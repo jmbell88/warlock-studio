@@ -448,7 +448,7 @@ class _Mouse:
 
 def _tab(**view):
     return inker_state.InkerDoc(
-        doc=inker.Document.blank(*SIZE), view=inker_state.PaintView(**view)
+        doc=inker.Document.blank(*SIZE), views=[inker_state.PaintView(**view)]
     )
 
 

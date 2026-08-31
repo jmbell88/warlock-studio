@@ -34,7 +34,7 @@ TRIANGLE = [(4.0, 4.0), (24.0, 6.0), (10.0, 26.0)]
 
 def _tab(**view):
     return inker_state.InkerDoc(
-        doc=inker.Document.blank(*SIZE), view=inker_state.PaintView(**view)
+        doc=inker.Document.blank(*SIZE), views=[inker_state.PaintView(**view)]
     )
 
 

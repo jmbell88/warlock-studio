@@ -485,9 +485,18 @@ def _tab_bar(ctx: Any, state: Any) -> None:
 
 
 def _canvas(ctx: Any, state: Any, tab: Any) -> None:
-    flags = imgui.WindowFlags_.no_scroll_with_mouse.value | imgui.WindowFlags_.no_scrollbar.value
-    hovered = False
-    origin = None
+    """The centre pane: one canvas, or two side by side after Duplicate View.
+
+    The split is a *width* division and nothing else -- each pane runs the same
+    body, on its own view, under its own imgui id. What makes that affordable
+    is that every gesture in here was already written against an ``origin`` and
+    a ``view`` passed in rather than against the pane being the whole region,
+    because a rotated or panned canvas needed exactly that.
+
+    The status bar stays single and reads the *focused* view, which is what
+    keeps two panes from producing two contradictory zoom readouts for one
+    drawing.
+    """
     # A positive height, never a bottom offset: with little room left a "-26"
     # child collapses to nothing and the canvas (and its texture uploads)
     # silently stops being drawn.
@@ -495,62 +504,100 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
     # The canvas is the *document*, not chrome: the global pane radius
     # (``tokens.RADIUS_PANE``) would clip the artwork's four corners.
     imgui.push_style_var(imgui.StyleVar_.child_rounding.value, 0.0)
-    if imgui.begin_child("inker-canvas", (0, height), imgui.ChildFlags_.borders.value, flags):
-        origin = imgui.get_cursor_screen_pos()
-        avail = imgui.get_content_region_avail()
-        region = (max(avail.x, 16.0), max(avail.y, 16.0))
-        view = tab.view
-        if view.pending_zoom is not None:
-            inker_state.centre(view, tab.doc.size, region, view.pending_zoom, **_BOUNDS)
-            view.pending_zoom = None
-        elif not view.fitted:
-            inker_state.fit(view, tab.doc.size, region, **_BOUNDS)
-        # The right button is taken as well as the left: it paints with the
-        # background colour (C12d) and the canvas has no context menu to
-        # conflict with. Without the flag imgui simply never reports the press.
-        imgui.invisible_button(
-            "##inker-surface",
-            region,
-            imgui.ButtonFlags_.mouse_button_left.value
-            | imgui.ButtonFlags_.mouse_button_right.value,
-        )
-        active = imgui.is_item_active()
-        hovered = imgui.is_item_hovered()
-        if view.pending_zoom_rung:
-            # Anchored on the cursor while it is over the canvas and on the
-            # middle of the pane while it is not: a keyboard zoom must not
-            # depend on where the mouse happens to be resting off-pane, and
-            # zooming about a cursor two panes away throws the page off screen.
-            mouse = imgui.get_mouse_pos()
-            focus = (
-                (mouse.x, mouse.y)
-                if hovered
-                else (origin.x + region[0] / 2.0, origin.y + region[1] / 2.0)
-            )
-            inker_state.zoom_ladder_step(
-                view, (origin.x, origin.y), focus, view.pending_zoom_rung, **_BOUNDS
-            )
-            view.pending_zoom_rung = 0
-        _input(ctx, state, tab, (origin.x, origin.y), active=active, hovered=hovered)
-        _paint(ctx, state, tab, (origin.x, origin.y), hovered=hovered)
-        # After everything ``_paint`` draws, because the bands sit on top of
-        # the canvas -- and outside it, because ``_paint`` early-outs when
-        # there is no composite yet and the rulers should not blink with it.
-        if state.rulers:
-            _rulers(tab, (origin.x, origin.y), region, hovered=hovered)
-        # Inside the child, because that is where ``_press`` opened it from and
-        # an imgui popup's id is computed off the id stack it was opened on.
-        _text_popup(ctx, state, tab)
-    else:
-        # A keyboard zoom aimed at a canvas that did not draw this frame is
-        # dropped, not banked: ``pending_zoom_rung`` is set by ``handle_key``
-        # from outside the canvas, so left alone here it survives the frame
-        # and fires a zoom rung later, unprompted. ``pending_zoom`` cannot do
-        # this -- it is only ever set from inside a visible canvas.
-        tab.view.pending_zoom_rung = 0
-    imgui.end_child()
+    count = max(len(tab.views), 1)
+    total = imgui.get_content_region_avail().x
+    # The gap is imgui's own item spacing, which is what ``same_line`` inserts
+    # between the two children -- computed rather than assumed, or the second
+    # pane is a few pixels wider than the first at every DPI but one.
+    gap = imgui.get_style().item_spacing.x * (count - 1)
+    width = (total - gap) / count if count > 1 else 0.0
+    shown: dict[int, tuple[Any, bool]] = {}
+    for index in range(count):
+        if index:
+            imgui.same_line()
+        shown[index] = _one_canvas(ctx, state, tab, index, (width, height))
     imgui.pop_style_var()
+    origin, hovered = shown.get(tab.focus, (None, False))
     _status_bar(ctx, state, tab, origin, hovered)
+
+
+def _one_canvas(
+    ctx: Any, state: Any, tab: Any, index: int, size: tuple[float, float]
+) -> tuple[Any, bool]:
+    """One view's pane. Returns its origin and whether the pointer is in it."""
+    flags = imgui.WindowFlags_.no_scroll_with_mouse.value | imgui.WindowFlags_.no_scrollbar.value
+    hovered = False
+    origin = None
+    # The whole body runs with this pane's view scoped as the tab's current
+    # one, so every ``tab.view`` inside ``_input``, ``_paint`` and the rest --
+    # roughly forty of them -- means *this* pane without any of them being
+    # taught that a second exists. See ``inker_state.viewing``.
+    with inker_state.viewing(tab, index) as view:
+        # The id carries the index, not the view's identity: imgui keys state --
+        # the invisible button's active flag above all -- on this string, and two
+        # panes sharing one would make a press in either drive both.
+        if imgui.begin_child(
+            f"inker-canvas-{index}", size, imgui.ChildFlags_.borders.value, flags
+        ):
+            origin = imgui.get_cursor_screen_pos()
+            avail = imgui.get_content_region_avail()
+            region = (max(avail.x, 16.0), max(avail.y, 16.0))
+            if view.pending_zoom is not None:
+                inker_state.centre(view, tab.doc.size, region, view.pending_zoom, **_BOUNDS)
+                view.pending_zoom = None
+            elif not view.fitted:
+                inker_state.fit(view, tab.doc.size, region, **_BOUNDS)
+            # The right button is taken as well as the left: it paints with the
+            # background colour (C12d) and the canvas has no context menu to
+            # conflict with. Without the flag imgui simply never reports the press.
+            imgui.invisible_button(
+                "##inker-surface",
+                region,
+                imgui.ButtonFlags_.mouse_button_left.value
+                | imgui.ButtonFlags_.mouse_button_right.value,
+            )
+            active = imgui.is_item_active()
+            hovered = imgui.is_item_hovered()
+            # Focus follows the pointer, and a press pins it. Hover alone is what
+            # a wheel zoom already obeyed, so making the keyboard agree with it is
+            # the smaller surprise; a press matters because a stroke that starts
+            # in one pane must keep its view even if the pointer leaves.
+            if hovered or active:
+                tab.focus = index
+            if view.pending_zoom_rung:
+                # Anchored on the cursor while it is over the canvas and on the
+                # middle of the pane while it is not: a keyboard zoom must not
+                # depend on where the mouse happens to be resting off-pane, and
+                # zooming about a cursor two panes away throws the page off screen.
+                mouse = imgui.get_mouse_pos()
+                focus = (
+                    (mouse.x, mouse.y)
+                    if hovered
+                    else (origin.x + region[0] / 2.0, origin.y + region[1] / 2.0)
+                )
+                inker_state.zoom_ladder_step(
+                    view, (origin.x, origin.y), focus, view.pending_zoom_rung, **_BOUNDS
+                )
+                view.pending_zoom_rung = 0
+            _input(ctx, state, tab, (origin.x, origin.y), active=active, hovered=hovered)
+            _paint(ctx, state, tab, (origin.x, origin.y), hovered=hovered)
+            # After everything ``_paint`` draws, because the bands sit on top of
+            # the canvas -- and outside it, because ``_paint`` early-outs when
+            # there is no composite yet and the rulers should not blink with it.
+            if state.rulers:
+                _rulers(tab, (origin.x, origin.y), region, hovered=hovered)
+            # Inside the child, because that is where ``_press`` opened it from and
+            # an imgui popup's id is computed off the id stack it was opened on.
+            _text_popup(ctx, state, tab)
+        else:
+            # A keyboard zoom aimed at a canvas that did not draw this frame is
+            # dropped, not banked: ``pending_zoom_rung`` is set by ``handle_key``
+            # from outside the canvas, so left alone here it survives the frame
+            # and fires a zoom rung later, unprompted. ``pending_zoom`` cannot do
+            # this -- it is only ever set from inside a visible canvas.
+            tab.view.pending_zoom_rung = 0
+        imgui.end_child()
+    return origin, hovered
 
 
 #: The tools whose gesture is sized by the brush slider, and therefore the

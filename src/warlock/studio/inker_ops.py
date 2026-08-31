@@ -698,6 +698,26 @@ def _doc(verb: str, *args: Any, **kwargs: Any) -> Callable[..., Any]:
 # ``_mode_ctx`` and ``_doc`` are used dozens of times.
 
 
+def _can_split(state: Any, tab: Any) -> bool:
+    return tab is not None and not tab.split
+
+
+def _has_split(state: Any, tab: Any) -> bool:
+    return tab is not None and tab.split
+
+
+def _dup_view(tab: Any) -> Any:
+    from . import inker_state
+
+    return inker_state.duplicate_view(tab)
+
+
+def _close_dup_view(tab: Any) -> Any:
+    from . import inker_state
+
+    return inker_state.close_duplicate_view(tab)
+
+
 def _view(verb: str, *args: Any) -> Callable[..., Any]:
     def _run(ctx: Any, tab: Any, **_: Any) -> Any:
         from . import inker_state
@@ -1865,6 +1885,27 @@ register(
         key="Ctrl+1",
         enabled=has_doc,
         reason=NO_DOC,
+    )
+)
+register(
+    Op(
+        "duplicate_view",
+        "Duplicate View",
+        lambda ctx, tab, **_: _dup_view(tab),
+        menu="View",
+        enabled=_can_split,
+        reason="This tab is already showing two views.",
+        separator_before=True,
+    )
+)
+register(
+    Op(
+        "close_duplicate_view",
+        "Close the second view",
+        lambda ctx, tab, **_: _close_dup_view(tab),
+        menu="View",
+        enabled=_has_split,
+        reason="This tab is showing one view.",
     )
 )
 register(

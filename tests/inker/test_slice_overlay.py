@@ -65,7 +65,7 @@ def _no_context(monkeypatch):
 
 def _tab(width: int = 32, height: int = 16, **view) -> object:
     doc = Document.blank(width, height)
-    return inker_state.InkerDoc(doc=doc, view=inker_state.PaintView(**view))
+    return inker_state.InkerDoc(doc=doc, views=[inker_state.PaintView(**view)])
 
 
 def _state(tab, tool: str = "slice") -> inker_state.InkerState:

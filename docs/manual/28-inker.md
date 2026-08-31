@@ -53,6 +53,18 @@ Quarter turns rather than a free angle, deliberately: at a quarter turn every ov
 marching ants, the symmetry lines, the transform box — stays exactly as accurate as it was, and a
 free angle would put all of them slightly wrong.
 
+**Duplicate View** splits the canvas into two panes onto the same drawing, and **Close the second
+view** puts it back. This is for working at a magnification you cannot judge at: zoom one pane to
+800% and leave the other at Fit in window, and you paint a few pixels while watching what they do to
+the whole sprite. Both panes are live — you can draw in either — and they share everything except
+where they are looking, so a stroke, an undo or a layer change appears in both at once.
+
+The new pane opens showing exactly what you were already looking at, so the command never throws
+away your framing; zoom the one you want changed. Whichever pane the pointer is in is the one the
+keyboard acts on, so `Ctrl+0` and the zoom keys go where your eye already is, and the readouts under
+the canvas follow it too. Closing the split keeps the pane you were working in rather than always
+the left one. There are two panes at most.
+
 Do not confuse these with **Flip H**, **Flip V** and **Rotate** in the document panel's *canvas*
 section. Those move pixels: they are edits, they are one undo step each, and they change what a save
 writes. These three change nothing at all, which is also why they keep working while a save is in

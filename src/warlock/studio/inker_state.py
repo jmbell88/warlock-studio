@@ -18,7 +18,8 @@ from __future__ import annotations
 import itertools
 import math
 import time
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -868,6 +869,63 @@ class PaintView:
     last_paint: tuple[float, float] | None = None
 
 
+@contextmanager
+def viewing(tab: Any, index: int):
+    """Make ``tab.views[index]`` the view ``tab.view`` answers with, and yield it.
+
+    The split canvas draws two views in one frame, and roughly forty places
+    inside the paint and input helpers ask the tab for "the" view rather than
+    being handed one. Threading a parameter through all of them would touch
+    every gesture in the editor -- every one a place a drawing bug can hide --
+    to express something with one true answer at any instant: whose turn it is.
+
+    Restored in a ``finally`` and *to whatever it was* rather than to None, so
+    a nested use (a pane's body calling something that scopes a view again)
+    unwinds correctly instead of unsetting the outer one.
+    """
+    before = tab.active_view
+    tab.active_view = index
+    try:
+        yield tab.views[index]
+    finally:
+        tab.active_view = before
+
+
+def duplicate_view(tab: Any) -> bool:
+    """Open a second pane onto this document. Aseprite's View ▸ Duplicate View.
+
+    The new view is a *copy* of the current one rather than a fresh default:
+    the pane appears showing what the user was already looking at, and they
+    zoom the one they want changed. A second view arriving fitted-to-window
+    would throw away the framing they had and make the command feel like it
+    reset something.
+
+    Two panes and no more. Aseprite opens windows and can have many; this is
+    one centre pane divided by width, and a third column of a 1600px window is
+    not a view of a drawing, it is a stripe.
+    """
+    if len(tab.views) > 1:
+        return False
+    tab.views.append(replace(tab.view))
+    tab.focus = len(tab.views) - 1
+    return True
+
+
+def close_duplicate_view(tab: Any) -> bool:
+    """Go back to one pane, keeping the view that has the user's attention.
+
+    Keeping the *focused* one rather than always the first is the whole
+    courtesy of the command: the pane you were working in is the one you meant
+    to keep, and closing the split should not also throw away its zoom.
+    """
+    if len(tab.views) < 2:
+        return False
+    tab.views = [tab.view]
+    tab.focus = 0
+    tab.active_view = None
+    return True
+
+
 def clamp_zoom(zoom: float, lo: float = MIN_ZOOM, hi: float = MAX_ZOOM) -> float:
     """Hold a zoom inside its bounds.
 
@@ -1135,7 +1193,32 @@ class InkerDoc:
     path: Path | None = None
     file_format: str = "png"  # ora | png | aseprite
     uid: str = field(default_factory=lambda: f"pd{next(_uids)}")
-    view: PaintView = field(default_factory=PaintView)
+    #: **The views onto this document, and the truth about them.** One until
+    #: somebody asks for a second (View ▸ Duplicate View), which is Aseprite's
+    #: verb for looking at one drawing at two zooms -- the whole sprite in one
+    #: pane while you work a few pixels in the other.
+    #:
+    #: A *list* plus :attr:`focus`, with :attr:`view` a read-only accessor over
+    #: the pair, is the shape `state.selected_objects` already uses one
+    #: workspace over, and it is chosen for that entry's reason: a mirrored
+    #: scalar field beside the collection is the bug this refuses. Forty-nine
+    #: call sites say ``tab.view`` and mean "the view the user is working in",
+    #: and every one of them goes on being right without being touched --
+    #: which is what makes the feature affordable at all.
+    views: list[PaintView] = field(default_factory=lambda: [PaintView()])
+    #: Which of :attr:`views` has the user's attention. Set by hovering or
+    #: pressing in a pane, so a keyboard zoom lands where the eye is.
+    focus: int = 0
+    #: The view being *drawn or operated on right now*, or None to follow
+    #: :attr:`focus`. Set only by :func:`viewing`, only for the length of one
+    #: pane's body, and always restored.
+    #:
+    #: This is not a second copy of ``focus`` and the distinction is the whole
+    #: reason both exist. ``focus`` answers "which pane did the user last
+    #: touch", which outlives the frame. This answers "whose turn is it", which
+    #: does not -- and a split pane draws *both* views in one frame, so without
+    #: it the second pane would render its picture at the first pane's zoom.
+    active_view: int | None = None
     # The history position the file on disk was written from. Dirty is a
     # *comparison*, not a flag, so undoing back to the saved state correctly
     # stops being dirty -- which the document's revision cannot express,
@@ -1255,6 +1338,37 @@ class InkerDoc:
     #: export *lands* -- a cancelled file dialog is not an export to repeat.
     export_kind: str = ""
     export_options: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def view(self) -> PaintView:
+        """The view the user is working in. Read-only, deliberately.
+
+        There is no setter and there must not be one: the pair
+        ``(views, focus)`` is the truth, and a settable ``view`` would let a
+        caller install a view the list does not hold -- at which point the pane
+        draws one object and every zoom, pan and rotation lands on another.
+        Everything that *changes* which view is current moves :attr:`focus`.
+
+        One meaning, not two: *the view currently being operated on*. Inside a
+        pane's body that is the pane's own view (:func:`viewing` says so);
+        everywhere else -- a menu op, a keypress, the status bar -- it is the
+        one the user last touched. A keyboard zoom and a wheel zoom therefore
+        agree about which pane they act on without either knowing there are
+        two.
+
+        Clamped rather than indexed blind, because closing the second pane and
+        drawing it are two different frames: a focus left pointing past the end
+        must cost nothing worse than looking at the first view.
+        """
+        if not self.views:  # pragma: no cover - a tab always has one
+            self.views.append(PaintView())
+        at = self.focus if self.active_view is None else self.active_view
+        return self.views[min(max(at, 0), len(self.views) - 1)]
+
+    @property
+    def split(self) -> bool:
+        """Whether this tab is showing more than one view of its document."""
+        return len(self.views) > 1
 
     @property
     def busy(self) -> bool:
