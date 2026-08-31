@@ -202,7 +202,7 @@ def test_switching_tabs_drops_the_palette_and_the_object_selection():
     second = _tab(ctx)
     state = plotter_mode.ensure(ctx)
     state.brush = np.array([[1]], gid.DTYPE)
-    state.selected_object = 99
+    state.select_object(99)
     state.terrain = (0, 2)
     state.activate(first.uid)
     assert state.brush is None and state.selected_object is None
@@ -764,7 +764,7 @@ def test_escape_cancels_one_thing_at_a_time(monkeypatch):
     _tab(ctx)
     state = plotter_mode.ensure(ctx)
     state.select = (0, 0, 2, 2)
-    state.selected_object = 7
+    state.select_object(7)
     state.drag_kind = "paint"
     event = _key("ESCAPE")
 
@@ -921,7 +921,7 @@ def test_delete_removes_the_object_when_the_object_tool_is_held():
     obj = MapObject(uid=new_uid(), name="spawn", kind="point", x=1, y=1)
     tab.doc.add_object(obj_layer.uid, obj)
     state.tool = "object"
-    state.selected_object = obj.uid
+    state.select_object(obj.uid)
     state.select = (0, 0, 3, 3)
 
     plotter_mode._delete(ctx, state, tab)
@@ -1211,7 +1211,7 @@ def test_a_lock_stops_removing_an_object_but_not_selecting_it():
     tab.doc.set_layer_props(obj_layer.uid, locked=True)
 
     state.tool = "object"
-    state.selected_object = obj.uid
+    state.select_object(obj.uid)
     plotter_mode._delete(ctx, state, tab)
     assert tab.doc.layers[-1].objects, "the object is still there"
     assert state.selected_object == obj.uid, "and still selected, so it can be read"
@@ -1227,7 +1227,7 @@ def _locked_object_layer(ctx: FakeCtx) -> tuple[Any, Any, Any, Any]:
     tab.doc.add_object(obj_layer.uid, obj)
     tab.doc.set_layer_props(obj_layer.uid, locked=True)
     state.tool = "object"
-    state.selected_object = obj.uid
+    state.select_object(obj.uid)
     return tab, state, obj_layer, obj
 
 
@@ -1292,7 +1292,7 @@ def _fake_imgui(monkeypatch, mouse: tuple[float, float], *, clicked: bool = True
         is_mouse_clicked=lambda _button: bool(clicked),
         is_mouse_down=lambda _button: False,
         is_mouse_released=lambda _button: False,
-        get_io=lambda: SimpleNamespace(key_ctrl=False),
+        get_io=lambda: SimpleNamespace(key_ctrl=False, key_shift=False, key_alt=False),
     )
     monkeypatch.setitem(sys.modules, "imgui_bundle", SimpleNamespace(imgui=fake))
 
@@ -1328,7 +1328,7 @@ def test_a_lock_on_a_group_stops_a_handle_drag_inside_it(monkeypatch):
     obj = MapObject(uid=new_uid(), name="zone", kind="rect", x=0, y=0, w=16, h=16)
     tab.doc.add_object(obj_layer.uid, obj)
     _grouped(tab.doc, obj_layer)
-    state.selected_object = obj.uid
+    state.select_object(obj.uid)
     origin = (0.0, 0.0)
     _fake_imgui(monkeypatch, inker_state.to_screen(tab.view, origin, obj.x, obj.y))
 
@@ -3500,7 +3500,7 @@ def test_a_history_jump_drops_the_object_selection():
     obj = tab.doc.add_object(
         layer.uid, MapObject(uid=new_uid(), name="spawn", kind="point", x=1, y=1)
     )
-    state.selected_object = obj.uid
+    state.select_object(obj.uid)
     depth = len(tab.doc.history)
 
     assert plotter_mode.step_history(ctx, tab, depth - 1) is True

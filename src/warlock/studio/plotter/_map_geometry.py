@@ -173,6 +173,7 @@ class GeometryOps:
         # flight, so the session is closed rather than moved.
         self.end_stroke()
         self.end_object_edit()
+        self.end_group_edit()
         if self.infinite:
             if wrap:
                 raise ValueError(

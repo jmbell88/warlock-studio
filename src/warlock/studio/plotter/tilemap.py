@@ -82,7 +82,7 @@ from ._map_model import (
     shape_kind,
     shape_size,
 )
-from ._map_objects import ObjectOps
+from ._map_objects import ObjectOps, object_bounds, objects_in_rect
 from ._map_paint import PaintOps
 from ._map_project import ProjectionOps
 from ._map_tilesets import TilesetOps
@@ -121,6 +121,8 @@ __all__ = [
     "TileLayer",
     "TileShape",
     "new_uid",
+    "object_bounds",
+    "objects_in_rect",
     "shape_for_kind",
     "shape_kind",
     "shape_size",
@@ -232,6 +234,11 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         # The open object drag, or None. The same thing for objects, and closed
         # at the same three chokepoints.
         self._object_edit: dict[str, Any] | None = None
+        # The open *group* drag, or None. A parallel session rather than a
+        # widened one -- see ``_map_objects.begin_group_edit`` -- and closed at
+        # exactly the same chokepoints, because a group left open is the same
+        # document-ahead-of-its-history defect.
+        self._group_edit: dict[str, Any] | None = None
 
     # -- identity ------------------------------------------------------------
 
@@ -351,6 +358,7 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         """
         self.end_stroke()
         self.end_object_edit()
+        self.end_group_edit()
         return self.history.undo(self)
 
     def redo(self) -> bool:
@@ -359,6 +367,7 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         pixels the session has already changed underneath it."""
         self.end_stroke()
         self.end_object_edit()
+        self.end_group_edit()
         return self.history.redo(self)
 
     def step_history(self, index: int) -> bool:
@@ -375,4 +384,5 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         """
         self.end_stroke()
         self.end_object_edit()
+        self.end_group_edit()
         return self.history.step_to(self, int(index))

@@ -18,6 +18,32 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **Plotter can select more than one object at a time, and drag the set as one.** The
+  Select tool now sweeps a **marquee** over empty space — a rubber band that takes every
+  object it *touches*, rotated ones included, because the box it tests is the object's
+  turned corners rather than its `w`/`h` — and **Shift or Ctrl click** adds one object to
+  the set or takes it back out. Dragging any member moves them all by a single offset, so
+  the arrangement keeps its spacing exactly; with a snap on it is the **offset** that
+  snaps rather than each object, since snapping every member's own corner would pull the
+  group apart. The marquee is on the **Select tool alone**: every insert tool's
+  empty-space drag still draws the shape it is named after, which is the one regression
+  this change was able to cause and `test_multi_select.py` pins it in both directions.
+  The hard half was undo. `begin_object_edit` stores one object and `end_object_edit`
+  pushes exactly one `ObjectPropsEdit`, so a multi-object drag was **not representable**;
+  rather than widening that session — four working gestures would have paid for a fifth —
+  there is a parallel `begin_group_edit` / `move_group` / `end_group_edit` that closes
+  into a `compound` of the *same* `ObjectPropsEdit`. One Ctrl+Z restores every object,
+  there is no new kind of `Edit`, and because the steps are addressed by uid a Raise or
+  Lower that reshuffles the layer's list underneath an open drag changes nothing about
+  what the undo puts back. Delete over a set is one step too, through a new
+  `remove_objects`. The Properties pane shows an **"N objects selected"** summary with
+  move and delete; **editing one property across a whole selection is deliberately not in
+  this pass**, because "blank means unchanged" versus "blank means cleared" is a real
+  design question and a form that quietly wrote the first object's values onto the rest
+  would answer it the worst way. Wave 5's rotation grip and the resize handles stay on a
+  selection of exactly one — half a multi-object rotate would be worse than none — and a
+  click inside a group that never moved narrows the set to that one object, which is
+  Tiled's rule and the only way back out of a selection.
 - **Four more Plotter gaps, all of them a gesture the mode did not have.**
   (1) **Canvas rulers**, along the top and left edges, on by default and on `Ctrl+R` or
   the sidebar's View block. They are Inker's bands — same thickness, same 1/2/5 tick

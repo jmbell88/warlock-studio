@@ -3597,6 +3597,10 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
         imgui.same_line()
         if imgui.begin_child("##plot-right", (sp(300), 0)):
             plotter_layers.draw(app_ctx)
+            # The Properties pane is a *separate* door in ``skeletons.py``, so
+            # a build that only called ``draw`` never entered the object form
+            # or the multi-selection summary at all.
+            plotter_layers.draw_properties(app_ctx)
             plotter_bridge.draw(app_ctx)
         imgui.end_child()
 
@@ -3687,7 +3691,7 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     )
     tab.doc.set_active_layer(objects.uid)
     state.tool = "object"
-    state.selected_object = zone.uid
+    state.select_object(zone.uid)
     _frame(imgui_ctx, build)
     tab.doc.set_layer_props(objects.uid, locked=True)
     _frame(imgui_ctx, build)
@@ -3724,9 +3728,24 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     obj = tab.doc.add_object(
         objects.uid, MapObject(uid=new_uid(), name="spawn", kind="rect", w=16, h=16)
     )
-    state.selected_object = obj.uid
+    state.select_object(obj.uid)
     tab.doc.set_active_layer(objects.uid)
     _frame(imgui_ctx, build)
+
+    # And a *multi*-selection: the "N objects selected" summary is a second
+    # branch of the same pane, with its own destructive button, and nothing
+    # above it reaches it -- locked as well as not, because the lock replaces
+    # that button with a reason.
+    other = tab.doc.add_object(
+        objects.uid,
+        MapObject(uid=new_uid(), name="exit", kind="rect", x=32, y=32, w=16, h=16),
+    )
+    state.select_objects([obj.uid, other.uid])
+    _frame(imgui_ctx, build)
+    tab.doc.set_layer_props(objects.uid, locked=True)
+    _frame(imgui_ctx, build)
+    tab.doc.set_layer_props(objects.uid, locked=False)
+    state.select_object(obj.uid)
 
     prefix = f"{plotter_textures.PREFIX}{tab.uid}:"
     assert [k for k in app_ctx.state.preview if k.startswith(prefix)], "a texture was made"

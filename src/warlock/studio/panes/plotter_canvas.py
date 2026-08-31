@@ -55,6 +55,7 @@ from ..plotter.tilemap import (
     Polygon,
     Polyline,
     TileLayer,
+    objects_in_rect,
 )
 from ..tilegrid import gid as gidlib
 from ..tilegrid import tileset as tileset_lib
@@ -1199,8 +1200,12 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
         if not isinstance(layer, ObjectLayer):
             continue
         dx, dy = _layer_shift(view, origin, entry)
+        # The handles belong to a selection of exactly one, for
+        # ``_object_input``'s reason -- and read once here rather than per
+        # object, so the draw and the dispatch cannot disagree within a frame.
+        sole = len(state.selected_objects) == 1
         for obj in layer.objects:
-            selected = state.selected_object == obj.uid
+            selected = obj.uid in state.selected_objects
             alpha = float(obj.opacity) * float(entry.opacity) * (1.0 if obj.visible else 0.4)
             colour = imgui.get_color_u32(
                 theme.rgba(theme.ACCENT if selected else theme.OK, alpha)
@@ -1221,7 +1226,7 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
                     sp(2) if selected else sp(1),
                     imgui.ImDrawFlags_.closed.value if closed else 0,
                 )
-                if selected and not entry.locked:
+                if selected and sole and not entry.locked:
                     # Only on the selected one, and only when it can actually be
                     # dragged: a handle on a locked layer is a control that
                     # looks live and does nothing. ``entry.locked``, not the
@@ -1249,6 +1254,16 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
                         draw_list.add_circle_filled(grip, sp(5), colour, 16)
             if obj.name:
                 draw_list.add_text((p0[0] + sp(6), p0[1] - sp(14)), colour, obj.name)
+        # The rubber band, on the layer whose space it was measured in. Drawn
+        # after the objects so it reads as sitting over them, and dashed-thin
+        # rather than filled because it is a gesture in flight, not a result.
+        if state.object_marquee is not None and layer.uid == doc.active_layer:
+            mx0, my0, mx1, my1 = state.object_marquee
+            band = imgui.get_color_u32(theme.rgba(theme.ACCENT, 0.9))
+            a = inker_state.to_screen(view, origin, min(mx0, mx1) + dx, min(my0, my1) + dy)
+            b = inker_state.to_screen(view, origin, max(mx0, mx1) + dx, max(my0, my1) + dy)
+            draw_list.add_rect_filled(a, b, imgui.get_color_u32(theme.rgba(theme.ACCENT, 0.12)))
+            draw_list.add_rect(a, b, band, 0.0, 0, sp(1))
 
 
 def _rotated(obj: Any, x: float, y: float) -> tuple[float, float]:
@@ -2460,8 +2475,11 @@ def _object_menu(ctx: Any, state: Any, tab: Any, hovered: bool) -> None:
             doc.reorder_object(layer.uid, uid, -1)
         controls.menu_separator()
         if controls.menu_item("Delete", "Delete", False, editable, reason=reason)[0]:
-            doc.remove_object(layer.uid, uid)
-            state.selected_object = None
+            # Every selected object, in one step -- the menu row sits on the
+            # same verb the Delete key runs, and a menu that removed one of five
+            # would need a different label.
+            doc.remove_objects(layer.uid, state.selected_objects)
+            state.select_object(None)
 
 
 def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:
@@ -2495,7 +2513,15 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
         # Priority: a handle on the selected rect, then any object's body, then
         # empty space. Handles win because they sit *on* the outline and so
         # overlap the body -- checking the body first would make them unreachable.
-        selected = next((o for o in layer.objects if o.uid == state.selected_object), None)
+        # **Exactly one, or none.** The resize corners, the rotation grip and
+        # the vertex handles all belong to a single object -- a handle drawn on
+        # one member of a five-object selection would resize that member and
+        # leave the other four where they were, which is not what a set of
+        # handles on screen promises. ``_objects`` draws them under the same
+        # test, so what is armed here is what is visible there.
+        selected = (
+            _sole_selection(state, layer) if len(state.selected_objects) == 1 else None
+        )
         vertex = (
             _vertex_at(tab.view, origin, selected, (mouse.x, mouse.y), (dx, dy))
             if selected is not None and not locked
@@ -2549,17 +2575,64 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
             state.drag_handle = handle
             return
         hit = _object_at(layer, point)
+        # Tiled's two bindings for "and this one as well". Read once, because
+        # both a body click and an empty-space press ask the same question, and
+        # a second read a branch later is how the two drift apart.
+        adding = bool(imgui.get_io().key_shift or imgui.get_io().key_ctrl)
         if hit is not None:
             # Selecting on a locked layer stays allowed -- it is how you read an
             # object's properties, and it changes nothing.
-            state.selected_object = hit.uid
+            if adding:
+                # A toggle is the whole gesture: arming a move as well would
+                # mean a Shift+click that wobbled two pixels dragged the object
+                # the user was only adding to the set.
+                state.toggle_object(hit.uid)
+                state.drag_kind = ""
+                return
+            if (
+                not locked
+                and hit.uid in state.selected_objects
+                and len(state.selected_objects) > 1
+            ):
+                # Pressing *inside* a group keeps the group -- otherwise every
+                # attempt to drag a multi-selection would collapse it to one
+                # object on the press, before the pointer had moved at all. The
+                # release collapses it if the pointer never went anywhere, which
+                # is how a click still picks one object out of a set. A locked
+                # layer has no drag to preserve the group for, so it collapses
+                # at the press.
+                state.make_primary(hit.uid)
+            else:
+                state.select_object(hit.uid)
             state.drag_kind = ""
             if not locked:
-                doc.begin_object_edit(layer.uid, hit.uid)
-                state.drag_kind = "object-move"
-                # The grab offset, so the object does not jump its own top-left
-                # corner to the pointer on the first frame of the drag.
-                state.drag_object = (point[0] - hit.x, point[1] - hit.y)
+                group = [o.uid for o in layer.objects if o.uid in state.selected_objects]
+                if len(group) > 1:
+                    doc.begin_group_edit(layer.uid, group)
+                    state.drag_kind = "object-group"
+                    # The press point, not a per-object grab offset: a group
+                    # moves by one delta, which is what keeps its members'
+                    # spacing exactly as the user arranged it.
+                    state.drag_object = point
+                else:
+                    doc.begin_object_edit(layer.uid, hit.uid)
+                    state.drag_kind = "object-move"
+                    # The grab offset, so the object does not jump its own
+                    # top-left corner to the pointer on the first frame.
+                    state.drag_object = (point[0] - hit.x, point[1] - hit.y)
+            return
+        # **Empty space means different things to the two halves of this
+        # palette**, and that is the whole reason the tool is consulted here and
+        # nowhere else in the gesture: Select sweeps a rubber band, every insert
+        # tool draws the object it is named after. Ahead of the lock check,
+        # because selecting on a locked layer has always been allowed and a
+        # marquee selects.
+        if state.tool == "object":
+            if not adding:
+                state.select_object(None)
+            state.drag_kind = "object-marquee"
+            state.drag_object = point
+            state.object_marquee = (point[0], point[1], point[0], point[1])
             return
         if locked:
             ctx.toast(f"{layer.name} is locked.", "error")
@@ -2570,6 +2643,39 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
         offset = state.drag_object or (0.0, 0.0)
         x, y = _snapped(state, doc, (point[0] - offset[0], point[1] - offset[1]))
         doc.place_object(x=float(x), y=float(y))
+    elif state.drag_kind == "object-group" and imgui.is_mouse_down(0):
+        start = state.drag_object or point
+        dx_move, dy_move = _snapped_delta(
+            state, doc, point[0] - start[0], point[1] - start[1]
+        )
+        doc.move_group(dx_move, dy_move)
+    elif state.drag_kind == "object-marquee" and imgui.is_mouse_down(0):
+        start = state.drag_object or point
+        state.object_marquee = (start[0], start[1], point[0], point[1])
+    elif state.drag_kind == "object-marquee" and imgui.is_mouse_released(0):
+        start = state.drag_object or point
+        picked = objects_in_rect(
+            layer.objects, (start[0], start[1], point[0], point[1])
+        )
+        if imgui.get_io().key_shift or imgui.get_io().key_ctrl:
+            # Added to whatever the press deliberately did *not* clear.
+            picked = [
+                o.uid
+                for o in layer.objects
+                if o.uid in state.selected_objects or o.uid in picked
+            ]
+        state.select_objects(picked, primary=picked[-1] if picked else None)
+        state.clear_drag()
+    elif state.drag_kind == "object-group" and imgui.is_mouse_released(0):
+        # One compound step for the whole group drag, and none at all for a
+        # press that never moved -- ``end_group_edit`` finds no diff.
+        if not doc.end_group_edit() and state.selected_object is not None:
+            # Nothing moved, so the gesture was a *click* inside the group, and
+            # a click picks one object. Tiled's rule, and without it a
+            # multi-selection could only be narrowed by clicking away from it
+            # first and starting again.
+            state.select_object(state.selected_object)
+        state.clear_drag()
     elif state.drag_kind == "object-rotate" and imgui.is_mouse_down(0):
         target = next((o for o in layer.objects if o.uid == state.selected_object), None)
         if target is not None:
@@ -2647,7 +2753,7 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
             h if kind != "point" else 0.0,
             gid=tile_gid,
         )
-        state.selected_object = obj.uid
+        state.select_object(obj.uid)
         state.clear_drag()
 
 
@@ -2663,6 +2769,33 @@ def _snap_mode(state: Any) -> str:
     from imgui_bundle import imgui
 
     return plotter_state.snap_mode(state.snap, bool(imgui.get_io().key_ctrl))
+
+
+def _sole_selection(state: Any, layer: Any):
+    """The one selected object on this layer, or ``None``."""
+    return next((o for o in layer.objects if o.uid in state.selected_objects), None)
+
+
+def _snapped_delta(
+    state: Any, doc: Any, dx: float, dy: float
+) -> tuple[float, float]:
+    """A group's translation, moved onto whatever this gesture snaps to.
+
+    **The offset snaps, not each object.** Snapping every member's own corner
+    to the grid would pull an arrangement apart -- two objects half a cell
+    apart would land on the same cell and the group would stop being the thing
+    the user selected. Snapping the delta keeps every relative position exactly
+    and still lands a grid-aligned group on the grid.
+    """
+    mode = _snap_mode(state)
+    if mode == "grid":
+        return (
+            round(dx / doc.tile_w) * float(doc.tile_w),
+            round(dy / doc.tile_h) * float(doc.tile_h),
+        )
+    if mode == "pixel":
+        return (float(round(dx)), float(round(dy)))
+    return (float(dx), float(dy))
 
 
 def _snapped(state: Any, doc: Any, point: tuple[float, float]) -> tuple[float, float]:

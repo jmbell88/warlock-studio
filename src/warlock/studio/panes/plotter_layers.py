@@ -168,7 +168,7 @@ def _row(
             # you are looking at changes no document and pushes no step, which
             # ``test_choosing_a_layer_pushes_no_step`` pins.
             doc.set_active_layer(layer.uid)
-            state.selected_object = None
+            state.select_object(None)
         if foldable:
             # **Not gated on ``editable``.** A fold changes nothing about the
             # map, and greying it while a save runs is the panel refusing to
@@ -395,6 +395,9 @@ def draw_properties(ctx: Any) -> None:
         widgets.muted_wrapped(_BUSY_WHY)
         return
 
+    if len(state.selected_objects) > 1:
+        _group_summary(ctx, doc, state)
+        return
     selected = _selected_object(doc, state)
     if selected is not None:
         _object_form(ctx, doc, state, selected, editable)
@@ -575,13 +578,13 @@ def _object_rows(
     indent = sp(GROUP_INDENT) * depth
     for obj in reversed(layer.objects):
         imgui.push_id(str(obj.uid))
-        picked = state.selected_object == obj.uid
+        picked = obj.uid in state.selected_objects
         with widgets.list_row(
             f"plotter-object/{obj.uid}", selected=picked, indent=indent
         ) as clicked:
             if clicked:
                 doc.set_active_layer(layer.uid)
-                state.selected_object = obj.uid
+                state.select_object(obj.uid)
             # No chevron: an object has nothing under it. The gap keeps its
             # eye in the same column as every layer's, so the list still reads
             # as one column of switches rather than two.
@@ -611,8 +614,7 @@ def _object_rows(
             imgui.separator()
             if controls.menu_item_simple("Delete"):
                 doc.remove_object(layer.uid, obj.uid)
-                if state.selected_object == obj.uid:
-                    state.selected_object = None
+                state.selected_objects.discard(obj.uid)
             imgui.end_disabled()
             imgui.end_popup()
         imgui.pop_id()
@@ -643,9 +645,49 @@ def _selected_object(doc: Any, state: Any) -> tuple[Any, MapObject] | None:
                 if obj.uid == state.selected_object:
                     return layer, obj
     # The object was deleted or undone away; forgetting it here keeps the form
-    # from drawing against a uid nothing answers to.
-    state.selected_object = None
+    # from drawing against a uid nothing answers to. The *whole* set is pruned
+    # rather than only the primary, because an undo takes a group away together
+    # and half a remembered selection is a group drag over objects that are no
+    # longer there.
+    live = {
+        obj.uid
+        for layer in doc.all_layers()
+        if isinstance(layer, ObjectLayer)
+        for obj in layer.objects
+    }
+    state.select_objects(state.selected_objects & live)
     return None
+
+
+def _group_summary(ctx: Any, doc: Any, state: Any) -> None:
+    """What the Properties pane says about a multi-selection.
+
+    A count and the two verbs that mean something to a group -- **a summary,
+    not a bulk editor**. Editing one field across a set is a real feature with
+    a real design question behind it (does an empty field mean "unchanged" or
+    "cleared"?), and a form that silently wrote the first object's values onto
+    the other four would answer it the worst way. Deselecting down to one
+    object is how you edit properties, and the pane says so rather than leaving
+    the user to find out.
+    """
+    from imgui_bundle import imgui
+
+    count = len(state.selected_objects)
+    widgets.section(f"{count} objects selected")
+    widgets.muted_wrapped(
+        "Drag any of them to move the whole set, or press Delete to remove "
+        "them. Click one object on its own to edit its properties."
+    )
+    imgui.dummy((0, 6))
+    layer = doc.layer(doc.active_layer) if doc.active_layer is not None else None
+    locked = bool(getattr(layer, "locked", False))
+    if locked:
+        widgets.muted(f"{layer.name} is locked.")
+        return
+    if widgets.destructive_button(f"{icons.TRASH} Delete {count} objects", (-1, 0)):
+        if layer is not None:
+            doc.remove_objects(layer.uid, state.selected_objects)
+        state.select_object(None)
 
 
 def _object_form(
@@ -718,7 +760,7 @@ def _object_fields(ctx: Any, doc: Any, state: Any, layer: Any, obj: MapObject) -
     imgui.dummy((0, 6))
     if widgets.destructive_button(f"{icons.TRASH} Delete object", (-1, 0)):
         doc.remove_object(layer.uid, obj.uid)
-        state.selected_object = None
+        state.select_object(None)
 
 
 def _shape_fields(doc: Any, layer: Any, obj: MapObject) -> None:

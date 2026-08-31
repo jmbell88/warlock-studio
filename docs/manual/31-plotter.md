@@ -337,7 +337,7 @@ there, which is a broken field rather than a constrained one.
 ### The clipboard
 
 Ctrl+C copies the selected cells, Ctrl+X copies and clears them in one undo step, and Delete clears
-them without copying. With the Objects tool in hand, Delete removes the selected object instead —
+them without copying. With the Objects tool in hand, Delete removes the selected objects instead —
 which one you get is decided by the tool you are holding, so a marquee left over from earlier
 cannot quietly erase tiles.
 
@@ -361,9 +361,11 @@ composite bottom-first — which is why the list is drawn top-first, the way eve
 does it.
 
 An **object layer** holds named rectangles and points. Nothing on one is drawn in an export; they
-are metadata an engine reads. With the **Objects** tool active, click empty space and drag to draw a
-rectangle, or click without dragging to drop a point. Click an existing object to select it, and its
-form appears in the **Properties** pane below the list.
+are metadata an engine reads. With an **insert** tool active — `R` for a rectangle, say — click empty
+space and drag to draw one, or click without dragging to drop a point. Click an existing object to
+select it, and its form appears in the **Properties** pane below the list. With the **Objects**
+pointer (`S`) in hand, that same empty-space drag sweeps a selection band instead of drawing
+anything; see *Selecting several objects* below.
 
 Standing on an object layer changes the whole toolbox: the letters become *insert* tools, one per
 shape — `R` rectangle, `I` point, `E` ellipse, `C` capsule, `P` polygon, `L` polyline, `T` tile,
@@ -386,7 +388,26 @@ nothing about the map — it stays exactly as visible, and as exported, as it wa
 **Selected objects can be moved and resized on the canvas.** Drag an object's body to move it, or
 one of the four corner handles to resize it — the opposite corner stays pinned, and dragging a
 corner past it flips the rectangle rather than giving it a negative size. A whole drag is one undo
-step, and a click that moves nothing costs none at all. Delete removes the selected object.
+step, and a click that moves nothing costs none at all. Delete removes the selected objects.
+
+**Selecting several objects.** With the **Objects** pointer in hand, drag across empty space to
+sweep a band over them: everything the band *touches* is taken, rotated objects included, and a band
+that touches nothing clears the selection. **Shift+click** or **Ctrl+click** an object to add it to
+the set or take it back out, and Shift-dragging a band adds what it sweeps to what is already
+selected. Selecting works on a locked layer, exactly as clicking one object always has.
+
+Drag any member of a set and the whole set moves with it, by one offset, so the objects keep their
+spacing. With **Snap objects to** on it is that offset that snaps rather than each object's own
+corner — snapping every member separately would pull the arrangement apart, and could land two
+objects on one cell. The whole group drag is **one undo step**: one Ctrl+Z puts every object back
+where it was, and Delete over the set is one step as well.
+
+The **Properties** pane says how many objects are selected and offers the two verbs that mean
+something to a set — drag to move, and delete. To edit a name, a class or a custom property, click
+one object on its own: changing a single property across a whole selection is not offered, because
+an empty field would have to mean *unchanged* on one reading and *cleared* on another. A click
+inside a set that does not move it narrows the selection to that one object, which is the quick way
+back. The resize handles and the rotation grip likewise belong to a selection of exactly one.
 
 **A round grip on a stalk above the top edge rotates it.** Drag it and the object turns about its
 own top-left corner — the point its `x` and `y` name, which is what Tiled's rotation means too — so
@@ -400,8 +421,8 @@ the same two, as chords. **Holding Ctrl inverts whatever is set** — so at the 
 snaps this one drag to the grid, exactly as it always did, and with snapping on, Ctrl is how you put
 one object between two cells. Rotation reads the same setting and snaps to 15°.
 
-Handles appear only on the selected rectangle, and not at all on a locked layer, where the drag
-would be refused anyway.
+Handles appear only when exactly one rectangle is selected, and not at all on a locked layer, where
+the drag would be refused anyway.
 
 A **polygon** or **polyline** gets a handle per point instead. Drag one to move it — computed in the
 object's own frame, so a vertex on a rotated shape lands where the outline says rather than where the
@@ -412,8 +433,9 @@ is refused by name rather than silently.
 **Ctrl+J** duplicates the selected object one cell down and right. Ctrl+C and Ctrl+V with the Objects
 tool in hand copy and paste one, and pasting into another map is refused whole — a tile object carries
 a gid and an object property may name an id, and both mean something else elsewhere. (Ctrl+D stays
-deselect here, unlike Tiled, because every other editor in this app deselects on it.) Selecting
-several objects at once is deliberately not offered yet.
+deselect here, unlike Tiled, because every other editor in this app deselects on it.) Duplicate,
+copy and cut act on the object last clicked when several are selected; move and delete are the two
+verbs that take a whole set.
 
 An **image layer** created here starts empty, and **Choose image…** on its row attaches a picture.
 `.wmap` already stores an image layer's pixels, so the file needs nothing new to hold it.

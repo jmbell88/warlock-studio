@@ -32,6 +32,7 @@ class Mouse:
         self.released = {0: False, 1: False, 2: False}
         self.ctrl = False
         self.alt = False
+        self.shift = False
 
     def install(self, monkeypatch: Any) -> None:
         from imgui_bundle import imgui
@@ -45,7 +46,9 @@ class Mouse:
         monkeypatch.setattr(
             imgui,
             "get_io",
-            lambda: SimpleNamespace(key_ctrl=self.ctrl, key_alt=self.alt, key_shift=False),
+            lambda: SimpleNamespace(
+                key_ctrl=self.ctrl, key_alt=self.alt, key_shift=self.shift
+            ),
         )
 
 
@@ -57,12 +60,24 @@ class Scene:
     straight off the object it is aiming at.
     """
 
-    def __init__(self, monkeypatch: Any, *, tile: int = 16, size: int = 16) -> None:
+    def __init__(
+        self,
+        monkeypatch: Any,
+        *,
+        tile: int = 16,
+        size: int = 16,
+        tool: str = "object",
+    ) -> None:
         self.doc = MapDoc(size, size, tile, tile)
         self.doc.add_tile_layer("Tiles")
         self.layer = self.doc.add_object_layer("Objects")
         self.doc.set_active_layer(self.layer.uid)
         self.state = plotter_state.PlotterState()
+        # The Select tool, because that is what an object layer opens on -- and
+        # what empty space means depends on it: Select sweeps a marquee, every
+        # insert tool draws its shape. Pass ``tool="object_rect"`` for the
+        # other half.
+        self.state.tool = tool
         self.tab = SimpleNamespace(
             doc=self.doc,
             uid="tab-1",
@@ -75,7 +90,7 @@ class Scene:
 
     def add(self, **kwargs: Any) -> MapObject:
         obj = self.doc.add_object(self.layer.uid, MapObject(uid=new_uid(), **kwargs))
-        self.state.selected_object = obj.uid
+        self.state.select_object(obj.uid)
         return obj
 
     def object(self, uid: int) -> MapObject:
@@ -89,6 +104,7 @@ class Scene:
         down: bool = False,
         release: bool = False,
         ctrl: bool = False,
+        shift: bool = False,
         hovered: bool = True,
     ) -> None:
         from warlock.studio.panes import plotter_canvas
@@ -98,4 +114,5 @@ class Scene:
         self.mouse.down = {0: down or click, 1: False, 2: False}
         self.mouse.released = {0: release, 1: False, 2: False}
         self.mouse.ctrl = ctrl
+        self.mouse.shift = shift
         plotter_canvas._object_input(self.ctx, self.state, self.tab, (0.0, 0.0), hovered)

@@ -542,9 +542,19 @@ class PlotterState:
     # The cell under the pointer, for the status line. View state, recomputed
     # every frame and never persisted; ``None`` when the pointer is elsewhere.
     hover_cell: tuple[int, int] | None = None
-    # The object under the cursor's attention, by uid. View state: not
+    # The objects under the cursor's attention, by uid. View state: not
     # undoable and not persisted, exactly as Clay's element selection is.
-    selected_object: int | None = None
+    #
+    # A **set**, because a marquee, a Shift+click and a group drag all need more
+    # than one -- and a set rather than a list because "is this one selected" is
+    # asked once per object per frame by the renderer. Order is carried by
+    # ``_primary_object`` alone (see :attr:`selected_object`), which is the only
+    # ordering anything actually reads.
+    selected_objects: set[int] = field(default_factory=set)
+    # The member of ``selected_objects`` the single-object verbs act on: the one
+    # most recently clicked. Written only through the four selection methods
+    # below, which is why it is spelled private.
+    _primary_object: int | None = None
     # The marquee, as a normalized *inclusive* cell rect ``(x0, y0, x1, y1)``.
     #
     # View state on the mode, beside ``brush`` and ``selected_object``, and
@@ -603,6 +613,12 @@ class PlotterState:
     drag_kind: str = ""
     drag_anchor: tuple[int, int] | None = None
     drag_object: tuple[float, float] | None = None
+    # The rubber band an open Select-tool drag is sweeping, in *map pixels*
+    # rather than cells: it picks objects, and an object is placed in pixels.
+    # Written by the gesture every frame and read by the renderer, which is why
+    # it lives here rather than being recomputed in the draw -- the two would
+    # otherwise be a frame apart. Dropped with the rest of the drag.
+    object_marquee: tuple[float, float, float, float] | None = None
     # Which corner a resize is pulling ("nw" / "ne" / "se" / "sw"), or "". The
     # *opposite* corner is what stays pinned, so this names the moving end.
     drag_handle: str = ""
@@ -678,7 +694,7 @@ class PlotterState:
         self.tileset_index = 0
         self.brush = None
         self.terrain = None
-        self.selected_object = None
+        self.select_object(None)
         # Names a cell in the document being left, so a Shift+click in the new
         # one would draw a line from somewhere the user never clicked.
         self.last_paint = None
@@ -838,8 +854,71 @@ class PlotterState:
                 # direction ``selection_mask_in`` takes.
                 self.select_mask = None
 
+    # -- the object selection --------------------------------------------------
+    #
+    # One set, four doors and one read-only accessor. The accessor is what let
+    # multi-selection land without touching the dozen sites that only ever ask
+    # "which one object am I looking at" -- the property form, Duplicate, the
+    # object clipboard, the right-click menu. Those verbs act on the *primary*
+    # selection, which is the object last clicked; a bulk edit across a
+    # multi-selection is a separate feature and deliberately not this one.
+
+    @property
+    def selected_object(self) -> int | None:
+        """The primary selected object, or ``None``. **Read-only.**
+
+        A property rather than a field so that no caller can put the scalar and
+        the set out of step -- which is the failure mode a mirrored field has,
+        and it shows up as a form editing an object the canvas is not drawing
+        as selected.
+        """
+        if self._primary_object is not None and self._primary_object in self.selected_objects:
+            return self._primary_object
+        if len(self.selected_objects) == 1:
+            return next(iter(self.selected_objects))
+        return None
+
+    def select_object(self, uid: int | None) -> None:
+        """Replace the whole selection with one object, or clear it."""
+        self.selected_objects = set() if uid is None else {int(uid)}
+        self._primary_object = None if uid is None else int(uid)
+
+    def select_objects(self, uids: Any, *, primary: int | None = None) -> None:
+        """Replace the whole selection with a group -- what a marquee lands."""
+        self.selected_objects = {int(uid) for uid in uids}
+        if primary is not None and int(primary) in self.selected_objects:
+            self._primary_object = int(primary)
+        elif self._primary_object not in self.selected_objects:
+            # The last one the caller listed, so a marquee leaves the topmost
+            # object it took as the one the form describes.
+            self._primary_object = max(self.selected_objects) if self.selected_objects else None
+
+    def toggle_object(self, uid: int) -> bool:
+        """Add or remove one object. -> whether it is selected afterwards.
+
+        Shift- and Ctrl+click both land here: Tiled binds add to Shift and
+        toggle to Ctrl, and on a set with one member the two are the same
+        gesture -- so one door, and the modifier only decides that it *is* a
+        toggle rather than a replace.
+        """
+        uid = int(uid)
+        if uid in self.selected_objects:
+            self.selected_objects.discard(uid)
+            if self._primary_object == uid:
+                self._primary_object = None
+            return False
+        self.selected_objects.add(uid)
+        self._primary_object = uid
+        return True
+
+    def make_primary(self, uid: int) -> None:
+        """Point the single-object verbs at an object already selected."""
+        if int(uid) in self.selected_objects:
+            self._primary_object = int(uid)
+
     def clear_drag(self) -> None:
         self.drag_kind = ""
+        self.object_marquee = None
         self.drag_anchor = None
         self.drag_object = None
         self.drag_handle = ""

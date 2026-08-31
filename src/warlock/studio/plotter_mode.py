@@ -520,14 +520,14 @@ _BRUSH_TRANSFORMS: dict[str, Any] = {"x": _flipped_h, "y": _flipped_v, "z": _tur
 def undo(ctx: Any, tab: Any) -> None:
     """One step back, whichever surface asked for it."""
     tab.doc.undo()
-    ensure(ctx).selected_object = None
+    ensure(ctx).select_object(None)
 
 
 
 def redo(ctx: Any, tab: Any) -> None:
     """One step forward. :func:`undo`'s twin, and its reasoning."""
     tab.doc.redo()
-    ensure(ctx).selected_object = None
+    ensure(ctx).select_object(None)
 
 
 def go_to_cell(ctx: Any, tab: Any, column: int, row: int) -> tuple[int, int]:
@@ -569,7 +569,7 @@ def step_history(ctx: Any, tab: Any, index: int) -> bool:
     object no layer holds.
     """
     moved = tab.doc.step_history(index)
-    ensure(ctx).selected_object = None
+    ensure(ctx).select_object(None)
     return moved
 
 
@@ -641,8 +641,8 @@ def handle_key(ctx: Any, event: Any) -> bool:
         # this mode even when there is nothing left for it to drop.
         if state.drag_kind:
             state.clear_drag()
-        elif state.selected_object is not None:
-            state.selected_object = None
+        elif state.selected_objects:
+            state.select_object(None)
         else:
             state.select = None
         return True
@@ -819,7 +819,7 @@ def _copy_object(
     state.clipboard_doc = tab.uid
     if cut:
         tab.doc.remove_object(layer.uid, found.uid)
-        state.selected_object = None
+        state.select_object(None)
 
 
 def _paste_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
@@ -857,7 +857,7 @@ def _paste_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
         y=state.clipboard.obj.y + tab.doc.tile_h,
     )
     tab.doc.add_object(layer.uid, copy)
-    state.selected_object = copy.uid
+    state.select_object(copy.uid)
 
 
 def _duplicate_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
@@ -901,7 +901,7 @@ def _duplicate_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
         y=found.y + tab.doc.tile_h,
     )
     tab.doc.add_object(layer.uid, copy)
-    state.selected_object = copy.uid
+    state.select_object(copy.uid)
     ctx.toast(f"Duplicated {found.name or 'the object'}.")
 
 
@@ -916,15 +916,19 @@ def _delete(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
 
     from .tilegrid import gid as gidlib
 
-    if state.tool == "object" and state.selected_object is not None:
+    if state.tool == "object" and state.selected_objects:
         layer = tab.doc.active()
         if layer is None:
             return
         if getattr(layer, "locked", False):
             ctx.toast(f"{layer.name} is locked.", "error")
             return
-        tab.doc.remove_object(layer.uid, state.selected_object)
-        state.selected_object = None
+        # Every selected object in one step. ``remove_objects`` is the group
+        # twin of ``remove_object`` -- one ``compound`` of the same
+        # ``ObjectRemoveEdit`` -- so a Delete over five objects is one Ctrl+Z
+        # rather than five.
+        tab.doc.remove_objects(layer.uid, state.selected_objects)
+        state.select_object(None)
         return
     layer, rect = _selected_tiles(ctx, state, tab, writing=True)
     if layer is None:
