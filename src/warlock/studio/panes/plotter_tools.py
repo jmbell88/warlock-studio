@@ -171,7 +171,7 @@ def _wang_swatch(wangset: Any, colour: Any) -> Any:
     """
     from ..tilegrid.tileset import TerrainSpec
 
-    fill = _hex_rgba(colour.colour)
+    fill = hex_rgba(colour.colour)
     return TerrainSpec(
         name=colour.name or wangset.name,
         fill=fill,
@@ -179,8 +179,13 @@ def _wang_swatch(wangset: Any, colour: Any) -> Any:
     )
 
 
-def _hex_rgba(text: str) -> tuple[int, int, int, int]:
+def hex_rgba(text: str) -> tuple[int, int, int, int]:
     """``#rrggbb`` or ``#aarrggbb`` as four channels; opaque white on nonsense.
+
+    Public since 2026-08-30, for one caller and one reason: the tileset
+    editor's Terrain tab draws the *same* swatch this picker does, and it has
+    to be the same colour by construction rather than by a second parser
+    beside it agreeing for a while.
 
     Tolerant rather than refusing, because this is a *swatch*: a colour nobody
     can parse is a row drawn in the wrong colour, and refusing the map over it

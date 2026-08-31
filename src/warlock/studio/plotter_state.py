@@ -535,6 +535,21 @@ class PlotterState:
     #: the whole drag: without it the shape leaps its corner to the pointer on
     #: the first moved frame.
     tileset_grab: tuple[float, float] | None = None
+    #: Which Wang set the Terrain tab is editing, by position in the tileset's
+    #: own tuple, and which of its colours is in the hand -- 1-based, matching a
+    #: wangid slot, with 0 meaning *Unset* rather than a colour. View state, and
+    #: a position rather than a uid for ``tileset_shape``'s reason exactly: a
+    #: Wang set has no identity of its own, it is one entry in a frozen tuple
+    #: the document rebuilds on every write, and the undoable step is addressed
+    #: by tileset index. The tab pulls both back into range on read, because an
+    #: undo can take a set or a colour out from under either of them.
+    tileset_wangset: int = 0
+    tileset_wang_colour: int = 1
+    #: What kind of Wang set the Terrain tab's *Create* button would make. On
+    #: the state rather than passed at the call because it is a choice the user
+    #: makes before pressing, and it is not a property of any set: a set's kind
+    #: is fixed when it is created (see ``create_wangset``).
+    tileset_wang_kind: str = "corner"
     # A library asset waiting for the map that ``setup_pending`` is asking
     # about. The Library's *Add to Plotter as a tileset* used to be drawn for
     # any asset with an ``input.png`` and then refused with an error toast when

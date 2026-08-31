@@ -18,6 +18,50 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **A terrain set can be made here, which it could not be at all.** The tileset editor
+  has a fourth tab, **Terrain**, and it is the author for Tiled's Wang sets. Everything
+  around one already existed: `WangColour`/`WangSet` and `Tileset.wangsets` had
+  round-tripped through `.tsx`, `.tsj` and `.wmap` since they landed, the Terrain tool's
+  swatch list had offered a Wang colour beside a blob terrain, and the constraint matcher
+  had painted with them — but the **only** way to get a set was to import a file Tiled
+  wrote. The single `wangset` reference anywhere in `panes/` was a read-only swatch
+  enumeration, which is to say the feature was a complete round trip with no entrance.
+  The tab creates and deletes whole sets, adds, renames, recolours, weights and removes
+  their colours, and writes a tile's eight slots by clicking the corner or edge itself —
+  markers positioned from `wang.slot_points` and picked with Wave 7's
+  `picking.nearest_region`, so what is drawn is what is clickable by construction rather
+  than by two lists agreeing for a while. The tile's own art is drawn under the markers,
+  because a Wang slot is a claim about *which corner of the picture is grass* and marking
+  that up against a blank square is guessing.
+- **No new data types, no new write door, and no plumbing between the author and the
+  painter.** Every gesture is one pure edit from `tilegrid.wang` followed by one
+  `MapDoc.replace_tileset` — the same undoable door the Inker polish trip and *Reload the
+  image...* already come back through, which keeps the firstgid, the tile count and the
+  declared blob terrains so nothing already painted moves. One click is one undo step,
+  which is this editor's existing granularity; unlike a collision drag there is nothing
+  continuous to batch. A set authored in the tab paints the map through the canvas's own
+  dispatch with nothing added in between, and
+  `tests/plotter/test_wang_authoring.py::test_a_set_authored_here_paints_the_map_through_the_canvas_dispatch`
+  is that end-to-end assertion.
+- **A set's `kind` is fixed when it is created**, and that is a refusal rather than an
+  omission: `kind` decides which of the eight slots a set *uses*, so an editable one
+  would either strand values in slots that no longer count — they still travel out to a
+  `.tsx` and are read back by Tiled — or clear them on the switch, which is silent data
+  loss one misclick away. Making a second set is the cheapest of the three.
+- **Removing a Wang colour renumbers every wangid.** A slot is a 1-based *position* in
+  the colour list, so dropping the second of three has to unset every slot naming it and
+  shift every slot naming the third. Left undone the set would not even construct
+  (`WangSet` refuses a slot pointing past the end); done by halves it would have quietly
+  repainted every tile in the set. `wang.without_colour` is where that lives, and it is
+  the reason the removal is not a list splice.
+- **The Terrain tab is the only one of the four with its own tile strip**, and the choice
+  was made rather than defaulted. Collision and Animation edit whichever tile the *Tiles*
+  tab selected, which is right for them — a collision shape is a property of one tile you
+  went looking for. A Wang set is not: authoring one means saying something about every
+  tile in it in a row, forty-seven of them for a blob-shaped set, and under that
+  convention each would cost a trip to the Tiles tab and back. The strip is the same
+  `_tile_grid` the Tiles tab draws, writing the same `state.editing_tile`, so it is one
+  selection shown in two places rather than a second one that can disagree with the first.
 - **A tile's collision shapes can be moved, resized and reshaped, which they could not
   be at all.** The tileset editor's Collision tab could *add* a shape and *clear* the lot
   and nothing else: `_add_shape` hard-coded the geometry to `x=0, y=0, w=tile_w,

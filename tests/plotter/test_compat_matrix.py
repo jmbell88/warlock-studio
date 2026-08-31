@@ -244,6 +244,39 @@ def test_a_positive_row_names_a_fixture_that_exists():
             )
 
 
+def test_every_authoring_claim_names_a_tab_that_exists():
+    """The other way a positive row goes stale, and the one a fixture cannot
+    catch.
+
+    A ``round-trips`` row backed by a fixture says the *format* survives the
+    trip. Several of these rows say more than that -- they name the place in
+    this app where the construct is authored ("the tileset editor's Collision
+    tab"), which is the sentence a reader acts on and the only part of the note
+    that can be checked against code rather than against a file. It goes stale
+    silently: renaming or dropping a tab leaves the ledger pointing at a
+    control that is not there, and every other test in this file stays green
+    because the *format* half is untouched.
+
+    So the tab names are read out of the note and checked against the editor's
+    own ``TABS``. Deliberately not a check that a tab has a *row*: a tab may
+    exist for something Tiled has no construct for, and demanding a row for one
+    would be inventing ledger entries to satisfy a test.
+    """
+    from warlock.studio.panes.plotter_tileset_editor import TABS
+
+    named = set()
+    for feature, state, note in _rows():
+        if state not in POSITIVE_STATES:
+            continue
+        for tab in re.findall(r"tileset editor's ([A-Z][a-z]+) tab", note):
+            assert tab in TABS, (
+                f"{feature!r} says it is authored in the tileset editor's {tab} "
+                f"tab, which is not one of {list(TABS)}"
+            )
+            named.add(tab)
+    assert named, "no row names an authoring tab -- has the note spelling changed?"
+
+
 def test_every_dialect_row_says_tiled_does_not_have_it():
     """The one thing a ``warlock-dialect`` row exists to say.
 

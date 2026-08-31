@@ -10,7 +10,7 @@ either: that would teach ``state.active``, ``plotter_canvas.draw``, four panes,
 the journal, the guard and the save path a second shape, for something that is
 a *view* of a map's own tileset.
 
-Three tabs, which are the three questions a tileset answers:
+Four tabs, which are the four questions a tileset answers:
 
 * **Tiles** -- the atlas at a readable zoom, and the per-tile form *moved* out
   of the 300 px sidebar, where a class name, a probability and a property table
@@ -22,6 +22,14 @@ Three tabs, which are the three questions a tileset answers:
   instead of the hard-coded 100 ms the sidebar's "Add frame" wrote, an order
   the arrows can change, and a preview that plays it through the same
   ``tileset.frame_at`` the canvas substitutes gids with.
+* **Terrain** -- the Wang sets, which until 2026-08-30 nothing in this app could
+  make. ``WangColour``/``WangSet`` had round-tripped through ``.tsx`` and
+  ``.wmap`` since they landed and the Terrain *tool* had painted with them the
+  whole time, but the only way to get one was to import a file Tiled wrote:
+  the single ``wangset`` reference anywhere in ``panes/`` was a read-only
+  swatch enumeration. The tab is the author, and everything downstream of it
+  -- the tool's picker, the constraint matcher, both exporters -- was already
+  built and needed no plumbing at all.
 
 **No tileset reordering, and the reason is not squeamishness**: order *is*
 firstgid order, baked into every painted cell, so reordering means renumbering
@@ -40,6 +48,7 @@ from .. import controls, icons, plotter_mode, theme, widgets
 from ..manual import render as manual_render
 from ..tilegrid import picking
 from ..tilegrid import tileset as tileset_lib
+from ..tilegrid import wang as wanglib
 from ..tilegrid.tileset import TileEllipse, TileFrame, TilePolygon, TileRect
 from ..tokens import sp
 from . import plotter_textures
@@ -58,7 +67,27 @@ TILE_CELL = 48.0
 #: works in a screenshot and not under a hand.
 HANDLE_SIZE = 8.0
 
-TABS = ("Tiles", "Collision", "Animation")
+#: How big a Wang slot marker is *drawn*, in design px.
+WANG_MARKER = 16.0
+
+#: How near the pointer has to be to a Wang marker, in design px.
+#:
+#: Much larger than :data:`picking.GRAB_RADIUS`, and the difference is not
+#: sloppiness: a collision handle is one of eight grips that can sit a single
+#: tile pixel apart on a small shape, so it needs a *tight* radius or the wrong
+#: one wins. The eight Wang markers are at fixed positions half a view apart --
+#: :data:`COLLISION_VIEW` / 2, so 128 design px -- and there is nothing else on
+#: the square to hit, so the useful radius is the one that makes a corner an
+#: easy target. 56 is under half that spacing, so no two regions can overlap and
+#: the centre of the tile still means "nothing".
+WANG_GRAB = 56.0
+
+#: What a new Wang colour is dressed in, cycled. Not white: two colours the
+#: same colour is a set whose markers cannot be told apart, which is a set the
+#: user has to name to read.
+WANG_SWATCHES = ("#4f9d52", "#c8a165", "#3f7fd0", "#b0413e", "#8d6cab", "#d0c341")
+
+TABS = ("Tiles", "Collision", "Animation", "Terrain")
 
 
 def active(ctx: Any) -> bool:
@@ -106,6 +135,8 @@ def draw(ctx: Any) -> None:
         _tiles_tab(ctx, state, tab, ref, index)
     elif which == "Collision":
         _collision_tab(ctx, state, tab, ref, index)
+    elif which == "Terrain":
+        _terrain_tab(ctx, state, tab, ref, index)
     else:
         _animation_tab(ctx, state, tab, ref, index)
 
@@ -638,3 +669,429 @@ def _preview(
         widgets.muted(f"Stopped. Tile {shown_id}.")
     else:
         widgets.muted(f"Frame {showing + 1} of {len(frames)}, tile {shown_id}.")
+
+
+# --- Terrain -----------------------------------------------------------------
+#
+# Authoring a Wang set, which is the one thing this app could not do to one.
+#
+# **No new data types and no new write door.** ``WangColour``/``WangSet`` and
+# ``Tileset.wangsets`` already existed, round-tripped and painted;
+# ``MapDoc.replace_tileset`` -- what the Inker polish trip and *Reload the
+# image...* already come back through -- is the undoable door a tileset's own
+# content changes by. So every gesture below is one pure edit from
+# ``tilegrid.wang`` followed by one ``replace_tileset``, and there is no second
+# path for a future reader to find and wonder about.
+#
+# One click is one undo step, which is this editor's existing granularity
+# (``set_tile_meta`` per control on the other three tabs). Unlike Wave 7's
+# collision drags these are *discrete* clicks, so none of the begin/live/end
+# session machinery is needed or used.
+
+
+def _wangset_at(state: Any, sets: Any) -> int:
+    """Which set the tab is on, pulled back into range.
+
+    Clamped on read rather than fixed up at every write: a set can vanish under
+    the selection by an undo as easily as by the Delete button, and a tab that
+    only corrected itself when *it* removed one would draw off the end of the
+    list after a Ctrl+Z.
+    """
+    at = int(getattr(state, "tileset_wangset", 0))
+    return at if 0 <= at < len(sets) else 0
+
+
+def _write_wangsets(tab: Any, index: int, wangsets: Any) -> None:
+    """The whole write path of this tab: a new tileset through the one door.
+
+    The tileset is rebuilt rather than written through -- ``Tileset`` is frozen
+    because the UI keys its texture upload on identity -- and
+    ``replace_tileset`` keeps the firstgid, the tile count and the declared
+    blob terrains, so nothing already painted moves.
+    """
+    ref = tab.doc.tilesets[int(index)]
+    tab.doc.replace_tileset(
+        int(index), dataclasses.replace(ref.tileset, wangsets=tuple(wangsets))
+    )
+
+
+def create_wangset(state: Any, tab: Any, index: int, kind: str = "corner") -> None:
+    """Add an empty Wang set to a tileset and select it.
+
+    **The kind is chosen here and never afterwards**, deliberately. ``kind``
+    decides which of the eight slots the set *uses* (``WangSet.slots``), so an
+    editable kind would mean either carrying values in slots that no longer
+    count -- which travel out to a ``.tsx`` and are read back by Tiled -- or
+    clearing them on the switch, which is silent data loss one misclick away.
+    Making a second set is the cheaper of the three.
+    """
+    sets = tuple(tab.doc.tilesets[int(index)].tileset.wangsets)
+    fresh = wanglib.WangSet(name=f"Terrain {len(sets) + 1}", kind=str(kind))
+    _write_wangsets(tab, index, (*sets, fresh))
+    state.tileset_wangset = len(sets)
+    state.tileset_wang_colour = 1
+
+
+def delete_wangset(state: Any, tab: Any, index: int, at: int) -> None:
+    """Remove one whole Wang set. Undoable, like every other write here.
+
+    No usage refusal, and that is the difference between this and removing a
+    *tileset*: a cell stores a gid, so dropping a tileset renumbers what every
+    painted cell means, while a Wang set is only ever consulted to *choose* a
+    gid. The cells it chose stay exactly as they are and simply stop growing
+    new edges, which is a change the user can see and undo.
+    """
+    sets = tuple(tab.doc.tilesets[int(index)].tileset.wangsets)
+    if not 0 <= int(at) < len(sets):
+        return
+    _write_wangsets(tab, index, tuple(s for i, s in enumerate(sets) if i != int(at)))
+    state.tileset_wangset = max(0, int(at) - 1)
+
+
+def add_wang_colour(state: Any, tab: Any, index: int, at: int) -> None:
+    """One more colour on the selected set, and it goes into the hand.
+
+    Selected for ``_add_shape``'s reason: a colour added and left unarmed is
+    one the user has to discover they can click before they can discover they
+    can paint a corner with it.
+    """
+    sets = tuple(tab.doc.tilesets[int(index)].tileset.wangsets)
+    if not 0 <= int(at) < len(sets):
+        return
+    wangset = sets[int(at)]
+    count = len(wangset.colours)
+    fresh = wanglib.WangColour(
+        name=f"Terrain {count + 1}", colour=WANG_SWATCHES[count % len(WANG_SWATCHES)]
+    )
+    _write_wangsets(tab, index, _swapped(sets, at, wanglib.with_colour(wangset, fresh)))
+    state.tileset_wang_colour = count + 1
+
+
+def remove_wang_colour(state: Any, tab: Any, index: int, at: int, colour: int) -> None:
+    """Drop a colour, and with it every slot that named it.
+
+    The renumbering is ``wang.without_colour``'s and is the whole reason this
+    is not a list splice: a slot is a *position* in ``colours``.
+    """
+    sets = tuple(tab.doc.tilesets[int(index)].tileset.wangsets)
+    if not 0 <= int(at) < len(sets):
+        return
+    wangset = sets[int(at)]
+    if not 0 <= int(colour) < len(wangset.colours):
+        return
+    _write_wangsets(
+        tab, index, _swapped(sets, at, wanglib.without_colour(wangset, int(colour)))
+    )
+    # The hand holds a 1-based colour number, and the numbers just moved.
+    state.tileset_wang_colour = min(
+        int(state.tileset_wang_colour), len(wangset.colours) - 1
+    )
+
+
+def set_wang_colour(
+    state: Any, tab: Any, index: int, at: int, colour: int, entry: Any
+) -> None:
+    """A rename, a new swatch or a new probability on one colour."""
+    sets = tuple(tab.doc.tilesets[int(index)].tileset.wangsets)
+    if not 0 <= int(at) < len(sets):
+        return
+    edited = wanglib.with_colour_at(sets[int(at)], int(colour), entry)
+    if edited != sets[int(at)]:
+        _write_wangsets(tab, index, _swapped(sets, at, edited))
+
+
+def rename_wangset(tab: Any, index: int, at: int, name: str) -> None:
+    """The set's own name, which is what a Tiled user sees in the terrain bar."""
+    sets = tuple(tab.doc.tilesets[int(index)].tileset.wangsets)
+    if not 0 <= int(at) < len(sets) or sets[int(at)].name == str(name):
+        return
+    edited = dataclasses.replace(sets[int(at)], name=str(name))
+    _write_wangsets(tab, index, _swapped(sets, at, edited))
+
+
+def _terrain_tab(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
+    """The Wang sets on this tileset, their colours, and one tile's eight slots.
+
+    **This tab draws its own tile strip**, and it is the only one of the four
+    that does. The other three edit whichever tile the *Tiles* tab selected --
+    the convention since the sheet landed -- and that is right for them: a
+    collision shape or an animation is a property of one tile you went looking
+    for. A Wang set is not. Authoring one means saying something about *every*
+    tile in the set in a row, forty-seven of them for a blob-shaped one, and
+    under the existing convention each of those would cost a trip to the Tiles
+    tab and back. The strip is the same ``_tile_grid`` the Tiles tab draws,
+    writing the same ``state.editing_tile``, so this is one selection shown in
+    two places rather than a second selection that can disagree with the first:
+    switch to Collision and you are on the tile you were just marking up.
+    """
+
+    tileset = ref.tileset
+    sets = tuple(tileset.wangsets)
+    _wangset_row(ctx, state, tab, index, sets)
+    if not sets:
+        widgets.muted_wrapped(
+            "A terrain set says, per tile, which colour sits at each of its "
+            "corners and edges -- and the Terrain tool then picks the tile whose "
+            "corners match what is already around the cell. Create one to start."
+        )
+        return
+    at = _wangset_at(state, sets)
+    wangset = sets[at]
+    imgui.separator()
+    _wang_colours(ctx, state, tab, index, sets, at, wangset)
+    if not wangset.colours:
+        widgets.muted_wrapped(
+            "Add a colour first: a slot is painted with a colour, so a set with "
+            "none has nothing it can say about a tile."
+        )
+        return
+    imgui.separator()
+    widgets.muted("Tile")
+    _tile_grid(ctx, state, ref)
+    local = int(state.editing_tile)
+
+    side = sp(COLLISION_VIEW)
+    origin = imgui.get_cursor_screen_pos()
+    view = picking.TileView(
+        origin=(origin.x, origin.y),
+        side=side,
+        tile_w=tileset.tile_w,
+        tile_h=tileset.tile_h,
+    )
+    _terrain_draw(ctx, tab, index, tileset, view, wangset, local)
+    imgui.invisible_button(f"##tswang-view{local}", (side, side))
+    _terrain_input(ctx, state, tab, index, local, view, imgui.is_item_hovered())
+
+    wangid = wangset.wangid_of(local)
+    used = [wangid[slot] for slot in wangset.slots]
+    widgets.muted(
+        f"Tile {local}: {sum(1 for value in used if value)} of {len(used)} "
+        f"{wangset.kind} slot(s) set"
+    )
+    widgets.muted_wrapped(
+        "Click a corner or an edge of the tile to put the colour in hand there, "
+        "and Unset to clear one. A tile every one of whose slots is the same "
+        "colour is that colour's interior -- the tile a click on the map lays "
+        "down -- and the rest are what the neighbours choose between."
+    )
+
+
+def _wangset_row(ctx: Any, state: Any, tab: Any, index: int, sets: Any) -> None:
+    """Which set is being edited, its name, and the two set-level buttons."""
+
+    if sets:
+        at = _wangset_at(state, sets)
+        changed, picked = controls.segmented_choice(
+            "plotter-wangset",
+            [
+                (str(slot), f"{entry.name or 'Terrain'} ({entry.kind})")
+                for slot, entry in enumerate(sets)
+            ],
+            str(at),
+        )
+        if changed:
+            state.tileset_wangset = int(picked)
+            state.tileset_wang_colour = 1
+            return
+        name = widgets.input_text(
+            "##tswang-name", sets[at].name, max_length=64, hint="set name"
+        )
+        if name != sets[at].name:
+            rename_wangset(tab, index, at, name)
+
+    width = widgets.grid_width(3)
+    kind = str(getattr(state, "tileset_wang_kind", "corner"))
+    if kind not in wanglib.WANG_KINDS:
+        kind = "corner"
+    changed, picked = controls.segmented_choice(
+        "plotter-wangkind",
+        [(entry, entry.title()) for entry in wanglib.WANG_KINDS],
+        kind,
+    )
+    if changed:
+        state.tileset_wang_kind = picked
+        kind = picked
+    if controls.button(f"Create a {kind} set##tswang-new", (width, 0)):
+        create_wangset(state, tab, index, kind)
+        return
+    if sets:
+        imgui.same_line()
+        if controls.button("Delete this set##tswang-del", (width, 0)):
+            delete_wangset(state, tab, index, _wangset_at(state, sets))
+            return
+    widgets.muted_wrapped(
+        "A corner set decides a tile by its four corners, an edge set by its "
+        "four sides, and a mixed set by all eight. The kind is fixed when the "
+        "set is created, because changing it later would either strand values "
+        "in slots that no longer count or throw them away."
+    )
+
+
+def _wang_colours(
+    ctx: Any, state: Any, tab: Any, index: int, sets: Any, at: int, wangset: Any
+) -> None:
+    """The colour list, and which one is in the hand.
+
+    ``Unset`` is a first-class entry rather than a right-click or a modifier:
+    clearing a slot is as ordinary as setting one, and every gesture on this
+    tab is then the same gesture with a different colour in hand.
+    """
+    from . import plotter_tools
+
+    widgets.muted("Colours")
+    width = widgets.grid_width(3)
+    in_hand = int(getattr(state, "tileset_wang_colour", 1))
+    if controls.button("Unset##tswang-c0", (width, 0), selected=in_hand == 0):
+        state.tileset_wang_colour = 0
+    for slot, colour in enumerate(wangset.colours):
+        imgui.push_id(f"tswang-colour{slot}")
+        fill = tuple(part / 255.0 for part in plotter_tools.hex_rgba(colour.colour))
+        imgui.push_style_color(imgui.Col_.button.value, imgui.get_color_u32(fill))
+        imgui.push_style_color(
+            imgui.Col_.button_hovered.value, imgui.get_color_u32(fill)
+        )
+        pressed = controls.button(
+            f"{colour.name or slot + 1}##pick", (width, 0), selected=in_hand == slot + 1
+        )
+        imgui.pop_style_color(2)
+        if pressed:
+            state.tileset_wang_colour = slot + 1
+        imgui.same_line()
+        name = widgets.input_text("##name", colour.name, max_length=64, hint="name")
+        moved, value = controls.color_edit4(
+            "##swatch",
+            imgui.ImVec4(fill[0], fill[1], fill[2], 1.0),
+            imgui.ColorEditFlags_.no_inputs.value
+            | imgui.ColorEditFlags_.no_alpha.value
+            | imgui.ColorEditFlags_.display_hex.value
+            | imgui.ColorEditFlags_.picker_hue_bar.value,
+        )
+        weighed, probability = controls.input_float(
+            "Probability", float(colour.probability)
+        )
+        if name != colour.name or moved or weighed:
+            set_wang_colour(
+                state,
+                tab,
+                index,
+                at,
+                slot,
+                wanglib.WangColour(
+                    name=name,
+                    colour=_hex_text(value) if moved else colour.colour,
+                    probability=max(0.0, probability),
+                ),
+            )
+            imgui.pop_id()
+            return
+        if widgets.icon_button("x##drop", "Remove this colour", borderless=True):
+            remove_wang_colour(state, tab, index, at, slot)
+            imgui.pop_id()
+            return
+        imgui.pop_id()
+    if controls.button("Add a colour##tswang-add", (width, 0)):
+        add_wang_colour(state, tab, index, at)
+
+
+def _hex_text(value: Any) -> str:
+    """imgui's float colour as Tiled's ``#rrggbb``, which is what a set stores."""
+    channels = (value.x, value.y, value.z) if hasattr(value, "x") else tuple(value)[:3]
+    return "#" + "".join(
+        f"{max(0, min(255, int(round(part * 255)))):02x}" for part in channels
+    )
+
+
+def _terrain_draw(
+    ctx: Any, tab: Any, index: int, tileset: Any, view: Any, wangset: Any, local: int
+) -> None:
+    """The tile, large, with a marker at each slot the set uses.
+
+    **The tile's own art is drawn under the markers**, which the Collision tab
+    does not do and this one has to: a collision shape is judged against a
+    silhouette you can hold in your head, but a Wang slot is a claim about
+    *which corner of the picture is grass*, and marking that up against a blank
+    square is guessing. Falls back to the same flat panel when there is no GL
+    context, which is the headless suite.
+
+    The marker positions come from :func:`wang.slot_points` -- the same
+    function :func:`_terrain_input` builds its click regions from -- so what is
+    drawn is exactly what is clickable.
+    """
+    from . import plotter_tools
+
+    draw_list = imgui.get_window_draw_list()
+    width, height = view.size
+    low = view.origin
+    high = (low[0] + width, low[1] + height)
+    texture = plotter_textures.tileset_texture(
+        ctx, tab.uid, index, tileset, tab.doc.tileset_epoch
+    )
+    if texture is None:
+        draw_list.add_rect_filled(
+            low, high, imgui.get_color_u32(theme.rgba(theme.PANEL))
+        )
+    else:
+        u0, v0, u1, v1 = tileset.uv(int(local))
+        draw_list.add_image(widgets.texture_ref(texture), low, high, (u0, v0), (u1, v1))
+    outline = imgui.get_color_u32(theme.rgba(theme.ACCENT, 0.55))
+    draw_list.add_rect(low, high, outline)
+    wangid = wangset.wangid_of(local)
+    radius = sp(WANG_MARKER) / 2.0
+    for slot, point in wanglib.slot_points(
+        view.tile_w, view.tile_h, wangset.slots
+    ).items():
+        centre = view.to_screen(*point)
+        value = wangid[slot]
+        fill = (
+            tuple(
+                part / 255.0
+                for part in plotter_tools.hex_rgba(wangset.colours[value - 1].colour)
+            )
+            if value
+            else theme.rgba(theme.PANEL, 0.75)
+        )
+        draw_list.add_circle_filled(centre, radius, imgui.get_color_u32(fill))
+        # Every marker keeps its ring, set or not: the ring is what says "this
+        # is a place you can click", and a slot only visible once it already
+        # holds a colour is a control nobody finds.
+        draw_list.add_circle(centre, radius, outline)
+
+
+def _terrain_input(
+    ctx: Any, state: Any, tab: Any, index: int, local: int, view: Any, hovered: bool
+) -> None:
+    """One click on one slot -- the whole Terrain gesture.
+
+    Written as a dispatch beside ``_collision_input`` for its reason: the rule
+    that matters is which region a press lands on, and a test calling a helper
+    would assert around that rather than through it.
+    ``tests/plotter/test_wang_authoring`` drives this with the shared synthetic
+    pointer.
+
+    No drag session, because there is nothing continuous here: a slot is one of
+    a few discrete values and a click sets it. One click is one undo step.
+    """
+    if not (hovered and imgui.is_mouse_clicked(0)):
+        return
+    sets = tuple(tab.doc.tilesets[int(index)].tileset.wangsets)
+    if not sets:
+        return
+    at = _wangset_at(state, sets)
+    wangset = sets[at]
+    colour = int(getattr(state, "tileset_wang_colour", 1))
+    if colour > len(wangset.colours):
+        # The hand can hold a colour an undo has taken away.
+        return
+    regions = {
+        slot: view.to_screen(*point)
+        for slot, point in wanglib.slot_points(
+            view.tile_w, view.tile_h, wangset.slots
+        ).items()
+    }
+    mouse = imgui.get_mouse_pos()
+    slot = picking.nearest_region(regions, (mouse.x, mouse.y), sp(WANG_GRAB))
+    if slot is None:
+        return
+    edited = wanglib.with_slot(wangset, int(local), int(slot), colour)
+    if edited != wangset:
+        _write_wangsets(tab, index, _swapped(sets, at, edited))

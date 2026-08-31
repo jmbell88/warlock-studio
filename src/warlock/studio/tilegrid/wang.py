@@ -27,7 +27,7 @@ has.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import blob
@@ -76,6 +76,27 @@ SHARERS: tuple[tuple[tuple[tuple[int, int], int], ...], ...] = (
 #: :data:`SHARERS` is exactly this plus the offset, which is worth being able to
 #: state and check rather than only to read off a table.
 OPPOSITE: tuple[int, ...] = (4, 5, 6, 7, 0, 1, 2, 3)
+
+#: Where each slot sits *on the tile*, as a fraction of its width and height,
+#: in :data:`POSITIONS` order. An edge slot is the middle of that side and a
+#: corner slot is the corner itself, which is not a drawing convenience: it is
+#: what the slot *means*, since a corner is the lattice point four cells meet
+#: at and an edge is the line two share.
+#:
+#: Here rather than in the pane that draws it, because the same eight points
+#: are what the pane's click regions are keyed on -- a second copy is how a
+#: marker comes to be drawn somewhere it cannot be clicked, which is exactly
+#: the defect ``picking`` was factored out to prevent for collision handles.
+SLOT_FRACTIONS: tuple[tuple[float, float], ...] = (
+    (0.5, 0.0),  # 0 top edge
+    (1.0, 0.0),  # 1 top-right corner
+    (1.0, 0.5),  # 2 right edge
+    (1.0, 1.0),  # 3 bottom-right corner
+    (0.5, 1.0),  # 4 bottom edge
+    (0.0, 1.0),  # 5 bottom-left corner
+    (0.0, 0.5),  # 6 left edge
+    (0.0, 0.0),  # 7 top-left corner
+)
 
 
 @dataclass(frozen=True)
@@ -189,6 +210,107 @@ class WangSet:
         if not used:
             return 1.0
         return sum(self.colours[slot - 1].probability for slot in used) / len(used)
+
+
+def slot_points(
+    tile_w: int, tile_h: int, slots: Any = None
+) -> dict[int, tuple[float, float]]:
+    """``{slot: (x, y)}`` in *tile pixels*, for the slots ``slots`` names.
+
+    ``slots`` defaults to all eight; pass a set's own :attr:`WangSet.slots` to
+    get only the half it uses, which is what keeps a corner-only set from
+    growing edge values nobody stores and nothing reads.
+
+    The shape a ``picking.nearest_region`` call wants -- a key and a point --
+    because that is the whole reason the marker positions are data: the tile
+    view converts them to screen once and the picker answers off the same dict
+    the drawing used.
+    """
+    width, height = float(max(1, int(tile_w))), float(max(1, int(tile_h)))
+    wanted = range(POSITIONS) if slots is None else [int(slot) for slot in slots]
+    return {
+        slot: (SLOT_FRACTIONS[slot][0] * width, SLOT_FRACTIONS[slot][1] * height)
+        for slot in wanted
+        if 0 <= slot < POSITIONS
+    }
+
+
+# --- authoring ---------------------------------------------------------------
+#
+# Five pure edits, each returning a **new** frozen set. Pure for ``picking``'s
+# reason exactly: the caller decides what the result goes through, which for
+# the tileset editor is ``MapDoc.replace_tileset`` -- the one undoable door a
+# tileset's own content changes by -- and never a second write path invented
+# beside it.
+
+
+def with_slot(wangset: WangSet, local_id: int, slot: int, colour: int) -> WangSet:
+    """One tile's one slot set to ``colour``. 0 clears it.
+
+    A wangid that ends up all-zero drops out of ``tiles`` rather than being
+    stored as eight noughts. That is the sparse rule ``set_tile_meta`` already
+    keeps for tile metadata, and it is what makes "does this set describe tile
+    seven" one question with one answer -- a stored blank would round-trip out
+    to a ``<wangtile>`` element saying nothing.
+    """
+    at = int(slot)
+    if not 0 <= at < POSITIONS:
+        raise IndexError(f"a wangid has slots 0..{POSITIONS - 1}, not {at}")
+    value = int(colour)
+    if value < 0 or value > len(wangset.colours):
+        raise ValueError(f"this set has no colour {value}")
+    wangid = list(wangset.wangid_of(local_id))
+    wangid[at] = value
+    tiles = dict(wangset.tiles)
+    if any(wangid):
+        tiles[int(local_id)] = tuple(wangid)
+    else:
+        tiles.pop(int(local_id), None)
+    return replace(wangset, tiles=tiles)
+
+
+def with_colour(wangset: WangSet, colour: WangColour) -> WangSet:
+    """``wangset`` with one more colour, appended. Existing wangids are
+    untouched: a colour's number is its position, and appending moves none."""
+    return replace(wangset, colours=(*wangset.colours, colour))
+
+
+def with_colour_at(wangset: WangSet, index: int, colour: WangColour) -> WangSet:
+    """``wangset`` with colour ``index`` (0-based) replaced -- a rename, a new
+    swatch or a new probability. The wangids name *positions*, so none moves."""
+    at = int(index)
+    if not 0 <= at < len(wangset.colours):
+        raise IndexError(f"no colour {at} in this set")
+    colours = list(wangset.colours)
+    colours[at] = colour
+    return replace(wangset, colours=tuple(colours))
+
+
+def without_colour(wangset: WangSet, index: int) -> WangSet:
+    """``wangset`` minus colour ``index``, **with every wangid renumbered**.
+
+    The renumbering is the whole of this function and the reason it is not a
+    one-line ``replace``. A wangid slot is a 1-based position in ``colours``, so
+    dropping the second of three does two things to the table at once: every
+    slot naming it becomes unset, and every slot naming a *later* colour now
+    names a colour one place to the left. Leaving either undone is not a
+    cosmetic error -- :meth:`WangSet.__post_init__` refuses a slot pointing past
+    the end, so the set would not even construct, and a set that constructed
+    with the numbers unshifted would have quietly repainted every tile in it.
+    """
+    at = int(index)
+    if not 0 <= at < len(wangset.colours):
+        raise IndexError(f"no colour {at} in this set")
+    gone = at + 1
+    tiles: dict[int, tuple[int, ...]] = {}
+    for local, wangid in wangset.tiles.items():
+        edited = tuple(
+            0 if slot == gone else (slot - 1 if slot > gone else slot) for slot in wangid
+        )
+        if any(edited):
+            tiles[int(local)] = edited
+    colours = tuple(c for pos, c in enumerate(wangset.colours) if pos != at)
+    return replace(wangset, colours=colours, tiles=tiles)
 
 
 def blob_wangset(names: list[str], colours: list[str]) -> WangSet:

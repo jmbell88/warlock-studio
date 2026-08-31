@@ -141,6 +141,45 @@ A whole drag is **one** undo step, not one per frame — the shape moves live un
 the history moves once, when you let go. **Remove shape** takes out the selected one; **Clear**
 takes out all of them.
 
+### Making a terrain set
+
+The **Terrain** tab is where a terrain set is authored. Until it existed, the only way to get one
+was to import a file Tiled had written: the Terrain tool could paint with a set and the exporters
+could write one out, but nothing here could make one.
+
+A terrain set is a list of **colours** — grass, sand, water — and, per tile, which colour sits at
+each of its corners and edges. That is all it is. The Terrain tool then does the rest: you click a
+cell, it asserts the colour you are holding there, and it picks the tile whose corners match what is
+already around it. Nothing is stored on the cell but the tile you can see, which is why a
+hand-stamped tile joins a field for free.
+
+**Create a corner set** makes an empty one. The three kinds differ in what they look at: a *corner*
+set decides a tile by its four corners, an *edge* set by its four sides, and a *mixed* set by all
+eight. A corner set is the usual choice and the one Tiled defaults to. **The kind is fixed when the
+set is made** — changing it later would either leave values in slots that no longer count, which
+still travel out to a `.tsx`, or throw them away without asking. Make a second set instead.
+
+Then **Add a colour** for each terrain, and name it: the name is what appears on the swatch in the
+Terrain section of the toolbox, so *grass* and *cliff* beat *Terrain 1* and *Terrain 2*. The swatch
+colour is only a label — it never reaches the map. **Probability** is a tie-break: when two tiles
+match a cell equally well, the heavier one is chosen more often.
+
+Now mark up the tiles. The strip shows every tile in the set — this tab has its own, because
+authoring means going through the tiles one after another — and the big square under it is the
+selected tile with its own art in it and a **marker at each corner or edge** the set uses. Click the
+colour you want in the list, then click a marker to put it there. **Unset** clears one.
+
+The tile whose slots are *all* the same colour is that colour's **interior**, and it is the tile a
+click on the map lays down; everything else in the set is an edge or a corner the neighbours choose
+between. A set with no interior for a colour paints nothing with it rather than guessing — which is
+the same rule as everywhere else here: no match leaves the cell alone, because a wrong tile is a
+mistake you have to find by looking.
+
+Each click is one undo step, and so is each button. **Delete this set** removes the whole set; the
+cells it already chose stay exactly as they are, since a cell stores a tile and not a terrain.
+Removing a *colour* renumbers the rest, so every tile marked up with a later colour follows it
+along rather than silently changing meaning.
+
 ### Picking a tile
 
 Each of the map's tilesets gets a **tab** along the top of the pane; click one to paint with that

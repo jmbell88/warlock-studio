@@ -53,12 +53,19 @@ class Mouse:
 
 
 class TileScene:
-    """The tileset editor's Collision tab, over one tile, with a fake mouse.
+    """The tileset editor's tile view, over one tile, with a fake mouse.
 
     The second scene in this file rather than a second harness: it reuses
     :class:`Mouse` verbatim and drives ``plotter_tileset_editor``'s real
-    ``_collision_input`` dispatch one call per frame, exactly as :class:`Scene`
-    drives ``plotter_canvas._object_input``.
+    per-tile dispatch one call per frame, exactly as :class:`Scene` drives
+    ``plotter_canvas._object_input``.
+
+    Two tabs share it, because they are the same gesture over the same square:
+    ``tileset_tab="Collision"`` drives ``_collision_input`` and
+    ``tileset_tab="Terrain"`` drives ``_terrain_input``. They take the same
+    arguments, so :meth:`frame` differs by one lookup rather than by a second
+    harness -- which is the whole reason the click-region machinery was
+    factored out in the first place.
 
     The view is the production one -- ``COLLISION_VIEW`` design px over the
     tile, so 16x for a 16 px tile -- because the grab radius is in *screen*
@@ -74,6 +81,7 @@ class TileScene:
         tile: int = 16,
         tiles: int = 4,
         side: float | None = None,
+        tileset_tab: str = "Collision",
     ) -> None:
         import numpy as np
 
@@ -91,7 +99,7 @@ class TileScene:
         self.local = 0
         self.state = plotter_state.PlotterState()
         self.state.editing_tileset = 0
-        self.state.tileset_tab = "Collision"
+        self.state.tileset_tab = str(tileset_tab)
         self.tab = SimpleNamespace(
             doc=self.doc,
             uid="tab-1",
@@ -116,6 +124,20 @@ class TileScene:
     @property
     def meta(self) -> Any:
         return self.doc.tilesets[0].tileset.meta_of(self.local)
+
+    @property
+    def wangsets(self) -> tuple:
+        """The tileset's Wang sets, re-read every time.
+
+        Never cached and never off ``self.ref``: the Terrain tab writes through
+        ``replace_tileset``, which swaps the whole ``TilesetRef``, so a held
+        reference is the atlas as it was before the last click.
+        """
+        return tuple(self.doc.tilesets[0].tileset.wangsets)
+
+    @property
+    def wangset(self) -> Any:
+        return self.wangsets[int(self.state.tileset_wangset)]
 
     @property
     def shapes(self) -> tuple:
@@ -172,9 +194,12 @@ class TileScene:
         self.mouse.ctrl = ctrl
         self.mouse.shift = shift
         self.mouse.alt = alt
-        plotter_tileset_editor._collision_input(
-            self.ctx, self.state, self.tab, 0, self.local, self.view, hovered
+        dispatch = (
+            plotter_tileset_editor._terrain_input
+            if self.state.tileset_tab == "Terrain"
+            else plotter_tileset_editor._collision_input
         )
+        dispatch(self.ctx, self.state, self.tab, 0, self.local, self.view, hovered)
 
     def drag(
         self, start: tuple[float, float], end: tuple[float, float], **mods: Any
