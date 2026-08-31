@@ -1652,6 +1652,11 @@ class InkerState:
     palette_sort: str = "luma"
     palette_sort_desc: bool = False
     palette_ramp: int = 3
+    #: Which palette the folder browser has selected, by stem. View state and
+    #: nothing else: the folder is the truth, and a name remembered here that
+    #: has since been deleted is answered by the browser drawing the first name
+    #: it *does* have rather than by anything stored being wrong.
+    palette_pick: str = ""
     #: The open conversion session: **which tab owns it**, which method it is
     #: previewing, how many colours a built table may have, and the table
     #: itself. View state, none of it persisted -- the *document* keeps the

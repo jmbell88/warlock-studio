@@ -18,6 +18,30 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **Four palette formats, and a folder to keep them in.** The Inker read GIMP `.gpl` and
+  JASC `.pal`; the pixel pipeline read `.gpl` and Lospec `.hex`; neither read Paint.NET's
+  `.txt`, and the palette directory listed only two suffixes, so a `.pal` or a `.txt`
+  dropped in it was not refused — it never appeared at all. All four formats are now read
+  and written on both sides, and the palette directory offers all four. The duplication is
+  deliberate and forced: `pipelines/pixel.py` may not import the studio, and the headless
+  `studio/inker/gpl.py` may not import a pipeline, so each keeps its own parser —
+  `tests/inker/test_palette_formats.py` feeds both the *same fixture bytes*, one real file
+  per format, and asserts the same colours come back, including on a malformed row, so the
+  two cannot drift quietly. `service/palettes.py` carried a long comment explaining why
+  `.pal` and `.txt` were absent; it is rewritten rather than left to lie about the tree.
+- **The palette folder is browsable from the Inker at last.** Every palette path in that
+  workspace was an OS file dialog, which starts wherever it was last, so the palettes a
+  user keeps were three navigations away every time. The Colour panel now lists the
+  palette directory and loads one by name — through `inspector.palette_names`, so there is
+  one remembering of that directory rather than two, and from a *pane*, because the
+  headless Inker package may not import the service layer. It presets nothing: Warlock
+  ships no palettes, and a palette is still just a file you dropped in a folder. Driven in
+  test by clicking the real button at the rect imgui put it at, because a control that
+  draws and does nothing is the defect this project has shipped most often.
+- **A palette can leave as a picture, not only arrive as one.** *Image...* built a palette
+  out of any image and there was no way back out; **Export image** writes the document's
+  table as a PNG swatch strip, which reads back as the same table in the same order and is
+  how a palette reaches a tool that reads no palette format at all.
 - **A terrain set can be made here, which it could not be at all.** The tileset editor
   has a fourth tab, **Terrain**, and it is the author for Tiled's Wang sets. Everything
   around one already existed: `WangColour`/`WangSet` and `Tileset.wangsets` had

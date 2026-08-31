@@ -343,6 +343,18 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
     imgui.same_line()
     if controls.small_button("Not indexed"):
         inker_mode.index_to(ctx, tab, None)
+    # A row of its own rather than a fourth on the one above: the Colour pane
+    # is 300 design px wide and ``same_line`` past the content region draws a
+    # control nobody can reach, which is exactly how the palette-source row
+    # below was lost once already.
+    if controls.small_button(
+        "Export image",
+        tooltip=(
+            "The palette as a PNG swatch strip -- the other half of "
+            "Image..., and how it reaches a tool that reads no palette file."
+        ),
+    ):
+        inker_mode.export_palette_image(ctx)
     if controls.small_button("Re-convert..."):
         inker_bridge.open_convert(ctx, tab)
     imgui.same_line()
@@ -459,11 +471,85 @@ def _palette_files(ctx: Any, state: Any) -> None:
     ):
         inker_mode.export_palette(ctx)
     widgets.help_marker(
-        "GIMP .gpl, which Krita, Aseprite and Inkscape all read, or JASC .pal. "
-        "The format follows the suffix you save under; neither has an alpha "
-        "channel, so exported swatches are written opaque. An import adds to "
-        "the row rather than replacing it."
+        "GIMP .gpl, which Krita, Aseprite and Inkscape all read, JASC .pal, "
+        "Lospec .hex or Paint.NET .txt. The format follows the suffix you save "
+        "under; only .txt has an alpha channel, so swatches exported to the "
+        "other three are written opaque. An import adds to the row rather than "
+        "replacing it."
     )
+    _palette_folder(ctx, state)
+
+
+def _palette_folder(ctx: Any, state: Any) -> None:
+    """The palette *folder*: every palette file the user has dropped in one place.
+
+    The one palette door in this workspace that is not an OS file dialog, and
+    the reason to have it: a picker starts wherever it was last, so the palettes
+    a user keeps are three navigations away every single time. This is the same
+    zero-registry convention the rest of the app already uses -- a palette is a
+    file in ``config.palette_dir``, there is nothing to install and nothing to
+    register -- drawn where the Inker actually needs it.
+
+    ``service.palettes`` is called from **here** and not from
+    ``studio/inker/``: the headless package may not import the service layer.
+    The listing goes through ``inspector.palette_names`` rather than calling
+    ``available`` directly, because that function owns the once-per-directory-
+    version remembering and a second copy of it would be a second thing to
+    invalidate when a file lands.
+    """
+    from ...service import palettes as svc_palettes
+    from . import inspector
+
+    names = inspector.palette_names(ctx)
+    imgui.dummy((0, 2))
+    if not names:
+        # A muted line and not a warning: the folder is opt-in, and having no
+        # palettes in it is the ordinary state of a fresh install.
+        widgets.muted_wrapped(f"No palette files yet. {svc_palettes.SUFFIX_HELP}")
+        return
+    if state.palette_pick not in names:
+        state.palette_pick = names[0]
+    widgets.field_label("folder")
+    state.palette_pick = widgets.combo(
+        "##palfolder",
+        state.palette_pick,
+        [(name, name) for name in names],
+        sp(150),
+        tooltip=svc_palettes.SUFFIX_HELP,
+    )
+    imgui.same_line()
+    if controls.button(
+        "Load",
+        tooltip="Add this palette's colours to the swatch row above.",
+    ):
+        _load_named_palette(ctx, state.palette_pick)
+
+
+def _load_named_palette(ctx: Any, name: str) -> None:
+    """Read one palette out of the folder and add it to the swatch row.
+
+    Off the frame thread under ``import_palette``'s own key, which is what
+    makes the landing free: this ends up in exactly the same place a file
+    dialog's import does -- appended to the row, with the count said out loud
+    -- and a second landing branch that did the same thing differently is how
+    two doors to one act drift apart. Sharing the key also means the two cannot
+    both be in flight, which is correct: they are the same act.
+
+    A file that is not a palette, or one deleted between the listing and the
+    click, comes back as ``service.errors.Invalid`` -- a ``ServiceError``, so
+    the task runner surfaces its message rather than "something went wrong".
+    """
+    from ...service import palettes as svc_palettes
+
+    config = ctx.svc.config
+
+    def run() -> list[tuple[int, int, int, int]]:
+        _name, colours, _digest = svc_palettes.load(config, name)
+        # Opaque: three of the four formats have no alpha at all, and the
+        # service's own reader answers in RGB triples whichever it read.
+        return [(r, g, b, 255) for r, g, b in colours]
+
+    ctx.submit("inker-palette", run)
 
 
 def _harmonies(ctx: Any, state: Any) -> None:

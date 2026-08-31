@@ -2599,7 +2599,11 @@ def on_task_done(ctx: Any, done: Any) -> None:
             ctx.toast(f"Added {len(result)} colour(s).", "success")
         return
 
-    if name in ("inker-palette-export", "inker-palette-export-doc"):
+    if name in (
+        "inker-palette-export",
+        "inker-palette-export-doc",
+        "inker-palette-export-image",
+    ):
         # Said out loud. Neither key had a branch here at all, so a palette
         # export fell through to the uid-keyed tail below, found no ``:`` in its
         # key and returned -- reporting neither success nor failure. A write to
@@ -3778,17 +3782,30 @@ def release_all(ctx: Any) -> None:
 
 GPL_FILTER = ["GIMP palette (*.gpl)", "*.gpl"]
 
-# Both text palette formats behind one filter, the combined pattern first so the
+# Every text palette format behind one filter, the combined pattern first so the
 # picker opens on it. ``.pal`` is JASC's text form only -- see ``gpl.parse_jasc``
 # for why the other two things called ``.pal`` are refused rather than guessed.
+#
+# The four match ``service.palettes.SUFFIXES`` and ``gpl``'s own writers, which
+# is asserted rather than assumed: a filter that offers a suffix no writer
+# handles produces a file in the wrong format under the right name, and one
+# that omits a suffix the reader takes hides files the user already owns.
 PALETTE_FILTER = [
-    "Palettes (*.gpl *.pal)",
-    "*.gpl *.pal",
+    "Palettes (*.gpl *.pal *.hex *.txt)",
+    "*.gpl *.pal *.hex *.txt",
     "GIMP palette (*.gpl)",
     "*.gpl",
     "JASC palette (*.pal)",
     "*.pal",
+    "Lospec palette (*.hex)",
+    "*.hex",
+    "Paint.NET palette (*.txt)",
+    "*.txt",
 ]
+
+#: The suffixes ``_write_palette`` will write under, and the set the filter
+#: above offers. ``.gpl`` is the fallback for anything else.
+PALETTE_SUFFIXES = (".gpl", ".pal", ".hex", ".txt")
 
 
 def _write_palette(path: Any, colours: list[tuple[int, int, int, int]], name: str) -> None:
@@ -3810,7 +3827,7 @@ def _write_palette(path: Any, colours: list[tuple[int, int, int, int]], name: st
     from .inker import gpl
 
     dest = Path(path)
-    if dest.suffix.lower() not in (".gpl", ".pal"):
+    if dest.suffix.lower() not in PALETTE_SUFFIXES:
         dest = dest.with_suffix(".gpl")
     atomic.write_text(
         dest, gpl.dumps_for(dest.suffix, colours, name), encoding="utf-8", newline=""
@@ -4081,6 +4098,74 @@ def export_document_palette(ctx: Any) -> None:
     # Not ``inker-palette-export``: see the sibling above for why sharing it
     # made one of the two commands inert whenever the other was open.
     ctx.submit("inker-palette-export-doc", run)
+
+
+#: One swatch of an exported palette strip, in real pixels. Bigger than the one
+#: pixel per colour some tools write, because the file is looked at as often as
+#: it is read back: at 1px a sixteen-colour palette is a 16x1 image that every
+#: viewer renders as a smear. ``palette_from_image`` reads the strip back to
+#: exactly the same colours either way -- it works over the *distinct* colours
+#: in the image, not over its pixels -- so the size costs nothing but bytes.
+PALETTE_STRIP_CELL = 16
+
+
+def palette_strip(colours: Sequence[tuple[int, int, int, int]], cell: int) -> Any:
+    """A one-row swatch strip for *colours* as an RGBA array. Pure.
+
+    Separate from the command below and taking no ``ctx`` so that the pixels
+    are testable without a picker: this is the half that can be wrong, and the
+    half a round trip through ``palette_from_image`` has to hold for.
+    """
+    import numpy as np
+
+    side = max(1, int(cell))
+    row = np.asarray([tuple(c)[:4] for c in colours], dtype=np.uint8)
+    if not row.size:
+        raise ValueError("there is nothing to write")
+    return np.repeat(np.repeat(row[None, :, :], side, axis=0), side, axis=1)
+
+
+def export_palette_image(ctx: Any) -> None:
+    """Write the document's palette out as a PNG swatch strip.
+
+    The mirror of :func:`palette_from_image`, and the reason it is worth having
+    at all: a palette that can only arrive as a picture and never leave as one
+    is a one-way door. It is also how a palette reaches a tool that reads no
+    palette format -- every image editor there is opens a PNG.
+
+    The *pixels* are built on the frame thread and the picker is not, which is
+    ``save_as``' rule: an array built after an unbounded modal is an array of
+    whatever the user changed while it was up.
+    """
+    tab = active(ctx)
+    if tab is None or not tab.doc.palette:
+        return
+    strip = palette_strip(
+        [tuple(c) for c in tab.doc.palette], PALETTE_STRIP_CELL
+    )
+    stem = tab.path.stem if tab.path else "palette"
+
+    def run() -> str | None:
+        path = dialogs.save_file(
+            "Export the palette as an image", f"{stem}-palette.png", PNG_FILTER
+        )
+        if path is None:
+            return None
+        from PIL import Image
+
+        dest = Path(path)
+        if dest.suffix.lower() != ".png":
+            dest = dest.with_suffix(".png")
+        # Through ``atomic`` like every other write onto a path the user named:
+        # a half-written PNG over a file they already had is the one outcome an
+        # export may not produce.
+        atomic.save_image(dest, Image.fromarray(strip, "RGBA"), "PNG")
+        return str(dest)
+
+    # The palette-export keys' rule: one key per command, because ``submit``
+    # refuses a duplicate and a shared key makes whichever picker is already up
+    # silently swallow the other command.
+    ctx.submit("inker-palette-export-image", run)
 
 
 # --- tileset export/import (Wave 3, Chunk 3.6) --------------------------------

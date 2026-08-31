@@ -1,0 +1,6 @@
+; Paint.NET Palette File
+; Lines that start with a semicolon are comments
+FF000000
+FFFFFFFF
+FF228B22
+FFFF8040

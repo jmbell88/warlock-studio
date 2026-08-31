@@ -5294,3 +5294,100 @@ def test_the_tileset_filter_appears_and_narrows_the_strip(app_ctx, imgui_ctx):
     app_ctx.state.list_filters[plotter_tileset.FILTER_TAG] = "zzz"
     labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
     assert [label for label in labels if "###ts" in label] == ["Grass###ts0"], labels
+
+
+def _drain_task(runner, key, timeout=10.0):
+    """Wait for one submitted key to come back. -> its ``Done``.
+
+    The task runner is a real thread pool here, which is the point: a browser
+    that submits nothing, or submits under a key nothing lands, would pass a
+    test that only looked at the frame it was clicked on.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for done in runner.poll():
+            if done.key == key:
+                return done
+        time.sleep(0.01)
+    raise AssertionError(f"{key} never finished")
+
+
+def test_the_palette_folder_browser_actually_loads_a_palette(app_ctx, imgui_ctx, monkeypatch):
+    """**Pressed, not called.** The browser is found in the frame it drew, its
+    button is clicked where imgui put it, and the palette has to arrive in the
+    swatch row through the same task and the same landing branch the file
+    dialog's import uses.
+
+    A control that draws correctly and does nothing is this codebase's most
+    common historical defect, and a test that calls the handler directly is
+    precisely the test that would not notice one: the wiring is the half that
+    breaks. ``probe`` is what makes the button addressable -- positions are
+    read from imgui rather than computed, for the reason its own docstring
+    gives.
+    """
+    from warlock.studio import inker_mode, probe
+    from warlock.studio.panes import inker_colors
+
+    folder = Path(app_ctx.svc.config.palette_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "wave9.hex").write_text("112233\n445566\n", encoding="utf-8")
+    # The listing is remembered per directory version; a directory written to
+    # inside one 15.6 ms tick is exactly the case that remembering guards.
+    app_ctx.state.palettes = None
+
+    state = inker_mode.ensure(app_ctx)
+    state.swatches = []
+    monkeypatch.setattr(probe, "ENABLED", True)
+
+    def build():
+        inker_colors._palette_folder(app_ctx, state)
+
+    # Located inside ``_click``'s own host window, and not in ``_frame``'s:
+    # they are different windows at different positions, and a rect read from
+    # one is empty space in the other.
+    probe.begin_frame()
+    _click(imgui_ctx, build, (-100.0, -100.0))
+    buttons = [one for one in probe.census() if one.text == "Load"]
+    assert buttons, [one.text for one in probe.census()]
+    assert buttons[-1].visible and buttons[-1].enabled, buttons[-1]
+
+    probe.begin_frame()
+    _click(imgui_ctx, build, buttons[-1].centre)
+    done = _drain_task(app_ctx.tasks, "inker-palette")
+    assert done.error is None, done.message
+    inker_mode.on_task_done(app_ctx, done)
+    assert state.swatches == [(0x11, 0x22, 0x33, 255), (0x44, 0x55, 0x66, 255)]
+
+
+def test_the_palette_folder_browser_says_so_when_the_folder_is_empty(
+    app_ctx, imgui_ctx, monkeypatch
+):
+    """The ordinary state of a fresh install: a muted line naming the formats,
+    and no control at all -- never a button that submits an empty load."""
+    from warlock.studio import inker_mode, probe
+    from warlock.studio.panes import inker_colors
+
+    folder = Path(app_ctx.svc.config.palette_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    for stale in folder.iterdir():
+        stale.unlink()
+    app_ctx.state.palettes = None
+    state = inker_mode.ensure(app_ctx)
+    monkeypatch.setattr(probe, "ENABLED", True)
+
+    def build():
+        inker_colors._palette_folder(app_ctx, state)
+
+    probe.begin_frame()
+    _frame(imgui_ctx, build)
+    assert [one.text for one in probe.census()] == []
+
+    # The same pane, one file later: the empty branch is a fact about the
+    # folder and not a browser that never draws anything.
+    (folder / "wave9.gpl").write_text("GIMP Palette\n1 2 3\n", encoding="utf-8")
+    app_ctx.state.palettes = None
+    probe.begin_frame()
+    _frame(imgui_ctx, build)
+    assert "Load" in [one.text for one in probe.census()]

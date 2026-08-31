@@ -31,11 +31,15 @@ def test_a_missing_directory_is_no_palettes_rather_than_an_error(svc, tmp_path):
     assert palettes.available(svc.config) == []
 
 
-def test_listing_is_by_stem_sorted_and_covers_both_formats(svc, paldir):
+def test_listing_is_by_stem_sorted_and_covers_every_format(svc, paldir):
     (paldir / "zzz.hex").write_text("#000000\n")
     (paldir / "aaa.gpl").write_text("GIMP Palette\n0 0 0\n")
-    (paldir / "notes.txt").write_text("not a palette")
-    assert palettes.available(svc.config) == ["aaa", "zzz"]
+    (paldir / "mmm.pal").write_text("JASC-PAL\n0100\n1\n0 0 0\n")
+    (paldir / "nnn.txt").write_text("ff000000\n")
+    # Not a palette suffix, and the listing is what decides: a file with one of
+    # the four above is read, and a file without one never appears at all.
+    (paldir / "notes.md").write_text("not a palette")
+    assert palettes.available(svc.config) == ["aaa", "mmm", "nnn", "zzz"]
 
 
 def test_load_returns_colours_and_a_content_digest(svc, paldir):
@@ -177,4 +181,9 @@ def test_the_2d_form_draws_that_helper_rather_than_a_list_of_its_own(svc, paldir
     # Precondition: the control this test is about was actually drawn.
     assert "palette" in form_ui.calls
     assert form_ui.calls["palette"]["helper"] == palettes.SUFFIX_HELP
-    assert ".pal" not in form_ui.calls["palette"]["helper"]
+    # Derived, so the line the form draws cannot name a format the loader does
+    # not read. ``.pal`` and ``.txt`` were the two it wrongly advertised until
+    # 2026-08-29 and the two the loader gained on 2026-08-30; what is asserted
+    # is that the two agree, not that any one suffix is in or out.
+    assert ".pal" in form_ui.calls["palette"]["helper"]
+    assert ".aco" not in form_ui.calls["palette"]["helper"]

@@ -1,1 +1,6 @@
 * text=auto
+
+# Palette fixtures are read for their exact bytes -- a JASC .pal is CRLF by
+# definition of the format and a .hex is LF, and line-ending normalisation on
+# checkout would make a test's verdict depend on the platform it ran on.
+tests/inker/fixtures/palettes/* -text

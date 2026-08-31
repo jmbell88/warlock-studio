@@ -36,7 +36,7 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_T2I_ROOT` | `~/.warlock/models` | Where every image model lives, with style LoRAs under its `loras/` subdirectory. |
 | `WARLOCK_T2I_DIR` | unset | Redirects the built-in `turbo` entry (by name; not the default model) at an arbitrary local diffusers directory. It changes *where* that entry loads from and nothing else. |
 | `WARLOCK_T2I_MODEL` | `sdxl_cfg` | The base model key used when a job does not name one. |
-| `WARLOCK_PALETTE_DIR` | `~/.warlock/palettes` | Where pixel-art palette files live (`.hex` from Lospec, `.gpl` from GIMP). Ships empty; a missing directory simply means the palette control offers nothing. |
+| `WARLOCK_PALETTE_DIR` | `~/.warlock/palettes` | Where palette files live (`.hex` from Lospec, `.gpl` from GIMP, `.pal` from Paint Shop Pro, `.txt` from Paint.NET). Ships empty; a missing directory simply means the palette control offers nothing. |
 | `WARLOCK_VRAM_EXCLUSIVE` | auto | Restores the sequential VRAM handoff for text jobs. Unset, the mode is chosen from the card's size; set, it is honoured verbatim. See [VRAM modes](#vram-modes). |
 | `WARLOCK_VRAM_BUDGET` | unset | Overrides the measured VRAM budget (GiB) that admission control checks jobs against. For a card whose free figure reports low, or for pinning tests. |
 | `WARLOCK_VRAM_TOTAL` | unset | Stands in for the device total (GiB) when no GPU is visible — the escape hatch that lets the VRAM planner and `warlock doctor` run on a torch-less install. |

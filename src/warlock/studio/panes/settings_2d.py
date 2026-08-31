@@ -963,10 +963,12 @@ def _pixel_look(
                 "contain."
             ),
             # From the loader's own tuple, never restated. This line named
-            # ``.pal`` and ``.txt`` until 2026-08-29 and ``palettes.SUFFIXES``
-            # has never carried either, so a user who dropped one in the folder
-            # was told it would work and then watched it not appear -- no error,
-            # no row, nothing to see.
+            # ``.pal`` and ``.txt`` until 2026-08-29 while ``palettes.SUFFIXES``
+            # carried neither, so a user who dropped one in the folder was told
+            # it would work and then watched it not appear -- no error, no row,
+            # nothing to see. Both formats gained readers on 2026-08-30 and the
+            # tuple now carries them; being derived is what kept the sentence
+            # true through both the removal and the addition.
             helper=svc_palettes.SUFFIX_HELP,
         )
         if changed:

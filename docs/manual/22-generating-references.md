@@ -346,8 +346,9 @@ supplied, and **Dither** (offered only with one) mixes two nearby entries where 
 pick one.
 
 A palette is a file you drop into the palette directory (`~/.warlock/palettes/` by default — see
-[Configuration](40-configuration.md)), in either of the two formats palette sites publish: Lospec's
-`.hex`, one `rrggbb` per line, or GIMP's `.gpl`. Nothing ships with the app, because a palette is
+[Configuration](40-configuration.md)), in any of the four formats palette sites and editors publish:
+Lospec's `.hex`, one `rrggbb` per line, GIMP's `.gpl`, Paint Shop Pro's `.pal` or Paint.NET's
+`.txt`. Nothing ships with the app, because a palette is
 art direction rather than a default. Colours are matched perceptually (in Oklab) rather than by raw
 RGB arithmetic, which is what stops a dark grey being mapped to black and a whole shadow being
 eaten. A palette file supersedes the **Colours** cap entirely: the cap is a median cut of the
@@ -562,7 +563,7 @@ sheet types offer the same two settings and the sprite sheet offers a third.
 colours this particular render happened to contain. It is the single highest-leverage art input in
 the program: a derived table is the average of whatever came back, which is where "muddy" comes
 from, while a designed ramp is a decision. The picker appears once you have palette files
-installed — `.hex` or `.gpl` in the palette folder (see
+installed — `.hex`, `.gpl`, `.pal` or `.txt` in the palette folder (see
 [Configuration](40-configuration.md)) — and also when the form or an applied profile names a palette
 that is no longer there, listed and marked rather than silently reverting to *Derived from the
 render*. A palette you name here can be saved onto a

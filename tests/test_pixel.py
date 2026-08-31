@@ -134,8 +134,13 @@ def test_gpl_needs_its_own_magic():
 
 def test_parse_palette_dispatches_on_suffix_and_refuses_anything_else():
     assert pixel.parse_palette("1a1c2c\n", ".HEX") == ((26, 28, 44),)
+    assert pixel.parse_palette("ff1a1c2c\n", ".TXT") == ((26, 28, 44),)
+    assert pixel.parse_palette("JASC-PAL\n0100\n1\n26 28 44\n", ".pal") == ((26, 28, 44),)
+    # ``.txt`` joined on 2026-08-30 with a reader behind it; Adobe's binary
+    # ``.aco`` did not, and a suffix with no reader is refused rather than
+    # guessed at.
     with pytest.raises(ValueError):
-        pixel.parse_palette("1a1c2c\n", ".txt")
+        pixel.parse_palette("1a1c2c\n", ".aco")
 
 
 def test_digest_ignores_formatting_and_not_colour():

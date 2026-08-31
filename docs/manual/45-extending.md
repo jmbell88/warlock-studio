@@ -92,8 +92,9 @@ See [Models and style LoRAs](22-generating-references.md#models-and-style-loras)
 ## Adding a palette
 
 There is nothing to add. A palette is a file in the palette directory (`~/.warlock/palettes/`, or wherever
-`WARLOCK_PALETTE_DIR` points), in Lospec's `.hex` or GIMP's `.gpl` format, and the export's palette
-control lists whatever is there — no registry entry, no code, no restart. That is deliberate: a
+`WARLOCK_PALETTE_DIR` points), in Lospec's `.hex`, GIMP's `.gpl`, Paint Shop Pro's `.pal` or
+Paint.NET's `.txt` format, and the export's palette control lists whatever is there — as does the
+Inker's own palette folder browser. No registry entry, no code, no restart. That is deliberate: a
 palette is art direction, and the registry pattern the models use exists for things that have to be
 downloaded, checked for and reported on.
 

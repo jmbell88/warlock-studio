@@ -1670,3 +1670,115 @@ def test_every_task_key_inker_submits_is_answered():
         if "{tab.uid}" in template:
             continue  # the uid-keyed tail resolves these
         assert f'"{prefix}"' in handled, f"{template} finishes and nothing answers it"
+
+
+# --- palette formats and the swatch strip (Wave 9) ---------------------------
+
+
+@pytest.mark.parametrize(
+    "suffix,reader",
+    [
+        (".gpl", "parse"),
+        (".pal", "parse_jasc"),
+        (".hex", "parse_hex"),
+        (".txt", "parse_txt"),
+    ],
+)
+def test_the_suffix_decides_the_format_written(tmp_path, suffix, reader):
+    """The picker's filter does not say which entry was selected, so the
+    filename is the only thing the user actually said."""
+    from warlock.studio.inker import gpl
+
+    out = tmp_path / f"p{suffix}"
+    inker_mode._write_palette(out, [(1, 2, 3, 255)], "Warlock")
+    assert [c[:3] for c in getattr(gpl, reader)(out.read_text(encoding="utf-8"))] == [
+        (1, 2, 3)
+    ]
+
+
+def test_a_palette_name_with_no_suffix_at_all_becomes_a_gpl(tmp_path):
+    inker_mode._write_palette(tmp_path / "p", [(1, 2, 3, 255)], "Warlock")
+    assert (tmp_path / "p.gpl").is_file()
+
+
+def test_a_jasc_palette_reaches_the_disk_with_its_own_line_endings(tmp_path):
+    """``newline=""`` in ``_write_palette``, asserted where it can be seen: text
+    mode would rewrite the serialiser's CRLF as CR CR LF, which our own reader
+    shrugs at and the strict third-party readers this format exists for do not."""
+    out = tmp_path / "p.pal"
+    inker_mode._write_palette(out, [(1, 2, 3, 255)], "Warlock")
+    assert b"\r\r\n" not in out.read_bytes()
+    assert out.read_bytes().startswith(b"JASC-PAL\r\n")
+
+
+def test_the_swatch_strip_is_one_cell_per_colour_in_order():
+    import numpy as np
+
+    strip = inker_mode.palette_strip(
+        [(10, 20, 30, 255), (40, 50, 60, 255)], inker_mode.PALETTE_STRIP_CELL
+    )
+    cell = inker_mode.PALETTE_STRIP_CELL
+    assert strip.shape == (cell, 2 * cell, 4)
+    assert tuple(strip[0, 0]) == (10, 20, 30, 255)
+    assert tuple(strip[cell - 1, cell]) == (40, 50, 60, 255)
+    assert np.array_equal(strip[0], strip[cell - 1]), "every row is the same row"
+
+
+def test_the_strip_reads_back_as_the_same_palette_it_was_written_from():
+    """The round trip that makes the export the other half of ``Image...``:
+    what comes back out has to be what went in, in the same order."""
+    from warlock.studio.inker import dither
+
+    colours = [(10, 20, 30, 255), (40, 50, 60, 255), (200, 100, 0, 255)]
+    strip = inker_mode.palette_strip(colours, inker_mode.PALETTE_STRIP_CELL)
+    assert dither.build_palette([strip], inker_mode.IMAGE_PALETTE_MAX) == colours
+
+
+def test_an_empty_palette_is_not_a_strip():
+    with pytest.raises(ValueError):
+        inker_mode.palette_strip([], inker_mode.PALETTE_STRIP_CELL)
+
+
+def test_exporting_the_palette_image_builds_the_pixels_before_the_picker(
+    monkeypatch, tmp_path
+):
+    """``export_palette``'s rule, asked of the other export: an array built
+    after an unbounded modal is an array of whatever changed while it was up."""
+    from PIL import Image
+
+    from warlock.studio import dialogs
+
+    out = tmp_path / "strip.png"
+    ctx = _PaletteCtx()
+    state = inker_mode.ensure(ctx)
+    tab = _tab()
+    tab.doc.set_palette([(10, 20, 30, 255), (40, 50, 60, 255)])
+    state.add(tab)
+
+    def fake_save(title, default, filters=None):
+        # The document's table changes *while the picker is up*.
+        tab.doc.set_palette([(9, 9, 9, 255)])
+        return out
+
+    monkeypatch.setattr(dialogs, "save_file", fake_save)
+    inker_mode.export_palette_image(ctx)
+    assert ctx.submitted == ["inker-palette-export-image"]
+    import numpy as np
+
+    with Image.open(out) as image:
+        pixels = np.asarray(image.convert("RGBA")).reshape(-1, 4)
+    seen = {tuple(int(c) for c in row) for row in pixels}
+    assert (10, 20, 30, 255) in seen and (9, 9, 9, 255) not in seen
+
+
+def test_a_document_with_no_palette_has_no_image_to_export(monkeypatch):
+    from warlock.studio import dialogs
+
+    monkeypatch.setattr(
+        dialogs, "save_file", lambda *a, **k: pytest.fail("a picker opened")
+    )
+    ctx = _PaletteCtx()
+    state = inker_mode.ensure(ctx)
+    state.add(_tab())
+    inker_mode.export_palette_image(ctx)
+    assert ctx.submitted == []

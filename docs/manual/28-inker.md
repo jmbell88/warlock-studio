@@ -459,12 +459,22 @@ Below them is a row of **swatches**. Clicking one makes it the foreground; the r
 your settings rather than reset each session, because a project has a palette and retyping it every
 time is the kind of small friction that makes a tool feel unfinished.
 
-**Import palette** and **Export palette** move that row in and out as a GIMP `.gpl` — the format
-GIMP, Krita, Aseprite and Inkscape all read — or a JASC `.pal`, which Paint Shop Pro, GraphicsGale
-and most pixel-art palette sites write. The format follows the suffix you save under, and an import
-reads whichever it was handed. Two things about both: neither has an alpha channel, so exported
-swatches are written opaque, and an import **adds** to the row rather than replacing it — unwanted
+**Import swatches** and **Export swatches** move that row in and out in any of four formats: a GIMP
+`.gpl` — the one GIMP, Krita, Aseprite and Inkscape all read — a JASC `.pal`, which Paint Shop Pro
+and GraphicsGale write, a Lospec `.hex`, which is what a palette downloaded from a palette site
+usually is, or a Paint.NET `.txt`. The format follows the suffix you save under, and an import reads
+whichever it was handed — by looking at the file rather than at its name, so a `.hex` somebody
+renamed still opens. Two things: only `.txt` has an alpha channel, so swatches exported to the other
+three are written opaque, and an import **adds** to the row rather than replacing it — unwanted
 colours are a right-click each, where a palette silently wiped has no way back.
+
+Under those two is the **palette folder**: a list of every palette file in your palette directory,
+and a **Load** button that adds the chosen one to the swatch row. Nothing installs a palette there
+and nothing registers one — a palette *is* a file you dropped in that folder, in any of the four
+formats above, and a file added while Warlock is running appears the next time the panel draws. The
+folder is `palettes/` under your Warlock home; [Configuration](40-configuration.md) says how to move
+it. With nothing in it the panel says so and offers no control, which is the ordinary state of a
+fresh install: Warlock ships no palettes of its own, deliberately.
 
 The `I` **Pick** tool samples a colour from the canvas into the foreground.
 
@@ -652,9 +662,12 @@ cost is the same one an animated `.ora` has: opening an indexed file in somethin
 about the slot numbers — **including an older build of Warlock** — and saving it writes the layers
 back as plain colour, and two identical swatches become one.
 
-**Export palette** writes it out as a GIMP `.gpl` or a JASC `.pal`, whichever
-suffix you give the file; both are plain text and neither has an alpha channel, so exported swatches
-are opaque. **Export animated GIF** on an indexed document writes your table verbatim instead of
+**Export palette** writes it out as a GIMP `.gpl`, a JASC `.pal`, a Lospec `.hex` or a Paint.NET
+`.txt`, whichever suffix you give the file; all four are plain text and only `.txt` has an alpha
+channel, so exported swatches are otherwise opaque. **Export image** writes the same table as a PNG
+swatch strip — the other half of **Image...**, and how a palette reaches a tool that reads no
+palette format at all; reading that strip back in gives you the table you exported, in order.
+**Export animated GIF** on an indexed document writes your table verbatim instead of
 quantising each frame, so slot *n* is the same colour in every frame of the clip.
 
 ## Layers

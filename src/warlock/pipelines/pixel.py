@@ -141,15 +141,126 @@ def parse_gpl(text: str) -> tuple[RGB, ...]:
     return tuple(colors)
 
 
+# --------------------------------------------------------------------------
+# The two ported readers
+# --------------------------------------------------------------------------
+#
+# ``studio/inker/gpl.py`` reads these same two formats for the Inker's own
+# import, and the code below is a **port** of that module's ``parse_jasc`` and
+# ``parse_txt`` rather than a call to them: this package may not import the
+# studio, and the studio's headless Inker package may not import this one. Two
+# readers of one format is a real cost and the accepted one here.
+#
+# What keeps it survivable is that the duplication is pinned rather than
+# trusted: ``tests/inker/test_palette_formats.py`` feeds the same fixture bytes
+# to both sides and asserts the same colours come back, for every format both
+# can read. Change the tolerance of one of these and that test fails.
+
+_ARGB_RE = re.compile(r"^#?([0-9a-fA-F]{8})$")
+
+#: The two lines a JASC ``.pal`` starts with. Only the first is checked; the
+#: version has been ``0100`` since Paint Shop Pro shipped it and no reader in
+#: the wild looks at it.
+JASC_HEADER = "JASC-PAL"
+
+
+def parse_pal(text: str) -> tuple[RGB, ...]:
+    """A JASC ``.pal`` palette: the magic line, a version, a count, then rows.
+
+    The magic line *is* checked, unlike ``.gpl``'s: three integers on a line
+    are unambiguous on their own but "``.pal``" is not -- it names JASC's text
+    form, Microsoft's RIFF binary form and a raw 768-byte dump, and reading
+    either of the other two as text produces plausible-looking garbage.
+
+    The declared count is read past and not enforced: it disagrees with the
+    rows in enough files in the wild that trusting it would drop real colours,
+    and the rows are the palette. A row this cannot read is skipped rather than
+    fatal, which is ``gpl.parse_jasc``'s rule and has to stay it.
+    """
+    lines = [line.strip() for line in text.lstrip("﻿").splitlines()]
+    if not lines or lines[0].strip().upper() != JASC_HEADER:
+        raise ValueError("not a JASC palette file")
+    colors: list[RGB] = []
+    for line in lines[1:]:
+        if not line or line.startswith(";"):
+            continue
+        parts = line.split()
+        if len(parts) < 3:
+            # The version and the count both land here, as does a blank-ish
+            # line: one branch, because the distinction is not one the caller
+            # can act on.
+            continue
+        try:
+            r, g, b = (int(part) for part in parts[:3])
+        except ValueError:
+            continue
+        colors.append((_clamp(r), _clamp(g), _clamp(b)))
+    if not colors:
+        raise ValueError("the palette file contains no colours")
+    return tuple(colors)
+
+
+def parse_txt(text: str) -> tuple[RGB, ...]:
+    """A Paint.NET ``.txt`` palette: one ``aarrggbb`` per line.
+
+    The alpha byte is read and then dropped, because a :data:`RGB` is what
+    everything downstream of here maps pixels onto -- ``gpl.parse_txt`` keeps
+    it, and that difference is the one thing the two readers are allowed to
+    disagree about. Six-digit rows, which some writers emit, are opaque.
+    """
+    colors: list[RGB] = []
+    for raw in text.lstrip("﻿").splitlines():
+        line = raw.strip()
+        if not line or line.startswith((";", "//")) or line.startswith("#!"):
+            continue
+        wide = _ARGB_RE.match(line)
+        if wide is not None:
+            value = wide.group(1)
+            colors.append(
+                (int(value[2:4], 16), int(value[4:6], 16), int(value[6:8], 16))
+            )
+            continue
+        narrow = _HEX_RE.match(line)
+        if narrow is None:
+            raise ValueError(f"not a hex colour: {line!r}")
+        value = narrow.group(1)
+        colors.append((int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)))
+    if not colors:
+        raise ValueError("the palette file contains no colours")
+    return tuple(colors)
+
+
+def _clamp(value: int) -> int:
+    return max(0, min(255, int(value)))
+
+
+#: Every suffix :func:`parse_palette` reads, and the reader for it. Two-way
+#: against ``service.palettes.SUFFIXES``: a suffix that directory offers and
+#: this cannot read is a file the picker lists and the loader refuses, and one
+#: this reads that the directory ignores is a reader nobody can reach. A test
+#: asserts the two keys match.
+PARSERS = {
+    ".hex": parse_hex,
+    ".gpl": parse_gpl,
+    ".pal": parse_pal,
+    ".txt": parse_txt,
+}
+
+
 def parse_palette(text: str, suffix: str) -> tuple[RGB, ...]:
     """Dispatch on the file extension, which is the only thing that names the
-    format -- both are plain text and one is a superset of nothing."""
-    lowered = suffix.lower()
-    if lowered == ".hex":
-        return parse_hex(text)
-    if lowered == ".gpl":
-        return parse_gpl(text)
-    raise ValueError(f"unsupported palette format {suffix!r} (expected .hex or .gpl)")
+    format here -- all four are plain text.
+
+    The suffix and not the content, unlike ``gpl.parse_any``: this is reached
+    through ``service.palettes``, which found the file *by* its suffix in the
+    palette directory, so there is nothing to sniff that has not already been
+    decided.
+    """
+    reader = PARSERS.get(suffix.lower())
+    if reader is None:
+        allowed = ", ".join(PARSERS)
+        raise ValueError(f"unsupported palette format {suffix!r} (expected {allowed})")
+    return reader(text)
 
 
 def palette_digest(colors: tuple[RGB, ...]) -> str:
