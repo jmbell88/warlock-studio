@@ -1141,10 +1141,29 @@ def tsx_element(
         # of the stored properties, so this is the one spelling of the fact.
         props = {**props, "phases": Prop("int", ts.phases)}
     write_properties(root, props)
+    if ts.terrains and ts.wangsets:
+        # **The exclusion, asserted rather than assumed.** The two writers
+        # below each return early only on *their own* emptiness, so a tileset
+        # carrying both would emit two ``<wangsets>`` blocks -- which Tiled's
+        # schema does not allow and which breaks this exporter's
+        # byte-identical pin. It used to be true by construction because
+        # nothing but ``_wang_model_of`` (which drops the foreign model
+        # whenever the preset is present) ever produced the field; the Terrain
+        # tab is a second producer, and it refuses the combination at its own
+        # door for the same reason. This is the belt to that pair of braces,
+        # and it can only fire on a document written by a build that had the
+        # tab and not the refusal -- so it is a named refusal the save door
+        # already toasts, not a crash.
+        raise TiledUnsupported(
+            "a tileset carrying both a generated terrain set and a hand-authored "
+            "Wang set",
+            "delete the hand-authored set in the tileset editor's Terrain tab",
+            exporting=True,
+        )
     write_wangsets(root, ts.terrains, ts.phases if ts.terrains else 1)
-    # Mutually exclusive by construction (see ``_wang_model_of``), so a tileset
-    # never writes two ``<wangsets>`` blocks and the blob preset's output is
-    # byte-identical to what it always was.
+    # Mutually exclusive, by the refusal above and by the Terrain tab's --
+    # so a tileset never writes two ``<wangsets>`` blocks and the blob preset's
+    # output is byte-identical to what it always was.
     write_wang_model(root, ts.wangsets)
     # After the wang sets, matching Tiled's own element order -- the writer is
     # held to producing a file that diffs cleanly against one Tiled wrote.

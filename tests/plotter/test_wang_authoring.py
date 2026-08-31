@@ -25,10 +25,14 @@ with **no plumbing** in between.
 
 from __future__ import annotations
 
+import dataclasses
+from types import SimpleNamespace
+
 import pytest
 
 from warlock.studio.panes import plotter_tileset_editor as editor
-from warlock.studio.tilegrid import wang
+from warlock.studio.tilegrid import blob, wang
+from warlock.studio.tilegrid.tileset import TerrainSpec
 
 from ._drive import TileScene
 
@@ -435,3 +439,159 @@ def test_the_marker_positions_are_read_from_the_engine_not_recomputed():
     copy is exactly how a marker comes to sit where it cannot be pressed."""
     assert wang.SLOT_FRACTIONS[1] == (1.0, 0.0)
     assert len(wang.SLOT_FRACTIONS) == wang.POSITIONS
+
+
+# --- the combination this tab must never create ------------------------------
+#
+# The Terrain tab is the first producer of ``Tileset.wangsets`` other than the
+# ``.tsx`` reader, and the reader has always enforced an exclusion the writer
+# only *assumed*: ``tsx._wang_model_of`` drops the general Wang model whenever
+# the blob preset is present, while ``write_tsx`` writes the preset's block and
+# the model's block from two doors that each return early only on their own
+# emptiness. A tileset carrying both therefore exported two ``<wangsets>``
+# blocks and lost the hand-authored one on reopen -- a silently-dropped row in
+# a ledger that says it has none. Both doors refuse it now, and these are the
+# tests of that.
+
+
+def _blob_scene(monkeypatch):
+    """A tileset editor on the Terrain tab, over a *generated* terrain set.
+
+    The atlas is the preset's own shape -- ``blob.TILE_COUNT`` columns, one row
+    per terrain -- because ``Tileset`` refuses any other for a set that
+    declares terrains, and the point of the scene is a tileset the app itself
+    could have produced.
+    """
+    made = TileScene(monkeypatch, tiles=blob.TILE_COUNT, tileset_tab="Terrain")
+    ts = made.doc.tilesets[0].tileset
+    made.doc.replace_tileset(
+        0,
+        dataclasses.replace(
+            ts,
+            terrains=(
+                TerrainSpec(name="Grass", fill=(0, 200, 0, 255), outline=(0, 90, 0, 255)),
+            ),
+        ),
+    )
+    assert made.doc.tilesets[0].tileset.is_terrain_set
+    return made
+
+
+def _fake_row_widgets(monkeypatch):
+    """``_wangset_row``'s two toolkits, faked, so the row can be drawn without
+    a GL context. -> ``(prose, buttons)``, filled as it draws.
+
+    The row is the only place the refusal is *offered or not offered*, and a
+    test that read the source instead of drawing it would pass whatever the
+    user ends up seeing.
+    """
+    prose: list[str] = []
+    buttons: list[str] = []
+    monkeypatch.setattr(
+        editor,
+        "widgets",
+        SimpleNamespace(
+            grid_width=lambda _n: 100.0,
+            muted_wrapped=prose.append,
+            input_text=lambda _label, value, **_k: value,
+        ),
+    )
+    monkeypatch.setattr(
+        editor,
+        "controls",
+        SimpleNamespace(
+            button=lambda label, _size=None, **_k: buttons.append(label) and False,
+            segmented_choice=lambda _key, _items, current: (False, current),
+        ),
+    )
+    return prose, buttons
+
+
+def test_authoring_a_wang_set_on_a_generated_terrain_set_is_refused(monkeypatch):
+    made = _blob_scene(monkeypatch)
+    assert editor.create_wangset(made.state, made.tab, 0, "corner", ctx=made.ctx) is False
+    assert made.wangsets == (), "nothing was written"
+
+
+def test_the_refusal_says_why_rather_than_failing_quietly(monkeypatch):
+    """A door that returned False and said nothing would be a button that does
+    nothing, which is this codebase's most common historical defect."""
+    made = _blob_scene(monkeypatch)
+    editor.create_wangset(made.state, made.tab, 0, ctx=made.ctx)
+    assert len(made.toasts) == 1
+    text, kind = made.toasts[0]
+    assert kind == "error"
+    assert text == editor.authoring_refusal(made.doc.tilesets[0].tileset)
+    assert "generated terrain set" in text and "read back" in text
+
+
+def test_the_refusal_is_not_a_silent_no_op_when_nobody_passes_a_ctx(monkeypatch):
+    """The pure edit stays callable without a context -- every other function
+    in this section is tested that way -- but it still reports."""
+    made = _blob_scene(monkeypatch)
+    assert editor.create_wangset(made.state, made.tab, 0) is False
+    assert made.toasts == []
+
+
+def test_the_terrain_tab_says_why_instead_of_offering_create(monkeypatch):
+    """Drawn, not inferred. The refusal reaches the user *before* the gesture:
+    the row puts the sentence where the Create button would be."""
+    made = _blob_scene(monkeypatch)
+    prose, buttons = _fake_row_widgets(monkeypatch)
+    editor._wangset_row(made.ctx, made.state, made.tab, 0, ())
+    assert not [label for label in buttons if label.startswith("Create")]
+    assert prose == [editor.authoring_refusal(made.doc.tilesets[0].tileset)]
+
+
+def test_the_terrain_tab_still_offers_create_on_an_ordinary_tileset(monkeypatch):
+    """The other direction, so the test above cannot pass by the row drawing
+    no buttons at all."""
+    made = TileScene(monkeypatch, tileset_tab="Terrain")
+    _prose, buttons = _fake_row_widgets(monkeypatch)
+    editor._wangset_row(made.ctx, made.state, made.tab, 0, ())
+    assert [label for label in buttons if label.startswith("Create")]
+
+
+def test_no_authoring_door_can_put_a_wang_set_on_a_generated_set(monkeypatch):
+    """The state, not the one gesture. Every entry point this tab writes
+    through is pressed on a blob-preset tileset, and the tileset comes out the
+    other side with terrains and no Wang sets -- which is the invariant
+    ``tsx.write_tsx`` and ``tsx._wang_model_of`` are each half of.
+    """
+    made = _blob_scene(monkeypatch)
+    editor.create_wangset(made.state, made.tab, 0, "corner", ctx=made.ctx)
+    editor.add_wang_colour(made.state, made.tab, 0, 0)
+    editor.set_wang_colour(
+        made.state, made.tab, 0, 0, 0, wang.WangColour("x")
+    )
+    editor.remove_wang_colour(made.state, made.tab, 0, 0, 0)
+    editor.rename_wangset(made.tab, 0, 0, "Coastline")
+    editor.delete_wangset(made.state, made.tab, 0, 0)
+    made.frame(_slot(made, 3), click=True)
+
+    tileset = made.doc.tilesets[0].tileset
+    assert tileset.terrains and tileset.wangsets == ()
+
+
+def test_a_tsx_never_writes_two_wangsets_blocks(monkeypatch):
+    """The pin the two refusals exist for. One block for a blob preset, one for
+    a hand-authored set, and the combination refused by name rather than
+    written as two."""
+    from warlock.studio.plotter import tsx
+
+    made = _blob_scene(monkeypatch)
+    generated = made.doc.tilesets[0].tileset
+    assert tsx.tsx_bytes(generated, image_name="a.png").count(b"<wangsets") == 1
+
+    authored = dataclasses.replace(
+        generated, terrains=(), wangsets=(wang.WangSet(name="Coast", kind="corner"),)
+    )
+    assert tsx.tsx_bytes(authored, image_name="a.png").count(b"<wangsets") == 1
+
+    both = dataclasses.replace(generated, wangsets=authored.wangsets)
+    with pytest.raises(tsx.TiledUnsupported) as caught:
+        tsx.tsx_bytes(both, image_name="a.png")
+    assert caught.value.feature == (
+        "a tileset carrying both a generated terrain set and a hand-authored Wang set"
+    )
+    assert caught.value.exporting, "the save door's sentence, not the reader's"

@@ -715,8 +715,44 @@ def _write_wangsets(tab: Any, index: int, wangsets: Any) -> None:
     )
 
 
-def create_wangset(state: Any, tab: Any, index: int, kind: str = "corner") -> None:
-    """Add an empty Wang set to a tileset and select it.
+def authoring_refusal(tileset: Any) -> str:
+    """Why a hand-authored Wang set cannot go on this tileset, or ``""``.
+
+    **One sentence, spelled once**, because two places say it: the door
+    (:func:`create_wangset`, as a toast) and the tab (as the prose where the
+    *Create* button would otherwise be). A greyed control with no reason is a
+    defect in this codebase's own terms, and a refusal whose message lives
+    only at the door is one the user meets *after* the gesture.
+
+    The rule is ``Tileset.terrains`` -- the blob preset Warlock's own terrain
+    generator declares. A tileset carrying one already has a working terrain
+    brush, so nothing is lost by refusing a second; and a tileset carrying
+    *both* is a state neither format can hold. ``tsx.write_tsx`` writes the
+    preset's ``<wangsets>`` and the foreign model's ``<wangsets>`` from
+    separate doors, each returning early only on its own emptiness, so a
+    tileset with both emits **two** blocks -- which Tiled's schema does not
+    allow and which breaks the exporter's byte-identical pin. And the reader
+    (``tsx._wang_model_of``) drops the foreign model whenever ``terrains`` is
+    set, so the hand-authored set would not survive its own file: merging the
+    two into one block would round-trip to exactly the same silent loss.
+    ``docs/COMPAT.md`` says there are no silently-dropped rows, and stopping
+    the combination by name is what keeps that true.
+    """
+    if not tuple(getattr(tileset, "terrains", ()) or ()):
+        return ""
+    return (
+        "This tileset carries a generated terrain set, which is already its "
+        "terrain brush -- so a second, hand-authored set is refused here. A "
+        "Tiled tileset holds one terrain block, and a set added on top of the "
+        "generated one could not be written to a .tsx and would be dropped "
+        "when the file was read back."
+    )
+
+
+def create_wangset(
+    state: Any, tab: Any, index: int, kind: str = "corner", *, ctx: Any = None
+) -> bool:
+    """Add an empty Wang set to a tileset and select it. -> whether it landed.
 
     **The kind is chosen here and never afterwards**, deliberately. ``kind``
     decides which of the eight slots the set *uses* (``WangSet.slots``), so an
@@ -724,12 +760,27 @@ def create_wangset(state: Any, tab: Any, index: int, kind: str = "corner") -> No
     count -- which travel out to a ``.tsx`` and are read back by Tiled -- or
     clearing them on the switch, which is silent data loss one misclick away.
     Making a second set is the cheaper of the three.
+
+    **A blob-preset tileset is refused by name**, for
+    :func:`authoring_refusal`'s reason -- and the refusal is here rather than
+    only in the tab because this is the *door*: the tab is what stops the
+    gesture being offered, and this is what makes offering it impossible to
+    get wrong. ``ctx`` is optional so the pure edit stays callable without one
+    (which is how every other function in this section is tested); when it is
+    given, the reason is said rather than swallowed.
     """
-    sets = tuple(tab.doc.tilesets[int(index)].tileset.wangsets)
+    tileset = tab.doc.tilesets[int(index)].tileset
+    refusal = authoring_refusal(tileset)
+    if refusal:
+        if ctx is not None:
+            ctx.toast(refusal, "error")
+        return False
+    sets = tuple(tileset.wangsets)
     fresh = wanglib.WangSet(name=f"Terrain {len(sets) + 1}", kind=str(kind))
     _write_wangsets(tab, index, (*sets, fresh))
     state.tileset_wangset = len(sets)
     state.tileset_wang_colour = 1
+    return True
 
 
 def delete_wangset(state: Any, tab: Any, index: int, at: int) -> None:
@@ -829,11 +880,15 @@ def _terrain_tab(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
     sets = tuple(tileset.wangsets)
     _wangset_row(ctx, state, tab, index, sets)
     if not sets:
-        widgets.muted_wrapped(
-            "A terrain set says, per tile, which colour sits at each of its "
-            "corners and edges -- and the Terrain tool then picks the tile whose "
-            "corners match what is already around the cell. Create one to start."
-        )
+        # ``_wangset_row`` has already said why on a blob-preset tileset, and
+        # "Create one to start" under that sentence would be an instruction to
+        # press a button that is deliberately not there.
+        if not authoring_refusal(tileset):
+            widgets.muted_wrapped(
+                "A terrain set says, per tile, which colour sits at each of its "
+                "corners and edges -- and the Terrain tool then picks the tile whose "
+                "corners match what is already around the cell. Create one to start."
+            )
         return
     at = _wangset_at(state, sets)
     wangset = sets[at]
@@ -900,6 +955,18 @@ def _wangset_row(ctx: Any, state: Any, tab: Any, index: int, sets: Any) -> None:
             rename_wangset(tab, index, at, name)
 
     width = widgets.grid_width(3)
+    refusal = authoring_refusal(tab.doc.tilesets[int(index)].tileset)
+    if refusal:
+        # Said instead of drawn-and-disabled. A greyed *Create* button with no
+        # sentence beside it is the shape this codebase treats as a defect in
+        # its own right, and the sentence is the whole content of the refusal.
+        # Delete stays reachable: a document written before this refusal
+        # existed can carry both, and the way out of that state is to remove
+        # the hand-authored set.
+        widgets.muted_wrapped(refusal)
+        if sets and controls.button("Delete this set##tswang-del", (width, 0)):
+            delete_wangset(state, tab, index, _wangset_at(state, sets))
+        return
     kind = str(getattr(state, "tileset_wang_kind", "corner"))
     if kind not in wanglib.WANG_KINDS:
         kind = "corner"
@@ -912,7 +979,7 @@ def _wangset_row(ctx: Any, state: Any, tab: Any, index: int, sets: Any) -> None:
         state.tileset_wang_kind = picked
         kind = picked
     if controls.button(f"Create a {kind} set##tswang-new", (width, 0)):
-        create_wangset(state, tab, index, kind)
+        create_wangset(state, tab, index, kind, ctx=ctx)
         return
     if sets:
         imgui.same_line()

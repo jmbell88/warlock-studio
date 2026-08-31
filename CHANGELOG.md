@@ -43,6 +43,23 @@ the release you are actually running.
   dispatch with nothing added in between, and
   `tests/plotter/test_wang_authoring.py::test_a_set_authored_here_paints_the_map_through_the_canvas_dispatch`
   is that end-to-end assertion.
+- **A Wang set cannot be authored onto a generated terrain set, and that combination is
+  now refused at both doors.** The Terrain tab was the first producer of
+  `Tileset.wangsets` other than the `.tsx` reader, and the reader had always enforced an
+  exclusion the writer only *assumed*: `tsx._wang_model_of` drops the general Wang model
+  whenever the blob preset is present, while `write_tsx` writes the preset's `<wangsets>`
+  and the model's `<wangsets>` from two doors that each return early only on their own
+  emptiness. So a set hand-authored onto a tileset carrying a generated preset exported
+  **two** `<wangsets>` blocks — invalid against Tiled's schema and off the exporter's
+  byte-identical pin — and was **silently dropped** when the file was read back, which is
+  the one state `docs/COMPAT.md` claims it has no rows in. Merging the two into one block
+  would round-trip to exactly the same loss, so the combination is stopped by name
+  instead: the tab does not offer *Create* on a blob-preset tileset and says why in its
+  place (a generated set already *is* a terrain brush, so nothing is lost), the
+  `create_wangset` door refuses with the same sentence, and `write_tsx` refuses it as a
+  named `TiledUnsupported` the save door already toasts — reachable only from a document
+  a build between the Terrain tab and this refusal could write, and escapable by deleting
+  the hand-authored set on that tab.
 - **A set's `kind` is fixed when it is created**, and that is a refusal rather than an
   omission: `kind` decides which of the eight slots a set *uses*, so an editable one
   would either strand values in slots that no longer count — they still travel out to a
