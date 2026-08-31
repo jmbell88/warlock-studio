@@ -106,6 +106,13 @@ minimap, and by anything that composites the map flat. That disagreement is deli
 a still. The document's own cells never move while it plays — a clock that wrote tile numbers would
 mark a saved map dirty sixty times a second.
 
+The tileset editor's **Animation** tab is where an animation is built: each frame carries its own
+duration in milliseconds, the up and down arrows on a row reorder the strip in one undo step, and
+**Play** runs the animation right there at the durations you typed, so you do not have to go back to
+the map to see what you made. The preview uses the same clock the canvas does, so what plays in the
+editor is what plays on the map. The arrows on the first and last rows are drawn greyed rather than
+left out, so a row never jumps under the pointer.
+
 Collision shapes are drawn as outlines and are **never** hit-tested against the map. They are
 metadata an engine reads, exactly as an object layer is.
 
@@ -273,6 +280,15 @@ so it is one thing to take back.
 Painting lands on the *active* layer — the highlighted row in the layers pane. Painting with an
 object layer active says so rather than doing nothing.
 
+## Rulers
+
+Bands along the canvas's top and left edges, on by default, off with **Ctrl+R** or the **Rulers**
+toggle in the View block. They count **cells**, not pixels — this is the mode where a cell is the
+unit of everything, and a band reading 512 where you are counting sixteen tiles would be a second
+set of numbers to hold in your head. The step comes off a 1/2/5 ladder and coarsens as you zoom out,
+so the labels never crowd, and a line on each band tracks the pointer, which is how you read the
+size of what you are dragging while you drag it.
+
 ## The minimap
 
 A small view of the whole map sits in the bottom-right corner of the canvas, one pixel per cell,
@@ -369,9 +385,20 @@ nothing about the map — it stays exactly as visible, and as exported, as it wa
 
 **Selected objects can be moved and resized on the canvas.** Drag an object's body to move it, or
 one of the four corner handles to resize it — the opposite corner stays pinned, and dragging a
-corner past it flips the rectangle rather than giving it a negative size. Hold Ctrl while dragging
-to snap to the grid. A whole drag is one undo step, and a click that moves nothing costs none at
-all. Delete removes the selected object.
+corner past it flips the rectangle rather than giving it a negative size. A whole drag is one undo
+step, and a click that moves nothing costs none at all. Delete removes the selected object.
+
+**A round grip on a stalk above the top edge rotates it.** Drag it and the object turns about its
+own top-left corner — the point its `x` and `y` name, which is what Tiled's rotation means too — so
+that corner stays exactly where it is and the rest of the shape swings around it. It is round where
+the resize handles are square, because the two do different things. A point object and a polygon get
+no grip: a point has no extent to turn, and a polygon is reshaped by its vertices.
+
+**Snap objects to** in the View block decides where a drag lands: *Off*, *Grid* (the cell corner) or
+*Pixel* (the whole map pixel, for objects smaller than a tile). `Ctrl+Shift+G` and `Ctrl+Shift+P` are
+the same two, as chords. **Holding Ctrl inverts whatever is set** — so at the default *Off*, Ctrl
+snaps this one drag to the grid, exactly as it always did, and with snapping on, Ctrl is how you put
+one object between two cells. Rotation reads the same setting and snaps to 15°.
 
 Handles appear only on the selected rectangle, and not at all on a locked layer, where the drag
 would be refused anyway.

@@ -141,6 +141,32 @@ class TileFrame:
         object.__setattr__(self, "duration_ms", max(1, int(self.duration_ms)))
 
 
+def frame_at(frames: Any, clock_ms: int) -> int | None:
+    """Which frame of ``frames`` is showing at ``clock_ms``, or ``None``.
+
+    ``None`` for an empty animation and for one whose durations sum to nothing,
+    which are the two cases with no answer rather than a zeroth one -- a caller
+    that got ``0`` back for either would draw a frame that is not playing.
+
+    Pure, and the *one* implementation: the canvas substitutes a gid through it
+    sixty times a second and the tileset editor's preview reads it for the frame
+    it highlights, and a second copy is how the map and the editor come to
+    disagree about which frame a tile is on.
+    """
+    frames = tuple(frames)
+    if not frames:
+        return None
+    total = sum(int(frame.duration_ms) for frame in frames)
+    if total <= 0:
+        return None
+    at = int(clock_ms) % total
+    for index, frame in enumerate(frames):
+        if at < frame.duration_ms:
+            return index
+        at -= frame.duration_ms
+    return len(frames) - 1
+
+
 @dataclass(frozen=True)
 class TileMeta:
     """Everything one tile carries beyond its picture.

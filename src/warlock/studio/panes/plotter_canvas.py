@@ -57,6 +57,7 @@ from ..plotter.tilemap import (
     TileLayer,
 )
 from ..tilegrid import gid as gidlib
+from ..tilegrid import tileset as tileset_lib
 from ..tokens import sp
 from . import plotter_layers, plotter_menu, plotter_textures
 
@@ -192,6 +193,10 @@ def draw(ctx: Any) -> None:
     _marquee(state, tab, draw_list, (origin.x, origin.y))
     _cursor(state, tab, draw_list, (origin.x, origin.y), hovered)
     _minimap(ctx, state, tab, draw_list, (origin.x, origin.y), region)
+    # Last, so the bands sit over everything they measure -- including the
+    # minimap's corner, which is Inker's arrangement too.
+    if state.rulers:
+        _rulers(tab, draw_list, (origin.x, origin.y), region, hovered=hovered)
     draw_list.pop_clip_rect()
 
     state.hover_cell = _cell_under(state, tab, (origin.x, origin.y)) if hovered else None
@@ -1066,6 +1071,119 @@ def _grid(draw_list: Any, doc: Any, view: Any, origin, region) -> None:
         draw_list.add_line(node(x0, row), node(x1, row), colour)
 
 
+# --- rulers -------------------------------------------------------------------
+#
+# Inker's bands, in this mode's own unit. The shape, the thickness, the 1/2/5
+# tick ladder and the cursor shadow are all lifted from ``inker_canvas`` rather
+# than re-invented -- two editors in one app must not read two ways -- and
+# ``ruler_step``/``ruler_minor`` are imported from it rather than copied, so the
+# ladder cannot drift between the two.
+#
+# **The one deliberate difference is the number on the band.** Inker measures
+# pixels because a pixel is what its user places; this measures *cells*, because
+# a cell is. A ruler that said "512" where the user counts sixteen tiles would
+# be a second coordinate system to hold in your head, which is exactly what the
+# status line's cell readout already refuses to do.
+
+
+def _rulers(tab: Any, draw_list: Any, origin, region, *, hovered: bool) -> None:
+    """Cell rulers along the canvas's top and left edges.
+
+    An overlay drawn after everything else: it owns no layout, reserves no
+    space and swallows no clicks, so turning it off changes nothing but what is
+    painted.
+    """
+    from imgui_bundle import imgui
+
+    from .. import fonts
+    from . import inker_canvas
+
+    view = tab.view
+    doc = tab.doc
+    thickness = sp(inker_canvas.RULER_THICKNESS)
+    left, top = origin
+    right, bottom = left + region[0], top + region[1]
+    back = imgui.get_color_u32(theme.rgba(theme.ELEV_1, 0.95))
+    ink = imgui.get_color_u32(theme.rgba(theme.MUTED))
+    draw_list.add_rect_filled((left, top), (right, top + thickness), back)
+    draw_list.add_rect_filled((left, top), (left + thickness, bottom), back)
+    with fonts.small(imgui):
+        _ruler_band(draw_list, doc, view, origin, (left, right), top, thickness, ink, True)
+        _ruler_band(draw_list, doc, view, origin, (top, bottom), left, thickness, ink, False)
+    # The corner square after both bands so neither's ticks show through it, and
+    # the edges after the corner so they run unbroken. Inker's order.
+    draw_list.add_rect_filled((left, top), (left + thickness, top + thickness), back)
+    edge = imgui.get_color_u32(theme.rgba(theme.EDGE))
+    draw_list.add_line((left, top + thickness), (right, top + thickness), edge)
+    draw_list.add_line((left + thickness, top), (left + thickness, bottom), edge)
+    if hovered:
+        mouse = imgui.get_mouse_pos()
+        accent = imgui.get_color_u32(theme.rgba(theme.ACCENT))
+        if left <= mouse.x <= right:
+            draw_list.add_line((mouse.x, top), (mouse.x, top + thickness), accent)
+        if top <= mouse.y <= bottom:
+            draw_list.add_line((left, mouse.y), (left + thickness, mouse.y), accent)
+
+
+def _ruler_band(
+    draw_list: Any,
+    doc: Any,
+    view: Any,
+    origin,
+    span: tuple[float, float],
+    cross: float,
+    thickness: float,
+    ink: int,
+    horizontal: bool,
+) -> None:
+    """One band's ticks and labels, in cells, between screen positions ``span``.
+
+    Which map axis runs along the band is *found* rather than assumed, by
+    sampling the view transform at the band's two ends: the transform is affine,
+    so interpolating between two samples is exact, and a rotated or flipped view
+    lands on the right axis with the right sign for free.
+    """
+    from . import inker_canvas
+
+    a0, a1 = span
+    if horizontal:
+        p0 = inker_state.to_image(view, origin, a0, cross)
+        p1 = inker_state.to_image(view, origin, a1, cross)
+    else:
+        p0 = inker_state.to_image(view, origin, cross, a0)
+        p1 = inker_state.to_image(view, origin, cross, a1)
+    axis = 0 if abs(p1[0] - p0[0]) >= abs(p1[1] - p0[1]) else 1
+    # Map pixels into cells, which is the whole difference from Inker's band.
+    per_cell = float(doc.tile_w if axis == 0 else doc.tile_h) or 1.0
+    v0, v1 = p0[axis] / per_cell, p1[axis] / per_cell
+    if abs(v1 - v0) < 1e-9:
+        return
+    scale = (a1 - a0) / (v1 - v0)
+    step = inker_canvas.ruler_step(abs(scale))
+    minor = inker_canvas.ruler_minor(step)
+    if minor and minor * abs(scale) < sp(5.0):
+        minor = 0
+    tick = minor or step
+    lo, hi = min(v0, v1), max(v0, v1)
+    start = int(math.floor(lo / tick)) * tick
+    for value in range(start, int(math.ceil(hi)) + tick, tick):
+        position = a0 + (value - v0) * scale
+        major = value % step == 0
+        length = thickness * (0.45 if major else 0.25)
+        if horizontal:
+            draw_list.add_line(
+                (position, cross + thickness - length), (position, cross + thickness), ink
+            )
+            if major:
+                draw_list.add_text((position + 3.0, cross + 1.0), ink, str(value))
+        else:
+            draw_list.add_line(
+                (cross + thickness - length, position), (cross + thickness, position), ink
+            )
+            if major:
+                draw_list.add_text((cross + 2.0, position + 1.0), ink, str(value))
+
+
 def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
     """The object outlines, through the same resolver the tiles go through.
 
@@ -1116,6 +1234,19 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
                         draw_list.add_rect_filled(
                             (sx - sp(4), sy - sp(4)), (sx + sp(4), sy + sp(4)), colour
                         )
+                    # The rotation grip, on a stalk out of the top edge so it
+                    # reads as attached to the object rather than as a fifth
+                    # corner. Round where the resize handles are square, which
+                    # is the shape difference that says the two do different
+                    # things without a tooltip.
+                    grip = _rotate_grip(view, origin, obj, (dx, dy))
+                    if grip is not None:
+                        top = _rotated(obj, obj.w * 0.5, 0.0)
+                        anchor = inker_state.to_screen(
+                            view, origin, top[0] + dx, top[1] + dy
+                        )
+                        draw_list.add_line(anchor, grip, colour, sp(1))
+                        draw_list.add_circle_filled(grip, sp(5), colour, 16)
             if obj.name:
                 draw_list.add_text((p0[0] + sp(6), p0[1] - sp(14)), colour, obj.name)
 
@@ -1985,19 +2116,14 @@ def animated_gid(doc: Any, value: int, clock_ms: int) -> int:
     frames = ref.tileset.meta_of(tile - ref.firstgid).animation
     if not frames:
         return value
-    total = sum(frame.duration_ms for frame in frames)
-    if total <= 0:
+    index = tileset_lib.frame_at(frames, clock_ms)
+    if index is None:
         return value
-    at = int(clock_ms) % total
-    for frame in frames:
-        if at < frame.duration_ms:
-            # The flags live in the top bits and the id in the rest, so the
-            # substitution is a masked write rather than a re-encode.
-            return int(
-                (int(value) & ~gidlib.GID_MASK) | (ref.firstgid + frame.local_id)
-            )
-        at -= frame.duration_ms
-    return value
+    # The flags live in the top bits and the id in the rest, so the substitution
+    # is a masked write rather than a re-encode.
+    return int(
+        (int(value) & ~gidlib.GID_MASK) | (ref.firstgid + frames[index].local_id)
+    )
 
 
 def _fill_rng(state: Any):
@@ -2396,6 +2522,22 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
                 points.insert(index + 1, at)
                 _with_points(ctx, doc, layer, selected, tuple(points))
                 return
+        if (
+            selected is not None
+            and not locked
+            and _rotate_at(tab.view, origin, selected, (mouse.x, mouse.y), (dx, dy))
+        ):
+            doc.begin_object_edit(layer.uid, selected.uid)
+            state.drag_kind = "object-rotate"
+            # The angle the pointer already makes with the origin corner, taken
+            # off the object's current rotation. Without it the object snaps its
+            # current angle to wherever the grip happened to be grabbed, which
+            # is the rotation twin of the grab offset a move keeps.
+            state.drag_object = (
+                float(selected.rotation) - _pointer_angle(selected, point),
+                0.0,
+            )
+            return
         handle = (
             _handle_at(tab.view, origin, selected, (mouse.x, mouse.y), (dx, dy))
             if selected is not None and not locked
@@ -2426,26 +2568,36 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
         state.drag_object = point
     elif state.drag_kind == "object-move" and imgui.is_mouse_down(0):
         offset = state.drag_object or (0.0, 0.0)
-        x, y = point[0] - offset[0], point[1] - offset[1]
-        if imgui.get_io().key_ctrl:
-            x, y = doc.cell_corner(*doc.cell_at(x, y))
+        x, y = _snapped(state, doc, (point[0] - offset[0], point[1] - offset[1]))
         doc.place_object(x=float(x), y=float(y))
+    elif state.drag_kind == "object-rotate" and imgui.is_mouse_down(0):
+        target = next((o for o in layer.objects if o.uid == state.selected_object), None)
+        if target is not None:
+            offset = (state.drag_object or (0.0, 0.0))[0]
+            angle = _pointer_angle(target, point) + offset
+            if _snap_mode(state) != "off":
+                step = plotter_state.ROTATE_SNAP_DEGREES
+                angle = round(angle / step) * step
+            # **Only ``rotation`` is written**, which is what makes the turn
+            # happen about ``(obj.x, obj.y)``: those two fields are the object's
+            # unrotated origin corner and ``_rotated`` turns every drawn point
+            # about them, so leaving them alone *is* rotating about the origin.
+            # Turning about the visual centre would mean writing x/y as well,
+            # and getting that half a frame out of step is what makes an object
+            # jump the instant a drag starts.
+            doc.place_object(rotation=float(angle % 360.0))
     elif state.drag_kind == "object-resize" and imgui.is_mouse_down(0):
         target = next((o for o in layer.objects if o.uid == state.selected_object), None)
         if target is not None:
             fixed = _opposite(state.drag_handle, target)
-            at = point
-            if imgui.get_io().key_ctrl:
-                at = doc.cell_corner(*doc.cell_at(*point))
+            at = _snapped(state, doc, point)
             x, y, w, h = _resized(target, fixed, at)
             doc.place_object(x=float(x), y=float(y), w=float(w), h=float(h))
     elif state.drag_kind == "object-vertex" and imgui.is_mouse_down(0):
         target = next((o for o in layer.objects if o.uid == state.selected_object), None)
         points = None if target is None else _vertex_points(target)
         if points is not None and state.drag_vertex is not None:
-            at = point
-            if imgui.get_io().key_ctrl:
-                at = doc.cell_corner(*doc.cell_at(*point))
+            at = _snapped(state, doc, point)
             # **Into the object's own frame**, which is the ``_resized`` trap by
             # name: the outline is drawn by rotating each point about the
             # object's origin, so taking the map point straight would put the
@@ -2461,7 +2613,11 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
         # One undo step for the whole drag, exactly as a move or a resize is.
         doc.end_object_edit()
         state.clear_drag()
-    elif state.drag_kind in ("object-move", "object-resize") and imgui.is_mouse_released(0):
+    elif state.drag_kind in (
+        "object-move",
+        "object-resize",
+        "object-rotate",
+    ) and imgui.is_mouse_released(0):
         # One step for the whole gesture, and none at all for a click that never
         # moved anything -- the session finds no diff and pushes nothing.
         doc.end_object_edit()
@@ -2495,9 +2651,114 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
         state.clear_drag()
 
 
+# --- snapping ----------------------------------------------------------------
+#
+# One question, asked in one place, by the four object gestures that used to ask
+# it four times with an inline ``if key_ctrl``. The policy -- what Ctrl means now
+# that the setting is persisted -- lives in ``plotter_state.snap_mode``; these
+# two are only the reading of the modifier and the arithmetic.
+
+
+def _snap_mode(state: Any) -> str:
+    from imgui_bundle import imgui
+
+    return plotter_state.snap_mode(state.snap, bool(imgui.get_io().key_ctrl))
+
+
+def _snapped(state: Any, doc: Any, point: tuple[float, float]) -> tuple[float, float]:
+    """``point`` moved onto whatever this gesture is snapping to."""
+    mode = _snap_mode(state)
+    if mode == "grid":
+        return doc.cell_corner(*doc.cell_at(*point))
+    if mode == "pixel":
+        return (float(round(point[0])), float(round(point[1])))
+    return (float(point[0]), float(point[1]))
+
+
 # The four corners of a rect object, in the order the handles are drawn. Named
 # by the corner that *moves*; a resize pins the opposite one.
+#
+# The rotation grip is deliberately **not** a fifth member: every consumer of
+# this tuple pairs a corner with its opposite (``_opposite``) or hit-tests the
+# four positions ``_handle_corners`` returns, and a member with no opposite and
+# no corner would have to be special-cased in both. It is its own pair of
+# functions below instead.
 _HANDLES = ("nw", "ne", "se", "sw")
+
+#: How far the rotation grip floats beyond the object's top edge, in design px
+#: through ``sp`` -- a *screen* distance, like the handles' own size, so it does
+#: not collapse into the outline as the map is zoomed out.
+ROTATE_GRIP_PX = 22.0
+
+
+def _rotatable(obj: Any) -> bool:
+    """Whether this object gets a rotation grip: ``_handle_at``'s own gate.
+
+    The same set that gets resize handles, and for the same reason -- a point
+    has no extent to turn and a polygon is turned by its vertices.
+    """
+    shape = getattr(obj, "shape", None)
+    if shape is None:
+        return getattr(obj, "kind", "") == "rect"
+    return hasattr(shape, "w")
+
+
+def _rotate_grip(
+    view: Any,
+    origin,
+    obj: Any,
+    shift: tuple[float, float] = (0.0, 0.0),
+) -> tuple[float, float] | None:
+    """Where the rotation grip is drawn, in **screen** space, or ``None``.
+
+    Computed by sampling the view at two points on the object -- the middle of
+    the top edge and the middle of the body -- and stepping a fixed number of
+    screen pixels away from the second along the line between them. That is one
+    expression for every case: it follows the object's rotation, it survives the
+    view's own rotation and flip, and it stays the same distance from the edge
+    at every zoom, none of which a fixed offset in map space manages.
+    """
+    if not _rotatable(obj):
+        return None
+    top = _rotated(obj, obj.w * 0.5, 0.0)
+    body = _rotated(obj, obj.w * 0.5, obj.h * 0.5)
+    sx, sy = inker_state.to_screen(view, origin, top[0] + shift[0], top[1] + shift[1])
+    bx, by = inker_state.to_screen(view, origin, body[0] + shift[0], body[1] + shift[1])
+    ux, uy = sx - bx, sy - by
+    length = math.hypot(ux, uy)
+    if length < 1e-6:
+        # A zero-height object: no "away from the body" direction exists, so
+        # take the screen's own up. Better than no grip at all, which would
+        # make a flattened object permanently unrotatable.
+        ux, uy, length = 0.0, -1.0, 1.0
+    step = sp(ROTATE_GRIP_PX)
+    return (sx + ux / length * step, sy + uy / length * step)
+
+
+def _rotate_at(
+    view: Any,
+    origin,
+    obj: Any,
+    mouse: tuple[float, float],
+    shift: tuple[float, float] = (0.0, 0.0),
+) -> bool:
+    """Whether the pointer is on the rotation grip. Screen space, ``_handle_at``'s
+    rule and for its reason."""
+    grip = _rotate_grip(view, origin, obj, shift)
+    if grip is None:
+        return False
+    return abs(grip[0] - mouse[0]) <= sp(7) and abs(grip[1] - mouse[1]) <= sp(7)
+
+
+def _pointer_angle(obj: Any, point: tuple[float, float]) -> float:
+    """The pointer's bearing from the object's **origin corner**, in degrees.
+
+    ``(obj.x, obj.y)`` and nothing else: that corner is the fixed point of
+    ``_rotated``, so measuring from anywhere else -- the visual centre being the
+    tempting one -- gives an angle that does not describe the turn the renderer
+    will draw.
+    """
+    return math.degrees(math.atan2(point[1] - obj.y, point[0] - obj.x))
 
 
 def _handle_corners(obj: Any) -> dict[str, tuple[float, float]]:

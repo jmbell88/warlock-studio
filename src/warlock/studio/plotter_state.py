@@ -50,6 +50,41 @@ MAP_SUFFIXES = (WMAP_SUFFIX, TMX_SUFFIX, TMJ_SUFFIX)
 #: not droppable. ``filetypes.describe`` is the same argument one layer up.
 MAP_SUFFIX_TEXT = " / ".join(MAP_SUFFIXES)
 
+#: What an object gesture may snap to, and the order the toggles cycle in.
+#:
+#: ``"grid"`` is the cell corner -- what Ctrl has always given -- and
+#: ``"pixel"`` is the whole map pixel, which is Tiled's third setting and the
+#: one that matters on a map whose objects are smaller than a tile.
+SNAP_MODES = ("off", "grid", "pixel")
+
+#: How far a rotation gesture snaps, in degrees, whenever snapping is on at all.
+#: Tiled's own number.
+ROTATE_SNAP_DEGREES = 15.0
+
+
+def snap_mode(setting: str, ctrl: bool) -> str:
+    """What this gesture actually snaps to. -> one of :data:`SNAP_MODES`.
+
+    **Ctrl inverts the setting**, which is the decision this function exists to
+    state once. Snapping used to be Ctrl-gated and nothing else: hold Ctrl and
+    a move, resize or vertex drag landed on a cell corner; let go and it did
+    not. Persisting the setting could have made Ctrl mean anything, and the
+    choice is the one every editor with a persisted snap makes -- Ctrl is the
+    momentary *opposite* of whatever is set.
+
+    The consequence worth naming is that the default is unchanged behaviour.
+    With the setting at its default ``"off"``, Ctrl still means "snap this one
+    gesture to the grid", byte for byte what it meant before the toggle
+    existed; a user who never finds the toggle never notices it landed. With
+    the setting on, Ctrl is the escape hatch for the one drag that wants to sit
+    between cells, which is the thing a persisted snap otherwise makes
+    impossible without a trip to the sidebar.
+    """
+    mode = setting if setting in SNAP_MODES else "off"
+    if not ctrl:
+        return mode
+    return "grid" if mode == "off" else "off"
+
 #: The tileset palette's zoom rungs, in screen pixels per source pixel.
 #:
 #: **Reciprocal integers below 1:1, whole integers above**, which is
@@ -477,6 +512,12 @@ class PlotterState:
     #: View state: nothing here is written to the document.
     editing_tile: int = 0
     tileset_tab: str = "Tiles"
+    #: Whether the Animation tab is running its preview, and the wall clock it
+    #: started at. View state on the mode rather than on the document, exactly
+    #: as ``animated_gid``'s clock is on the canvas: a preview that wrote frames
+    #: would dirty a saved map sixty times a second.
+    tileset_playing: bool = False
+    tileset_play_at: float = 0.0
     # A library asset waiting for the map that ``setup_pending`` is asking
     # about. The Library's *Add to Plotter as a tileset* used to be drawn for
     # any asset with an ``input.png`` and then refused with an error toast when
@@ -491,6 +532,13 @@ class PlotterState:
     grid: bool = True
     show_objects: bool = True
     minimap: bool = True
+    #: The cell rulers along the canvas's top and left edges. On by default, for
+    #: the reason ``InkerState.rulers`` is: they exist to give a sense of size,
+    #: which is exactly what a first-run user lacks. They count *cells*, not
+    #: pixels -- this is the mode where the cell is the unit of everything.
+    rulers: bool = True
+    #: What a gesture snaps to. See :data:`SNAP_MODES` and :func:`snap_mode`.
+    snap: str = "off"
     # The cell under the pointer, for the status line. View state, recomputed
     # every frame and never persisted; ``None`` when the pointer is elsewhere.
     hover_cell: tuple[int, int] | None = None

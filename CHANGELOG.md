@@ -18,6 +18,41 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **Four more Plotter gaps, all of them a gesture the mode did not have.**
+  (1) **Canvas rulers**, along the top and left edges, on by default and on `Ctrl+R` or
+  the sidebar's View block. They are Inker's bands — same thickness, same 1/2/5 tick
+  ladder, same cursor shadow, and the ladder is *imported* from `inker_canvas` rather
+  than copied so the two cannot drift — with the one deliberate difference that they
+  count **cells**, not pixels. A band reading "512" where the user counts sixteen tiles
+  would be a second coordinate system to hold in your head, which is exactly what the
+  status line's cell readout already refuses to be. (2) **The tile Animation tab can
+  reorder its frames and play them.** It could set a duration per frame and append, so
+  moving a frame meant deleting every frame after it and re-adding them in order, and
+  nothing ever played — the durations were numbers you typed and then went to the map to
+  see. Up/down arrows per row (disabled at the ends rather than absent, so a row does not
+  jump under the pointer) reorder in one undo step, and a Play button runs a preview
+  through the *same* `tileset.frame_at` the canvas substitutes gids with, so what plays
+  in the editor is what plays on the map. That function is new and is now the single
+  implementation: `animated_gid` was walking the durations itself. (3) **A rotation grip
+  on the selected object.** `MapObject.rotation` has round-tripped through all four
+  codecs since objects landed and could only be authored by typing a number into the
+  sidebar. The grip is a round handle on a stalk out of the top edge — round where the
+  resize handles are square, because they do different things — and it **turns the object
+  about `(obj.x, obj.y)`, its origin corner**, not about the middle of the rectangle you
+  can see. That is not a preference: those two fields are the object's *unrotated* origin
+  and `_rotated` turns every drawn point about them, so a gesture that rotated about the
+  centre would have to write a position and an angle from the same pointer sample, and
+  the object leaps on the first frame of the drag when they disagree. Writing only
+  `rotation` is what makes the corner the fixed point by construction, and
+  `test_object_rotate.py` pins the corner, the no-jump first frame and the one undo step.
+  (4) **A snap setting**, `Off` / `Grid` / `Pixel`, on `Ctrl+Shift+G` and `Ctrl+Shift+P`,
+  which are Tiled's own chords. Snapping was Ctrl-gated and per-gesture: a user who
+  wanted every object on the grid held a modifier down for the length of every drag, and
+  Tiled's pixel snap was unreachable. **Ctrl now inverts the setting** — the momentary
+  opposite of whatever is set, which is what every editor with a persisted snap does —
+  and the consequence worth stating is that the default is unchanged behaviour: at the
+  default `Off`, Ctrl still means "snap this one gesture to the grid", exactly as it
+  always did. Rotation reads the same setting and snaps to 15°.
 - **Six Plotter capabilities that had no control in front of them now have one.** Each
   one was finished code with no entry point, which is the shape of defect this codebase
   is most prone to. (1) **The capsule object** was modelled, hit-tested, drawn and

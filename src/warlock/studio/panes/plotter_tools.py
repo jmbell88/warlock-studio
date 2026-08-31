@@ -308,11 +308,13 @@ def _body(ctx: Any) -> None:
     # were terrain settings.
     widgets.section("View")
     _, state.grid = widgets.toggle("Grid (Ctrl+G)", state.grid)
+    _, state.rulers = widgets.toggle("Rulers (Ctrl+R)", state.rulers)
     _, state.show_objects = widgets.toggle("Show objects", state.show_objects)
     _, state.minimap = widgets.toggle("Minimap", state.minimap)
     _, state.highlight = widgets.toggle(
         "Highlight current layer", state.highlight
     )
+    _snap_choice(state)
 
     imgui.dummy((0, 6))
     widgets.section("Map")
@@ -323,6 +325,37 @@ def _body(ctx: Any) -> None:
     if tab.busy:
         widgets.muted("Saving...")
         return
+
+
+#: The snap setting's three pills, and the sentence each one is worth.
+SNAP_LABELS = (("off", "Off"), ("grid", "Grid"), ("pixel", "Pixel"))
+
+SNAP_TIPS = {
+    "off": "Object drags land wherever the pointer is. Hold Ctrl to snap to the grid.",
+    "grid": "Object drags land on cell corners, and rotation on 15 degrees. "
+    "Hold Ctrl for one unsnapped drag.",
+    "pixel": "Object drags land on whole map pixels, and rotation on 15 degrees. "
+    "Hold Ctrl for one unsnapped drag.",
+}
+
+
+def _snap_choice(state: Any) -> None:
+    """What object gestures snap to, as one row of three.
+
+    A choice rather than a switch because there are three answers and Tiled
+    offers all three; the tooltips are where "and Ctrl inverts it" is said,
+    because a modifier nobody documents is a modifier nobody finds.
+    """
+    widgets.field_label("Snap objects to")
+    changed, picked = controls.segmented_choice(
+        "plotter-snap",
+        list(SNAP_LABELS),
+        state.snap if state.snap in plotter_state.SNAP_MODES else "off",
+        tooltips=SNAP_TIPS,
+        compact=True,
+    )
+    if changed:
+        state.snap = picked
 
 
 SETTINGS_POPUP = "plotter-map-settings"

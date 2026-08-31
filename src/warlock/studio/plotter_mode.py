@@ -1085,7 +1085,21 @@ def _ctrl_key(
         redo(ctx, tab)
         return True
     if name == "g":
+        if shift:
+            # Tiled's Ctrl+Shift+G, Snap to Grid, as a straight toggle between
+            # the grid and off -- it does not disturb Pixel, which has its own
+            # chord below, so the pair behave like Tiled's two checkable rows
+            # rather than like one three-way cycle nobody can aim.
+            state.snap = "off" if state.snap == "grid" else "grid"
+            return True
         state.grid = not state.grid
+        return True
+    if name == "p" and shift:
+        # Tiled's Ctrl+Shift+P, Snap to Pixels.
+        state.snap = "off" if state.snap == "pixel" else "pixel"
+        return True
+    if name == "r" and not shift:
+        state.rulers = not state.rulers
         return True
     if name == "i" and shift:
         # Ctrl+Shift+I, the chord Inker and Clay both bind for the same verb.
