@@ -77,6 +77,20 @@ once. Painting on any of them paints on all of them, which is the point.
 **Unlink** gives that one frame a private copy from then on. *Copy* is the other choice: an
 independent duplicate you can diverge immediately.
 
+### Cel opacity
+
+**Each cell has an opacity of its own**, on the same right-click menu, and it is a *multiplier* on
+the layer's own — a layer at 50% with a cel at 50% draws at 25%. That is what makes it useful for
+a fade: leave the layer where it is and dim the cells across a few frames.
+
+**A linked cel can be dimmed on one frame without dimming the others.** The drawing is still one
+drawing — paint on it and every frame changes, exactly as before — but the opacity belongs to the
+*slot* rather than to the picture, so the same held pose can fade out over ten frames without
+being unlinked into ten copies first. A cell with no drawing in it has no opacity to set, and the
+slider is not offered there. The value is saved with the document, and survives a round trip
+through `.aseprite` in both directions.
+
+
 ## Timing
 
 **Durations are per frame**, in milliseconds, in the box on the transport row — so a held pose and
@@ -312,8 +326,9 @@ build cannot read, a canvas too small to draw on, a cel that will not decompress
 build cannot align to its own tile grid, a cel type nobody here knows, a tileset that links an
 external file rather than carrying its own pixels, or a cel linked to a frame that holds none.
 Anything cosmetic is a message and the file still opens: colour profiles (this app assumes sRGB
-throughout), user data and timeline colours, a per-cel opacity (opacity is a layer property here), a
-cel's z-index (layer order is stacking order), per-frame palettes (the final table is used). A
+throughout), user data and timeline colours, a cel's z-index (layer order is stacking order), and per-frame
+palettes (the final table is used). Per-cel opacity *is* kept now — except on a one-frame file,
+which opens as a still image with no timeline for it to live on, and there it is a message. A
 reference layer opens hidden, which is what exporting from Aseprite would do with it.
 
 The full list of what comes across, what is only a message, and what a save back out to `.aseprite`

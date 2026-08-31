@@ -1685,6 +1685,21 @@ def _cell_menu(
         doc.unlink_cel(track_index=ti, frame_index=fi)
     if has_cel and controls.menu_item_simple("Clear"):
         doc.clear_cel(track_index=ti, frame_index=fi)
+    if has_cel:
+        # Per-cel opacity, on the *cel* menu and not the row menu, because that
+        # is the difference the feature is: the row's own slider is the track's
+        # and this multiplies it for this slot alone. A linked cel gets one of
+        # these per slot, which is the point -- the engine keys the value by
+        # ``(track uid, frame uid)`` rather than by the shared ``Layer``.
+        changed, alpha = controls.slider_float(
+            "Opacity##cel",
+            float(doc.anim.cel_alpha(doc.anim.tracks[ti].uid, doc.anim.frames[fi].uid)),
+            0.0,
+            1.0,
+            "%.2f",
+        )
+        if changed:
+            doc.set_cel_opacity(float(alpha), track_index=ti, frame_index=fi)
     _range_menu(ctx, tab)
     imgui.end_disabled()
     imgui.end_popup()

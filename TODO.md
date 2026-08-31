@@ -624,9 +624,12 @@ Decisions with arguments beside them, not backlog:
 - **A hexagonal 120° tile rotation** stays refused: not a permutation of the
   pixel grid, and the standing bar for a tile transform is that it invents no
   colour. `docs/COMPAT.md` carries the argument.
-- **Pen/tablet pressure, ICC colour, per-frame palettes, per-cel opacity** and
-  the rest of the Aseprite parity programme's named non-goals, in
-  `docs/INVARIANTS.md`.
+- **Pen/tablet pressure, ICC colour, per-frame palettes, ~~per-cel opacity~~**
+  and the rest of the Aseprite parity programme's named non-goals, in
+  `docs/INVARIANTS.md`. Per-cel opacity was struck out on 2026-08-30: it could
+  be built, so it was built (divergence #1, retired in place there), and this
+  file's own rule is that an item which could be built is struck through
+  rather than left standing as a decision it is no longer.
 - **The Aseprite P1 backlog** was waved after all, on 2026-08-22, by the UX
   refactor's Wave 6. The rule that said it never would be was reversed in
   `docs/INVARIANTS.md` on the same day, and this line said the opposite until

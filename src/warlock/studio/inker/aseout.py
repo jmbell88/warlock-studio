@@ -773,35 +773,59 @@ def _plane(layer, mode: str, size: tuple[int, int]) -> bytes:
     return np.ascontiguousarray(indices, dtype=np.uint8).tobytes()
 
 
-def _cel_chunk(layer_index: int, plane: bytes, size: tuple[int, int]) -> bytes:
+def _ase_opacity(alpha: float) -> int:
+    """A per-cel opacity as the format's byte, 0-255.
+
+    One function because three chunk writers need the same rounding and the
+    reader divides by 255 -- ``round`` and not ``int``, so 0.5 writes 128 and
+    reads back as 128/255, which is the nearest the format can hold rather than
+    a value a floor would drift a step darker on every save.
+    """
+    return max(0, min(255, round(max(0.0, min(1.0, float(alpha))) * 255.0)))
+
+
+def _cel_chunk(
+    layer_index: int, plane: bytes, size: tuple[int, int], opacity: int = 255
+) -> bytes:
     """A type-2 (zlib) cel, full canvas at the origin.
 
-    Opacity 255 and z-index 0, both deliberately: opacity is a track property
-    here (divergence 1) and track order *is* stack order (divergence 12), so
-    writing anything else would be inventing a value the reader would then warn
-    about on the way back in.
+    ``opacity`` is the slot's own (``Animation.cel_opacity``; divergence 1,
+    retired 2026-08-30) and defaults to the 255 every undimmed cel writes, so a
+    document that never used the feature is byte-for-byte the file it was.
+    Z-index stays 0 deliberately: track order *is* stack order here (divergence
+    12), so writing anything else would invent a value the reader warns about on
+    the way back in.
     """
     width, height = size
     body = struct.pack(
-        "<HhhBHh5s", layer_index, 0, 0, 255, _CEL_COMPRESSED, 0, b"\0" * 5
+        "<HhhBHh5s", layer_index, 0, 0, opacity, _CEL_COMPRESSED, 0, b"\0" * 5
     )
     return _chunk(
         _CEL, body + struct.pack("<HH", width, height) + zlib.compress(plane)
     )
 
 
-def _link_chunk(layer_index: int, frame_index: int) -> bytes:
+def _link_chunk(layer_index: int, frame_index: int, opacity: int = 255) -> bytes:
     """A type-1 cel: this slot holds the cel that frame ``frame_index`` does.
 
     The field is a **frame** index, not a cel index -- the reader resolves it as
     ``(this cel's layer, that frame)``, which is why the link is only ever
     written within one track.
+
+    **It carries an opacity of its own**, and that is what the parameter is
+    for: the format gives a linked chunk its own opacity byte, and so does this
+    package -- ``Animation.cel_opacity`` is keyed by *slot*, not by ``Layer`` --
+    so the two slots of a link round-trip two different numbers over one image.
     """
-    body = struct.pack("<HhhBHh5s", layer_index, 0, 0, 255, _CEL_LINKED, 0, b"\0" * 5)
+    body = struct.pack(
+        "<HhhBHh5s", layer_index, 0, 0, opacity, _CEL_LINKED, 0, b"\0" * 5
+    )
     return _chunk(_CEL, body + struct.pack("<H", frame_index))
 
 
-def _tilemap_cel_chunk(layer_index: int, refs: np.ndarray) -> bytes:
+def _tilemap_cel_chunk(
+    layer_index: int, refs: np.ndarray, opacity: int = 255
+) -> bytes:
     """A type-3 cel: a grid of tile references, not pixels.
 
     Whole-canvas at the origin, for :func:`_cel_chunk`'s reason one level up --
@@ -821,7 +845,9 @@ def _tilemap_cel_chunk(layer_index: int, refs: np.ndarray) -> bytes:
     Aseprite reads unchanged.
     """
     grid_h, grid_w = int(refs.shape[0]), int(refs.shape[1])
-    body = struct.pack("<HhhBHh5s", layer_index, 0, 0, 255, _CEL_TILEMAP, 0, b"\0" * 5)
+    body = struct.pack(
+        "<HhhBHh5s", layer_index, 0, 0, opacity, _CEL_TILEMAP, 0, b"\0" * 5
+    )
     body += struct.pack("<HHH", grid_w, grid_h, _TILE_BITS)
     body += struct.pack("<IIII", gid.GID_MASK, gid.FLIP_H, gid.FLIP_V, gid.FLIP_D)
     body += b"\0" * 10
@@ -833,7 +859,12 @@ def _tilemap_cel_chunk(layer_index: int, refs: np.ndarray) -> bytes:
 
 
 def _drawn_cel(
-    layer_index: int, row: _Row, layer, mode: str, size: tuple[int, int]
+    layer_index: int,
+    row: _Row,
+    layer,
+    mode: str,
+    size: tuple[int, int],
+    opacity: int = 255,
 ) -> bytes:
     """The chunk one occupied slot writes -- pixels, or tile references.
 
@@ -845,7 +876,7 @@ def _drawn_cel(
     document, and this is the cheapest place to say so.
     """
     if row.tileset is None:
-        return _cel_chunk(layer_index, _plane(layer, mode, size), size)
+        return _cel_chunk(layer_index, _plane(layer, mode, size), size, opacity)
     refs = getattr(layer, "refs", None)
     if refs is None:
         raise ValueError(
@@ -860,7 +891,7 @@ def _drawn_cel(
             f"the tilemap layer {row.name!r} holds a cel bound to a different"
             " tileset, and an .aseprite layer draws through exactly one"
         )
-    return _tilemap_cel_chunk(layer_index, refs)
+    return _tilemap_cel_chunk(layer_index, refs, opacity)
 
 
 # --- tilesets ----------------------------------------------------------------
@@ -1356,14 +1387,20 @@ def aseprite_bytes(doc) -> bytes:
                     # transparent one would read back as a slot somebody drew
                     # in, which is a hole in the grid's own sparseness.
                     continue
+                # Per *slot* and not per layer: a linked cel is one object in
+                # two slots and the two may carry two different opacities,
+                # which is exactly what ``cel_opacity`` is keyed by slot for.
+                alpha = _ase_opacity(anim.cel_alpha(track.uid, frame.uid))
                 at = first.get(id(layer))
                 if at is None:
                     first[id(layer)] = index
                     per_frame[index].append(
-                        _drawn_cel(index_of[position], row, layer, mode, size)
+                        _drawn_cel(index_of[position], row, layer, mode, size, alpha)
                     )
                 else:
-                    per_frame[index].append(_link_chunk(index_of[position], at))
+                    per_frame[index].append(
+                        _link_chunk(index_of[position], at, alpha)
+                    )
 
     body = bytearray(
         _header(

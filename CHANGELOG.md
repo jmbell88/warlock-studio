@@ -18,6 +18,22 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **A cel can carry its own opacity, and a linked cel can carry two.** Aseprite's format gives
+  every cel chunk an opacity byte; this build kept only the layer's, warned the rest away, and
+  wrote 255 back out (divergence #1, now retired in place in `docs/INVARIANTS.md`). Opacity is now
+  a sparse map on the grid, `Animation.cel_opacity`, keyed `(track uid, frame uid)` exactly as
+  `cels` is — **deliberately not a field on `Layer`**, because a linked cel is two keys mapping to
+  one `Layer` object and two slots may legitimately want two different values. It is a multiplier
+  on the track's opacity, folded down in `Animation.layers_for` and nowhere else, so
+  `LayerStack._entries` still emits the ordinary `(pixels, opacity, blend)` triple and neither the
+  compositor nor the native stack kernel was touched. The reader keeps the byte instead of warning
+  about it, the writer emits it per *slot* so a link's two chunks disagree correctly, and
+  `animation.json` gains an additive per-cel key written only when it is set — a document that
+  never used the feature writes the bytes it always wrote, which the ORA determinism pins hold to.
+  A one-frame `.aseprite` opens as a still document with no grid, so there alone the byte is still
+  said out loud rather than folded into a layer opacity nobody set. The slider lives on the
+  timeline's cell menu and is driven in test by a real mouse press at the rect imgui put it at,
+  because a control that draws and does nothing is this codebase's most common historical defect.
 - **Four palette formats, and a folder to keep them in.** The Inker read GIMP `.gpl` and
   JASC `.pal`; the pixel pipeline read `.gpl` and Lospec `.hex`; neither read Paint.NET's
   `.txt`, and the palette directory listed only two suffixes, so a `.pal` or a `.txt`

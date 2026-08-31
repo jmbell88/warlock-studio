@@ -293,7 +293,7 @@ settle the first question in a minute.
 
 | What | State | Divergence | Notes |
 |---|---|---|---|
-| Cel opacity | dropped | #1 | Opacity is a track/layer property here; every cel writes at 255. |
+| Cel opacity | round-trips | #1 (retired 2026-08-30) | ~~Opacity is a track/layer property here; every cel writes at 255.~~ A cel's own opacity is written from `Animation.cel_opacity`, keyed by *slot* -- so the two chunks of a linked cel carry two independent bytes, exactly as the format allows. A slot nobody dimmed still writes 255, which is what keeps an undimmed document byte-for-byte the file it was. |
 | Cel z-index | n/a on write | #12 | This build has none — track order *is* stack order, so there is nothing to write per cel. |
 | User data (layer/cel/tileset/tile) | dropped | #14 | Not modeled; nothing is written to the `0x2020` chunk this format offers for it. |
 | Per-frame palettes | n/a on write | #20 | One table per document; there is only ever one palette to write. |
@@ -319,7 +319,7 @@ settle the first question in a minute.
 
 | What | State | Divergence | Notes |
 |---|---|---|---|
-| Cel opacity | warned | #1 | "per-cel opacity is not kept; the layer's opacity is." |
+| Cel opacity | kept (still documents warned) | #1 (retired 2026-08-30) | The byte lands in `Animation.cel_opacity`, per slot, so a linked pair declaring two different bytes arrives as one shared `Layer` wearing two numbers. ~~"per-cel opacity is not kept; the layer's opacity is."~~ A **one-frame** file opens as a still document (divergence 22) and has no grid for it to land on, so there alone it is still said out loud: "per-cel opacity needs a timeline; this file has one frame." |
 | Cel z-index | warned | #12 | "a cel's z-index was dropped; layer order is stacking order." |
 | User data (layer or tag/timeline colour) | warned | #14 | "user data and timeline colours are not kept; the drawing is" — raised once for a layer's own user-data chunk and again for a tag whose colour bytes are non-zero. |
 | Per-tile user data | warned, tiles kept | #14 | Its own, narrower sentence ("the tiles are") — the picture survives; only the metadata about individual tiles does not. |

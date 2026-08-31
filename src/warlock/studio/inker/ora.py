@@ -579,6 +579,19 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
             "track": tracks[track_uid],
             "frame": frames[frame_uid],
             "data": names[id(layer)],
+            # Per-cel opacity, written **only when it is set**, which is
+            # ``continuous``'s and ``repeat``'s rule and for their reason: 1.0
+            # is what every cel ever written already means, so a document that
+            # has never been dimmed writes the bytes it always wrote and the
+            # determinism pin depends on exactly that. It rides on the *cel*
+            # rather than on the layer because a linked cel is one ``data`` PNG
+            # named by two entries, and the two may legitimately disagree --
+            # putting it beside "data" is what lets them.
+            **(
+                {"opacity": anim.cel_alpha(track_uid, frame_uid)}
+                if anim.cel_alpha(track_uid, frame_uid) < 1.0
+                else {}
+            ),
         }
         for (track_uid, frame_uid), layer in anim.cels.items()
         if track_uid in tracks and frame_uid in frames
@@ -1184,6 +1197,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
         # and the break would only show on the next stroke.
         planes: dict[str, Layer] = {}
         cels: dict[tuple[int, int], Layer] = {}
+        cel_opacity: dict[tuple[int, int], float] = {}
         for entry in payload["cels"]:
             ti, fi, src = int(entry["track"]), int(entry["frame"]), entry["data"]
             if not (0 <= ti < len(tracks) and 0 <= fi < len(frames)):
@@ -1210,6 +1224,15 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
                     reader.attach(layer, data)
                 planes[src] = layer
             cels[(tracks[ti].uid, frames[fi].uid)] = layer
+            # ``.get``-based like every other additive key here, so a file
+            # written before per-cel opacity existed reads back at 1.0 rather
+            # than failing the whole grid -- which is why the version stays 1.
+            # Stored sparsely for ``_set_cel_opacity``'s reason: a 1.0 entry
+            # would be written straight back out and cost the file its
+            # byte-for-byte round trip.
+            alpha = float(entry.get("opacity", 1.0))
+            if alpha < 1.0:
+                cel_opacity[(tracks[ti].uid, frames[fi].uid)] = max(0.0, alpha)
 
         tags = [
             Tag(
@@ -1262,7 +1285,13 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
                     getattr(zf, "filename", "?"), exc)
 
     return Animation(
-        tracks=tracks, frames=frames, cels=cels, tags=tags, current=0, layout=layout
+        tracks=tracks,
+        frames=frames,
+        cels=cels,
+        cel_opacity=cel_opacity,
+        tags=tags,
+        current=0,
+        layout=layout,
     ), payload
 
 

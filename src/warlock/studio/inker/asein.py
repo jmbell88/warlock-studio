@@ -333,6 +333,12 @@ class AseCel:
     x: int = 0
     y: int = 0
     kind: int = _CEL_RAW
+    #: The chunk's own opacity byte, 0-255. Kept per *cel* and not folded into
+    #: the layer, because the format gives every cel chunk one of these --
+    #: linked ones included -- and two slots sharing one image may carry two
+    #: different numbers. It lands in ``Animation.cel_opacity``, which is keyed
+    #: the same way for the same reason.
+    opacity: int = 255
     width: int = 0
     height: int = 0
     data: bytes = b""
@@ -689,15 +695,18 @@ def _read_cel(state: _Parse, r: _Reader) -> None:
     z_index = r.i16()
     r.take(5)
 
-    if opacity != 255:
-        # Divergence 1: opacity is a track property here, per-cel was skipped.
-        state.warn("per-cel opacity is not kept; the layer's opacity is")
+    # Divergence 1 was retired on 2026-08-30: per-cel opacity is kept now, in
+    # ``Animation.cel_opacity``, and is *not* warned away here. It has nowhere
+    # to land on a **still** document (``Document.anim is None``, divergence
+    # 22), so the one remaining warning is raised where that is known -- in
+    # ``open_aseprite``'s single-frame branch -- rather than here, where it is
+    # not.
     if z_index:
         # Divergence 12: track order *is* stack order, which the compositor and
         # the stack kernel both assume.
         state.warn("a cel's z-index was dropped; layer order is stacking order")
 
-    cel = AseCel(layer=layer, frame=state.frame, x=x, y=y, kind=kind)
+    cel = AseCel(layer=layer, frame=state.frame, x=x, y=y, kind=kind, opacity=opacity)
     if kind == _CEL_LINKED:
         cel.link = r.u16()
     elif kind in (_CEL_RAW, _CEL_COMPRESSED):
@@ -1535,10 +1544,26 @@ def document_from_aseprite(
             for (row, frame), layer in made.items()
             if row in tracks and frame < len(frames)
         }
+        # Per-cel opacity, read off the *cel chunk* and keyed the way the cels
+        # themselves are -- so a linked pair whose two chunks declared two
+        # different bytes arrives as one shared ``Layer`` wearing two numbers,
+        # which is the case ``cel_opacity`` is a dict rather than a ``Layer``
+        # field for. Sparse: 255 is stored as nothing, so a file that never
+        # used the feature makes an ``Animation`` identical to the one it made
+        # before the feature existed.
+        cel_opacity = {
+            (tracks[cel.layer].uid, frames[cel.frame].uid): cel.opacity / 255.0
+            for cel in sprite.cels
+            if cel.layer in tracks
+            and cel.frame < len(frames)
+            and cel.opacity != 255
+            and (tracks[cel.layer].uid, frames[cel.frame].uid) in cels
+        }
         anim = Animation(
             tracks=[tracks[index] for index in image_rows],
             frames=frames,
             cels=cels,
+            cel_opacity=cel_opacity,
             tags=list(sprite.tags),
         )
         doc = Document(
@@ -1558,6 +1583,14 @@ def document_from_aseprite(
         # frame is dropped -- there is nothing here for it to play across.
         if sprite.tags:
             warn("a tag over a single frame was dropped; there is nothing to play")
+        # The last of divergence 1, and all that is left of it: per-cel opacity
+        # lives on the *grid* (``Animation.cel_opacity``), and a still document
+        # has no grid -- so this is the one shape of file where the byte still
+        # has nowhere to go. Said out loud rather than folded into the layer's
+        # own opacity, because the two are different numbers and multiplying
+        # them here would write a track opacity nobody set on the next save.
+        if any(cel.opacity != 255 for cel in sprite.cels):
+            warn("per-cel opacity needs a timeline; this file has one frame")
         layers: list[Layer] = []
         for index in image_rows:
             row = sprite.layers[index]

@@ -40,6 +40,7 @@ from .undo import _plane_bytes
 
 __all__ = [
     "AnimateEdit",
+    "CelOpacityEdit",
     "CelSetEdit",
     "FrameAddEdit",
     "FrameDurationEdit",
@@ -333,3 +334,29 @@ class CelSetEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         self._put(doc, self.after)
+
+
+@dataclass
+class CelOpacityEdit(Edit):
+    """One slot's per-cel opacity, before and after.
+
+    Addressed by the same ``(track uid, frame uid)`` pair the cel itself is,
+    and **not** by the ``Layer``: a linked cel is one object in two slots, so an
+    edit naming the object would move both of them and the two-slots-two-values
+    case -- the whole reason ``Animation.cel_opacity`` is a dict rather than a
+    field on ``Layer`` -- would be unreachable through undo.
+
+    Cost is zero. The step holds two floats and no pixels, so the byte budget
+    has nothing to say about it -- ``TagsEdit``'s reason, one grid cell down.
+    """
+
+    track_uid: int
+    frame_uid: int
+    before: float
+    after: float
+
+    def undo(self, doc: Any) -> None:
+        doc._set_cel_opacity(self.track_uid, self.frame_uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._set_cel_opacity(self.track_uid, self.frame_uid, self.after)

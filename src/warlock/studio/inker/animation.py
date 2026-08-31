@@ -479,6 +479,27 @@ class Animation:
     tags: list[Tag] = field(default_factory=list)
     current: int = 0
 
+    #: Per-cel opacity, sparse, ``1.0`` for every slot not named here -- a
+    #: *multiplier* on the track's own opacity rather than a replacement for it,
+    #: folded down in :meth:`layers_for` beside the copy of ``CEL_PROPS``.
+    #:
+    #: **A dict beside ``cels`` and deliberately not a field on ``Layer``.** A
+    #: linked cel is two keys mapping to one ``Layer`` object -- that sharing is
+    #: the whole of what a link *is* here (``asein._build_cels`` says so at
+    #: length) -- so an opacity stored on the layer would be one number for
+    #: every slot it occupies, and Aseprite's own format gives each cel chunk,
+    #: linked ones included, its own opacity byte. Keyed exactly like ``cels``,
+    #: so the two are read with the same tuple.
+    #:
+    #: Entries are **not** dropped when a track or frame goes: uids are
+    #: per-process and monotonic, so a key naming a dead row can never be read
+    #: again (``layers_for`` only ever asks about live tracks and frames, and
+    #: both writers walk ``cels``), while keeping it is what lets undoing a row
+    #: or column deletion bring its opacities back without a second edit type
+    #: carrying them. ``_placeholder_uids`` above is pruned for the opposite
+    #: reason -- a stale uid *there* would be handed out to a caller.
+    cel_opacity: dict[tuple[int, int], float] = field(default_factory=dict)
+
     #: Set when these frames are a directional sprite sheet's cells, in order.
     #: None for every ordinary animation, which is the default and takes the
     #: fixed-grid export path out of the picture entirely.
@@ -648,17 +669,42 @@ class Animation:
         the track is authoritative, and a cel that kept its own stale opacity
         would composite differently on the frame it was drawn on than on the
         frame it was linked into.
+
+        ``cel_opacity`` is folded in **here and only here**, right after that
+        copy-down, and that is what keeps the feature out of everything
+        downstream: by the time ``LayerStack._entries`` reads ``layer.opacity``
+        it is already ``track x cel``, so the compositor, the below-cache and
+        the native stack kernel see the ordinary ``(pixels, opacity, blend)``
+        triple they always saw and none of them learns the word "cel". The
+        multiply is per *call*, not per object, which is precisely why a linked
+        cel can wear two different numbers in its two slots: the shared
+        ``Layer`` is rewritten each time it is materialised for a frame.
         """
         out: list[Layer] = []
         for track in self.tracks:
-            layer = self.cels.get((track.uid, frame.uid))
+            key = (track.uid, frame.uid)
+            layer = self.cels.get(key)
             if layer is None:
+                # No cel, no per-cel opacity: a placeholder is a blank plane on
+                # a row, and dimming nothing is still nothing. The stored entry
+                # (if the slot was cleared and the clear not yet undone) stays
+                # put for the field's own reason.
                 out.append(self.placeholder(track, frame, size))
                 continue
-            for key in CEL_PROPS:
-                setattr(layer, key, getattr(track, key))
+            for prop in CEL_PROPS:
+                setattr(layer, prop, getattr(track, prop))
+            layer.opacity = track.opacity * self.cel_alpha(*key)
             out.append(layer)
         return out
+
+    def cel_alpha(self, track_uid: int, frame_uid: int) -> float:
+        """One slot's per-cel opacity, clamped, ``1.0`` when nobody set one.
+
+        A method rather than a bare ``.get`` because three writers and the
+        fold all want the same clamp, and a stored 1.4 out of somebody else's
+        file must not brighten a layer past what it drew.
+        """
+        return max(0.0, min(1.0, float(self.cel_opacity.get((track_uid, frame_uid), 1.0))))
 
     # -- playback -----------------------------------------------------------
 

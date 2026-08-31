@@ -214,10 +214,12 @@ def _cel(
     )
 
 
-def _linked_cel(layer: int, frame: int, *, x: int = 0, y: int = 0) -> bytes:
+def _linked_cel(
+    layer: int, frame: int, *, x: int = 0, y: int = 0, opacity: int = 255
+) -> bytes:
     return _chunk(
         0x2005,
-        struct.pack("<HhhBHh5s", layer, x, y, 255, 1, 0, b"\0" * 5)
+        struct.pack("<HhhBHh5s", layer, x, y, opacity, 1, 0, b"\0" * 5)
         + struct.pack("<H", frame),
     )
 
@@ -1168,11 +1170,21 @@ def test_an_empty_user_data_chunk_says_nothing():
     assert warnings == []
 
 
-def test_a_per_cel_opacity_is_a_warning_rather_than_a_refusal():
-    """Divergence 1: opacity is a track property here."""
+def test_a_per_cel_opacity_on_a_still_file_is_a_warning_rather_than_a_refusal():
+    """All that is left of divergence 1, retired 2026-08-30.
+
+    Per-cel opacity is kept now -- in ``Animation.cel_opacity``, which is part
+    of the *grid*. A one-frame ``.aseprite`` opens as a still document
+    (divergence 22: ``Document.anim is None``), so there is no grid for the
+    byte to land on and it is said out loud rather than folded into the layer's
+    own opacity, which is a different number.
+    """
     cel = _cel(0, _rgba(2, 2, (1, 1, 1, 255)), 2, 2, opacity=128)
-    _doc, warnings = asein.document_from_aseprite(_one_layer_file(cel=cel))
+    doc, warnings = asein.document_from_aseprite(_one_layer_file(cel=cel))
+    assert doc.anim is None
     assert any("per-cel opacity" in line for line in warnings)
+    # And the layer keeps the opacity the *layer* chunk declared, untouched.
+    assert doc.stack[0].opacity == 1.0
 
 
 def test_a_cel_z_index_is_a_warning_rather_than_a_refusal():
@@ -1310,20 +1322,26 @@ def test_a_tag_over_a_single_frame_is_dropped_with_a_warning():
 
 def test_a_warning_is_one_line_per_kind_however_many_times_it_happens():
     """A file with two hundred cels carrying user data has one thing wrong with
-    it as far as this import is concerned."""
+    it as far as this import is concerned.
+
+    Measured on the *z-index* warning rather than the per-cel opacity one it
+    used to use: divergence 1 was retired on 2026-08-30 and an opacity byte on
+    an animated file is now kept rather than warned away, so the only per-cel
+    divergence left that repeats once per chunk is divergence 12.
+    """
     art = _rgba(1, 1, (1, 1, 1, 255))
     user = _chunk(0x2020, struct.pack("<I", 0))
     data = _file(
         _header(3, 1, 1),
         [
-            _frame([_layer("Art"), _cel(0, art, 1, 1, opacity=10), user]),
-            _frame([_cel(0, art, 1, 1, opacity=20), user]),
-            _frame([_cel(0, art, 1, 1, opacity=30), user]),
+            _frame([_layer("Art"), _cel(0, art, 1, 1, z=1), user]),
+            _frame([_cel(0, art, 1, 1, z=2), user]),
+            _frame([_cel(0, art, 1, 1, z=3), user]),
         ],
     )
     _doc, warnings = asein.document_from_aseprite(data)
     assert len(warnings) == len(set(warnings))
-    assert sum("per-cel opacity" in line for line in warnings) == 1
+    assert sum("z-index" in line for line in warnings) == 1
 
 
 # --- tilemaps: Wave 3 chunk 3.5 -----------------------------------------------

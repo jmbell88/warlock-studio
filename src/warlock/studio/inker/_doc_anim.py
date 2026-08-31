@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from .anim_edits import (
     AnimateEdit,
+    CelOpacityEdit,
     CelSetEdit,
     FrameAddEdit,
     FrameDurationEdit,
@@ -225,6 +226,24 @@ class AnimOps:
             setattr(track, key, value)
         self._anim_changed()
 
+    def _set_cel_opacity(
+        self: Document, track_uid: int, frame_uid: int, value: float
+    ) -> None:
+        """Undo hook for :meth:`set_cel_opacity`. Sparse: 1.0 removes the key.
+
+        Removing rather than storing 1.0 is what keeps the feature invisible to
+        every writer when it is not used -- ``ora`` and ``aseout`` both ask
+        whether a slot is *named* here, so a document that has been dimmed and
+        put back writes the bytes it wrote before.
+        """
+        anim = self._require_anim()
+        value = max(0.0, min(1.0, float(value)))
+        if value >= 1.0:
+            anim.cel_opacity.pop((track_uid, frame_uid), None)
+        else:
+            anim.cel_opacity[(track_uid, frame_uid)] = value
+        self._anim_changed()
+
     def _set_cel(self: Document, track_uid: int, frame_uid: int, layer: Layer | None) -> None:
         anim = self._require_anim()
         if layer is None:
@@ -354,6 +373,37 @@ class AnimOps:
                 track.uid, frame.uid, before, None, pinned=bool(self._released([before]))
             )
         )
+        return True
+
+    def set_cel_opacity(
+        self: Document,
+        value: float,
+        track_index: int | None = None,
+        frame_index: int | None = None,
+    ) -> bool:
+        """Dim one slot of the grid, on top of whatever its track says.
+
+        A *multiplier* rather than an override, so a track hidden to 50% still
+        reads as the row's setting and the cel's number is the difference from
+        it -- which is also how the two survive being edited independently.
+
+        Refused on an empty slot: there is no cel to dim, and inventing an
+        entry for one would leave a number behind that nothing draws and that
+        the next autovivified cel would silently inherit.
+        """
+        slot = self._slot(track_index, frame_index)
+        anim = self.anim
+        if slot is None or anim is None:
+            return False
+        track, frame = slot
+        if anim.cels.get((track.uid, frame.uid)) is None:
+            return False
+        before = anim.cel_alpha(track.uid, frame.uid)
+        after = max(0.0, min(1.0, float(value)))
+        if after == before:
+            return False
+        self._set_cel_opacity(track.uid, frame.uid, after)
+        self.history.push(CelOpacityEdit(track.uid, frame.uid, before, after))
         return True
 
     def link_cel(
