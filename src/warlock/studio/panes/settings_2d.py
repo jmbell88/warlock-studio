@@ -76,8 +76,6 @@ def draw(ctx: Any) -> None:
     # this bridge.
     if "asset_type" not in form:
         form["asset_type"] = create_assets.legacy_asset_type(form)
-    if form.get("generation_type") not in generation.GENERATION_TYPES:
-        form["generation_type"] = create_assets.legacy_asset_type(form)
     create_assets.sync_legacy_fields(form)
     # Form.errors now places the rings and copy beneath the owning controls;
     # these are the routes it replaces and keeps wired by the same field keys:
@@ -201,7 +199,7 @@ def _asset_type(ctx: Any, form: dict[str, Any]) -> None:
     widgets.muted_wrapped(
         {
             "image": "A standalone 2D image.",
-            "model_3d": "A reference image you can turn into a 3D model.",
+            "3d_model": "A reference image you can turn into a 3D model.",
             "seamless_material": "A seamless surface texture.",
             "tileset": "A coherent pixel-art tile sheet.",
             "sprite_sheet": "A character reference followed by a sprite sheet.",
@@ -2561,7 +2559,7 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         _generate_tile_sheet(ctx, form)
         return
     resolved = None
-    if create_assets.selected(form).key in {"image", "model_3d", "seamless_material"}:
+    if create_assets.selected(form).key in {"image", "3d_model", "seamless_material"}:
         request = generation.request_from_legacy(form)
         resolved = generation.resolve_recipe(request, ctx.svc.config)
         recipe_issues = generation.validate_request(request, resolved)

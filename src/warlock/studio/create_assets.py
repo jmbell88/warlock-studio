@@ -27,7 +27,7 @@ class AssetType:
 
 _ORDERED = (
     AssetType("image", "Image", "refine_2d", "Create image", "reference"),
-    AssetType("model_3d", "3D Model", "reconstruct_3d", "Generate reference", "reference"),
+    AssetType("3d_model", "3D Model", "reconstruct_3d", "Generate reference", "reference"),
     AssetType("seamless_material", "Seamless Material", "refine_2d", "Create material", "tile"),
     AssetType("tileset", "Tileset", "tileset", "Create tileset", "sheet"),
     AssetType(
@@ -41,6 +41,10 @@ _ORDERED = (
 # because the product vocabulary was consolidated.
 _ALIASES = {
     "image_2d": "image",
+    # The spelling this registry itself used until the two were unified on
+    # ``generation.GENERATION_TYPES``. Every form persisted before that, and
+    # every job row written under it, still says ``model_3d``.
+    "model_3d": "3d_model",
     "seamless_tile": "seamless_material",
     "tileset_top_down": "tileset",
     "tileset_three_quarter": "tileset",
@@ -53,7 +57,7 @@ ASSET_TYPES.update({key: ASSET_TYPES[value] for key, value in _ALIASES.items()})
 ASSET_TYPE_OPTIONS: tuple[tuple[str, str], ...] = tuple(
     (item.key, item.label) for item in _ORDERED
 )
-DEFAULT_ASSET_TYPE = "model_3d"
+DEFAULT_ASSET_TYPE = "3d_model"
 
 
 def legacy_asset_type(form: Any) -> str:
@@ -68,7 +72,7 @@ def legacy_asset_type(form: Any) -> str:
             return "sprite_sheet"
         return "tileset"
     # Old "Object" meant a reconstruction reference, not a standalone image.
-    return "model_3d"
+    return "3d_model"
 
 
 def selected(form: Any) -> AssetType:

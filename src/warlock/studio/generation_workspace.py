@@ -48,7 +48,7 @@ def plan_for(form: dict[str, Any], resolved: Any = None) -> Plan:
     generations = candidates
     duration = "a few seconds"
     stages = "Generate image"
-    if spec.key == "model_3d":
+    if spec.key == "3d_model":
         stages = "Generate reference → choose or make 3D"
     elif spec.key == "seamless_material":
         stages = "Generate seamless material → verify wrap"

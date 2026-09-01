@@ -389,13 +389,15 @@ def _safe_form_value(key: str, value: Any) -> bool:
         "sheet_layout": {"turnaround", "walk", *generation.SPRITE_SHEET_KINDS},
         "tile_size": {"16", "32", "48", "64"},
         "cell_size": {"32", "48", "64"},
-        "expand": {"off", "asset", "scene"},
-        "generation_type": {"image", "model_3d", "seamless_material", "tileset", "sprite_sheet"},
         "quality": {"fast", "quality"},
         "model_mode": {"auto", "advanced"},
         "target_cell_px": {"", "8", "16", "24", "32", "48", "64", "96", "128", "256"},
     }
-    if key == "asset_type":
+    if key in ("asset_type", "generation_type"):
+        # Both, through the one registry that carries the aliases. A literal
+        # set here dropped a persisted ``model_3d`` on the floor the moment
+        # the two registries were unified -- and a dropped form value is a
+        # preference the user set and the app forgot.
         from .create_assets import ASSET_TYPES
 
         return value in ASSET_TYPES

@@ -22,7 +22,7 @@ def test_the_asset_registry_is_the_approved_flat_list():
     """
     assert create_assets.ASSET_TYPE_OPTIONS == (
         ("image", "Image"),
-        ("model_3d", "3D Model"),
+        ("3d_model", "3D Model"),
         ("seamless_material", "Seamless Material"),
         ("tileset", "Tileset"),
         ("sprite_sheet", "Sprite Sheet"),
@@ -59,7 +59,7 @@ def test_the_retired_keys_still_resolve():
             "sprite_sheet",
         ),
         # Old "Object" meant a reconstruction reference, not a standalone image.
-        ({"output": "reference"}, "model_3d"),
+        ({"output": "reference"}, "3d_model"),
     ],
 )
 def test_legacy_switches_migrate_without_guessing(legacy, expected):
@@ -166,3 +166,37 @@ def test_corrupt_persisted_form_values_fall_back_safely(tmp_path):
     assert restored["base_model"] == defaults["base_model"]
     assert restored["count"] == defaults["count"]
     assert restored["lora_weight"] == defaults["lora_weight"]
+
+
+def test_the_two_registries_agree_on_every_key():
+    """``create_assets`` and ``generation`` are two spellings of one choice, and
+    they disagreed about exactly one of them: this registry said ``model_3d``
+    where ``generation.GENERATION_TYPES`` said ``3d_model``. Harmless only
+    because every reader accepted both -- ``settings_2d.draw`` ran a membership
+    test that failed on the default type every frame and wrote it straight
+    back. Unified onto ``generation``'s spelling, with the old one kept as an
+    alias so a persisted form and a stored job row still resolve.
+    """
+    from warlock import generation
+
+    assert tuple(key for key, _ in create_assets.ASSET_TYPE_OPTIONS) == generation.GENERATION_TYPES
+    assert create_assets.ASSET_TYPE_OPTIONS == generation.GENERATION_TYPE_OPTIONS
+    assert create_assets.DEFAULT_ASSET_TYPE in generation.GENERATION_TYPES
+    # The old spelling reads, and reads as the new one.
+    assert create_assets.ASSET_TYPES["model_3d"].key == "3d_model"
+
+
+def test_a_form_persisted_under_the_old_spelling_still_restores():
+    """The settings-reset class of bug, guarded at the one boundary that can
+    cause it. ``_safe_form_value`` is a *boundary* check over untrusted JSON,
+    and it used to test ``generation_type`` against a literal set -- so
+    unifying the registries would have made every upgrading user's remembered
+    type fail validation and silently revert to the default.
+    """
+    from warlock.studio import settings
+
+    for key in ("asset_type", "generation_type"):
+        assert settings._safe_form_value(key, "model_3d") is True, key
+        assert settings._safe_form_value(key, "3d_model") is True, key
+        assert settings._safe_form_value(key, "sprite_turnaround") is True, key
+        assert settings._safe_form_value(key, "not_a_type") is False, key
