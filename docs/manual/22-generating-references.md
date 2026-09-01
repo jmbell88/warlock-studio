@@ -3,7 +3,7 @@
 A reference is the picture the mesh will be reconstructed from. Everything in this chapter lives in
 the **2D reference** mode's settings pane, in the left sidebar.
 
-![The Reference stage: the form, the preview, the library](img/22-reference.png)
+![The Reference stage: the command bar, the recipe column, the preview and the library](img/22-reference.png)
 
 ## The prompt
 
@@ -45,70 +45,78 @@ separately and joins them, which the image model's cross-attention accepts witho
 long prompt costs attention rather than being cut off. The soft limit still applies, though: a
 longer conditioning sequence dilutes attention, so your prompt is best kept to a sentence.
 
-## The pane at a glance
+## The screen at a glance
 
-The form opens on the choices every job needs and folds the rest away. Above the fold, in order:
-**Asset type**, **Prompt**, **Negative prompt / Avoid** (only while the chosen recipe can use one),
-a layout section belonging to the asset type — **Tile layout** for a tileset, **Sprite layout** for
-a sprite sheet, and nothing at all for the other three — then **Image model** and **Style LoRA**.
+Create's Reference stage is a **command bar** across the top and a **recipe column** down the left.
+The split is the whole design: the bar is *what to make*, the column is *how to make it*, and no
+control appears in both.
 
-Below them is one **Advanced** disclosure holding **References & conditioning**, **Seed & count**,
-**Dimensions** (only on a sheet) and, once a LoRA is chosen, **Style strength**. The Generate button is pinned below the
-whole column and never scrolls with it:
-the one control every visit ends with must not be at the bottom of a scrolled list.
+The bar holds the four things a common visit touches, on one row that never scrolls:
 
-**Asset type** is the top-level choice and it decides what everything under it means. Five entries:
-*Image*, *3D Model*, *Seamless Material*, *Tileset* and *Sprite Sheet*. Two of them are described
-elsewhere in this chapter — see [Seamless tiles](#seamless-tiles) and [Sheets](#sheets).
+| Control | What it decides |
+| --- | --- |
+| **Generation type** | The top-level choice, which decides what everything else means. |
+| **Prompt** | The words. Required; everything else has a default. |
+| **Count** | How many alternatives one press draws — 1, 2, 4 or 8. |
+| **Generate** | The press. Its label names what you are making: *Create image*, *Generate reference*, *Create tileset*. |
+
+At narrow widths the row gives way in a stated order: the prompt shrinks first, then the count is
+dropped — its value is restated in the plan block below — and the type and Generate never give way.
+
+The bar is drawn on the Reference stage only. Mesh, Rig, Pose and Export have no brief to state, so
+they draw no bar at all and their columns simply start higher.
+
+The column below holds **Recipe** (the model, the style LoRA and the seed), **Style strength** once
+a LoRA is chosen, **Negative prompt / Avoid** while the chosen recipe can use one, one section
+belonging to the chosen type — **Tileset** or **Sprite sheet**, and nothing at all for the other
+three — and one collapsed **Conditioning** disclosure. Its header counts how many of its controls
+are switched on, so a closed section never hides a setting that is doing something.
+
+Pinned at the bottom of the column, never scrolling, is the **generation plan**: what the press will
+cost, what recipe it will use, and — when Generate is disabled — every reason why, each with a
+one-click repair. The button itself carries the first of those reasons as its tooltip.
+
+**Generation type** has five entries: *Image*, *3D Model*, *Seamless Material*, *Tileset* and
+*Sprite Sheet*. Two of them are described elsewhere in this chapter — see
+[Seamless tiles](#seamless-tiles) and [Sheets](#sheets).
 
 Earlier versions carried a twelve-select creative taxonomy (category, genre, material and the
 rest) behind a "More options" reveal. It was retired on 2026-08-17: no taxonomy axis ever measured
 a quality win, and your prompt is the brief. Assets generated under it are unaffected — rerolling
 or promoting one simply composes without the retired fragments.
 
-**Reset...**, under Advanced, puts the whole 2D form back to its first-launch defaults after a
-confirm — the prompt, the negative prompt, the model and LoRA, the reference and the run controls,
+**Reset...**, at the foot of the column, puts the whole form back to its first-launch defaults after
+a confirm — the prompt, the negative prompt, the model and LoRA, the reference and the run controls,
 with a freshly rolled seed. It touches nothing outside this pane: the 3D form is left alone.
 
 ## Models and style LoRAs
 
-The **Image model** section asks two questions. The first, labelled **Recipe**, is *Fast* or
-*Quality*. The second is *Automatic* or *Advanced*: whether the app picks the checkpoint from that
-recipe, or you do.
+The **Model** row is one dropdown. Its first entry is *Automatic*, which lets the app resolve a
+checkpoint from what you are making and what is installed; every other entry is an installed
+checkpoint you are naming yourself.
 
-### Fast and Quality
+On *Automatic* the line underneath says what it resolved to — *Quality image · sdxl_cfg*, say —
+along with anything that recipe trades. A control whose value is "Automatic" and says nothing else
+is a control refusing to tell you what it did.
 
-Both tiers run the same 7 GB of SDXL weights, and they are genuinely different pictures:
+This used to be three controls: a *Fast*/*Quality* tier, an *Automatic*/*Advanced* switch, and the
+checkpoint list. They were three controls for one decision, and the first two only ever chose which
+checkpoint. Nothing was lost in folding them — the only *Fast* recipe resolved to the **SDXL 1.0 +
+Hyper-SD** entry, so choosing *Fast* and choosing that checkpoint were the same act said two ways.
+Pick it from the list when you want four-step draws: eight cheap ones to find out whether an idea is
+worth a real one. It gives up structure control and the negative prompt, both of which need a
+guidance branch it does not have.
 
-| Recipe | How it runs | What it gives up |
-| --- | --- | --- |
-| **Fast** | Four steps at guidance 0, with the Hyper-SD distillation fused on. | Structure control and the negative prompt, both of which need a guidance branch it does not have. |
-| **Quality** | Thirty steps with full classifier-free guidance. **The default.** | Time. |
+*Quality* is measurably better at holding a shape, which is the property the mesh stage depends on,
+so automatic routing chooses it for anything you mean to reconstruct.
 
-The line under the combo says which of the two you are on and what it trades, and the line under
-*that* names the recipe and the checkpoint automatic routing resolved to — *Quality image ·
-sdxl_cfg*, say. Both disappear under Advanced, where you have named the checkpoint yourself and the
-model's own description takes their place.
-
-Switching to Fast **clears** a structure control and any Avoid text rather than greying them, and
-says which it cleared. That is deliberate: under automatic routing the tier is what picked the
-checkpoint, so leaving those selections in place would mean a Generate button refusing on a control
-that is no longer on screen. Switching back does not restore them — retype the Avoid text and
-re-pick the control.
-
-Fast is a documented trade rather than a free win. Quality is measurably better at holding a shape,
-which is the property the mesh stage depends on, so *Quality* is the default and stays the right
-choice for anything you mean to reconstruct. Fast is for hunting: eight cheap draws to find out
-whether an idea is worth a real one.
-
-A **Tileset** has no Recipe row at all. Its recipe and its style LoRA are fixed, because a sheet
+A **Tileset** has no model row at all. Its recipe and its style LoRA are fixed, because a sheet
 whose cells have to share a palette and a light direction is not a place to vary the machinery, and
 the pane says so where the controls would be.
 
 ### The model registry
 
-Choosing **Advanced** replaces automatic routing with the full list. Eleven base models ship in the
-registry:
+Naming a checkpoint replaces automatic routing. Eleven base models ship in the registry:
 
 | Model | What it is | Runs at |
 | --- | --- | --- |
@@ -243,7 +251,7 @@ never had, while 1.0 holds the shape to the final step and tends to look traced.
 
 Structure needs a checkpoint that runs with real guidance, and the section says so rather than
 offering a control that cannot work. Which fix it names depends on which control chose the
-checkpoint: under Advanced it names the models that could run it, and under automatic routing it
+checkpoint: with a checkpoint named it says which models could run it, and under automatic routing it
 tells you to switch the Recipe to Quality — because the Fast recipe is what picked a guidance-zero
 checkpoint on your behalf, and no combo on screen is showing that checkpoint's name.
 
@@ -462,7 +470,7 @@ under it is rerun. Its cells are drawn from one guide in which every cell is ide
 to come back as one scene cut up or as one tile repeated — measured, in
 `docs/measurements/2026-08-18-tile-sheet-grid.md`.
 
-**Tile size** lives under Advanced, in **Dimensions**. **View** is drawn in the layout section
+**Tile size** lives in the **Tileset** section. **View** is drawn in the layout section
 itself, and only by the grid — the other two would be a picker with nothing to pick. What each
 offers depends on the layout:
 
@@ -515,7 +523,7 @@ eight generation pixels on one art pixel, and one direction is never split acros
 so all of an action's frames have to fit inside one 1024 px frame at eight times the cell size. At
 32 px every action fits; at 48 px and 64 px only the four-frame ones do, which today means idle and
 hurt. Ask for an eight-frame run at 64 px and it is refused naming both numbers — but you will
-rarely see that, because the pane shortens the **Cell size** ladder under Advanced first and says
+rarely see that, because the pane shortens the **Cell size** ladder first and says
 which action shortened it.
 
 A finished sheet carries **animation tags and per-frame durations**, one tag per direction —
@@ -536,7 +544,7 @@ The drafts appear under **Sprite sheet** in the inspector when the character is 
 
 ### The pixel look
 
-Under **Advanced → Dimensions**, below the size controls and the working-resolution choice, both
+In the type's own section, below the size controls and the working-resolution choice, both
 sheet types offer the same two settings and the sprite sheet offers a third.
 
 **Palette** maps every pixel to the nearest colour of a palette you authored, instead of to the

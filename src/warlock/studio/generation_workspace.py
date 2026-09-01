@@ -20,6 +20,11 @@ from . import controls, create_assets, widgets
 from .panes import thumbs
 from .tokens import sp
 
+#: How many finished results the tray shows, and the width of its grid. One
+#: number because they are one fact: the tray is a fixed-height strip, so the
+#: row it can draw whole is the row it should hold.
+_RESULT_COLUMNS = 3
+
 
 @dataclass(frozen=True)
 class Plan:
@@ -134,20 +139,32 @@ def _progress(ctx: Any, job: dict[str, Any]) -> None:
 
 
 def _candidate_grid(ctx: Any, group: Any) -> None:
+    """Every candidate, in a strip that scrolls.
+
+    Unlike the results grid this one cannot be trimmed to a row: a count of 8
+    means eight candidates and choosing between them is the entire purpose, so
+    the grid is put in a scrolling child rather than being cut short.
+    """
     widgets.secondary("Compare candidates")
     widgets.muted(
         "Choose one when every candidate settles. Seeds and scores stay with each result."
     )
+    if not imgui.begin_child("generation-candidate-scroll", (0, 0), False):
+        imgui.end_child()
+        return
     if imgui.begin_table("generation-candidates", 2, imgui.TableFlags_.sizing_stretch_same.value):
         for member in group.members:
             imgui.table_next_column()
             _result_card(ctx, member, group=group)
         imgui.end_table()
+    imgui.end_child()
 
 
 def _result_grid(ctx: Any, jobs: list[dict[str, Any]]) -> None:
     widgets.secondary("Compare and refine")
-    if imgui.begin_table("generation-results", 3, imgui.TableFlags_.sizing_stretch_same.value):
+    if imgui.begin_table(
+        "generation-results", _RESULT_COLUMNS, imgui.TableFlags_.sizing_stretch_same.value
+    ):
         for job in jobs:
             imgui.table_next_column()
             _result_card(ctx, job)
@@ -169,14 +186,29 @@ def _result_card(ctx: Any, job: dict[str, Any], group: Any = None) -> None:
     if score is not None:
         widgets.muted(f"score {float(score) * 100:.0f}%")
     imgui.end_group()
-    if controls.button(f"Open##result-open-{job_id}", (-1, 0)):
-        ctx.state.select(job_id)
+    # **Two per row, not one per row.** Four full-width buttons stacked under a
+    # 72 dp thumbnail make a card taller than the tray that holds it, and the
+    # tray is the bottom of a column whose height is a fraction of the window --
+    # so the last two fell outside it and could not be pressed at all.
+    # ``/exercise-mode create`` reported fifteen clipped controls, every one of
+    # them one of these; no test saw it, because a clipped button is drawn.
+    half = (_half_width(), 0.0)
     status = str(job.get("status") or "")
     done = status == "done"
+    not_ready = "This result is not ready yet."
+
+    if controls.button(f"Open##result-open-{job_id}", half):
+        ctx.state.select(job_id)
+    imgui.same_line()
+    if widgets.disabled_button(f"Vary##result-vary-{job_id}", done, half, reason=not_ready):
+        _vary(ctx, job)
+
     if group is not None:
         ready = group.finished and done
         if widgets.disabled_button(
-            f"Keep##result-keep-{job_id}", ready, (-1, 0),
+            f"Keep##result-keep-{job_id}",
+            ready,
+            half,
             reason=(
                 "Wait for every candidate to finish."
                 if not group.finished
@@ -186,25 +218,32 @@ def _result_card(ctx: Any, job: dict[str, Any], group: Any = None) -> None:
             from .panes import candidates_panel
 
             candidates_panel.keep(ctx, group, job_id)
-    if widgets.disabled_button(
-        f"Vary##result-vary-{job_id}", done, (-1, 0), reason="This result is not ready yet."
-    ):
-        _vary(ctx, job)
-    if widgets.disabled_button(
-        f"Rerun##result-rerun-{job_id}", done, (-1, 0), reason="This result is not ready yet."
-    ):
+        imgui.same_line()
+
+    if widgets.disabled_button(f"Rerun##result-rerun-{job_id}", done, half, reason=not_ready):
         ctx.submit(f"rerun:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="reroll")
+    if group is None:
+        imgui.same_line()
     is_reference = job.get("stage") == "reference" and "input.png" in (job.get("files") or [])
     if widgets.disabled_button(
         f"Make 3D##result-3d-{job_id}",
         done and is_reference,
-        (-1, 0),
+        half,
         reason="A finished reference image is required.",
     ):
-        from .panes import settings_3d
+        _make_3d(ctx, job)
 
-        ctx.state.source_job = job_id
-        settings_3d.promote(ctx, job, ctx.state.form_3d)
+
+def _half_width() -> float:
+    """Half the cell, less the gap between the two buttons that share it."""
+    return (imgui.get_content_region_avail().x - imgui.get_style().item_spacing.x) * 0.5
+
+
+def _make_3d(ctx: Any, job: dict[str, Any]) -> None:
+    from .panes import settings_3d
+
+    ctx.state.source_job = str(job["id"])
+    settings_3d.promote(ctx, job, ctx.state.form_3d)
 
 
 def _vary(ctx: Any, job: dict[str, Any]) -> None:
@@ -218,11 +257,18 @@ def _vary(ctx: Any, job: dict[str, Any]) -> None:
 
 
 def _recent_results(ctx: Any) -> list[dict[str, Any]]:
+    """The most recent finished results. **One row of the grid, not two.**
+
+    Six filled the tray's three columns twice over, and the tray is a
+    fixed-height strip -- so the second row's cards were drawn with their
+    actions below the fold, where nothing can press them. Three whole cards
+    beat six half-drawn ones, and the library beside them holds the rest.
+    """
     return [
         job
         for job in ctx.cache.jobs
         if job.get("status") in ("done", "error", "cancelled") and not job.get("candidate_group")
-    ][:6]
+    ][:_RESULT_COLUMNS]
 
 
 def _queue_position(ctx: Any, job_id: str) -> int | None:

@@ -1,7 +1,7 @@
 # Tuning what you get
 
 [Your first asset](02-your-first-asset.md) used defaults for everything. This chapter is about the
-controls under **Advanced**, what each is for, and which of them are worth your attention.
+controls in Create's recipe column, what each is for, and which of them are worth your attention.
 
 The short version: prompt and seed do most of the work, and the conditioning controls are the ones
 that reward learning properly.
@@ -27,11 +27,11 @@ than most people expect — so this is often the more valuable of the two.
 
 ## Models and LoRAs
 
-Two rows above Advanced decide this before you get here. **Recipe** is *Fast* or *Quality*, and
-*Automatic* or *Advanced* decides whether the app resolves that recipe to a checkpoint or you name
-one. Fast is four steps at guidance 0; it cannot use the negative prompt or structure control, and
-switching to it clears both rather than leaving you a Generate button refusing on a hidden field.
-See [Fast and Quality](22-generating-references.md#fast-and-quality).
+One dropdown decides this. Its first entry is *Automatic* — the app resolves a checkpoint and says
+which underneath — and every other entry is an installed checkpoint you name yourself. The four-step
+distilled entries cannot use the negative prompt or structure control, and picking one clears both
+rather than leaving you a Generate button refusing on a hidden field.
+See [Models and style LoRAs](22-generating-references.md#models-and-style-loras).
 
 The default base model is SDXL 1.0 run at **full CFG**, and it is the default because it measured
 better than the alternatives as a source for reconstruction, not because it is fastest. The faster

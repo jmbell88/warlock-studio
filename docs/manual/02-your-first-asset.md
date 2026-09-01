@@ -55,14 +55,14 @@ One object, described plainly. The reference stage is trying to draw a thing a r
 can turn into a model, and a picture with two objects in it produces a mesh with two objects fused
 into one. Composition matters more than adjectives here.
 
-**Image model.** Leave both rows alone. **Recipe** is *Quality*, which is thirty steps of SDXL 1.0
-at full CFG — the default because it was measured against the alternatives rather than chosen for
-speed. *Fast* is four steps of the same weights and gives up the negative prompt and structure
-control to get there; it is for hunting, not for a picture you mean to reconstruct. The row under it
-is *Automatic*, which means the app resolves that recipe to a checkpoint and tells you which. Switch
-it to *Advanced* when you want to name the checkpoint yourself.
+**Model.** Leave it on *Automatic*, which means the app picks the checkpoint and tells you which
+one underneath. For a first asset it resolves to SDXL 1.0 at full CFG — thirty steps, the default
+because it was measured against the alternatives rather than chosen for speed. Name a checkpoint
+yourself when you want a specific one; the four-step entries are for hunting, not for a picture you
+mean to reconstruct.
 
-Press **Generate**. The job appears in the library on the right, immediately, as a queued row with a
+Press **Create image** — the button in the bar, whose label names whatever you are making. The job appears in the
+library on the right, immediately, as a queued row with a
 progress bar. A few seconds later it is a picture.
 
 ## Looking at it

@@ -197,3 +197,40 @@ def test_the_bar_is_a_registered_pane_not_a_bare_row():
     assert 'layout_mod.pane(\n                            "brief",' in source
     assert "create_brief.shows(ctx)" in source
     assert "create_brief.draw(ctx)" in source
+
+
+# --- the disabled button's reason -------------------------------------------
+
+
+def test_the_disabled_generate_wears_the_first_problem_as_its_reason():
+    """``widgets.Problem`` is a ``str`` subclass -- the message *is* the object,
+    and there is no ``.message`` on it.
+
+    This branch only runs when the form is *invalid*, which is why neither the
+    suite nor a screenshot of a seeded (valid) form ever executed it: the bar
+    raised ``AttributeError`` and the pane guard blanked it, on every frame with
+    an empty prompt. ``/exercise-mode create`` is what found it.
+    """
+    from warlock.studio import widgets
+
+    problem = widgets.Problem("Describe what to generate.", "prompt")
+    assert not hasattr(problem, "message")
+    assert str(problem) == "Describe what to generate."
+
+    body = _body(create_brief._generate)
+    assert ".message" not in body, "Problem is a str; there is no .message"
+    assert "str(problems[0])" in body
+
+
+def test_an_empty_prompt_leaves_the_bar_drawable():
+    """The whole-object check behind the test above: every problem the column's
+    validator can raise for an untouched form must render as a reason string."""
+    from warlock.studio.panes import settings_2d
+
+    form = default_form_2d()
+    form["prompt"] = ""
+    problems = settings_2d.validate(form)
+    assert problems, "an empty prompt must refuse"
+    for problem in problems:
+        assert isinstance(problem, str)
+        assert str(problem)

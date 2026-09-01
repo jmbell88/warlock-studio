@@ -222,7 +222,8 @@ def _generate(
             spec.create_label,
             (sp(GENERATE_W), sp(PROMPT_H)),
             enabled=enabled,
-            reason=problems[0].message if problems else "",
+            # ``Problem`` is a str subclass -- the message *is* the object.
+            reason=str(problems[0]) if problems else "",
             tooltip="Ctrl+Enter",
         )
         anchors.mark("create/generate")

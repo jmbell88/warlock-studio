@@ -5651,7 +5651,15 @@ class App:
                 # can still be judged at useful scale while progress and the
                 # next variation stay in the same creative loop.
                 tray = reference_stage and generation_workspace.should_draw(ctx)
-                tray_height = min(sp(280), max(sp(180), height * 0.36)) if tray else 0.0
+                # The floor is **one whole card**, not a round number: heading,
+                # caption, a 72 dp thumbnail and the two rows of actions under
+                # it come to a little over 200 dp, and at the old 180 the
+                # actions sat below the tray's fold on every card. A button
+                # nobody can reach without scrolling a strip they cannot see
+                # scrolls is a button that does nothing; ``/exercise-mode
+                # create`` reported twelve of them, and no test can, because a
+                # clipped button is still drawn.
+                tray_height = min(sp(320), max(sp(232), height * 0.36)) if tray else 0.0
                 gap = imgui.get_style().item_spacing.y if tray else 0
                 canvas_height = max(height - tray_height - gap, sp(64))
                 if tray:
