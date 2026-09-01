@@ -1094,3 +1094,66 @@ def test_ctrl_shift_j_unions_instead_of_welding(svc) -> None:
     assert clay_mode._ctrl_key(ctx, state, tab, doc, "j", shift=True) is True
     assert not state.pending_op, "union has no dialog to stage"
     assert len(doc.objects) == 1
+
+
+def test_g_and_s_start_a_keyboard_drag(svc) -> None:
+    """The two letters that were free. R is the Scale tool's and E is Rotate's,
+    both taken long before this."""
+    from types import SimpleNamespace
+
+    import pygame
+
+    from warlock.studio import clay_mode
+
+    started: list[str] = []
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx)
+    tab.doc.select([tab.doc.objects[0].uid])
+    ctx.clay_view = SimpleNamespace(
+        dragging=False,
+        begin_keyboard_drag=lambda doc, kind: started.append(kind) or True,
+    )
+
+    for key in (pygame.K_g, pygame.K_s):
+        clay_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=key, mod=0))
+    assert started == ["move", "scale"]
+
+
+def test_a_keyboard_drag_is_refused_while_the_document_is_saving(svc) -> None:
+    from types import SimpleNamespace
+
+    import pygame
+
+    from warlock.studio import clay_mode
+
+    started: list[str] = []
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx)
+    tab.doc.select([tab.doc.objects[0].uid])
+    tab.saving = True
+    ctx.clay_view = SimpleNamespace(
+        dragging=False,
+        begin_keyboard_drag=lambda doc, kind: started.append(kind) or True,
+    )
+
+    assert clay_mode.handle_key(
+        ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_g, mod=0)
+    )
+    assert started == []
+
+
+def test_the_registry_keeps_a_letter_a_drag_would_otherwise_take(svc) -> None:
+    """The ``or`` short-circuits, so an op bound to a bare letter still fires
+    rather than starting a drag."""
+    import inspect
+
+    from warlock.studio import clay_mode
+
+    source = inspect.getsource(clay_mode.handle_key)
+    assert source.index("_registry_key(") < source.index("_keyboard_drag(")
+    # And the two letters a drag takes are not tool letters, which is the other
+    # half of why they were the two that were free.
+    tool_letters = {key.lower() for key in clay_mode.TOOL_KEYS}
+    assert not (tool_letters & set(clay_mode.DRAG_KEYS)), (
+        "a drag key that is also a tool letter would take a binding a user has"
+    )

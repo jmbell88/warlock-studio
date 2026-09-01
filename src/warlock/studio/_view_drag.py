@@ -148,6 +148,15 @@ class DragOps:
 
     def _press(self: ClayView, doc: Any, button: int, local: tuple[float, float]) -> bool:
         self._last_mouse = local
+        # A keyboard drag has no button held, so a press is how it *ends*: the
+        # left button commits it and the right cancels, which is Blender's
+        # arrangement and the one a modeller's hand already knows.
+        if self._grab == "keydrag":
+            if button == 1:
+                self._release_drag(doc, button=1)
+            else:
+                self.cancel_drag(doc)
+            return True
         # A gizmo drag owns the mouse until its button comes up. Without this,
         # pressing the middle button mid-drag overwrote ``_grab`` with "pan",
         # so releasing the left button found nothing to commit and the drag was
@@ -211,6 +220,112 @@ class DragOps:
         self._snap_point = None
         if doc.element_mode != "object":
             self._begin_element_drag(doc)
+
+    def begin_keyboard_drag(self: ClayView, doc: Any, kind: str) -> bool:
+        """``G``/``R``/``S``: start a transform with no handle grabbed.
+
+        -> whether one started. The modeller's gesture, and the one Clay had no
+        route to at all: every transform went through grabbing a coloured arrow,
+        which means finding it, which means the object is never moved without
+        first looking at the gizmo rather than at the model.
+
+        Measured on the plane through the pivot perpendicular to the camera,
+        which is what "move it where the mouse goes" means when no axis has been
+        chosen -- and the same plane all three kinds measure on, so ``X`` mid-
+        drag narrows a translation, a rotation and a scale by the one rule in
+        :meth:`_narrow` rather than three.
+
+        It reuses ``_begin_gizmo_drag`` outright: the snapshot, the pivot and
+        the fresh ``DragInput`` are the same three things a handle drag needs,
+        and a second copy of them is a second place for a cancel to restore the
+        wrong values from.
+        """
+
+        if self._grab is not None or not doc.selection:
+            return False
+        if doc.element_mode != "object" and not doc.element_sel:
+            return False
+        centre = self.selection_centre(doc)
+        if centre is None:
+            return False
+        self._begin_gizmo_drag(doc)
+        # ``_begin_gizmo_drag`` reads the *gizmo's* origin, and Select draws no
+        # gizmo -- so the pivot is taken from the selection directly, which is
+        # the same point the gizmo would have been placed at.
+        self._drag_origin = np.asarray(centre, dtype="f8")
+        anchor = self._view_plane_point(self._last_mouse, self._drag_origin)
+        if anchor is None:
+            self._grab = None
+            return False
+        self._grab = "keydrag"
+        self._key_kind = kind
+        self._key_anchor = anchor
+        return True
+
+    def _view_plane_point(
+        self: ClayView, local: tuple[float, float], centre: Any
+    ) -> Any:
+        """Where the pointer's ray meets the plane through ``centre`` facing the
+        camera. ``None`` when the ray runs parallel to it, which the caller
+        treats as "no movement" rather than as an error."""
+        from .viewer import picking
+
+        origin, direction = self._ray(local)
+        normal = np.asarray(self.camera.position, dtype="f8") - np.asarray(
+            centre, dtype="f8"
+        )
+        length = float(np.linalg.norm(normal))
+        if length < 1e-9:
+            return None
+        return picking.ray_plane(origin, direction, np.asarray(centre), normal / length)
+
+    def _drag_keyboard(self: ClayView, doc: Any, local: tuple[float, float]) -> None:
+        """One frame of a keyboard drag: the same delta shapes a gizmo makes.
+
+        Deliberately the same three shapes -- a 3-vector for a move, a 4-vector
+        quaternion for a rotate, a 3-vector of factors for a scale -- so
+        everything downstream (``_narrow``, ``_accumulate``, ``_apply``, the
+        element path) is the code that already exists rather than a parallel
+        set that has to be kept agreeing with it.
+        """
+        from .clay import drag as bdrag
+
+        point = self._view_plane_point(local, self._drag_origin)
+        if point is None or self._key_anchor is None:
+            return
+        pivot = np.asarray(self._drag_origin, dtype="f8")
+        anchor = np.asarray(self._key_anchor, dtype="f8")
+        state = self.state
+        if self._key_kind == "rotate":
+            forward = np.asarray(self.camera.position, dtype="f8") - pivot
+            norm = float(np.linalg.norm(forward))
+            if norm < 1e-9:
+                return
+            angle = bdrag.screen_angle(pivot, forward / norm, anchor, point)
+            delta = m3.quat_from_axis_angle(forward / norm, angle)
+        elif self._key_kind == "scale":
+            was = float(np.linalg.norm(anchor - pivot))
+            now = float(np.linalg.norm(point - pivot))
+            if was < 1e-9:
+                return
+            factor = now / was
+            delta = np.array([factor, factor, factor], dtype="f8")
+        else:
+            # A translation is reported as the *destination*, not the
+            # displacement: that is what the translate gizmo hands back and
+            # what ``_apply`` subtracts ``_drag_origin`` from.
+            delta = pivot + (point - anchor)
+        delta = self._narrow(doc, delta, state, local)
+        if doc.element_mode != "object":
+            self._preview_element_drag(doc, delta, state)
+            return
+        for uid, was in self._drag_start.items():
+            try:
+                obj = doc.by_uid(uid)
+            except KeyError:
+                continue
+            self._apply(obj, was, delta, state)
+        doc.touch()
 
     def _press_element(
         self: ClayView, doc: Any, local: tuple[float, float], *, shift: bool, ctrl: bool
@@ -279,8 +394,11 @@ class DragOps:
         if button != owner:
             return True
         was, self._grab = self._grab, None
-        if was == "gizmo":
-            gizmo = self.active_gizmo(doc)
+        if was in ("gizmo", "keydrag"):
+            # A keyboard drag holds no handle, so there is no gizmo drag to end
+            # -- but everything after that is identical, which is the whole
+            # point of routing it through the same delta shapes.
+            gizmo = self.active_gizmo(doc) if was == "gizmo" else None
             if gizmo is not None:
                 gizmo.end_drag()
             if doc.element_mode != "object":
@@ -288,6 +406,7 @@ class DragOps:
             else:
                 self._commit_drag(doc)
             self._clear_drag_input()
+            self._end_keyboard_drag()
         elif was == "marquee":
             self._commit_marquee(doc)
         return True
@@ -296,13 +415,20 @@ class DragOps:
 
     @property
     def dragging(self: ClayView) -> bool:
-        """Whether a gizmo drag is live. What the key handler checks *first*.
+        """Whether a transform drag is live. What the key handler checks *first*.
 
         First because the number row is bound to the element modes: a ``1``
         typed into a drag has to be a digit, not a jump into vertex mode
         halfway through moving something.
+
+        Both kinds count. A gizmo drag is a handle held with the mouse down; a
+        **keyboard drag** is ``G``/``R``/``S`` with the mouse merely moving, and
+        every rule that applies during one applies during the other -- the axis
+        lock, the typed value, Esc to cancel. They differ in how they end, and
+        nowhere else: a gizmo drag ends when its button comes up, and a keyboard
+        drag has no button held, so it ends on a *press*.
         """
-        return self._grab == "gizmo"
+        return self._grab in ("gizmo", "keydrag")
 
     def _clear_drag_input(self: ClayView) -> None:
         from .clay import drag as bdrag
@@ -310,6 +436,10 @@ class DragOps:
         self.drag_input = bdrag.DragInput()
         self.drag_hud = ""
         self._snap_point = None
+
+    def _end_keyboard_drag(self: ClayView) -> None:
+        self._key_kind = ""
+        self._key_anchor = None
 
     def drag_key(self: ClayView, doc: Any, name: str) -> bool:
         """Feed one key name to the live drag. -> whether it was consumed.
@@ -321,10 +451,49 @@ class DragOps:
         from: ``RotateGizmo`` returns a zero increment for an unchanged ray,
         and the other two are measured from the press outright.
         """
-        if not self.dragging or not self.drag_input.key(name):
+        if not self.dragging:
             return False
-        self._drag_gizmo(doc, self._last_mouse)
+        # ``G``/``R``/``S`` mid-drag switch which transform is running, which is
+        # Blender's and is what makes "move it, no -- rotate it" one gesture
+        # rather than a cancel and a restart. Only during a keyboard drag: a
+        # handle drag is holding a specific arrow, and switching under it would
+        # leave the gizmo's own drag state describing a transform nobody is
+        # doing any more.
+        switch = {"g": "move", "r": "rotate", "s": "scale"}.get(name)
+        if switch is not None and self._grab == "keydrag":
+            self._restart_keyboard_drag(doc, switch)
+            return True
+        if not self.drag_input.key(name):
+            return False
+        if self._grab == "keydrag":
+            self._drag_keyboard(doc, self._last_mouse)
+        else:
+            self._drag_gizmo(doc, self._last_mouse)
         return True
+
+    def _restart_keyboard_drag(self: ClayView, doc: Any, kind: str) -> None:
+        """Switch a live keyboard drag to another transform.
+
+        The objects are put back first, so the new transform is measured from
+        where they *started* rather than from wherever the abandoned one left
+        them -- a rotate that began from a half-finished move would carry that
+        move into its result and there would be no way to undo one without the
+        other.
+        """
+        if self._key_kind == kind:
+            return
+        for uid, was in self._drag_start.items():
+            try:
+                obj = doc.by_uid(uid)
+            except KeyError:
+                continue
+            obj.translation, obj.rotation, obj.scale = (
+                np.array(v, copy=True) for v in was
+            )
+        self._key_kind = kind
+        self._key_anchor = self._view_plane_point(self._last_mouse, self._drag_origin)
+        self._clear_drag_input()
+        doc.touch()
 
     def cancel_drag(self: ClayView, doc: Any) -> bool:
         """Esc during a drag: put everything back and record nothing.
@@ -356,6 +525,7 @@ class DragOps:
             self._drag_uids = []
             self._drag_start = {}
         self._clear_drag_input()
+        self._end_keyboard_drag()
         doc.touch()
         return True
 
@@ -480,6 +650,8 @@ class DragOps:
             self.camera.pan(dx, dy, height)
         elif self._grab == "gizmo":
             self._drag_gizmo(doc, local)
+        elif self._grab == "keydrag":
+            self._drag_keyboard(doc, local)
         return True
 
     def _begin_element_drag(self: ClayView, doc: Any) -> None:
@@ -750,6 +922,26 @@ class DragOps:
         return delta
 
     def _apply(self: ClayView, obj: Any, was: Any, delta: Any, state: Any) -> None:
+        """One object's transform under the live drag.
+
+        **A rotate and a scale orbit the pivot, not the object's own origin**,
+        and that is a fix rather than a feature: the gizmo is drawn at
+        ``selection_centre`` -- the median of what is selected -- while this
+        wrote only ``obj.rotation``, so dragging the ring with two objects
+        selected span each of them in place around a ring drawn somewhere
+        neither of them was. The picture said "these turn about here" and the
+        document did something else.
+
+        It changes what a *single* off-centre object does too, and that is the
+        same correction rather than a side effect: the ring is drawn at the
+        bounding box's centre, so an object whose origin is not there has always
+        been rotating about a point other than the one on screen. Blender's
+        Median Point pivot behaves exactly as this now does.
+
+        ``_drag_origin`` is that pivot -- the gizmo's own origin, captured at
+        the press -- which the translation arm has always subtracted and the
+        other two never read.
+        """
         from .clay import ops
 
         # See ``_element_world_transform``: the grid stands down for a vertex
@@ -758,8 +950,11 @@ class DragOps:
         snap = bool(getattr(state, "snap", False)) and not (
             self._snap_point is not None or self.drag_input.active
         )
+        pivot = np.asarray(self._drag_origin, dtype="f8")
+        before = np.array(was[0], dtype="f8")
         if isinstance(delta, np.ndarray) and delta.shape == (3,) and self._is_scale(state):
             obj.scale = np.array(was[2], dtype="f8") * delta
+            obj.translation = pivot + (before - pivot) * np.asarray(delta, dtype="f8")
         elif isinstance(delta, np.ndarray) and delta.shape == (4,):
             # The *delta* angle is what snaps, exactly as the element path does
             # in ``_element_world_transform`` and for ``ops.snap_rotation``'s
@@ -770,6 +965,7 @@ class DragOps:
             if snap:
                 delta = ops.snap_rotation(delta, state.snap_rotate)
             obj.rotation = m3.quat_normalize(m3.quat_mul(delta, np.array(was[1], dtype="f8")))
+            obj.translation = pivot + m3.quat_rotate(delta, before - pivot)
         else:
             moved = np.asarray(delta, dtype="f8").reshape(3) - self._drag_origin
             obj.translation = np.array(was[0], dtype="f8") + moved

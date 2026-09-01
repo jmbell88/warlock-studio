@@ -236,3 +236,62 @@ def test_the_readout_shows_a_half_typed_number_as_well_as_the_value():
 def test_a_rotation_reads_in_degrees_and_a_scale_carries_no_unit():
     assert "deg" in bd.readout("rotate", np.array([45.0]), _typed())
     assert "m" not in bd.readout("scale", np.ones(3), _typed())
+
+
+# --- the signed screen angle (Clay W3) ---------------------------------------
+
+
+def test_the_screen_angle_is_signed_rather_than_absolute():
+    """``arccos`` of the dot product gives the angle and loses the direction,
+    so a rotate drag turned the same way whichever way the mouse went round."""
+    import math
+
+    from warlock.studio.clay import drag as bdrag
+
+    pivot = np.zeros(3)
+    axis = np.array([0.0, 0.0, 1.0])
+    right = np.array([1.0, 0.0, 0.0])
+    up = np.array([0.0, 1.0, 0.0])
+
+    assert bdrag.screen_angle(pivot, axis, right, up) == pytest.approx(math.pi / 2)
+    assert bdrag.screen_angle(pivot, axis, up, right) == pytest.approx(-math.pi / 2)
+
+
+def test_the_screen_angle_ignores_the_component_along_the_axis():
+    """Every ray hit is a hair off the plane at float precision, and a tilt
+    that leaked in would make the same drag report a different angle."""
+    from warlock.studio.clay import drag as bdrag
+
+    pivot = np.zeros(3)
+    axis = np.array([0.0, 0.0, 1.0])
+    flat = bdrag.screen_angle(
+        pivot, axis, np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0])
+    )
+    off = bdrag.screen_angle(
+        pivot, axis, np.array([1.0, 0.0, 7.0]), np.array([0.0, 1.0, -3.0])
+    )
+    assert off == pytest.approx(flat)
+
+
+def test_a_degenerate_pair_reports_no_angle_rather_than_refusing():
+    """The caller is a live drag that must go on drawing."""
+    from warlock.studio.clay import drag as bdrag
+
+    pivot = np.zeros(3)
+    axis = np.array([0.0, 0.0, 1.0])
+    assert bdrag.screen_angle(pivot, axis, pivot, np.array([1.0, 0.0, 0.0])) == 0.0
+
+
+def test_a_full_turn_wraps_rather_than_accumulating():
+    """``atan2`` is what the caller's own accumulator expects: the increment is
+    per frame, and a drag that passes the half turn must not jump."""
+    import math
+
+    from warlock.studio.clay import drag as bdrag
+
+    pivot = np.zeros(3)
+    axis = np.array([0.0, 0.0, 1.0])
+    angle = bdrag.screen_angle(
+        pivot, axis, np.array([1.0, 0.0, 0.0]), np.array([-1.0, 0.0, 0.0])
+    )
+    assert abs(angle) == pytest.approx(math.pi)

@@ -164,10 +164,13 @@ one loop at a time, so a keypress about a picture can never be filed as a verdic
 | Q / W / E / R | Select / move / rotate / scale |
 | 1 / 2 / 3 / 4 | Vertex / edge / face / object mode |
 | E | Extrude, in any element mode |
+| G / S | Move / scale the selection with no handle to grab — the drag follows the pointer |
+| G / R / S | Switch which transform a running drag is doing; the objects go back first |
 | F | Frame the selection |
 | X / Y / Z | Lock a drag already under way to that axis; the same key again clears it |
 | digits, `.`, `-` | Type the drag's value outright; `Backspace` takes a character back |
 | Enter | Commit the drag |
+| Left-click / right-click | Commit / cancel a keyboard drag — it holds no button, so a press is how it ends |
 | Delete | Delete the selection — faces in an element mode, objects in object mode |
 | Ctrl+D | Duplicate the selection (object mode only) |
 | Ctrl+J | Merge the selected objects into one (object mode only) |

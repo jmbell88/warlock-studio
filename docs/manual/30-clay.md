@@ -189,6 +189,12 @@ parameters to a vertex and face count.
 
 ## Transforming
 
+Rotating and scaling turn about the **median of the selection** — the point the gizmo is drawn at.
+That was not true until 2026-09-01: the ring was drawn at the median while each object span about its
+own origin, so with two objects selected the picture said "these turn about here" and the document did
+something else. It also means a single object whose origin is not at the centre of its bounding box
+now orbits the ring you can see, which is the same correction rather than a second change.
+
 Four tools, on `Q`, `W`, `E` and `R`:
 
 | Tool | Key | What it does |
@@ -212,6 +218,26 @@ is the better way to place something exactly. Rotation is shown as a quaternion 
 which is what every file this app writes uses. Under them is a read-only **size** row: the object's
 world-space width, depth and height in metres, after its transform — the number a scale of 2 on a
 generator whose radius is 0.35 does not tell you.
+
+### Moving without a handle
+
+`G` moves the selection and `S` scales it, with no handle grabbed: the drag follows the pointer until
+you click to commit or press `Esc` to put it back. Every transform in Clay used to go through
+grabbing a coloured arrow, which means finding it, which means never moving an object without first
+looking at the gizmo rather than at the model.
+
+`G`, `R` and `S` also switch which transform a *running* drag is doing — "move it; no, turn it" is one
+gesture rather than a cancel and a restart. The objects go back to where they started first, so a
+rotate that follows a half-finished move is measured from the original position and not from wherever
+the abandoned move left them.
+
+Rotate has no letter of its own to start with, because `R` is the Scale tool and `E` is Rotate — both
+taken long before this, and moving either would take away a binding you already have. `G` then `R` is
+how you start one.
+
+A keyboard drag holds no mouse button, so a **press** is how it ends: left commits, right cancels.
+Everything else behaves exactly as it does under a handle drag — the axis lock, the typed value and
+`Esc` are the same code and are described next.
 
 ### Locking an axis, and typing a number
 

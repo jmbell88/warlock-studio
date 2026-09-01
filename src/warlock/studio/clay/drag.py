@@ -30,6 +30,7 @@ quaternion is built in exactly one place in this project.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -311,3 +312,38 @@ def readout(tool: str, quantity: np.ndarray, drag: DragInput) -> str:
     if drag.typed:
         parts.append(f"= {drag.typed}")
     return "  ".join(parts)
+
+
+def screen_angle(
+    pivot: np.ndarray, normal: np.ndarray, was: np.ndarray, now: np.ndarray
+) -> float:
+    """The signed angle from ``was`` to ``now`` about ``normal``, in radians.
+
+    Both points are projected into the plane through ``pivot`` first, so a ray
+    hit that is a hair off the plane -- which every ray hit is, at float
+    precision -- does not tilt the answer.
+
+    Signed rather than absolute, and that is the whole of why it is a function:
+    ``arccos`` of the dot product gives the angle and loses the direction, so a
+    rotate drag turned the same way whichever way the mouse went round. The
+    cross product against the axis is what carries the sign.
+
+    Zero for a degenerate pair rather than a refusal: a pointer exactly on the
+    pivot has no angle to report, and the caller is a live drag that must go on
+    drawing.
+    """
+    pivot = np.asarray(pivot, dtype="f8")
+    axis = np.asarray(normal, dtype="f8")
+    first = np.asarray(was, dtype="f8") - pivot
+    second = np.asarray(now, dtype="f8") - pivot
+    first = first - axis * float(np.dot(first, axis))
+    second = second - axis * float(np.dot(second, axis))
+    len_first = float(np.linalg.norm(first))
+    len_second = float(np.linalg.norm(second))
+    if len_first < 1e-9 or len_second < 1e-9:
+        return 0.0
+    first = first / len_first
+    second = second / len_second
+    return float(
+        math.atan2(float(np.dot(np.cross(first, second), axis)), float(np.dot(first, second)))
+    )

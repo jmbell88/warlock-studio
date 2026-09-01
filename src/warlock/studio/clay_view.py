@@ -184,6 +184,11 @@ class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
         # turned into a displacement.
         self._drag_quat = np.array([0.0, 0.0, 0.0, 1.0])
         self._drag_origin = np.zeros(3)
+        # A live keyboard drag: which transform it is, and where on the view
+        # plane it started. Empty and None between drags -- see
+        # ``_view_drag.begin_keyboard_drag``.
+        self._key_kind = ""
+        self._key_anchor: Any = None
 
         # What the cursor is over in an element mode, as ``(uid, index)`` read
         # through the document's own mode. Updated only on motion with no grab

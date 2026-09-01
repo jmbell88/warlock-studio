@@ -749,7 +749,13 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if name in ELEMENT_KEYS and not shift:
         if not tab.saving:
             doc.set_element_mode(ELEMENT_KEYS[name])
-    elif not shift and _registry_key(ctx, tab, doc, name):
+    elif not shift and (
+        # The registry first, and the ``or`` short-circuits, so a letter an
+        # element mode has claimed still fires its op rather than starting a
+        # drag -- which is the ordering ``DRAG_KEYS`` records the reason for.
+        _registry_key(ctx, tab, doc, name)
+        or _keyboard_drag(ctx, view, tab, doc, name)
+    ):
         pass
     elif name in TOOL_KEYS and not shift:
         state.tool = TOOL_KEYS[name]
@@ -759,6 +765,39 @@ def handle_key(ctx: Any, event: Any) -> bool:
     elif event.key == pygame.K_ESCAPE:
         _escape(state, tab, doc)
     return True
+
+
+
+#: The two letters that start a transform with no handle grabbed, and what each
+#: starts. **G and S only** -- not R, and the omission is the one interesting
+#: thing about the table.
+#:
+#: ``R`` is the Scale *tool*'s letter and ``E`` is Rotate's, both taken long
+#: before this and both in ``clay_state.TOOLS``; taking either back for a drag
+#: would move a binding a user already has. What is free is ``G``, which every
+#: modelling package uses for grab, and ``S``, which every one of them uses for
+#: scale. Rotate is reached mid-drag instead -- ``G`` then ``R`` -- which is a
+#: gesture Blender has anyway and which costs nothing here, because switching
+#: transforms mid-drag had to work regardless.
+#:
+#: Checked *after* the op registry, so a letter an element mode has claimed
+#: still fires its op: ``S`` is nothing in the registry today, and the ordering
+#: is what keeps that from being a thing to remember if it ever is.
+DRAG_KEYS = {"g": "move", "s": "scale"}
+
+
+def _keyboard_drag(ctx: Any, view: Any, tab: ClayTab, doc: Any, name: str) -> bool:
+    """Start a keyboard transform. -> whether the key was one.
+
+    Refused while the tab is saving, like every control that changes the
+    document -- and refused with nothing selected, where it would be a drag with
+    nothing to drag and would swallow a keystroke that means nothing else.
+    """
+
+    kind = DRAG_KEYS.get(name)
+    if kind is None or view is None or tab.saving:
+        return False
+    return bool(view.begin_keyboard_drag(doc, kind))
 
 
 def _registry_key(ctx: Any, tab: ClayTab, doc: Any, name: str) -> bool:

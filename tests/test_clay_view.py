@@ -1314,3 +1314,214 @@ def test_the_nearer_of_two_overlapping_edges_is_picked(view) -> None:
 
     picked = view.pick_element(doc, point)
     assert picked is not None and picked[0] == near.uid
+
+
+# --- the pivot, and the keyboard's half of a drag (Clay W3) -------------------
+
+
+def test_a_rotate_orbits_the_selection_median_rather_than_each_origin(view) -> None:
+    """The picture used to lie.
+
+    The gizmo is drawn at ``selection_centre`` -- the median of what is
+    selected -- while ``_apply`` wrote only ``obj.rotation``, so dragging the
+    ring with two objects selected spun each of them in place around a ring
+    drawn somewhere neither of them was.
+    """
+    doc = _doc(count=2)
+    uids = [obj.uid for obj in doc.objects]
+    doc.select(uids)
+    before = [np.array(doc.by_uid(uid).translation) for uid in uids]
+    pivot = view.selection_centre(doc)
+
+    view._begin_gizmo_drag(doc)
+    view._drag_origin = np.asarray(pivot, dtype="f8")
+    half_turn = m3.quat_from_axis_angle(m3.vec3(0.0, 1.0, 0.0), np.pi)
+    for uid, was in view._drag_start.items():
+        view._apply(doc.by_uid(uid), was, half_turn, view.state)
+
+    after = [np.array(doc.by_uid(uid).translation) for uid in uids]
+    # A half turn about the median swaps two objects placed either side of it.
+    assert np.allclose(after[0], before[1], atol=1e-6), (before, after)
+    assert np.allclose(after[1], before[0], atol=1e-6)
+
+
+def test_a_rotate_of_one_object_about_its_own_centre_leaves_it_put(view) -> None:
+    """The correction must not move what was already right: an object whose
+    origin *is* the pivot stays where it is, whatever it is turned by."""
+    doc = _doc(count=1)
+    uid = doc.objects[0].uid
+    doc.select([uid])
+    before = np.array(doc.by_uid(uid).translation)
+
+    view._begin_gizmo_drag(doc)
+    view._drag_origin = before.astype("f8")
+    turn = m3.quat_from_axis_angle(m3.vec3(0.0, 1.0, 0.0), 0.7)
+    view._apply(doc.by_uid(uid), view._drag_start[uid], turn, view.state)
+
+    assert np.allclose(doc.by_uid(uid).translation, before, atol=1e-9)
+
+
+def test_a_scale_moves_the_objects_toward_the_pivot(view) -> None:
+    doc = _doc(count=2)
+    uids = [obj.uid for obj in doc.objects]
+    doc.select(uids)
+    pivot = np.asarray(view.selection_centre(doc), dtype="f8")
+    before = [np.array(doc.by_uid(uid).translation) for uid in uids]
+
+    view.state.tool = "scale"
+    view._begin_gizmo_drag(doc)
+    view._drag_origin = pivot
+    for uid, was in view._drag_start.items():
+        view._apply(doc.by_uid(uid), was, np.array([0.5, 0.5, 0.5]), view.state)
+
+    for uid, was in zip(uids, before, strict=True):
+        assert np.allclose(
+            doc.by_uid(uid).translation, pivot + (was - pivot) * 0.5, atol=1e-9
+        )
+    view.state.tool = "select"
+
+
+def test_g_starts_a_drag_with_no_handle_grabbed(view) -> None:
+    """Every transform went through grabbing a coloured arrow, which means
+    finding it, which means never moving an object without first looking at the
+    gizmo rather than at the model."""
+    doc = _doc(count=1)
+    doc.select([doc.objects[0].uid])
+    view.draw(doc, RECT, 0.0)
+    view._last_mouse = (64.0, 48.0)
+
+    assert view.begin_keyboard_drag(doc, "move")
+    assert view.dragging
+    assert view._grab == "keydrag"
+
+
+def test_a_keyboard_drag_moves_the_selection_as_the_pointer_moves(view) -> None:
+    doc = _doc(count=1)
+    uid = doc.objects[0].uid
+    doc.select([uid])
+    view.draw(doc, RECT, 0.0)
+    view._last_mouse = (64.0, 48.0)
+    before = np.array(doc.by_uid(uid).translation)
+
+    view.begin_keyboard_drag(doc, "move")
+    view._motion(doc, (90.0, 48.0))
+
+    assert not np.allclose(doc.by_uid(uid).translation, before)
+
+
+def test_a_keyboard_drag_needs_something_to_drag(view) -> None:
+    doc = _doc(count=1)
+    doc.select([])
+    view.draw(doc, RECT, 0.0)
+
+    assert not view.begin_keyboard_drag(doc, "move")
+    assert not view.dragging
+
+
+def test_a_keyboard_drag_will_not_start_over_a_live_one(view) -> None:
+    doc = _doc(count=1)
+    doc.select([doc.objects[0].uid])
+    view.draw(doc, RECT, 0.0)
+
+    assert view.begin_keyboard_drag(doc, "move")
+    assert not view.begin_keyboard_drag(doc, "scale")
+
+
+def test_escape_puts_a_keyboard_drag_back(view) -> None:
+    doc = _doc(count=1)
+    uid = doc.objects[0].uid
+    doc.select([uid])
+    view.draw(doc, RECT, 0.0)
+    view._last_mouse = (64.0, 48.0)
+    before = np.array(doc.by_uid(uid).translation)
+
+    view.begin_keyboard_drag(doc, "move")
+    view._motion(doc, (100.0, 60.0))
+    assert view.cancel_drag(doc)
+
+    assert np.allclose(doc.by_uid(uid).translation, before)
+    assert not view.dragging
+    assert view._key_kind == ""
+
+
+def test_a_left_press_commits_a_keyboard_drag(view) -> None:
+    """It holds no button, so a press is how it ends rather than a release."""
+    doc = _doc(count=1)
+    uid = doc.objects[0].uid
+    doc.select([uid])
+    view.draw(doc, RECT, 0.0)
+    view._last_mouse = (64.0, 48.0)
+    head = doc.history.head
+
+    view.begin_keyboard_drag(doc, "move")
+    view._motion(doc, (100.0, 48.0))
+    view._press(doc, 1, (100.0, 48.0))
+
+    assert not view.dragging
+    assert doc.history.head != head, "one step for the whole gesture"
+
+
+def test_a_right_press_cancels_one(view) -> None:
+    doc = _doc(count=1)
+    uid = doc.objects[0].uid
+    doc.select([uid])
+    view.draw(doc, RECT, 0.0)
+    view._last_mouse = (64.0, 48.0)
+    before = np.array(doc.by_uid(uid).translation)
+
+    view.begin_keyboard_drag(doc, "move")
+    view._motion(doc, (100.0, 48.0))
+    view._press(doc, 3, (100.0, 48.0))
+
+    assert not view.dragging
+    assert np.allclose(doc.by_uid(uid).translation, before)
+
+
+def test_an_axis_lock_narrows_a_keyboard_drag(view) -> None:
+    """The lock, the typed value and the snap are ``_narrow``'s, above both
+    drag paths, so neither has to learn what a lock is."""
+    doc = _doc(count=1)
+    uid = doc.objects[0].uid
+    doc.select([uid])
+    view.draw(doc, RECT, 0.0)
+    view._last_mouse = (64.0, 48.0)
+    before = np.array(doc.by_uid(uid).translation)
+
+    view.begin_keyboard_drag(doc, "move")
+    assert view.drag_key(doc, "x")
+    view._motion(doc, (100.0, 70.0))
+
+    moved = doc.by_uid(uid).translation - before
+    assert abs(moved[1]) < 1e-9 and abs(moved[2]) < 1e-9, moved
+
+
+def test_r_mid_drag_switches_the_transform_and_starts_it_afresh(view) -> None:
+    """A rotate that began from a half-finished move would carry that move into
+    its result, with no way to undo one without the other."""
+    doc = _doc(count=1)
+    uid = doc.objects[0].uid
+    doc.select([uid])
+    view.draw(doc, RECT, 0.0)
+    view._last_mouse = (64.0, 48.0)
+    before = np.array(doc.by_uid(uid).translation)
+
+    view.begin_keyboard_drag(doc, "move")
+    view._motion(doc, (100.0, 48.0))
+    assert not np.allclose(doc.by_uid(uid).translation, before)
+
+    assert view.drag_key(doc, "r")
+    assert view._key_kind == "rotate"
+    assert np.allclose(doc.by_uid(uid).translation, before), "the move was undone"
+
+
+def test_switching_to_the_transform_already_running_does_nothing(view) -> None:
+    doc = _doc(count=1)
+    doc.select([doc.objects[0].uid])
+    view.draw(doc, RECT, 0.0)
+
+    view.begin_keyboard_drag(doc, "move")
+    anchor = view._key_anchor
+    view.drag_key(doc, "g")
+
+    assert view._key_kind == "move"
+    assert anchor is view._key_anchor
