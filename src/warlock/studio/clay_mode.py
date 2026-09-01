@@ -667,6 +667,26 @@ def redo(ctx: Any, tab: Any) -> None:
     tab.doc.redo()
 
 
+def step_history(ctx: Any, tab: Any, index: int) -> bool:
+    """Jump the document to a position in its undo stack. -> whether it moved.
+
+    The history panel's door, and the *third* surface onto the same stack --
+    which is why it is here beside the other two rather than in the pane, and
+    why the pane will not call ``doc.step_history`` itself. ``plotter_mode``
+    has the same three, for the same reason written out there.
+
+    A jump can undo the op the adjust card is offering to re-run, so the record
+    of it is dropped: the card's own guard is that the head has not moved, and
+    leaving a stale ``last_op`` behind would make Repeat replay an op against a
+    document that no longer has what it ran on.
+    """
+
+    moved = tab.doc.step_history(index)
+    if moved:
+        ensure(ctx).last_op = None
+    return moved
+
+
 
 def handle_key(ctx: Any, event: Any) -> bool:
     """Clay's shortcuts. -> whether the key was consumed.

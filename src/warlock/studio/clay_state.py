@@ -38,6 +38,40 @@ DEFAULT_SNAP_ROTATE = 15.0
 
 WBLK_SUFFIX = ".wblk"
 
+
+@dataclass
+class LastOp:
+    """The op that ran last, and everything needed to run it again differently.
+
+    What an *adjust last operation* card is: a modeller runs Bevel, sees the
+    result, and changes the width -- and what must happen then is that the
+    first bevel is *undone* and a new one run, not that a second bevel is laid
+    over the first. So the record has to carry the state the op ran against,
+    not only its numbers.
+
+    ``depth_before`` is where the undo stack stood; ``head_after`` is the serial
+    the stack ended on, and it is the guard rather than a convenience: any other
+    edit -- a gizmo drag, a rename, a second op -- moves the head, and re-running
+    against a stack that has moved on would undo somebody else's work. A card
+    whose ``head_after`` no longer matches is stale and hides itself.
+
+    The selection is carried because ops read it and several of them change it:
+    Extrude leaves the new faces selected, so re-running from the *current*
+    selection would extrude the extrusion.
+
+    Plain data with no methods, in the state module rather than in ``clay_ops``,
+    because ``clay_ops`` may not import the pane layer and this is the shape
+    both of them pass around.
+    """
+
+    name: str
+    params: dict[str, float] = field(default_factory=dict)
+    depth_before: int = 0
+    head_after: int = 0
+    element_mode: str = "object"
+    element_sel: dict[int, Any] = field(default_factory=dict)
+    selection: set[int] = field(default_factory=set)
+
 _uids = itertools.count(1)
 
 
@@ -235,6 +269,12 @@ class ClayState:
     # edit's holes. Keeping the mesh alive is the price, and it is one mesh per
     # object the user has actually asked about.
     manifold: dict[int, tuple[Any, list[Any]]] = field(default_factory=dict)
+
+    # The op that ran last, or None. Recorded by ``clay_ops.run`` and read by
+    # the adjust-last-operation card and by Repeat. Session state and never
+    # serialized: it names a position in an undo stack, which is the one thing
+    # that cannot survive a reopen.
+    last_op: LastOp | None = None
 
     # -- documents ---------------------------------------------------------
 

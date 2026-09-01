@@ -71,10 +71,20 @@ _serials = itertools.count(1)
 
 
 class Edit:
-    """One reversible step. ``cost`` is what the budget is spent on."""
+    """One reversible step. ``cost`` is what the budget is spent on.
+
+    ``label`` is what the history panel calls this step, and it is empty by
+    default on purpose: the class name is a good enough name for twenty edits
+    and giving each of them a string would be twenty places for a rename to be
+    missed. It exists for the case the class name is *wrong* -- a
+    :class:`CompoundEdit` folded out of an op's several pushes reads as
+    "compound", which tells a reader nothing about what they are about to undo.
+    Whoever folded it knows what it was and can say so.
+    """
 
     cost: int = 0
     serial: int = 0
+    label: str = ""
 
     def undo(self, doc: Any) -> None:  # pragma: no cover - interface
         raise NotImplementedError
@@ -104,9 +114,19 @@ class CompoundEdit(Edit):
 
 
 def _label(edit: Any) -> str:
-    """An edit's class name as words: ``LayerAddEdit`` -> "layer add"."""
+    """What the history panel calls a step.
+
+    The edit's own :attr:`Edit.label` if it was given one, else its class name
+    as words: ``LayerAddEdit`` -> "layer add". The fallback is what keeps the
+    twenty existing edits from each needing a string; the override is for the
+    one shape the fallback cannot name, a compound folded out of an op's
+    several pushes.
+    """
     import re
 
+    named = getattr(edit, "label", "")
+    if named:
+        return str(named)
     name = type(edit).__name__.removesuffix("Edit")
     return re.sub(r"(?<!^)(?=[A-Z])", " ", name).lower() or "step"
 

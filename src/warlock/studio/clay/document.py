@@ -253,6 +253,33 @@ class ClayDoc:
         self._forget_elements(edit)
         return True
 
+    def step_history(self, index: int) -> bool:
+        """Jump to a position in the undo stack. -> whether anything moved.
+
+        ``index`` is the count of *done* steps, which is what
+        ``UndoStack.step_to`` takes and what the history panel's rows stand
+        for: 0 is the document as it was opened.
+
+        Through :meth:`undo` and :meth:`redo` rather than
+        ``self.history.step_to(self, n)``, and that is the whole reason this
+        method exists rather than the call site doing it: ``step_to`` walks the
+        *stack's* own undo and redo, which do not run :meth:`_forget_elements`.
+        Called straight, a jump made in edge mode would leave the selection
+        naming edges of a mesh the jump had replaced -- the exact defect the two
+        methods above exist to prevent, reintroduced by the one caller that
+        reached past them. ``PlotterDoc.step_history`` is the same method for
+        the same reason, ending its open sessions instead.
+        """
+
+        total = len(self.history.history())
+        wanted = max(0, min(int(index), total))
+        moved = False
+        while len(self.history) > wanted and self.undo():
+            moved = True
+        while len(self.history) < wanted and self.redo():
+            moved = True
+        return moved
+
     def _forget_elements(self, edit: Edit | None) -> None:
         for uid in _geometry_uids(edit):
             gone = self.element_sel.pop(uid, None) is not None
