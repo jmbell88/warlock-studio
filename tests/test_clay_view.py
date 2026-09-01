@@ -1525,3 +1525,90 @@ def test_switching_to_the_transform_already_running_does_nothing(view) -> None:
 
     assert view._key_kind == "move"
     assert anchor is view._key_anchor
+
+
+# --- Alt+click selects a loop, Alt+drag still orbits (Clay W4) ----------------
+
+
+def _element_doc() -> bd.ClayDoc:
+    doc = bd.ClayDoc()
+    obj = doc.add_object(bd.Obj(uid=bd.new_uid(), name="grid", mesh=bp.grid()))
+    doc.select([obj.uid])
+    doc.element_mode = "edge"
+    return doc
+
+
+def test_alt_click_selects_the_loop_under_the_pointer(view) -> None:
+    doc = _element_doc()
+    uid = doc.objects[0].uid
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    assert view.select_loop_at(doc, (64.0, 48.0))
+
+    sel = doc.element_sel_of(uid)
+    assert len(sel.edges) > 1, "a loop, not the one edge under the cursor"
+
+
+def test_ctrl_alt_click_takes_the_ring_instead(view) -> None:
+    doc = _element_doc()
+    uid = doc.objects[0].uid
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    assert view.select_loop_at(doc, (64.0, 48.0), ring=True)
+    ring = len(doc.element_sel_of(uid).edges)
+    doc.clear_element_sel()
+    assert view.select_loop_at(doc, (64.0, 48.0), ring=False)
+    loop = len(doc.element_sel_of(uid).edges)
+
+    # Different traversals: on a grid the ring across a row is one longer than
+    # the loop along it.
+    assert ring != loop
+
+
+def test_alt_drag_still_orbits_rather_than_selecting(view) -> None:
+    """The one gesture that must never be reinterpreted: it is how a user looks
+    at what they are about to click."""
+    doc = _element_doc()
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    view._alt_at = (64.0, 48.0)
+    view._last_mouse = (110.0, 70.0)
+
+    assert not view._alt_click(doc), "moved too far to be a click"
+    assert not doc.element_sel
+
+
+def test_a_press_and_release_in_the_same_place_is_a_click(view) -> None:
+    doc = _element_doc()
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    view._alt_at = (64.0, 48.0)
+    view._last_mouse = (65.0, 48.0)  # one pixel, inside the slop
+
+    assert view._alt_click(doc)
+
+
+def test_alt_click_does_nothing_in_object_mode(view) -> None:
+    """There is no loop to select there, and swallowing the release would stop
+    the orbit it was."""
+    doc = _element_doc()
+    doc.element_mode = "object"
+    view.draw(doc, RECT, 0.0)
+    view._alt_at = (64.0, 48.0)
+    view._last_mouse = (64.0, 48.0)
+
+    assert not view._alt_click(doc)
+
+
+def test_the_alt_state_is_consumed_so_a_later_release_is_not_a_click(view) -> None:
+    doc = _element_doc()
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    view._alt_at = (64.0, 48.0)
+    view._last_mouse = (64.0, 48.0)
+
+    view._alt_click(doc)
+    assert view._alt_at is None
+    assert not view._alt_click(doc)

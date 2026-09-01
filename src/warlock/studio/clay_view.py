@@ -189,6 +189,11 @@ class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
         # ``_view_drag.begin_keyboard_drag``.
         self._key_kind = ""
         self._key_anchor: Any = None
+        # Where an Alt press went down, and whether Ctrl was held with it.
+        # Alt+drag orbits and Alt+click selects a loop; the two share the button
+        # and are told apart on the release -- see ``_view_drag._alt_click``.
+        self._alt_at: Any = None
+        self._alt_ctrl = False
 
         # What the cursor is over in an element mode, as ``(uid, index)`` read
         # through the document's own mode. Updated only on motion with no grab

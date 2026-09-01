@@ -353,6 +353,9 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             # R is the Scale tool's letter and E is Rotate's, both taken long
             # before this, so rotate is reached mid-drag instead.
             ("G / S", "Move / scale the selection -- no handle to grab"),
+            ("L", "Select everything joined to the selection"),
+            ("Ctrl+= / Ctrl+-", "Grow / shrink the selection by one ring"),
+            ("Alt+click", "Select the edge loop; Ctrl+Alt+click takes the ring"),
             ("G / R / S", "Switch the transform while a drag is under way"),
             ("F", "Frame the selection"),
             ("Delete", "Delete -- faces in an element mode, objects otherwise"),

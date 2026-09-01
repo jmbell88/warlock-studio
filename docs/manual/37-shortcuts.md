@@ -165,6 +165,9 @@ one loop at a time, so a keypress about a picture can never be filed as a verdic
 | 1 / 2 / 3 / 4 | Vertex / edge / face / object mode |
 | E | Extrude, in any element mode |
 | G / S | Move / scale the selection with no handle to grab — the drag follows the pointer |
+| L | Select everything joined to what is selected — two shapes welded into one mesh come apart |
+| Ctrl+= / Ctrl+- | Grow / shrink the selection by one ring |
+| Alt+click | Select the edge loop under the pointer; `Ctrl`+`Alt`+click takes the ring instead |
 | G / R / S | Switch which transform a running drag is doing; the objects go back first |
 | F | Frame the selection |
 | X / Y / Z | Lock a drag already under way to that axis; the same key again clears it |

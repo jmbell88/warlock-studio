@@ -929,9 +929,31 @@ def _ctrl_key(
         # operation with a different name, and doing the object one instead
         # would silently double a mesh the user is mid-edit on.
         _duplicate_selection(ctx, state, doc)
+    elif name in GROW_KEYS:
+        # Ctrl+plus and Ctrl+minus, on both the number row and the keypad.
+        # Four names for two verbs, because the two rows report different key
+        # names for the same glyph and a user pressing the one under their hand
+        # should not have to know which.
+        from . import clay_ops
+
+        op = clay_ops.get(GROW_KEYS[name])
+        if op.enabled(doc) and doc.element_mode in op.modes:
+            _fire_op(ctx, doc, op)
     elif name == "tab":
         state.cycle(-1 if shift else 1)
     return True
+
+
+#: The two selection-size chords, by the key names pygame reports. ``=`` is the
+#: unshifted key that carries ``+``, which is what a user presses; ``[+]`` and
+#: ``[-]`` are the keypad's own names.
+GROW_KEYS = {
+    "=": "select-more",
+    "+": "select-more",
+    "[+]": "select-more",
+    "-": "select-less",
+    "[-]": "select-less",
+}
 
 
 # The three below and ``_delete`` above are thin wrappers on

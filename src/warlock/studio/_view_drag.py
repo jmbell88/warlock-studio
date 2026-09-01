@@ -65,6 +65,15 @@ class _ElementDrag:
 SNAP_VERTEX_RADIUS = 14.0
 
 
+#: How far the pointer may travel between an Alt press and its release and
+#: still count as a click rather than an orbit, in pixels (Manhattan).
+#:
+#: Four, and the number is doing real work: a mouse moves a pixel or two under
+#: the click of a finger, so zero makes the gesture unreliable, and a generous
+#: threshold eats the beginning of a deliberate orbit.
+ALT_CLICK_SLOP = 4.0
+
+
 def _about(centre: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     """*matrix* conjugated to act about *centre* rather than about the origin."""
     to = m3.identity()
@@ -178,7 +187,16 @@ class DragOps:
             # Alt+drag always orbits, in every mode: it is the one gesture that
             # must never be reinterpreted, because it is how a user looks at
             # what they are about to click.
+            #
+            # Alt+*click* is a loop select, and the two have to share the
+            # button because both are Blender's. They are told apart on the
+            # release by how far the pointer moved -- see ``_alt_click``:
+            # anything that is a drag orbits, and only a press and a release in
+            # the same place selects. Recorded here rather than decided here,
+            # because at press time there is nothing yet to tell them apart.
             self._grab = "orbit"
+            self._alt_at = local
+            self._alt_ctrl = ctrl
             return True
 
         origin, direction = self._ray(local)
@@ -394,6 +412,8 @@ class DragOps:
         if button != owner:
             return True
         was, self._grab = self._grab, None
+        if was == "orbit" and self._alt_click(doc):
+            return True
         if was in ("gizmo", "keydrag"):
             # A keyboard drag holds no handle, so there is no gizmo drag to end
             # -- but everything after that is identical, which is the whole
@@ -410,6 +430,99 @@ class DragOps:
         elif was == "marquee":
             self._commit_marquee(doc)
         return True
+
+    def _alt_click(self: ClayView, doc: Any) -> bool:
+        """An Alt+click that never became a drag: select the loop under it.
+
+        -> whether it selected something, which the caller takes as "this
+        release is spoken for".
+
+        **Four pixels** is the whole of what separates this from an orbit, and
+        the number is doing real work: a mouse moves a pixel or two under the
+        click of a finger, so zero would make the gesture unreliable, and a
+        generous threshold would eat the beginning of a deliberate orbit. It is
+        measured against the *press*, so a long orbit that happens to return to
+        where it started still orbits -- the pointer having travelled is what
+        makes it a drag, not where it ended up.
+
+        Ctrl picks the ring rather than the loop, which is Blender's
+        Ctrl+Alt+click and is why the modifier is captured at the press: by the
+        release the user may have let go of it.
+        """
+        at, self._alt_at = self._alt_at, None
+        ctrl, self._alt_ctrl = self._alt_ctrl, False
+        if at is None or doc.element_mode == "object":
+            return False
+        moved = abs(self._last_mouse[0] - at[0]) + abs(self._last_mouse[1] - at[1])
+        if moved > ALT_CLICK_SLOP:
+            return False
+        return self.select_loop_at(doc, at, ring=ctrl)
+
+    def select_loop_at(
+        self: ClayView, doc: Any, local: tuple[float, float], *, ring: bool = False
+    ) -> bool:
+        """Select the edge loop -- or ring -- through the element under ``local``.
+
+        Public because the manual names the gesture and a test presses it; the
+        pane never calls it.
+
+        Works from whatever the mode is picking: an edge directly, and a vertex
+        or a face through one of its edges, because "the loop through this" is a
+        sentence a user means in every element mode and refusing two of the
+        three would be an offer taken back.
+        """
+        from .clay import select as bsel
+
+        found = self.pick_element(doc, local)
+        if found is None:
+            return False
+        uid, index = found
+        try:
+            obj = doc.by_uid(uid)
+        except KeyError:
+            return False
+        edge = self._edge_under(doc, obj.mesh, index)
+        if edge is None:
+            return False
+        pairs = (
+            bsel.edge_ring(obj.mesh, edge)
+            if ring
+            else bsel.edge_loop(obj.mesh, edge)
+        )
+        if not len(pairs):
+            return False
+        from .clay import elements as el
+
+        doc.set_element_sel(uid, el.ElementSel(edges=pairs))
+        doc.select([uid])
+        return True
+
+    def _edge_under(self: ClayView, doc: Any, mesh: Any, index: int) -> Any:
+        """One edge of whatever the pick returned, as a vertex pair.
+
+        In edge mode the pick *is* an edge. In the other two it is a vertex or a
+        face, and any edge touching it is a seed the loop can run from -- which
+        is an arbitrary choice among a few, and is the honest one: a loop
+        through a vertex is not a single answer, and picking the first is what
+        Blender does from a face too.
+        """
+        from .clay.adjacency import adjacency
+
+        a = adjacency(mesh)
+        mode = doc.element_mode
+        if mode == "edge":
+            if not (0 <= index < a.n_edges):
+                return None
+            return tuple(int(v) for v in a.edge_verts[index])
+        if mode == "vertex":
+            corners = a.vertex_corners(int(index))
+            if not len(corners):
+                return None
+            return tuple(int(v) for v in a.edge_verts[int(a.corner_edge[corners[0]])])
+        starts = mesh.starts
+        if not (0 <= index < len(starts) - 1):
+            return None
+        return tuple(int(v) for v in a.edge_verts[int(a.corner_edge[int(starts[index])])])
 
     # -- the keyboard's half of a drag (Clay18) ------------------------------
 

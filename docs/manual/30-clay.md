@@ -139,6 +139,27 @@ something takes it out of what you are working on, so nothing you select can act
 geometry drops it — the indices it named describe a mesh that no longer exists. An undo that only
 moves or renames something keeps it, because those cannot invalidate it.
 
+### Selecting more than one thing
+
+Clicking picks one element and `Shift`-clicking adds another, and until 2026-09-01 that was the whole
+vocabulary — so selecting the ring of edges round a cylinder meant clicking each of them, and
+selecting one of two shapes welded into one mesh was not possible at all.
+
+`Alt`-click selects the **edge loop** under the pointer: the run of edges continuing end to end
+through it. `Ctrl`+`Alt`-click takes the **ring** instead — the edges parallel to it, each one the far
+side of a quad from the last. The two share a button with orbit, and are told apart by whether the
+pointer moved: a press and a release in the same place selects, anything further orbits.
+
+A loop stops where a modeller expects it to. It continues through a vertex with **exactly four
+edges**, to the edge opposite the one it arrived on, and stops at anything else — a pole, like the tip
+of a cone or a cube's corner, has some other number, and a loop that ran through one would wander off
+round the mesh. A ring has no such rule and works where a loop does not.
+
+`L` selects everything **joined** to what is selected. `Ctrl`+`=` grows the selection by one ring and
+`Ctrl`+`-` shrinks it — shrinking peels the border off, leaving the middle of what you had, which
+includes the mesh's own open border. **Select Boundary** in the context menu takes every open edge:
+the border of every hole, which is what Fill Hole is about to close.
+
 ### The operations
 
 | Mode | Operation | What it does |

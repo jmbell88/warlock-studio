@@ -42,6 +42,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
+
 __all__ = [
     "OPS",
     "Op",
@@ -705,6 +707,140 @@ def _invert(ctx: Any, doc: Any, **_: Any) -> None:
     selection.invert(doc)
 
 
+def _selection_op(verb: Any) -> Any:
+    """Wrap a ``clay.select`` verb as an op that writes the element selection.
+
+    One wrapper for five verbs, because every one of them is the same three
+    steps -- read what is selected on each object, ask the engine, write the
+    answer back -- and five copies of that is five places for the "write it
+    back only when it changed" rule to be forgotten.
+
+    Per object, and **only the objects that already have a selection**: growing
+    a selection on the object you are working on must not quietly select
+    something on the one behind it.
+    """
+
+    def run(ctx: Any, doc: Any, **params: Any) -> bool:
+
+        del ctx
+        mode = doc.element_mode
+        ran = False
+        for uid in list(doc.element_sel):
+            try:
+                obj = doc.by_uid(uid)
+            except KeyError:
+                continue
+            sel = doc.element_sel_of(uid)
+            wanted = verb(obj.mesh, sel, mode, **params)
+            if wanted is None or wanted.same_as(sel):
+                continue
+            doc.set_element_sel(uid, wanted)
+            ran = True
+        # ``False`` rather than a refusal: the selection is what it already was,
+        # and ``run`` turns that into "nothing happened" without a toast. A verb
+        # that found nothing new is not an error, it is an answer.
+        return ran
+
+    return run
+
+
+def _verb_linked(mesh: Any, sel: Any, mode: str) -> Any:
+    from .clay import select as bsel
+
+    verts = _verts_of(mesh, sel, mode)
+    if not len(verts):
+        return None
+    return _sel_from_verts(mesh, bsel.linked(mesh, verts), mode)
+
+
+def _verb_grow(mesh: Any, sel: Any, mode: str) -> Any:
+    from .clay import select as bsel
+
+    verts = _verts_of(mesh, sel, mode)
+    if not len(verts):
+        return None
+    return _sel_from_verts(mesh, bsel.grow(mesh, verts), mode)
+
+
+def _verb_shrink(mesh: Any, sel: Any, mode: str) -> Any:
+    from .clay import select as bsel
+
+    verts = _verts_of(mesh, sel, mode)
+    if not len(verts):
+        return None
+    return _sel_from_verts(mesh, bsel.shrink(mesh, verts), mode)
+
+
+def _verb_boundary(mesh: Any, sel: Any, mode: str) -> Any:
+    from .clay import elements as el
+    from .clay import select as bsel
+
+    del sel
+    pairs = bsel.boundary(mesh)
+    if not len(pairs):
+        return None
+    # Reported in the mode's own currency: the border is a set of edges, and in
+    # vertex mode what a user means by "select the boundary" is its vertices.
+    if mode == "edge":
+        return el.ElementSel(edges=pairs)
+    if mode == "vertex":
+        return el.ElementSel(verts=np.unique(pairs.reshape(-1)))
+    return None
+
+
+def _verts_of(mesh: Any, sel: Any, mode: str) -> Any:
+    """Whatever is selected, as a set of vertices.
+
+    The common currency: growing a face selection and growing a vertex one are
+    the same walk over the same graph, and converting once here is what keeps
+    ``select.py`` free of a mode argument.
+    """
+    if mode == "vertex":
+        return np.asarray(sel.verts, dtype="i8")
+    if mode == "edge":
+        return np.unique(np.asarray(sel.edges, dtype="i8").reshape(-1))
+    faces = np.asarray(sel.faces, dtype="i8")
+    if not len(faces):
+        return np.zeros(0, dtype="i8")
+    starts = np.asarray(mesh.starts, dtype="i8")
+    loops = np.asarray(mesh.loops, dtype="i8")
+    out = [loops[starts[f] : starts[f + 1]] for f in faces if 0 <= f < len(starts) - 1]
+    return np.unique(np.concatenate(out)) if out else np.zeros(0, dtype="i8")
+
+
+def _sel_from_verts(mesh: Any, verts: Any, mode: str) -> Any:
+    """A vertex set back into the mode's own currency.
+
+    An edge or a face is included when **every** one of its vertices is, which
+    is the only definition that makes grow and shrink inverses of each other on
+    the inside of a selection: "partly selected" is not a state an element
+    selection can be in.
+    """
+    from .clay import elements as el
+
+    verts = np.unique(np.asarray(verts, dtype="i8"))
+    if mode == "vertex":
+        return el.ElementSel(verts=verts)
+    inside = np.zeros(len(mesh.positions), dtype=bool)
+    inside[verts[(verts >= 0) & (verts < len(inside))]] = True
+    starts = np.asarray(mesh.starts, dtype="i8")
+    loops = np.asarray(mesh.loops, dtype="i8")
+    if mode == "face":
+        keep = [
+            face
+            for face in range(len(starts) - 1)
+            if bool(inside[loops[starts[face] : starts[face + 1]]].all())
+        ]
+        return el.ElementSel(faces=np.asarray(keep, dtype="i4"))
+    from .clay.adjacency import adjacency
+
+    a = adjacency(mesh)
+    if a.n_edges == 0:
+        return el.ElementSel()
+    both = inside[a.edge_verts[:, 0]] & inside[a.edge_verts[:, 1]]
+    return el.ElementSel(edges=a.edge_verts[both])
+
+
 def _register_defaults() -> None:
     """Build the registry once, at import.
 
@@ -741,6 +877,52 @@ def _register_defaults() -> None:
             modes=ELEMENT_MODES,
             run=_invert,
             key="Ctrl+Shift+I",
+        )
+    )
+    register(
+        Op(
+            name="select-linked",
+            label="Select Linked",
+            modes=ELEMENT_MODES,
+            run=_selection_op(_verb_linked),
+            enabled=has_elements,
+            key="L",
+            hint="Everything joined to what is selected. Two shapes welded into "
+            "one mesh are separable again by it.",
+        )
+    )
+    register(
+        Op(
+            name="select-more",
+            label="Select More",
+            modes=ELEMENT_MODES,
+            run=_selection_op(_verb_grow),
+            enabled=has_elements,
+            key="Ctrl+=",
+        )
+    )
+    register(
+        Op(
+            name="select-less",
+            label="Select Less",
+            modes=ELEMENT_MODES,
+            run=_selection_op(_verb_shrink),
+            enabled=has_elements,
+            key="Ctrl+-",
+            hint="Peels the border off the selection, leaving its middle.",
+        )
+    )
+    register(
+        Op(
+            name="select-boundary",
+            label="Select Boundary",
+            # Vertex and edge only: a hole's border is a run of edges, and there
+            # is no face on the open side of one to select.
+            modes=("vertex", "edge"),
+            run=_selection_op(_verb_boundary),
+            key="",
+            hint="Every open edge -- the border of every hole, which is what "
+            "Fill Hole is about to close.",
         )
     )
 
