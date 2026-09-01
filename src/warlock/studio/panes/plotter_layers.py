@@ -11,6 +11,7 @@ list) and a user arriving from one would read a bottom-first list as inverted.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 
@@ -75,6 +76,75 @@ ADD_KINDS: tuple[tuple[str, str, str], ...] = (
 )
 
 ADD_POPUP = "plotter-layer-add"
+
+
+#: How wide the name column is, in design pixels. Fixed rather than stretched:
+#: a two-column table whose *name* column stretches puts the values at a
+#: different x on every form, and a column of values that does not line up is
+#: the thing a table is for.
+NAME_COLUMN = 104.0
+
+
+@contextmanager
+def _table(table_id: str):
+    """Tiled's property table: a name column and a value column, ruled.
+
+    A ``begin_table`` rather than the label-above-field stack this app uses
+    everywhere else, and the difference is not decoration. A stack spends two
+    rows on every field -- a label line and a full-width control -- so a layer's
+    fourteen fields are twenty-eight rows of a 300 px pane, and the *names* are
+    a column the eye cannot run down because each one is followed by a control
+    the width of the panel. The stack is right for a form somebody fills in
+    once; this is a form somebody reads.
+
+    Yields whether the table opened, which is imgui's contract and must be
+    honoured: ``end_table`` may only be called when ``begin_table`` returned
+    true, and an unbalanced pair takes the frame down.
+    """
+    from imgui_bundle import imgui
+
+    flags = (
+        imgui.TableFlags_.borders_inner_v.value
+        | imgui.TableFlags_.row_bg.value
+        | imgui.TableFlags_.sizing_stretch_prop.value
+    )
+    opened = bool(imgui.begin_table(table_id, 2, flags))
+    if opened:
+        imgui.table_setup_column(
+            "name", imgui.TableColumnFlags_.width_fixed.value, sp(NAME_COLUMN)
+        )
+        imgui.table_setup_column("value", imgui.TableColumnFlags_.width_stretch.value)
+    try:
+        yield opened
+    finally:
+        if opened:
+            imgui.end_table()
+
+
+def _row_named(name: str, help_text: str = "", *, indent: float = 0.0) -> None:
+    """Open a row, write the name into the left cell, and leave the cursor in
+    the right one with the item width already set to fill it.
+
+    The help text is a **tooltip on the name** rather than a marker beside it.
+    ``help_marker`` after a full-width control is drawn on a line of its own,
+    where it reads as the next field's -- the failure ``labeled_combo`` exists
+    to avoid -- and in a table there is no room for it at all. The name is the
+    thing a reader hovers when they do not know what a field is.
+    """
+    from imgui_bundle import imgui
+
+    imgui.table_next_row()
+    imgui.table_next_column()
+    if indent:
+        imgui.indent(indent)
+    imgui.align_text_to_frame_padding()
+    widgets.muted(name)
+    if help_text and imgui.is_item_hovered():
+        imgui.set_tooltip(help_text)
+    if indent:
+        imgui.unindent(indent)
+    imgui.table_next_column()
+    imgui.set_next_item_width(-1)
 
 
 def draw(ctx: Any) -> None:
@@ -588,7 +658,14 @@ def draw_properties(ctx: Any) -> None:
     editable = not tab.busy
     layer = doc.layer(doc.active_layer) if doc.active_layer is not None else None
     if layer is None:
-        widgets.muted_wrapped("Choose a layer to see what it carries.")
+        # **The map's own fields**, rather than a sentence telling the user to
+        # go and select something. There is always a map when this pane draws,
+        # so there is always something true to show -- and the map's size,
+        # projection and custom properties are exactly what a Properties pane
+        # with nothing selected is asked about. The sentence it replaces was a
+        # pane that went blank the moment you clicked off a layer.
+        widgets.muted("Map")
+        map_rows(ctx, doc, editable)
         return
     if not editable:
         widgets.muted_wrapped(_BUSY_WHY)
@@ -609,147 +686,7 @@ def draw_properties(ctx: Any) -> None:
         _object_form(ctx, doc, state, selected, editable)
         return
 
-    changed, opacity = widgets.labeled_slider_float(
-        "Opacity",
-        layer.opacity,
-        0.0,
-        1.0,
-        help_text="How strongly this layer draws over the ones below it.",
-    )
-    if changed:
-        doc.set_layer_props(layer.uid, opacity=float(opacity))
-    # Labels live above their fields throughout the Studio.  Keeping them
-    # out of the ImGui ids also gives the narrow inspector the whole row
-    # for the value instead of clipping labels into the controls.
-    widgets.field_label(
-        "Name",
-        "What this layer is called in the map, in Tiled, and in the exported "
-        ".tmx. Two layers may share a name; the map addresses them by uid.",
-    )
-    name = widgets.input_text("##layer-name", layer.name, max_length=64)
-    if name != layer.name:
-        doc.set_layer_props(layer.uid, name=name)
-    widgets.field_label(
-        "Class",
-        "Tiled's per-layer class string. Round-trips through export and import "
-        "and means nothing to Plotter itself -- it is for whatever reads the "
-        "map afterwards.",
-    )
-    class_name = widgets.input_text(
-        "##layer-class", layer.class_name, max_length=64, hint="Optional class"
-    )
-    if class_name != layer.class_name:
-        doc.set_layer_props(layer.uid, class_name=class_name)
-    widgets.field_label(
-        "Blend",
-        "How this layer composites onto the ones below it. Tiled has no blend "
-        "mode, so anything but normal is dropped on .tmx export.",
-    )
-    blend_mode = widgets.combo(
-        "##layer-blend", layer.blend_mode, [(mode, mode) for mode in BLEND_MODES]
-    )
-    if blend_mode != layer.blend_mode:
-        doc.set_layer_props(layer.uid, blend_mode=blend_mode)
-    widgets.field_label(
-        "Tint",
-        "Multiplied into every tile this layer draws. Alpha multiplies the "
-        "layer opacity above.",
-    )
-    imgui.set_next_item_width(-1)
-    changed, tint = controls.color_edit4(
-        "##layer-tint", [channel / 255.0 for channel in layer.tint]
-    )
-    if changed:
-        doc.set_layer_props(
-            layer.uid,
-            tint=tuple(
-                max(0, min(255, int(round(float(channel) * 255))))
-                for channel in tint
-            ),
-        )
-    widgets.field_label(
-        "Offset",
-        "Shifts the whole layer by this many pixels when drawn, without moving "
-        "any tile in the grid.",
-    )
-    imgui.set_next_item_width(-1)
-    changed, offset = controls.input_float2(
-        "##layer-offset", [float(layer.offset_x), float(layer.offset_y)]
-    )
-    if changed:
-        doc.set_layer_props(
-            layer.uid, offset_x=float(offset[0]), offset_y=float(offset[1])
-        )
-    widgets.field_label(
-        "Parallax",
-        "How fast this layer scrolls against the camera. 1 is locked to the "
-        "map, 0.5 is half speed -- a distant background.",
-    )
-    imgui.set_next_item_width(-1)
-    changed, parallax = controls.input_float2(
-        "##layer-parallax", [float(layer.parallax_x), float(layer.parallax_y)]
-    )
-    if changed:
-        doc.set_layer_props(
-            layer.uid,
-            parallax_x=float(parallax[0]),
-            parallax_y=float(parallax[1]),
-        )
-    if isinstance(layer, ObjectLayer):
-        widgets.field_label(
-            "Draw order",
-            "Top-down sorts the objects by their y position each frame, so one "
-            "in front overlaps one behind. Manual keeps the order they were "
-            "added in.",
-        )
-        draworder = widgets.combo(
-            "##object-layer-draw-order",
-            layer.draworder,
-            [("topdown", "Top-down"), ("index", "Manual")],
-        )
-        if draworder != layer.draworder:
-            doc.set_layer_props(layer.uid, draworder=draworder)
-        widgets.field_label(
-            "Outline colour",
-            "The colour Tiled draws this layer's object outlines in. It is "
-            "editor chrome, not part of the map.",
-        )
-        color = widgets.input_text(
-            "##object-layer-color",
-            layer.color or "",
-            max_length=9,
-            hint="#RRGGBB",
-        )
-        if color != (layer.color or ""):
-            doc.set_layer_props(layer.uid, color=color or None)
-    elif isinstance(layer, ImageLayer):
-        if layer.pixels is None:
-            widgets.muted_wrapped(
-                "This image layer has no picture yet."
-            )
-        if widgets.disabled_button(
-            f"{icons.PLUS} Choose image...##img-{layer.uid}",
-            editable,
-            (-1, 0),
-            reason=_BUSY_WHY,
-        ):
-            plotter_mode.choose_layer_image(ctx, layer.uid)
-        changed_x, repeat_x = widgets.toggle(
-            "Repeat X",
-            layer.repeat_x,
-            tooltip="Tile the picture across the map horizontally.",
-        )
-        changed_y, repeat_y = widgets.toggle(
-            "Repeat Y",
-            layer.repeat_y,
-            tooltip="Tile the picture down the map vertically.",
-        )
-        if changed_x or changed_y:
-            doc.set_layer_props(
-                layer.uid,
-                repeat_x=repeat_x if changed_x else layer.repeat_x,
-                repeat_y=repeat_y if changed_y else layer.repeat_y,
-            )
+    _layer_table(ctx, doc, layer, editable)
     # Collapsed by default: most maps carry none, and an always-open form
     # for an empty mapping is a row of controls that explain nothing. The
     # model has supported these since the format did; only the way in was
@@ -764,6 +701,217 @@ def draw_properties(ctx: Any) -> None:
             object_options=object_options(doc),
         )
         imgui.end_disabled()
+
+
+
+def map_rows(ctx: Any, doc: Any, editable: bool) -> None:
+    """The map's own facts and its custom properties, as name/value rows.
+
+    Two surfaces read this: the Properties pane with no layer selected, and
+    Map > Map properties, which is the dialog that owns the *editable*
+    metadata. What is drawn here is deliberately the read-only half plus the
+    property table -- the size, the projection and the tile size are set in the
+    Resize dialog, and a second set of fields for them is a second place they
+    can be typed differently.
+    """
+    from imgui_bundle import imgui
+
+    with _table("##plotter-map-table") as opened:
+        if not opened:
+            return
+        _row_named("Size", "How many cells the map is, and how big a cell is.")
+        imgui.align_text_to_frame_padding()
+        widgets.muted(
+            f"{doc.width} x {doc.height} tiles, {doc.tile_w} x {doc.tile_h} px"
+        )
+        _row_named("Pixels", "The whole map, in pixels.")
+        imgui.align_text_to_frame_padding()
+        widgets.muted(f"{doc.pixel_width} x {doc.pixel_height}")
+        _row_named("Projection", "The lattice. Fixed once anything is painted.")
+        imgui.align_text_to_frame_padding()
+        widgets.muted(str(doc.projection))
+        _row_named("Class", "Tiled's per-map class string.")
+        imgui.align_text_to_frame_padding()
+        widgets.muted(doc.class_name or "-")
+
+    imgui.dummy((0, 4))
+    widgets.section("Custom properties")
+    imgui.begin_disabled(not editable)
+    property_editor(
+        ctx,
+        f"plotter_map_prop:{id(doc)}",
+        doc.properties,
+        doc.set_map_properties,
+        object_options=object_options(doc),
+    )
+    imgui.end_disabled()
+
+
+def _layer_table(ctx: Any, doc: Any, layer: Any, editable: bool) -> None:
+    """Everything a layer carries, as name/value rows.
+
+    Fourteen fields were twenty-eight rows before this: a label line and a
+    full-width control apiece, in a 300 px pane. Every value starts at the same
+    x now, which is what makes the column readable and is why Tiled draws it as
+    a table.
+
+    The kind-specific rows sit inside the same table rather than after it, so an
+    object layer's draw order and an image layer's repeat flags line up with the
+    name and the opacity above them instead of restarting the form.
+    """
+    from imgui_bundle import imgui
+
+    with _table("##plotter-layer-table") as opened:
+        if not opened:
+            return
+        _row_named(
+            "Name",
+            "What this layer is called in the map, in Tiled, and in the "
+            "exported .tmx. Two layers may share a name; the map addresses "
+            "them by uid.",
+        )
+        name = widgets.input_text("##layer-name", layer.name, max_length=64)
+        if name != layer.name:
+            doc.set_layer_props(layer.uid, name=name)
+
+        _row_named(
+            "Class",
+            "Tiled's per-layer class string. Round-trips through export and "
+            "import and means nothing to Plotter itself -- it is for whatever "
+            "reads the map afterwards.",
+        )
+        class_name = widgets.input_text(
+            "##layer-class", layer.class_name, max_length=64, hint="Optional class"
+        )
+        if class_name != layer.class_name:
+            doc.set_layer_props(layer.uid, class_name=class_name)
+
+        _row_named("Opacity", "How strongly this layer draws over the ones below it.")
+        changed, opacity = controls.slider_float(
+            "##layer-opacity", float(layer.opacity), 0.0, 1.0
+        )
+        if changed:
+            doc.set_layer_props(layer.uid, opacity=float(opacity))
+
+        _row_named(
+            "Blend",
+            "How this layer composites onto the ones below it. Tiled has no "
+            "blend mode, so anything but normal is dropped on .tmx export.",
+        )
+        blend_mode = widgets.combo(
+            "##layer-blend", layer.blend_mode, [(mode, mode) for mode in BLEND_MODES]
+        )
+        if blend_mode != layer.blend_mode:
+            doc.set_layer_props(layer.uid, blend_mode=blend_mode)
+
+        _row_named(
+            "Tint",
+            "Multiplied into every tile this layer draws. Alpha multiplies the "
+            "layer opacity above.",
+        )
+        changed, tint = controls.color_edit4(
+            "##layer-tint", [channel / 255.0 for channel in layer.tint]
+        )
+        if changed:
+            doc.set_layer_props(
+                layer.uid,
+                tint=tuple(
+                    max(0, min(255, int(round(float(channel) * 255))))
+                    for channel in tint
+                ),
+            )
+
+        _row_named(
+            "Offset",
+            "Shifts the whole layer by this many pixels when drawn, without "
+            "moving any tile in the grid.",
+        )
+        changed, offset = controls.input_float2(
+            "##layer-offset", [float(layer.offset_x), float(layer.offset_y)]
+        )
+        if changed:
+            doc.set_layer_props(
+                layer.uid, offset_x=float(offset[0]), offset_y=float(offset[1])
+            )
+
+        _row_named(
+            "Parallax",
+            "How fast this layer scrolls against the camera. 1 is locked to "
+            "the map, 0.5 is half speed -- a distant background.",
+        )
+        changed, parallax = controls.input_float2(
+            "##layer-parallax", [float(layer.parallax_x), float(layer.parallax_y)]
+        )
+        if changed:
+            doc.set_layer_props(
+                layer.uid,
+                parallax_x=float(parallax[0]),
+                parallax_y=float(parallax[1]),
+            )
+
+        if isinstance(layer, ObjectLayer):
+            _row_named(
+                "Draw order",
+                "Top-down sorts the objects by their y position each frame, so "
+                "one in front overlaps one behind. Manual keeps the order they "
+                "were added in.",
+            )
+            draworder = widgets.combo(
+                "##object-layer-draw-order",
+                layer.draworder,
+                [("topdown", "Top-down"), ("index", "Manual")],
+            )
+            if draworder != layer.draworder:
+                doc.set_layer_props(layer.uid, draworder=draworder)
+
+            _row_named(
+                "Outline",
+                "The colour Tiled draws this layer's object outlines in. It is "
+                "editor chrome, not part of the map.",
+            )
+            color = widgets.input_text(
+                "##object-layer-color",
+                layer.color or "",
+                max_length=9,
+                hint="#RRGGBB",
+            )
+            if color != (layer.color or ""):
+                doc.set_layer_props(layer.uid, color=color or None)
+        elif isinstance(layer, ImageLayer):
+            _row_named(
+                "Picture",
+                "The image this layer draws. It is stored in the .wmap rather "
+                "than referenced, so moving the file does not break the map.",
+            )
+            if widgets.disabled_button(
+                f"{icons.PLUS} Choose...##img-{layer.uid}",
+                editable,
+                (-1, 0),
+                reason=_BUSY_WHY,
+            ):
+                plotter_mode.choose_layer_image(ctx, layer.uid)
+            if layer.pixels is None:
+                _row_named("", "")
+                widgets.muted("No picture yet")
+
+            _row_named("Repeat", "Tile the picture across and down the map.")
+            changed_x, repeat_x = controls.checkbox(
+                "X##img-repeat-x",
+                layer.repeat_x,
+                tooltip="Tile the picture across the map horizontally.",
+            )
+            imgui.same_line()
+            changed_y, repeat_y = controls.checkbox(
+                "Y##img-repeat-y",
+                layer.repeat_y,
+                tooltip="Tile the picture down the map vertically.",
+            )
+            if changed_x or changed_y:
+                doc.set_layer_props(
+                    layer.uid,
+                    repeat_x=repeat_x if changed_x else layer.repeat_x,
+                    repeat_y=repeat_y if changed_y else layer.repeat_y,
+                )
 
 
 def _object_rows(
@@ -941,44 +1089,94 @@ def _object_form(
 
 
 def _object_fields(ctx: Any, doc: Any, state: Any, layer: Any, obj: MapObject) -> None:
+    """One object's own fields, in the same table the layer form uses.
+
+    The kind and the position used to be a muted sentence -- "rect at 128, 64
+    -- 64 x 32" -- which is a *reading* rather than a field: the numbers were on
+    screen and could not be typed. They are rows now, and the shape's own
+    geometry with them, so an object can be placed exactly rather than dragged
+    until the sentence says the right thing.
+    """
     from imgui_bundle import imgui
 
-    name = widgets.input_text("##obj-name", obj.name, max_length=64, hint="name")
-    if name != obj.name:
-        doc.set_object(layer.uid, obj.uid, name=name)
-    obj_class = widgets.input_text("##obj-class", obj.obj_class, max_length=64, hint="class")
-    if obj_class != obj.obj_class:
-        doc.set_object(layer.uid, obj.uid, obj_class=obj_class)
+    with _table("##plotter-object-table") as opened:
+        if not opened:
+            return
+        _row_named(
+            "Name",
+            "What this object is called. Two objects may share a name; the "
+            "map addresses them by id.",
+        )
+        name = widgets.input_text("##obj-name", obj.name, max_length=64, hint="name")
+        if name != obj.name:
+            doc.set_object(layer.uid, obj.uid, name=name)
 
-    widgets.muted(
-        f"{obj.kind} at {obj.x:.0f}, {obj.y:.0f}"
-        + (f" -- {obj.w:.0f} x {obj.h:.0f}" if hasattr(obj.shape, "w") else "")
-    )
-    changed, visible = widgets.toggle(
-        "Visible",
-        obj.visible,
-        tag="obj-visible",
-        tooltip="Hides the object without removing it. Tiled carries the flag too.",
-    )
-    if changed:
-        doc.set_object(layer.uid, obj.uid, visible=visible)
-    changed, opacity = widgets.labeled_slider_float(
-        "Opacity",
-        obj.opacity,
-        0.0,
-        1.0,
-        help_text="This one object's opacity, multiplied into its layer's.",
-    )
-    if changed:
-        doc.set_object(layer.uid, obj.uid, opacity=float(opacity))
-    changed, rotation = controls.input_float(
-        "Rotation",
-        float(obj.rotation),
-        tooltip="Degrees clockwise about the object's own origin.",
-    )
-    if changed:
-        doc.set_object(layer.uid, obj.uid, rotation=float(rotation))
-    _shape_fields(doc, layer, obj)
+        _row_named(
+            "Class",
+            "Tiled's per-object class string. Round-trips through export and "
+            "means nothing to Plotter itself.",
+        )
+        obj_class = widgets.input_text(
+            "##obj-class", obj.obj_class, max_length=64, hint="class"
+        )
+        if obj_class != obj.obj_class:
+            doc.set_object(layer.uid, obj.uid, obj_class=obj_class)
+
+        _row_named("Kind", "What shape this object is. Set by the tool that drew it.")
+        imgui.align_text_to_frame_padding()
+        widgets.muted(str(obj.kind))
+
+        _row_named(
+            "Position",
+            "Where the object sits, in map pixels from the top-left corner.",
+        )
+        changed, position = controls.input_float2(
+            "##obj-position", [float(obj.x), float(obj.y)]
+        )
+        if changed:
+            doc.set_object(
+                layer.uid, obj.uid, x=float(position[0]), y=float(position[1])
+            )
+
+        if hasattr(obj.shape, "w"):
+            _row_named("Size", "The object's width and height, in map pixels.")
+            changed, size = controls.input_float2(
+                "##obj-size", [float(obj.w), float(obj.h)]
+            )
+            if changed:
+                doc.set_object(
+                    layer.uid,
+                    obj.uid,
+                    shape=replace(
+                        obj.shape, w=float(size[0]), h=float(size[1])
+                    ),
+                )
+
+        _row_named(
+            "Rotation", "Degrees clockwise about the object's own origin."
+        )
+        changed, rotation = controls.input_float("##obj-rotation", float(obj.rotation))
+        if changed:
+            doc.set_object(layer.uid, obj.uid, rotation=float(rotation))
+
+        _row_named(
+            "Visible",
+            "Hides the object without removing it. Tiled carries the flag too.",
+        )
+        changed, visible = controls.checkbox("##obj-visible", bool(obj.visible))
+        if changed:
+            doc.set_object(layer.uid, obj.uid, visible=visible)
+
+        _row_named(
+            "Opacity", "This one object's opacity, multiplied into its layer's."
+        )
+        changed, opacity = controls.slider_float(
+            "##obj-opacity", float(obj.opacity), 0.0, 1.0
+        )
+        if changed:
+            doc.set_object(layer.uid, obj.uid, opacity=float(opacity))
+
+        _shape_fields(doc, layer, obj)
 
     imgui.dummy((0, 4))
     widgets.section("Properties")
@@ -990,31 +1188,57 @@ def _object_fields(ctx: Any, doc: Any, state: Any, layer: Any, obj: MapObject) -
         state.select_object(None)
 
 
+#: The text shape's boolean run, as one table. Six toggles that were six rows
+#: are one row of six checkboxes, which is what they are: a set of independent
+#: switches on one font, not six separate questions.
+TEXT_FLAGS: tuple[tuple[str, str], ...] = (
+    ("bold", "B"),
+    ("italic", "I"),
+    ("underline", "U"),
+    ("strikeout", "S"),
+    ("wrap", "Wrap"),
+    ("kerning", "Kern"),
+)
+
+
 def _shape_fields(doc: Any, layer: Any, obj: MapObject) -> None:
-    """Fields carried by tile and text geometry, replacing the frozen shape."""
+    """Fields carried by tile and text geometry, replacing the frozen shape.
+
+    Drawn **inside the caller's table**, which is why it opens none of its own:
+    a tile object's gid belongs in the same column of values as its position,
+    and a second table under the first would restart the alignment three rows
+    from the end of the form.
+    """
+    from imgui_bundle import imgui
+
     shape = obj.shape
     if isinstance(shape, TileShape):
         tile_id, flip_h, flip_v, flip_d = gidlib.decompose(shape.gid)
-        changed, value = controls.input_int(
-            "Tile gid",
-            tile_id,
-            1,
-            tooltip=(
-                "Which tile this object draws, as a global id across every "
-                "tileset in the map. The three flip flags are stored in the "
-                "high bits of the same number."
-            ),
+        _row_named(
+            "Tile",
+            "Which tile this object draws, as a global id across every tileset "
+            "in the map. The three flip flags are stored in the high bits of "
+            "the same number.",
         )
-        changed_h, next_h = widgets.toggle(
-            "Flip horizontal", flip_h, tooltip="Mirror the tile across."
+        changed, value = controls.input_int("##obj-gid", tile_id, 1)
+        _row_named(
+            "Flip",
+            "Across, down, and transposed. The three together make the quarter "
+            "turns.",
         )
-        changed_v, next_v = widgets.toggle(
-            "Flip vertical", flip_v, tooltip="Mirror the tile down."
+        changed_h, next_h = controls.checkbox(
+            "H##obj-flip-h", flip_h, tooltip="Mirror the tile across."
         )
-        changed_d, next_d = widgets.toggle(
-            "Flip diagonal",
+        imgui.same_line()
+        changed_v, next_v = controls.checkbox(
+            "V##obj-flip-v", flip_v, tooltip="Mirror the tile down."
+        )
+        imgui.same_line()
+        changed_d, next_d = controls.checkbox(
+            "D##obj-flip-d",
             flip_d,
-            tooltip="Transpose the tile. With the other two it makes the quarter turns.",
+            tooltip="Transpose the tile. With the other two it makes the "
+            "quarter turns.",
         )
         if changed or changed_h or changed_v or changed_d:
             try:
@@ -1031,28 +1255,38 @@ def _shape_fields(doc: Any, layer: Any, obj: MapObject) -> None:
     if not isinstance(shape, Text):
         return
 
+    _row_named("Text", "What the label reads.")
     text = widgets.input_text("##text-value", shape.text, max_length=2048, hint="text")
+    _row_named("Font", "The family name. Tiled resolves it; Plotter stores it.")
     family = widgets.input_text(
         "##text-family", shape.family, max_length=128, hint="font family"
     )
-    changed_size, pixel_size = controls.input_int("Pixel size", shape.pixel_size, 1)
+    _row_named("Size", "The font's pixel size.")
+    changed_size, pixel_size = controls.input_int("##text-size", shape.pixel_size, 1)
+    _row_named("Colour", "The colour the text is drawn in.")
     color = widgets.input_text("##text-color", shape.color, max_length=9, hint="#RRGGBB")
-    halign = widgets.labeled_combo(
-        "Horizontal",
+    _row_named("Align", "Horizontal, then vertical, within the object's box.")
+    halign = widgets.combo(
+        "##text-halign",
         shape.halign,
         [(value, value.title()) for value in ("left", "center", "right", "justify")],
     )
-    valign = widgets.labeled_combo(
-        "Vertical",
+    _row_named("", "")
+    valign = widgets.combo(
+        "##text-valign",
         shape.valign,
         [(value, value.title()) for value in ("top", "center", "bottom")],
     )
-    changed_wrap, wrap = widgets.toggle("Wrap", shape.wrap)
-    changed_bold, bold = widgets.toggle("Bold", shape.bold)
-    changed_italic, italic = widgets.toggle("Italic", shape.italic)
-    changed_underline, underline = widgets.toggle("Underline", shape.underline)
-    changed_strike, strikeout = widgets.toggle("Strikeout", shape.strikeout)
-    changed_kerning, kerning = widgets.toggle("Kerning", shape.kerning)
+    _row_named("Style", "Bold, italic, underline, strikeout, wrapping, kerning.")
+    flags: dict[str, bool] = {}
+    for index, (key, label) in enumerate(TEXT_FLAGS):
+        if index:
+            imgui.same_line()
+        changed_flag, value_flag = controls.checkbox(
+            f"{label}##text-{key}", bool(getattr(shape, key))
+        )
+        flags[key] = value_flag if changed_flag else getattr(shape, key)
+
     values = {
         "text": text,
         "family": family,
@@ -1060,12 +1294,7 @@ def _shape_fields(doc: Any, layer: Any, obj: MapObject) -> None:
         "color": color,
         "halign": halign,
         "valign": valign,
-        "wrap": wrap if changed_wrap else shape.wrap,
-        "bold": bold if changed_bold else shape.bold,
-        "italic": italic if changed_italic else shape.italic,
-        "underline": underline if changed_underline else shape.underline,
-        "strikeout": strikeout if changed_strike else shape.strikeout,
-        "kerning": kerning if changed_kerning else shape.kerning,
+        **flags,
     }
     if any(getattr(shape, key) != value for key, value in values.items()):
         doc.set_object(layer.uid, obj.uid, shape=replace(shape, **values))
@@ -1084,6 +1313,70 @@ def object_options(doc: Any) -> list[tuple[str, str]]:
     return entries
 
 
+def _prop_form(ctx: Any, form_key: str) -> dict:
+    """The half-typed new-key row and the selected row, scoped to one editor.
+
+    In ``ctx.state.preview`` rather than on the pane, which is the pattern the
+    resize and offset forms already follow: a draft must not be on the document,
+    and it must not be on the pane either or scrolling the row out of view would
+    lose it. ``form_key`` is what stops two editors drawn in one frame -- a
+    layer's and the map's -- sharing the name being typed into one of them.
+    """
+
+    form = ctx.state.preview.setdefault(
+        form_key, {"name": "", "type": "string", "selected": "", "folded": set()}
+    )
+    # Older sessions parked a two-key dict here; fill the rest in rather than
+    # replacing it, so a name half-typed across the upgrade survives.
+    form.setdefault("selected", "")
+    form.setdefault("folded", set())
+    return form
+
+
+def _prop_row_head(
+    name: str,
+    *,
+    depth: int = 0,
+    foldable: bool = False,
+    folded: bool = False,
+    selected: bool = False,
+) -> tuple[bool, bool]:
+    """Open a property row and draw its name cell. -> (picked, folded toggled).
+
+    The name is a **selectable** rather than muted text, which is what makes the
+    ``-`` in the footer possible: a remove button per row was a third control on
+    every line of a two-column table, and in a 300 px pane that is the column of
+    values gone. One selection and one button says the same thing in the space
+    of a name.
+    """
+    from imgui_bundle import imgui
+
+    imgui.table_next_row()
+    imgui.table_next_column()
+    indent = sp(GROUP_INDENT) * depth
+    if indent:
+        imgui.indent(indent)
+    toggled = False
+    if foldable:
+        glyph = icons.CHEVRON_RIGHT if folded else icons.CHEVRON_DOWN
+        toggled = widgets.small_icon_button(
+            glyph, "Fold / unfold this property", borderless=True
+        )
+    else:
+        # The same width the chevron takes, so every name in the column starts
+        # at the same x whether or not it folds. ``get_text_line_height`` is the
+        # side ``small_icon_button`` uses -- ``get_frame_height`` is wider and
+        # would ripple the column.
+        imgui.dummy((imgui.get_text_line_height(), 0))
+    imgui.same_line()
+    picked = bool(controls.selectable(f"{name}##prop-name", selected)[0])
+    if indent:
+        imgui.unindent(indent)
+    imgui.table_next_column()
+    imgui.set_next_item_width(-1)
+    return picked, toggled
+
+
 def property_editor(
     ctx: Any,
     form_key: str,
@@ -1100,21 +1393,63 @@ def property_editor(
     they are given, so writing into the owner's own dict would leave undo
     restoring the value it had already been changed to.
 
-    ``form_key`` scopes the half-typed new-key row in ``ctx.state.preview``, so
-    two editors drawn in one frame -- a layer's and the map's -- do not share
-    the name being typed into one of them.
-
-    It lives here rather than in ``widgets`` because this pane owns it and the
-    other two reach for it; a cross-pane import is house-normal, and moving it
-    would put a Tiled-shaped control in the generic widget set.
+    Drawn as Tiled's name/value table since wave C, with the ``+`` and ``-``
+    under it rather than a remove button on every row. It lives here rather than
+    in ``widgets`` because this pane owns it and the other two reach for it; a
+    cross-pane import is house-normal, and moving it would put a Tiled-shaped
+    control in the generic widget set.
     """
     from imgui_bundle import imgui
 
+    form = _prop_form(ctx, form_key)
+    with _table(f"##{form_key}/table") as opened:
+        if opened:
+            _prop_rows(
+                ctx, form_key, form, props, on_change, object_options=object_options
+            )
+    _prop_footer(ctx, form, props, on_change)
+    imgui.dummy((0, 2))
+
+
+def _prop_rows(
+    ctx: Any,
+    form_key: str,
+    form: dict,
+    props: dict[str, Prop],
+    on_change: Any,
+    *,
+    object_options: list[tuple[str, str]] | None = None,
+    depth: int = 0,
+    path: str = "",
+) -> None:
+    """One row per property, with a container's members indented under it.
+
+    Recursion stays **inside one table**, so a class member's value lines up
+    with its parent's rather than restarting the column. The imgui id scope is
+    pushed per row and popped after the members, which is what stops a nested
+    editor's ``##prop-name`` being the same id as its parent's -- the collision
+    that used to make typing into an inner row drive the outer one.
+    """
+    from imgui_bundle import imgui
+
+    folded = form["folded"]
     for key in sorted(props):
         prop = props[key]
-        imgui.push_id(f"prop-{key}")
-        widgets.muted(key)
-        imgui.same_line()
+        here = f"{path}/{key}"
+        imgui.push_id(f"prop-{here}")
+        container = prop.type in CONTAINER_TYPES
+        is_folded = here in folded
+        picked, toggled = _prop_row_head(
+            key,
+            depth=depth,
+            foldable=container,
+            folded=is_folded,
+            selected=form["selected"] == here,
+        )
+        if picked:
+            form["selected"] = here
+        if toggled:
+            folded.discard(here) if is_folded else folded.add(here)
         value = _value_editor(prop, object_options=object_options)
         if value is not None and value != prop.value:
             replacement = dict(props)
@@ -1125,72 +1460,114 @@ def property_editor(
                 type=prop.type, value=value, propertytype=prop.propertytype
             )
             on_change(replacement)
-        imgui.same_line()
-        if widgets.small_icon_button(icons.X, "Remove"):
-            replacement = dict(props)
-            replacement.pop(key, None)
-            on_change(replacement)
-
-        # The unfolded editors stay *inside* ``prop-{key}``. The pop used to be
-        # here, which put three separate collisions one line apart:
-        # ``##property-class`` was shared by every class property at the same
-        # level, and the recursive calls below re-entered this function outside
-        # any scope at all -- so a nested editor's ``##prop-name``,
-        # ``##prop-type`` and ``##add-prop`` were the *same* imgui ids as its
-        # parent's, and typing a new key into the inner row drove the outer one.
-        # ``form_key`` scopes the half-typed state in ``state.preview``, which
-        # is a different question from what imgui thinks the widget is.
-        if prop.type == "class" and widgets.header(
-            f"Edit {key}", default_open=False, persist_key=f"{form_key}/{key}/class"
-        ):
-            class_name = widgets.input_text(
-                "##property-class", prop.propertytype, max_length=64, hint="class name"
-            )
-            if class_name != prop.propertytype:
-                replacement = dict(props)
-                replacement[key] = Prop("class", prop.value, propertytype=class_name)
-                on_change(replacement)
-            property_editor(
+        if container and not is_folded:
+            _prop_children(
                 ctx,
-                f"{form_key}:{key}",
-                prop.value,
-                lambda values, key=key, prop=prop: on_change(
-                    {
-                        **props,
-                        key: Prop("class", values, propertytype=prop.propertytype),
-                    }
-                ),
+                form_key,
+                form,
+                prop,
+                key,
+                props,
+                on_change,
                 object_options=object_options,
-            )
-        elif prop.type == "list" and widgets.header(
-            f"Edit {key}", default_open=False, persist_key=f"{form_key}/{key}/list"
-        ):
-            _list_editor(
-                ctx,
-                f"{form_key}:{key}",
-                prop.value,
-                lambda values, key=key, prop=prop: on_change(
-                    {
-                        **props,
-                        key: Prop("list", values, propertytype=prop.propertytype),
-                    }
-                ),
-                object_options=object_options,
+                depth=depth,
+                path=here,
             )
         imgui.pop_id()
 
-    form = ctx.state.preview.setdefault(form_key, {"name": "", "type": "string"})
-    form["name"] = widgets.input_text("##prop-name", form["name"], max_length=48, hint="new key")
+
+def _prop_children(
+    ctx: Any,
+    form_key: str,
+    form: dict,
+    prop: Prop,
+    key: str,
+    props: dict[str, Prop],
+    on_change: Any,
+    *,
+    object_options: list[tuple[str, str]] | None = None,
+    depth: int,
+    path: str,
+) -> None:
+    """A class's members or a list's items, one level in."""
+
+    def replace_value(value: Any) -> None:
+        replacement = dict(props)
+        replacement[key] = Prop(
+            type=prop.type, value=value, propertytype=prop.propertytype
+        )
+        on_change(replacement)
+
+    if prop.type == "class":
+        _row_named("class", "The Tiled class this member set belongs to.",
+                   indent=sp(GROUP_INDENT) * (depth + 1))
+        class_name = widgets.input_text(
+            "##property-class", prop.propertytype, max_length=64, hint="class name"
+        )
+        if class_name != prop.propertytype:
+            replacement = dict(props)
+            replacement[key] = Prop(
+                type=prop.type, value=prop.value, propertytype=class_name
+            )
+            on_change(replacement)
+        _prop_rows(
+            ctx,
+            form_key,
+            form,
+            dict(prop.value),
+            replace_value,
+            object_options=object_options,
+            depth=depth + 1,
+            path=path,
+        )
+        return
+    for index, item in enumerate(list(prop.value)):
+        _row_named(
+            f"[{index}] {item.type}",
+            "",
+            indent=sp(GROUP_INDENT) * (depth + 1),
+        )
+        value = _value_editor(item, object_options=object_options)
+        if value is not None and value != item.value:
+            items = list(prop.value)
+            items[index] = Prop(
+                type=item.type, value=value, propertytype=item.propertytype
+            )
+            replace_value(items)
+
+
+def _prop_footer(ctx: Any, form: dict, props: dict[str, Prop], on_change: Any) -> None:
+    """The new-key row and the remove button, under the table.
+
+    ``-`` acts on the *selected* row rather than carrying its own per-row
+    button, and says so when nothing is selected. That is what buys the table
+    its value column back in a 300 px pane.
+
+    Nested selections are deliberately not removable from here: the path names a
+    member of a class or an item of a list, and removing one is a different
+    edit on a different container. The button refuses by name rather than
+    silently doing nothing.
+    """
+    from imgui_bundle import imgui
+
+    selected = str(form.get("selected") or "")
+    top_level = selected.startswith("/") and selected.count("/") == 1
+    name = selected[1:] if top_level else ""
+
+    form["name"] = widgets.input_text(
+        "##prop-name", form["name"], max_length=48, hint="new key"
+    )
     imgui.same_line()
-    imgui.set_next_item_width(sp(90))
+    imgui.set_next_item_width(sp(80))
     form["type"] = widgets.combo(
-        "##prop-type", form["type"], [(t, t) for t in AUTHORABLE_TYPES], width=sp(90)
+        "##prop-type", form["type"], [(t, t) for t in AUTHORABLE_TYPES], width=sp(80)
     )
     imgui.same_line()
     if widgets.disabled_button(
         f"{icons.PLUS}##add-prop",
         bool(form["name"].strip()),
         reason="Give the property a name first.",
+        tooltip="Add a property with this name and type",
     ):
         replacement = dict(props)
         replacement[form["name"].strip()] = Prop(
@@ -1198,6 +1575,21 @@ def property_editor(
         )
         on_change(replacement)
         form["name"] = ""
+    imgui.same_line()
+    if widgets.disabled_button(
+        f"{icons.MINUS}##remove-prop",
+        bool(name) and name in props,
+        reason=(
+            "Select a property to remove it."
+            if not selected
+            else "Only a top-level property can be removed here."
+        ),
+        tooltip=f"Remove {name}" if name else "Remove the selected property",
+    ):
+        replacement = dict(props)
+        replacement.pop(name, None)
+        form["selected"] = ""
+        on_change(replacement)
 
 
 def _properties(ctx: Any, doc: Any, layer: Any, obj: MapObject) -> None:
@@ -1268,86 +1660,6 @@ def _value_editor(
     # editor never resolves, so a text row is the whole control.
     text = widgets.input_text("##v", str(prop.value or ""), max_length=200)
     return text if text != str(prop.value or "") else None
-
-
-def _list_editor(
-    ctx: Any,
-    form_key: str,
-    items: list[Prop],
-    on_change: Any,
-    *,
-    object_options: list[tuple[str, str]] | None = None,
-) -> None:
-    """A typed list property, recursively and without mutating its live list."""
-    from imgui_bundle import imgui
-
-    for index, prop in enumerate(items):
-        imgui.push_id(f"item-{index}")
-        widgets.muted(f"[{index}] {prop.type}")
-        imgui.same_line()
-        value = _value_editor(prop, object_options=object_options)
-        if value is not None and value != prop.value:
-            replacement = list(items)
-            replacement[index] = Prop(prop.type, value, propertytype=prop.propertytype)
-            on_change(replacement)
-        imgui.same_line()
-        if widgets.small_icon_button(icons.X, "Remove item"):
-            replacement = list(items)
-            replacement.pop(index)
-            on_change(replacement)
-
-        # Inside ``item-{index}`` for ``property_editor``'s reason, and this
-        # one has the extra sting: a nested list's ``##item-type`` combo and
-        # its bare PLUS button were the parent list's ids exactly, so adding an
-        # item to an inner list added it to the outer one.
-        if prop.type == "class" and widgets.header(
-            f"Edit item {index}",
-            default_open=False,
-            persist_key=f"{form_key}/{index}/class",
-        ):
-            property_editor(
-                ctx,
-                f"{form_key}:{index}",
-                prop.value,
-                lambda values, index=index, prop=prop: on_change(
-                    [
-                        *items[:index],
-                        Prop("class", values, propertytype=prop.propertytype),
-                        *items[index + 1 :],
-                    ]
-                ),
-                object_options=object_options,
-            )
-        elif prop.type == "list" and widgets.header(
-            f"Edit item {index}",
-            default_open=False,
-            persist_key=f"{form_key}/{index}/list",
-        ):
-            _list_editor(
-                ctx,
-                f"{form_key}:{index}",
-                prop.value,
-                lambda values, index=index, prop=prop: on_change(
-                    [
-                        *items[:index],
-                        Prop("list", values, propertytype=prop.propertytype),
-                        *items[index + 1 :],
-                    ]
-                ),
-                object_options=object_options,
-            )
-        imgui.pop_id()
-
-    form = ctx.state.preview.setdefault(f"{form_key}:new-item", {"type": "string"})
-    form["type"] = widgets.combo(
-        "##item-type",
-        form["type"],
-        [(kind, kind) for kind in AUTHORABLE_TYPES],
-        width=sp(110),
-    )
-    imgui.same_line()
-    if widgets.small_icon_button(icons.PLUS, "Add item"):
-        on_change([*items, Prop(form["type"], _blank_value(form["type"]))])
 
 
 def add_object(

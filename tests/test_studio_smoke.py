@@ -5604,3 +5604,71 @@ def test_the_clay_hud_draws_its_widget_and_its_line(app_ctx, imgui_ctx):
     state.drag_kind = "move"
     _frame(imgui_ctx, lambda: clay_hud.hint_line(app_ctx))
     state.drag_kind = ""
+
+
+def test_the_plotter_properties_table_draws_every_branch(app_ctx, imgui_ctx):
+    """The name/value table, in each of the four things it can be showing.
+
+    Three of these have no other route to a frame: the map table draws only
+    with *no* layer selected, a folded container draws only once the chevron
+    has been pressed, and the ``-`` in the footer is live only with a top-level
+    row selected.
+    """
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_layers
+    from warlock.studio.plotter.tsx import Prop
+
+    imgui, _renderer = imgui_ctx
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    state = plotter_mode.ensure(app_ctx)
+    doc = tab.doc
+    layer = doc.tile_layers()[0]
+
+    title = "##props-table"
+
+    # 1. No layer at all -- the map's own table, which replaced a sentence
+    #    telling the user to go and select something.
+    doc.set_active_layer(None)
+    labels = _drawn_labels(imgui, lambda: plotter_layers.draw_properties(app_ctx), title)
+    # By the fields rather than by the table id: ``begin_table`` is not one of
+    # the id widgets ``_drawn_labels`` wraps, so what a table *is* has to be
+    # asserted through what it contains. The map branch draws the property
+    # editor and no layer fields; the layer branch is the other way round.
+    assert _index_of(labels, "##add-prop") >= 0, labels
+    assert _index_of(labels, "##layer-name") == -1, labels
+
+    # 2. A layer, with a class property and a list property on it.
+    doc.set_active_layer(layer.uid)
+    doc.set_layer_props(
+        layer.uid,
+        properties={
+            "theme": Prop("string", "cave"),
+            "loot": Prop("class", {"gold": Prop("int", 3)}, propertytype="Loot"),
+            "tags": Prop("list", [Prop("string", "wet")]),
+        },
+    )
+    labels = _drawn_labels(imgui, lambda: plotter_layers.draw_properties(app_ctx), title)
+    for field in ("##layer-name", "##layer-class", "##layer-opacity", "##layer-blend"):
+        assert _index_of(labels, field) >= 0, labels
+
+    # 3. The class unfolded, and one row selected so the ``-`` goes live.
+    form = plotter_layers._prop_form(app_ctx, f"plotter_layer_prop:{layer.uid}")
+    form["selected"] = "/theme"
+    _frame(imgui_ctx, lambda: plotter_layers.draw_properties(app_ctx))
+    # And folded, which is the other half of the chevron.
+    form["folded"].add("/loot")
+    _frame(imgui_ctx, lambda: plotter_layers.draw_properties(app_ctx))
+    # A nested selection, where the ``-`` refuses by name rather than acting.
+    form["folded"].discard("/loot")
+    form["selected"] = "/loot/gold"
+    _frame(imgui_ctx, lambda: plotter_layers.draw_properties(app_ctx))
+    form["selected"] = ""
+
+    # 4. Every object shape's own rows, which the layer branch never reaches.
+    objects = doc.add_object_layer()
+    doc.set_active_layer(objects.uid)
+    for kind in ("rect", "point", "ellipse", "text", "tile"):
+        obj = plotter_layers.add_object(doc, objects, kind, 8.0, 8.0, 16.0, 16.0)
+        state.select_object(obj.uid)
+        _frame(imgui_ctx, lambda: plotter_layers.draw_properties(app_ctx))
+    state.select_object(None)
