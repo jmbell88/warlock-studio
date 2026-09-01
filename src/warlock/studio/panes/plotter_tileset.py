@@ -221,17 +221,9 @@ def draw(ctx: Any) -> None:
     state.tileset_index = index
     ref = doc.tilesets[index]
     imgui.dummy((0, 4))
-    _zoom_row(ctx, state, tab, ref, index)
+    _tileset_bar(ctx, state, tab, ref, index)
     _picker(ctx, state, tab, ref, index, tab.uid, doc.tileset_epoch)
     _tile_form(ctx, state, tab, ref, index)
-
-    # Everything below here is about the pane's *contents* rather than about the
-    # brush, in the order the questions get asked: which tile (above), then how
-    # another tileset gets on, then how this one gets repainted.
-    imgui.dummy((0, 8))
-    add_button()
-    imgui.dummy((0, 4))
-    _inker_row(ctx, state, tab, index)
 
 
 #: The tab strip's id, and the filter box's key on ``AppState.list_filters``.
@@ -451,34 +443,116 @@ def _resolve_zoom(state: Any, tab: Any, tileset: Any, index: int, avail: float) 
     return zoom
 
 
-def _zoom_row(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
-    """Fit, out, in, and the percentage. The answer to "show me all of it".
+SOURCES_POPUP = "plotter-tileset-sources"
 
-    No combo, unlike the canvas footer's. A map's useful zoom is
-    percentage-shaped and fixed percentages serve it; a palette's depends on
-    the atlas *and* the pane width, both of which move, so a fixed list would
-    spend most of its rows offering scales that show nothing.
+
+def _tileset_bar(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
+    """Edit, the zoom group, and every way a tileset gets on or off the map.
+
+    One strip over the picker, where there used to be a zoom row above it and
+    a hundred pixels of full-width buttons *below* it -- *Add from a file...*,
+    *Polish in Inker* and one *Back onto...* per open Inker document. Those are
+    reached once a session and the picker is reached on every click, so they
+    were taking the bottom of the pane from the thing the pane is for. Behind
+    the ``+`` they cost one glyph.
+
+    **The zoom is Fit / out / in and no combo**, unlike the canvas footer's. A
+    map's useful zoom is percentage-shaped and fixed percentages serve it; a
+    palette's depends on the atlas *and* the pane width, both of which move, so
+    a fixed list would spend most of its rows offering scales that show nothing.
+
+    *Edit tileset* leads because it is the verb this pane could not reach at
+    all: the sheet was a Tileset-menu row, three clicks from the picker whose
+    tile you wanted to look at.
     """
     from imgui_bundle import imgui
 
-    zoom = tab.palette_zoom.get(index)
+    editable = not tab.busy
+    if widgets.disabled_button(
+        f"{icons.PENCIL} Edit",
+        editable,
+        reason=_BUSY_WHY,
+        tooltip="Open this tileset's sheet over the map: per-tile class, "
+        "properties, animation and terrain",
+    ):
+        plotter_mode.edit_tileset(ctx, index)
+    imgui.same_line()
     if controls.button("Fit", tooltip="Zoom so the whole tileset is on screen."):
         state.palette_zoom_fit = True
     imgui.same_line()
-    if widgets.small_icon_button(
-        icons.MINUS, "Zoom out (Ctrl+wheel over the palette)", borderless=True
+    if controls.button(
+        f"{icons.MINUS}##palette-zoom-out",
+        tooltip="Zoom out (Ctrl+wheel over the palette)",
     ):
         state.palette_zoom_rung = -1
     imgui.same_line()
-    if widgets.small_icon_button(
-        icons.PLUS, "Zoom in (Ctrl+wheel over the palette)", borderless=True
+    if controls.button(
+        f"{icons.PLUS}##palette-zoom-in",
+        tooltip="Zoom in (Ctrl+wheel over the palette)",
     ):
         state.palette_zoom_rung = 1
+    imgui.same_line()
+    if controls.button(
+        f"{icons.ELLIPSIS}##palette-sources",
+        tooltip="Add a tileset, reload this one, or repaint it in Inker",
+    ):
+        imgui.open_popup(SOURCES_POPUP)
+    _sources_popup(ctx, state, tab, ref, index)
+    zoom = tab.palette_zoom.get(index)
     if zoom:
         imgui.same_line()
         # The canvas footer's own spelling, so one number does not read two
         # ways in one mode.
         widgets.muted(f"{zoom * 100:.0f}%")
+
+
+def _sources_popup(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
+    """Where a tileset comes from, and where it goes to be repainted.
+
+    The four rows the pane used to draw as full-width buttons, in the order the
+    questions get asked: how another one gets on, how this one is re-read off
+    disk, and how it is repainted -- out to Inker and back onto the same
+    tileset, so every painted cell keeps its tile.
+
+    The pull direction copies ``packwright_sources._from_inker``: Plotter reaches
+    into Inker's open documents rather than Inker pushing into Plotter, so
+    neither mode has to know when the other is finished.
+    """
+
+    with controls.menu_popup(SOURCES_POPUP) as opened:
+        if not opened:
+            return
+        editable = not tab.busy
+        name = ref.tileset.name
+        if _menu_row("Add from a file...", editable):
+            plotter_mode.ask_add_tileset(ctx)
+        if _menu_row("Reload the image...", editable):
+            # The other half of *Polish in Inker*, for a paint program that is
+            # not Inker. Through ``MapDoc.replace_tileset``, so the ids, the
+            # firstgid and the declared terrains are kept and the map redraws
+            # rather than renumbering.
+            plotter_mode.ask_replace_tileset(ctx, index)
+        controls.menu_separator()
+        if _menu_row(f"{icons.BRUSH} Polish in Inker", editable):
+            plotter_mode.polish_in_inker(ctx, tab, index)
+        inker = getattr(ctx.state, "inker", None)
+        for entry in list(getattr(inker, "docs", []) or []):
+            row = f"{icons.IMAGE} Back onto {name}##ink-{entry.uid}"
+            if _menu_row(
+                row,
+                editable,
+                tooltip=f"Repaint {name} with {entry.title}. Every painted cell "
+                "keeps its tile.",
+            ):
+                plotter_mode.tileset_from_inker(ctx, entry.doc, index=index)
+
+
+def _menu_row(label: str, enabled: bool, *, tooltip: str = "") -> bool:
+    hit = controls.menu_item(
+        f"{label}##plotter-tileset-src", "", False, enabled,
+        reason=_BUSY_WHY, tooltip=tooltip,
+    )
+    return bool(hit[0] if isinstance(hit, tuple) else hit)
 
 
 def _picker(
@@ -645,32 +719,3 @@ def _palette_cell(tileset: Any, local: int) -> tuple[int, int]:
 
 
 # --- generating ---------------------------------------------------------------
-def _inker_row(ctx: Any, state: Any, tab: Any, index: int) -> None:
-    """Out to Inker to be painted, and back onto the same tileset.
-
-    The pull direction copies ``packwright_sources._from_inker``: Plotter reaches
-    into Inker's open documents rather than Inker pushing into Plotter, so
-    neither mode has to know when the other is finished.
-    """
-    from imgui_bundle import imgui
-
-    if widgets.disabled_button(
-        f"{icons.BRUSH} Polish in Inker", not tab.busy, (-1, 0), reason=_BUSY_WHY
-    ):
-        plotter_mode.polish_in_inker(ctx, tab, index)
-
-    inker = getattr(ctx.state, "inker", None)
-    docs = list(getattr(inker, "docs", []) or [])
-    if not docs:
-        return
-    imgui.dummy((0, 4))
-    widgets.muted("from Inker")
-    name = tab.doc.tilesets[index].tileset.name
-    for entry in docs:
-        label = f"{icons.IMAGE} Back onto {name}##ink-{entry.uid}"
-        if widgets.disabled_button(label, not tab.busy, (-1, 0), reason=_BUSY_WHY):
-            plotter_mode.tileset_from_inker(ctx, entry.doc, index=index)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                f"Repaint {name} with {entry.title}. Every painted cell keeps its tile."
-            )

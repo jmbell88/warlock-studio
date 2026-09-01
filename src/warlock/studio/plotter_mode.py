@@ -580,6 +580,71 @@ def go_to_cell(ctx: Any, tab: Any, column: int, row: int) -> tuple[int, int]:
     return cell
 
 
+def shift_layer(doc: Any, uid: int, delta: int) -> bool:
+    """Move a layer one place **within its own parent**, clamped at the ends.
+
+    -> whether it moved, so a caller can leave a button greyed rather than
+    offering a press that does nothing.
+
+    Here rather than in either pane because there are three surfaces onto it
+    now -- the Layer menu, the layer list's own footer bar and the row's
+    right-click menu -- and the awkward part is not the move but the *address*:
+    ``move_layer`` takes a position within a parent's children, so "up one" has
+    to be resolved against this layer's siblings rather than against
+    ``doc.layers``. A copy of that resolution per surface is a copy that will
+    disagree about a layer inside a group.
+    """
+
+    found = doc._locate(uid)
+    if found is None:
+        return False
+    _layer, parent_uid, _index = found
+    siblings = [layer.uid for layer in doc.children_of(parent_uid)]
+    if uid not in siblings:
+        return False
+    at = siblings.index(uid)
+    wanted = max(0, min(len(siblings) - 1, at + delta))
+    if wanted == at:
+        return False
+    doc.move_layer(uid, wanted)
+    return True
+
+
+def can_shift_layer(doc: Any, uid: int | None, delta: int) -> bool:
+    """Whether :func:`shift_layer` would move anything. The bar's grey rule.
+
+    Asked rather than attempted because the answer is wanted on every frame the
+    footer draws, and a button that is live at the top of the stack and does
+    nothing is the clickable lie the house pattern names.
+    """
+
+    if uid is None:
+        return False
+    found = doc._locate(uid)
+    if found is None:
+        return False
+    _layer, parent_uid, _index = found
+    siblings = [layer.uid for layer in doc.children_of(parent_uid)]
+    if uid not in siblings:
+        return False
+    at = siblings.index(uid)
+    return 0 <= at + delta < len(siblings)
+
+
+def edit_tileset(ctx: Any, index: int | None = None) -> None:
+    """Open the tileset sheet over the centre pane. ``None`` is the one in hand.
+
+    **By index**, which is what the sheet addresses: tileset order is firstgid
+    order, so an index is stable for as long as the list is. Two surfaces ask
+    for it -- the Tileset menu and the palette's own footer -- and a flag set in
+    two places is a flag that comes to be set two ways.
+    """
+
+    state = ensure(ctx)
+    wanted = state.tileset_index if index is None else int(index)
+    state.editing_tileset = max(0, wanted)
+
+
 def step_history(ctx: Any, tab: Any, index: int) -> bool:
     """Jump the document to a position in its undo stack.
 

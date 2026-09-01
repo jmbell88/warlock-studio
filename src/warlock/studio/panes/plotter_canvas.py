@@ -198,7 +198,7 @@ def draw(ctx: Any) -> None:
     # Above the grid so its edge reads against one, below the cursor so the
     # footprint stays the thing under the pointer.
     _marquee(state, tab, draw_list, (origin.x, origin.y))
-    _cursor(state, tab, draw_list, (origin.x, origin.y), hovered)
+    _cursor(ctx, state, tab, draw_list, (origin.x, origin.y), hovered)
     _minimap(ctx, state, tab, draw_list, (origin.x, origin.y), region)
     # Last, so the bands sit over everything they measure -- including the
     # minimap's corner, which is Inker's arrangement too.
@@ -479,35 +479,43 @@ def _create(ctx: Any, form: dict) -> None:
         plotter_mode.ask_add_tileset(ctx)
 
 
-def _status(ctx: Any, state: Any, tab: Any) -> None:
+def status_bits(state: Any, tab: Any) -> list[str]:
+    """The status line, as a list of readings. Pure -- no imgui, no drawing.
+
+    **In Tiled's order**, which is nearest-first: where the pointer is, what is
+    under it, what is selected, what you are painting on and with, and only then
+    the facts about the map that do not change while you work. It used to open
+    with the map's size and projection and finish with the cell coordinate --
+    the one reading that moves with the mouse, at the far end of the line.
+
+    The **tile under the pointer** is new, and it is the reading Tiled's status
+    bar is mostly used for: "which tile is this" was answerable only by picking
+    it up with the eyedropper and looking at where the palette selection jumped
+    to. Given as the tileset's own local id and the tileset's name, never the
+    gid: a gid is an artefact of how the map packs its tilesets together, and
+    the number the tile is called in the atlas is the one a person can act on.
+
+    A function so ``tests/plotter/test_status_bits.py`` can read the line
+    without a window, and so the reordering is a list comparison rather than a
+    screenshot.
+    """
+
     doc = tab.doc
     layer = doc.active()
-    name = layer.name if layer is not None else "no layer"
-    bits = [
-        f"{doc.width} x {doc.height}",
-        doc.projection,
-        f"{int(tab.view.zoom * 100)}%",
-        name,
-        f"tool {state.tool}",
-    ]
-    # The hovered cell is the affordance an isometric map actually needs:
-    # nothing on screen says which diamond you are in, so "did I click the one
-    # I meant" is otherwise unanswerable. Suppressed off-map so it cannot
-    # flicker while the pointer is over the chrome.
-    rect = state.select
-    if rect is not None:
-        # The size of the selection, which every tile editor puts here and this
-        # one never has: "how big is the block I am about to stamp" was
-        # answerable only by counting cells on screen. Inker's status bar has
-        # printed the same three numbers since W2.4.
-        x0, y0, x1, y1 = rect
-        bits.append(f"sel {x1 - x0 + 1} x {y1 - y0 + 1}")
+    bits: list[str] = []
     cell = state.hover_cell
-    if cell is not None and 0 <= cell[0] < doc.width and 0 <= cell[1] < doc.height:
-        bits.append(f"cell {cell[0]}, {cell[1]}")
+    # Suppressed off-map so the line cannot flicker while the pointer is over
+    # the chrome.
+    on_map = (
+        cell is not None and 0 <= cell[0] < doc.width and 0 <= cell[1] < doc.height
+    )
+    if on_map:
+        bits.append(f"{cell[0]}, {cell[1]}")
+        tile = _tile_bit(doc, layer, cell)
+        if tile:
+            bits.append(tile)
         if state.tool == "terrain":
             target = _terrain_ref(state, doc)
-            layer = doc.active()
             # Blob only: ``terrain_at`` reads a rank off the positional layout,
             # which is the one thing a foreign Wang set does not have. The Wang
             # answer would be a colour read out of the wangid, and it is not
@@ -517,12 +525,51 @@ def _status(ctx: Any, state: Any, tab: Any) -> None:
                 and target.wangset is None
                 and isinstance(layer, TileLayer)
             ):
-                rank = plotter_terrain.terrain_at(layer.data, cell[0], cell[1], target.ref)
+                rank = plotter_terrain.terrain_at(
+                    layer.data, cell[0], cell[1], target.ref
+                )
                 if rank is not None:
                     bits.append(target.ref.tileset.terrains[rank].name)
+    rect = state.select
+    if rect is not None:
+        # The size of the selection, which every tile editor puts here and this
+        # one never has: "how big is the block I am about to stamp" was
+        # answerable only by counting cells on screen. Inker's status bar has
+        # printed the same three numbers since W2.4.
+        x0, y0, x1, y1 = rect
+        bits.append(f"sel {x1 - x0 + 1} x {y1 - y0 + 1}")
+    bits.append(layer.name if layer is not None else "no layer")
+    bits.append(f"tool {state.tool}")
+    bits.append(f"{doc.width} x {doc.height}")
+    bits.append(doc.projection)
     if tab.busy:
         bits.append("saving")
-    widgets.muted("  --  ".join(bits))
+    return bits
+
+
+def _tile_bit(doc: Any, layer: Any, cell: tuple[int, int]) -> str:
+    """``tile <local id> (<tileset>)`` for the cell, or "" for an empty one.
+
+    Read off the **active** layer rather than off the topmost thing drawn there,
+    which is the answer to the question actually being asked: the status line
+    sits beside a tool that acts on the active layer, so a reading taken from a
+    layer above it would name a tile the next click is not going to replace.
+    """
+
+    if not isinstance(layer, TileLayer):
+        return ""
+    x, y = cell
+    if not (0 <= y < layer.data.shape[0] and 0 <= x < layer.data.shape[1]):
+        return ""
+    found = doc.resolve(int(layer.data[y, x]))
+    if found is None:
+        return ""
+    tileset, local = found
+    return f"tile {local} ({tileset.name})"
+
+
+def _status(ctx: Any, state: Any, tab: Any) -> None:
+    widgets.muted("  --  ".join(status_bits(state, tab)))
     _zoom_combo(tab)
 
 
@@ -779,6 +826,66 @@ def _blended(ctx: Any, tab: Any, doc: Any, draw_list: Any, origin, view) -> bool
     return True
 
 
+def _cell_quad(
+    doc: Any,
+    view: Any,
+    origin,
+    draw_list: Any,
+    entry: tuple[Any, Any],
+    tile_id: int,
+    mask: int,
+    column: int,
+    row: int,
+    shift: tuple[float, float],
+    tint: int,
+) -> bool:
+    """One tile, drawn into one lattice cell. -> whether anything was drawn.
+
+    ``entry`` is the ``(ref, texture)`` pair the caller has already resolved,
+    because the map loop resolves it through a per-frame memo and paying for
+    that lookup twice per cell is not what the extraction is for.
+
+    Lifted out of :func:`_layers`' inner loop so the **stamp ghost draws the
+    same picture the map does**. A second copy of this arithmetic is a second
+    copy of the two things it is easy to get wrong: the flip flags, which
+    permute the UV corners rather than the quad, and the bottom-left anchor --
+    a tileset whose tiles are larger than the map's grid is ordinary (a 32 px
+    map with 48 px trees) and Tiled grows such a tile *upward* out of its cell.
+    A ghost that got either wrong would preview something other than what the
+    click puts down, which is worse than no ghost.
+    """
+
+    ref, texture = entry
+    if texture is None:
+        return False
+    local = ref.local(tile_id)
+    corners = _corner_uvs(
+        ref.tileset.uv(local),
+        bool(mask & gidlib.FLIP_H),
+        bool(mask & gidlib.FLIP_V),
+        bool(mask & gidlib.FLIP_D),
+    )
+    px, py = doc.cell_origin(column, row)
+    own_w, own_h = ref.tileset.tile_size(local)
+    p0 = inker_state.to_screen(
+        view, origin, px + shift[0], py + shift[1] + (doc.tile_h - own_h)
+    )
+    p2 = (p0[0] + own_w * view.zoom, p0[1] + own_h * view.zoom)
+    draw_list.add_image_quad(
+        widgets.texture_ref(texture),
+        p0,
+        (p2[0], p0[1]),
+        p2,
+        (p0[0], p2[1]),
+        corners[0],
+        corners[1],
+        corners[2],
+        corners[3],
+        tint,
+    )
+    return True
+
+
 def _layers(
     ctx: Any,
     state: Any,
@@ -800,11 +907,8 @@ def _layers(
 
     doc = tab.doc
     view = tab.view
-    zoom = view.zoom
-    # Only the height: a tile's own width is read per tile now (a collection's
-    # tiles differ), and the grid height is what the bottom-left anchor is
-    # measured from.
-    tile_h = doc.tile_h
+    # The zoom and the grid height moved into ``_cell_quad`` with the quad
+    # arithmetic they belonged to; both are read off ``view`` and ``doc`` there.
     resolved = plotter_scene.resolve(doc)
     # ImGui's draw list can tint a texture but has no per-quad blend-mode
     # switch, so the only way to show a non-normal mode is the flat renderer's
@@ -909,43 +1013,17 @@ def _layers(
                 memo[tile_id] = index
             if index is None:
                 continue
-            ref, texture = refs[index]
-            if texture is None:
-                continue
-            local = ref.local(tile_id)
-            uv = ref.tileset.uv(local)
-            mask = int(flags[row, column])
-            corners = _corner_uvs(
-                uv,
-                bool(mask & gidlib.FLIP_H),
-                bool(mask & gidlib.FLIP_V),
-                bool(mask & gidlib.FLIP_D),
-            )
-            px, py = doc.cell_origin(c0 + column, r0 + row)
-            # **The tile's own size, anchored bottom-left**, which is what
-            # ``render.py`` has always done and this loop did not: a tileset
-            # whose tiles are larger than the map's grid is ordinary -- a 32px
-            # map with 48px trees -- and Tiled grows such a tile *upward* out of
-            # its cell. Identical to the old arithmetic whenever the tile is the
-            # grid size, which is every sliced atlas.
-            own_w, own_h = ref.tileset.tile_size(local)
-            p0 = inker_state.to_screen(
+            _cell_quad(
+                doc,
                 view,
                 origin,
-                px + shift[0],
-                py + shift[1] + (tile_h - own_h),
-            )
-            p2 = (p0[0] + own_w * zoom, p0[1] + own_h * zoom)
-            draw_list.add_image_quad(
-                widgets.texture_ref(texture),
-                p0,
-                (p2[0], p0[1]),
-                p2,
-                (p0[0], p2[1]),
-                corners[0],
-                corners[1],
-                corners[2],
-                corners[3],
+                draw_list,
+                refs[index],
+                tile_id,
+                int(flags[row, column]),
+                c0 + column,
+                r0 + row,
+                shift,
                 tint,
             )
 
@@ -1424,12 +1502,30 @@ def _marquee(state: Any, tab: Any, draw_list: Any, origin) -> None:
     )
 
 
-def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None:
-    """The brush footprint under the pointer.
+#: How faint the stamp ghost is drawn. Half: enough to read the tiles as tiles
+#: and not enough to be mistaken for cells that are already on the map, which is
+#: the one way a preview can be worse than none.
+GHOST_ALPHA = 0.5
 
-    Drawn from the *brush's* shape rather than one cell, so a 3x2 stamp shows
-    what it is about to cover -- which is the only way to place one without
-    guessing.
+#: The wash under the cell the pointer is in. A tenth, which is under the
+#: selection wash (0.14) on purpose -- the hovered cell is not a selected one,
+#: and two tints of the same weight would read as the same state.
+HOVER_ALPHA = 0.1
+
+
+def _cursor(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None:
+    """What the click is about to do, under the pointer.
+
+    Three things, in the order they are read: a wash on the cell the pointer is
+    actually in, the brush's own tiles faintly where they would land, and the
+    footprint outline over both.
+
+    The footprint is drawn from the *brush's* shape rather than one cell, so a
+    3x2 stamp shows what it is about to cover -- which is the only way to place
+    one without guessing. **Except in random mode**, where it is one cell, and
+    that is a fix rather than a special case: ``tools.random_stamp`` chooses one
+    gid out of the stamp and places it at the cell, so the 3x2 outline was
+    promising an area that six presses would paint one cell of.
     """
     from imgui_bundle import imgui
 
@@ -1440,7 +1536,8 @@ def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None
         return
     doc, view = tab.doc, tab.view
     columns, rows = 1, 1
-    if state.tool == "stamp" and state.brush is not None:
+    stamping = state.tool == "stamp" and state.brush is not None
+    if stamping and not state.random_mode:
         rows, columns = state.brush.shape
     # Drawn where the *active layer* is drawn, because that is the layer the
     # cell under the pointer belongs to -- ``_cell_under`` already took this
@@ -1467,6 +1564,23 @@ def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None
             imgui.ImDrawFlags_.closed.value,
         )
 
+    def fill(at: tuple[int, int], alpha: float) -> None:
+        """The wash under one cell. The affordance an isometric map needs most:
+        nothing else on screen says which diamond the pointer is in, so "did I
+        click the one I meant" was answerable only after the click."""
+        quad = [
+            inker_state.to_screen(view, origin, *_shifted(doc.cell_corner(cx, cy), shift))
+            for cx, cy in (
+                (at[0], at[1]),
+                (at[0] + 1, at[1]),
+                (at[0] + 1, at[1] + 1),
+                (at[0], at[1] + 1),
+            )
+        ]
+        draw_list.add_convex_poly_filled(
+            quad, imgui.get_color_u32((1.0, 1.0, 1.0, alpha))
+        )
+
     # A shape drag in progress: outline what would land at release. The rect
     # tool this replaced had no preview at all, so the only way to place one was
     # to draw it and undo.
@@ -1489,7 +1603,78 @@ def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None
     if _line_pending(state, imgui.get_io()):
         for step in plotter_tools.line(*state.last_paint, cell[0], cell[1])[:-1]:
             outline(step, 0.3)
+
+    # Under everything else, and only where a cell is what lands: an insert tool
+    # on an object layer places a shape at a point, so washing a cell would name
+    # a grid the gesture does not use.
+    if not state.tool.startswith("object"):
+        fill(cell, HOVER_ALPHA)
+    if stamping:
+        _ghost(ctx, state, tab, draw_list, origin, cell, shift)
     outline(cell, 0.75)
+
+
+def _ghost(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, cell, shift) -> None:
+    """The brush's own tiles, faint, where the click would put them.
+
+    Tiled shows the stamp under the pointer and this showed a rectangle, so
+    placing a 3x2 block of roof meant knowing which corner of it the pointer
+    held. Through :func:`_cell_quad`, so the preview is the same drawing the map
+    makes -- flips and oversized tiles included, which is exactly what a second
+    copy of the arithmetic would get wrong.
+
+    Bounded by the brush: at most the cells the user captured, once per frame,
+    and nothing at all while a drag is in flight (the paint is already on the
+    map, and a ghost over it would read as a second, unplaced copy).
+    """
+    from imgui_bundle import imgui
+
+    if state.drag_kind:
+        return
+    brush = state.brush
+    doc = tab.doc
+    memo = _index_memo(tab.uid, doc.tileset_epoch)
+    tint = imgui.get_color_u32((1.0, 1.0, 1.0, GHOST_ALPHA))
+    rows, columns = brush.shape
+    for row in range(rows):
+        for column in range(columns):
+            value = int(brush[row, column])
+            tile_id = value & gidlib.GID_MASK
+            if not tile_id:
+                continue
+            index = memo.get(tile_id, _UNMEMOISED)
+            if index is _UNMEMOISED:
+                index = None
+                for candidate, ref in enumerate(doc.tilesets):
+                    if ref.holds(tile_id):
+                        index = candidate
+                        break
+                memo[tile_id] = index
+            if index is None:
+                continue
+            ref = doc.tilesets[index]
+            texture = plotter_textures.tileset_texture(
+                ctx, tab.uid, index, ref.tileset, doc.tileset_epoch
+            )
+            _cell_quad(
+                doc,
+                tab.view,
+                origin,
+                draw_list,
+                (ref, texture),
+                tile_id,
+                value,
+                cell[0] + column,
+                cell[1] + row,
+                shift,
+                tint,
+            )
+            if state.random_mode:
+                # One tile, because one is what lands: the stamp is a palette in
+                # this mode rather than a block. The first non-empty one stands
+                # for the set, since which of them arrives is not knowable until
+                # the click.
+                return
 
 
 # How many segments an ellipse preview is drawn with. Past about this the

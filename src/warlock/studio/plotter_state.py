@@ -574,6 +574,14 @@ class PlotterState:
     # The cell under the pointer, for the status line. View state, recomputed
     # every frame and never persisted; ``None`` when the pointer is elsewhere.
     hover_cell: tuple[int, int] | None = None
+
+    #: The layer whose name is being typed in the list, by uid, or 0.
+    #:
+    #: A uid rather than an index, for the reason every address in this package
+    #: is one: the list reorders under a drag and a rename in flight must not
+    #: follow the position. ``ClayState.renaming`` is the same field for the
+    #: same reason. View state -- dropped with the document, never serialized.
+    renaming_layer: int = 0
     # The objects under the cursor's attention, by uid. View state: not
     # undoable and not persisted, exactly as Clay's element selection is.
     #
@@ -742,6 +750,9 @@ class PlotterState:
         self.sheet_import_open = False
         # Names a cell in the document being left, ``last_paint``'s own reason.
         self.goto_cell = None
+        # Names a layer of the document being left. Carried across, the new
+        # map's first layer would open with a text field on it.
+        self.renaming_layer = 0
 
     def cycle(self, step: int = 1) -> None:
         if len(self.docs) < 2:

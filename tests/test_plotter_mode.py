@@ -3663,3 +3663,74 @@ def test_the_tileset_menu_has_a_reload_row_that_acts(monkeypatch):
     )
     _menu_rows(ctx, state, tab, "Tileset", "Reload the image...", monkeypatch)
     assert seen == [0]
+
+
+# --- the doors the bars and the menus share ---------------------------------
+
+
+def test_shift_layer_moves_within_the_parent_and_clamps_at_the_ends():
+    """"Up one" is a position within a *parent's* children, not within
+    ``doc.layers`` -- which is why this is a mode door rather than three lines
+    copied into the Layer menu, the layer bar and the row menu."""
+    ctx = FakeCtx()
+    tab = plotter_mode.new_document(ctx, (8, 8, 16, 16))
+    doc = tab.doc
+    lower = doc.tile_layers()[0]
+    upper = doc.add_tile_layer()
+
+    assert plotter_mode.shift_layer(doc, lower.uid, 1)
+    assert [layer.uid for layer in doc.layers] == [upper.uid, lower.uid]
+    # And at the top it refuses rather than silently doing nothing.
+    assert not plotter_mode.shift_layer(doc, lower.uid, 1)
+
+
+def test_shift_layer_keeps_a_grouped_layer_inside_its_group():
+    ctx = FakeCtx()
+    tab = plotter_mode.new_document(ctx, (8, 8, 16, 16))
+    doc = tab.doc
+    group = doc.add_group_layer()
+    first = doc.add_tile_layer()
+    second = doc.add_tile_layer()
+    doc.move_layer(first.uid, 0, parent_uid=group.uid)
+    doc.move_layer(second.uid, 1, parent_uid=group.uid)
+
+    assert plotter_mode.shift_layer(doc, first.uid, 1)
+    assert [layer.uid for layer in doc.children_of(group.uid)] == [
+        second.uid,
+        first.uid,
+    ]
+    assert group.uid in [layer.uid for layer in doc.layers], "still in the group"
+
+
+def test_can_shift_layer_is_the_bars_grey_rule():
+    """Asked rather than attempted, because the answer is wanted on every frame
+    the footer draws and a button that is live and does nothing is the
+    clickable lie the house pattern names."""
+    ctx = FakeCtx()
+    tab = plotter_mode.new_document(ctx, (8, 8, 16, 16))
+    doc = tab.doc
+    lower = doc.tile_layers()[0]
+    upper = doc.add_tile_layer()
+
+    assert plotter_mode.can_shift_layer(doc, lower.uid, 1)
+    assert not plotter_mode.can_shift_layer(doc, lower.uid, -1)
+    assert plotter_mode.can_shift_layer(doc, upper.uid, -1)
+    assert not plotter_mode.can_shift_layer(doc, upper.uid, 1)
+    assert not plotter_mode.can_shift_layer(doc, None, 1), "no layer, no move"
+    assert not plotter_mode.can_shift_layer(doc, 999999, 1), "a uid nothing answers to"
+
+
+def test_edit_tileset_opens_the_sheet_by_index_and_defaults_to_the_one_in_hand():
+    ctx = FakeCtx()
+    tab = plotter_mode.new_document(ctx, (8, 8, 16, 16))
+    state = plotter_mode.ensure(ctx)
+    assert state.editing_tileset is None
+
+    plotter_mode.edit_tileset(ctx, 2)
+    assert state.editing_tileset == 2
+
+    state.editing_tileset = None
+    state.tileset_index = 1
+    plotter_mode.edit_tileset(ctx)
+    assert state.editing_tileset == 1, "no index means the one the picker shows"
+    assert tab is not None

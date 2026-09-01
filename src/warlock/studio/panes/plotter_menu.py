@@ -163,27 +163,14 @@ def _layer_rows(ctx: Any, state: Any, tab: Any) -> None:
         enabled=ready and many and active is not None,
         reason=BUSY,
     ):
-        _shift(doc, active, 1)
+        plotter_mode.shift_layer(doc, active, 1)
     if _row(
         "Lower layer",
         "Ctrl+Shift+Down",
         enabled=ready and many and active is not None,
         reason=BUSY,
     ):
-        _shift(doc, active, -1)
-
-
-def _shift(doc: Any, uid: int, delta: int) -> None:
-    """Move a layer one place within its own parent, clamped at the ends."""
-    found = doc._locate(uid)
-    if found is None:
-        return
-    _layer, parent_uid, _index = found
-    siblings = [layer.uid for layer in doc.children_of(parent_uid)]
-    if uid not in siblings:
-        return
-    at = siblings.index(uid)
-    doc.move_layer(uid, max(0, min(len(siblings) - 1, at + delta)))
+        plotter_mode.shift_layer(doc, active, -1)
 
 
 def _tileset_rows(ctx: Any, state: Any, tab: Any) -> None:
@@ -209,7 +196,6 @@ def _tileset_rows(ctx: Any, state: Any, tab: Any) -> None:
         enabled=ready and tilesets,
         reason=BUSY if not ready else NO_TILESET,
     ):
-        # The sheet over the centre pane; see ``plotter_tileset_editor``.
-        # By *index*, which is what the sheet addresses: order is firstgid
-        # order, so an index is stable for as long as the list is.
-        state.editing_tileset = max(0, state.tileset_index)
+        # The sheet over the centre pane; see ``plotter_tileset_editor``. The
+        # palette's own footer opens the same one through the same door.
+        plotter_mode.edit_tileset(ctx)

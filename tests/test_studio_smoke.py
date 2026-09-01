@@ -4767,8 +4767,14 @@ def test_plotter_tileset_pane_leads_with_the_picker(app_ctx, imgui_ctx):
     which put ways of *acquiring* a tileset above the picker for the one
     already loaded -- so the control used on every single click sat below
     controls used once per map. The generators were retired on 2026-08-18 when
-    tile sheets moved to Create; the ordering rule they motivated still holds
-    for the two doors that remain.
+    tile sheets moved to Create.
+
+    The ordering rule is satisfied more strongly since the footer bar landed:
+    the acquisition doors are not in the column at all. They were about a
+    hundred pixels of full-width buttons *below* the picker -- one per open
+    Inker document -- and they are four rows behind the bar's ``...`` now, at
+    the cost of one glyph. So what this asserts is that the strip leads, the
+    bar follows it, and none of the four is drawn in the column.
     """
     from warlock.studio import plotter_mode
     from warlock.studio.panes import plotter_tileset
@@ -4785,12 +4791,14 @@ def test_plotter_tileset_pane_leads_with_the_picker(app_ctx, imgui_ctx):
     # a combo's two -- so what leads the pane is the strip and its first tab.
     picker = _index_of(labels, plotter_tileset.TABS)
     assert _index_of(labels, "terrain###ts0") >= 0, labels
-    add = _index_of(labels, "Add from a file")
-    assert picker >= 0 and add >= 0, labels
-    assert picker < add, f"the tileset picker must precede Add from a file: {labels}"
-    assert add < _index_of(labels, "Polish in Inker"), (
-        f"the Inker row comes after the file door: {labels}"
-    )
+    assert picker >= 0, labels
+    bar = _index_of(labels, "Fit")
+    assert bar > picker, f"the strip leads and the bar follows it: {labels}"
+    # And the picker itself comes after the bar rather than under a column of
+    # buttons: the bar is one row, which is what buys the picker the pane.
+    assert _index_of(labels, "##palette-sources") > picker, labels
+    for gone in ("Add from a file", "Polish in Inker", "Reload the image"):
+        assert _index_of(labels, gone) == -1, f"{gone} belongs behind the ...: {labels}"
     # Nothing in Plotter generates a tileset any more.
     assert _index_of(labels, "Generate a ground set") == -1, labels
 
@@ -5372,3 +5380,96 @@ def test_the_palette_folder_browser_says_so_when_the_folder_is_empty(
     probe.begin_frame()
     _frame(imgui_ctx, build)
     assert "Load" in [one.text for one in probe.census()]
+
+
+def test_the_plotter_layer_bar_and_the_rename_field_both_render(app_ctx, imgui_ctx):
+    """Two branches of the layers pane with no other route to a frame.
+
+    The bar is where every layer verb lives since wave B -- add, duplicate,
+    raise, lower, lock, delete -- and the rename field replaces the row's label
+    while it is being typed. Neither draws unless it is asked for, so neither
+    rasterises in the workspace frame above.
+    """
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_layers
+
+    imgui, _renderer = imgui_ctx
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    state = plotter_mode.ensure(app_ctx)
+    layer = tab.doc.tile_layers()[0]
+    tab.doc.set_active_layer(layer.uid)
+
+    title = "##layer-bar"
+    labels = _drawn_labels(imgui, lambda: plotter_layers.draw(app_ctx), title)
+    for key in ("##plotter-layer-add", "##plotter-layer-dup", "##plotter-layer-del"):
+        assert _index_of(labels, key) >= 0, labels
+    # The bar is under the list, which is the whole point of the footer child:
+    # thirty layers must not push Delete off the bottom of the pane.
+    assert _index_of(labels, "##plotter-layer-add") > _index_of(
+        labels, f"plotter-layer/{layer.uid}"
+    ), labels
+
+    # And the rename branch, which swaps the label for a field.
+    state.renaming_layer = int(layer.uid)
+    labels = _drawn_labels(imgui, lambda: plotter_layers.draw(app_ctx), title)
+    assert _index_of(labels, f"##plotter-rename-{layer.uid}") >= 0, labels
+    # A second frame, so the field is drawn with a draft already parked rather
+    # than only on the frame that creates one.
+    _drawn_labels(imgui, lambda: plotter_layers.draw(app_ctx), title)
+    state.renaming_layer = 0
+
+    # A saving tab greys the bar rather than hiding it, and the rename field is
+    # not offered at all -- a text box that discards what is typed is worse
+    # than one that is not there.
+    # ``busy`` is derived from ``saving``, which is the flag a save sets.
+    tab.saving = True
+    state.renaming_layer = int(layer.uid)
+    _drawn_labels(imgui, lambda: plotter_layers.draw(app_ctx), title)
+    tab.saving = False
+    state.renaming_layer = 0
+
+
+def test_the_plotter_stamp_ghost_draws_the_brush_under_the_pointer(app_ctx, imgui_ctx):
+    """The cursor's three parts, which need a *hovered* canvas to run at all.
+
+    The workspace frame above never puts the pointer over the map, so the hover
+    wash, the ghost and the footprint outline had no route to a frame -- and the
+    ghost resolves tilesets and uploads textures, which is exactly the kind of
+    code a smoke frame exists to execute.
+    """
+    import numpy as np
+
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_canvas
+    from warlock.studio.tilegrid import gid
+
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    state = plotter_mode.ensure(app_ctx)
+    ref = tab.doc.add_tileset(_tileset())
+    # A 2x2 brush with a hole and a flipped corner: the ghost draws each cell
+    # through ``_cell_quad``, so the flag path is what a second copy of the
+    # arithmetic would get wrong.
+    state.brush = np.array(
+        [
+            [gid.compose(ref.firstgid), 0],
+            [gid.compose(ref.firstgid + 1, flip_h=True), gid.compose(ref.firstgid + 2)],
+        ],
+        gid.DTYPE,
+    )
+    state.tool = "stamp"
+
+    def build() -> None:
+        plotter_canvas.draw(app_ctx)
+
+    # Over the middle of the host window, which is where the canvas is.
+    _click(imgui_ctx, build, (400, 400))
+    # Random mode draws one tile rather than the block, because one is what
+    # lands -- the other branch of the ghost.
+    state.random_mode = True
+    _click(imgui_ctx, build, (400, 400))
+    state.random_mode = False
+    # And every other tool's wash, which is the branch that is not the stamp.
+    for tool in ("erase", "fill", "select", "wand"):
+        state.tool = tool
+        _click(imgui_ctx, build, (400, 400))
+    state.tool = "stamp"

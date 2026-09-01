@@ -64,7 +64,35 @@ LAYERS_FLOOR = 140.0
 PROPERTIES_FLOOR = 160.0
 
 
+#: The kinds a layer can be added as, in the order the ``+`` menu offers them.
+#: Tiled's own order and Tiled's own four. A table because the menu and the
+#: Layer menu both name them, and two lists would come to hold three each.
+ADD_KINDS: tuple[tuple[str, str, str], ...] = (
+    ("tile", "Tile layer", "add_tile_layer"),
+    ("object", "Object layer", "add_object_layer"),
+    ("group", "Group", "add_group_layer"),
+    ("image", "Image layer", "add_image_layer"),
+)
+
+ADD_POPUP = "plotter-layer-add"
+
+
 def draw(ctx: Any) -> None:
+    """The layer stack: the active layer's opacity, the list, and the bar.
+
+    **Tiled's three parts, in Tiled's order.** The four *Add* buttons used to
+    be a 2x2 grid across the top of the pane -- 68 px of the panel spent on the
+    thing done once per map, above the list that is read on every click -- and
+    the opacity of the layer in hand was a slider in the Properties pane on the
+    other side of the window. Both are wrong the same way round: the frequent
+    control was below the rare one.
+
+    So the opacity leads, the list takes everything that is left, and the verbs
+    are a footer bar under it. The bar is the ``settings_2d`` footer pattern --
+    ``begin_child`` at ``(0, -bar_h)`` so the list scrolls and the bar stays
+    put, which is what stops a map with thirty layers pushing Delete off the
+    bottom of the pane.
+    """
     from imgui_bundle import imgui
 
     state = plotter_mode.ensure(ctx)
@@ -80,31 +108,147 @@ def draw(ctx: Any) -> None:
 
     doc = tab.doc
     editable = not tab.busy
-    width = widgets.grid_width(2)
-    if widgets.disabled_button(f"{icons.PLUS} Tiles", editable, (width, 0), reason=_BUSY_WHY):
-        doc.add_tile_layer()
-    imgui.same_line()
-    if widgets.disabled_button(
-        f"{icons.FLAG} Objects", editable, (width, 0), reason=_BUSY_WHY
-    ):
-        doc.add_object_layer()
-    if widgets.disabled_button(
-        f"{icons.FOLDER_OPEN} Group", editable, (width, 0), reason=_BUSY_WHY
-    ):
-        doc.add_group_layer()
-    imgui.same_line()
-    if widgets.disabled_button(
-        f"{icons.IMAGE} Image", editable, (width, 0), reason=_BUSY_WHY
-    ):
-        doc.add_image_layer()
+    layer = doc.layer(doc.active_layer) if doc.active_layer is not None else None
+    _opacity_row(doc, layer, editable)
 
     # The "Insert" combo that stood here is the object palette's tools now
     # (W3.2): eight kinds behind a dropdown, on a pane that is about layers,
     # when Tiled makes each of them a tool. ``state.object_shape`` is still the
     # stored answer -- ``sync_tool`` writes it from the tool in hand.
-    imgui.dummy((0, 4))
-    for layer in reversed(doc.layers):
-        _row(ctx, doc, state, tab, layer, editable)
+    bar_h = imgui.get_frame_height() + imgui.get_style().item_spacing.y
+    if imgui.begin_child("##plotter-layer-list", (0.0, -bar_h)):
+        for entry in reversed(doc.layers):
+            _row(ctx, doc, state, tab, entry, editable)
+    imgui.end_child()
+    _layer_bar(ctx, state, doc, layer, editable)
+
+
+def _opacity_row(doc: Any, layer: Any, editable: bool) -> None:
+    """The active layer's opacity, over the list rather than across the window.
+
+    Tiled's placement, and the argument is the gesture: opacity is reached for
+    *while looking at the stack* -- "which of these is washing the others out"
+    -- and the Properties pane is now on the far side of the map. It stays in
+    Properties too, because that pane is the full account of what a layer
+    carries and a field missing from it would be a field with no home.
+    """
+
+    if layer is None:
+        widgets.muted("No layer selected")
+        return
+    changed, opacity = widgets.labeled_slider_float(
+        "Opacity",
+        float(getattr(layer, "opacity", 1.0)),
+        0.0,
+        1.0,
+        help_text="How strongly this layer draws over the ones below it.",
+    )
+    if changed and editable:
+        doc.set_layer_props(layer.uid, opacity=float(opacity))
+
+
+def _layer_bar(ctx: Any, state: Any, doc: Any, layer: Any, editable: bool) -> None:
+    """Add, duplicate, raise, lower, lock, delete -- the strip under the list.
+
+    Glyphs through ``widgets.small_icon_button`` would be invisible to
+    ``probe``; these are ``controls.button`` and ``widgets.disabled_button``,
+    which is the same rule the toolbar's tool pill follows and for the same
+    reason -- a bar button that stopped working could not otherwise be caught
+    by a test that presses it.
+
+    Every button that can refuse says why. "A map keeps at least one layer" is
+    Delete's, and it is the sentence the Layer menu already used: one refusal,
+    one wording, wherever it is met.
+    """
+    from imgui_bundle import imgui
+
+    uid = None if layer is None else layer.uid
+    many = len(doc.layers) > 1
+    if controls.button(f"{icons.PLUS}##plotter-layer-add", tooltip="Add a layer"):
+        imgui.open_popup(ADD_POPUP)
+    _add_popup(ctx, doc, editable)
+    imgui.same_line()
+    if widgets.disabled_button(
+        f"{icons.COPY}##plotter-layer-dup",
+        editable and uid is not None,
+        reason=_BUSY_WHY if not editable else "Select a layer first.",
+        tooltip="Duplicate this layer",
+    ):
+        doc.duplicate_layer(uid)
+    imgui.same_line()
+    for glyph, delta, verb in (
+        (icons.ARROW_UP, 1, "Raise"),
+        (icons.ARROW_DOWN, -1, "Lower"),
+    ):
+        can = editable and plotter_mode.can_shift_layer(doc, uid, delta)
+        if widgets.disabled_button(
+            f"{glyph}##plotter-layer-{verb.lower()}",
+            can,
+            reason=_BUSY_WHY
+            if not editable
+            else "This layer is already at the end of its group.",
+            tooltip=f"{verb} this layer",
+        ):
+            plotter_mode.shift_layer(doc, uid, delta)
+        imgui.same_line()
+    locked = bool(getattr(layer, "locked", False))
+    if widgets.disabled_button(
+        f"{icons.LOCK if locked else icons.LOCK_OPEN}##plotter-layer-lock",
+        editable and uid is not None,
+        reason=_BUSY_WHY if not editable else "Select a layer first.",
+        tooltip="Lock / unlock painting on this layer",
+    ):
+        doc.set_layer_props(uid, locked=not locked)
+    imgui.same_line()
+    # ``controls.button`` rather than ``widgets.disabled_button`` for this one
+    # alone: it is the destructive verb on the bar and wants the role paint,
+    # which ``disabled_button`` has no argument for. Same chokepoint either way,
+    # so ``probe`` sees it.
+    if controls.button(
+        f"{icons.TRASH}##plotter-layer-del",
+        role=controls.ButtonRole.DESTRUCTIVE,
+        enabled=editable and uid is not None and many,
+        reason=_BUSY_WHY
+        if not editable
+        else (
+            "A map keeps at least one layer."
+            if uid is not None
+            else "Select a layer first."
+        ),
+        tooltip="Delete this layer",
+    ):
+        _delete_layer(ctx, doc, layer)
+    imgui.same_line()
+    # The one switch on this bar that is about the *canvas* rather than about a
+    # layer, and it earns its place beside them: "which of these am I painting
+    # on" is the question the list answers and this is the answer drawn on the
+    # map. Also a row in both View surfaces -- see ``plotter_tools``.
+    if controls.button(
+        f"{icons.EYE}##plotter-layer-highlight",
+        selected=bool(state.highlight),
+        tooltip="Dim every layer but this one (H)",
+    ):
+        state.highlight = not state.highlight
+
+
+def _add_popup(ctx: Any, doc: Any, editable: bool) -> None:
+    """The four kinds, behind the ``+``. A menu rather than four buttons: they
+    are one decision with four answers, and four glyphs would have been four
+    pictures to learn for a thing done once per map."""
+
+    with controls.menu_popup(ADD_POPUP) as opened:
+        if not opened:
+            return
+        for key, label, method in ADD_KINDS:
+            hit = controls.menu_item(
+                f"{label}##plotter-add/{key}",
+                "",
+                False,
+                editable,
+                reason=_BUSY_WHY,
+            )
+            if bool(hit[0] if isinstance(hit, tuple) else hit):
+                getattr(doc, method)()
 
 
 def _subtree_uids(layer: Any) -> set[int]:
@@ -206,7 +350,20 @@ def _row(
             doc.set_layer_props(layer.uid, locked=not layer.locked)
         imgui.end_disabled()
         imgui.same_line()
-        _row_label(layer, active)
+        if state.renaming_layer == int(layer.uid) and editable:
+            _rename_field(ctx, doc, state, layer)
+        else:
+            _row_label(layer, active)
+            # **Double-click renames**, which is what every layered editor
+            # does and what this list did not: the only way to change a name
+            # was to select the layer and cross the window to the Properties
+            # pane -- and after wave A that pane is on the *other side* of the
+            # map. Read after the label rather than after the row's hit
+            # target, so a double-click in the empty gap to the right of a
+            # short name still selects rather than opening a field the pointer
+            # is nowhere near.
+            if imgui.is_item_hovered() and imgui.is_mouse_double_clicked(0):
+                state.renaming_layer = int(layer.uid)
     _row_menu(ctx, doc, layer, editable)
     _reorder(ctx, doc, layer, editable)
     imgui.pop_id()
@@ -219,6 +376,48 @@ def _row(
             _object_rows(ctx, doc, state, layer, editable, depth + 1)
         for child in reversed(getattr(layer, "children", ()) or ()):
             _row(ctx, doc, state, tab, child, editable, depth + 1)
+
+
+def _rename_field(ctx: Any, doc: Any, state: Any, layer: Any) -> None:
+    """The name, in place, while it is being typed.
+
+    Committed on **deactivation** rather than per keystroke, which is the one
+    thing that separates this from the Properties pane's field: that one is a
+    read-modify-write on every frame the caret is in it, which is right for a
+    form and wrong here -- a rename pushes an undo step, and typing "Ground"
+    would push six.
+
+    Escape leaves the name alone; Enter and a click elsewhere both commit,
+    because both are how a person says they are finished. The field takes
+    keyboard focus on the frame it appears, or the user would have to click the
+    thing they just double-clicked.
+
+    The half-typed value lives in ``ctx.state.preview``, keyed by uid, which is
+    the pattern the resize and offset forms already use: it is a *draft*, so it
+    must not be on the document, and it must not be on the pane either or a
+    scroll that culls the row would lose it.
+    """
+    from imgui_bundle import imgui
+
+    key = f"plotter_rename:{layer.uid}"
+    typed = ctx.state.preview.get(key)
+    if typed is None:
+        typed = layer.name
+        ctx.state.preview[key] = typed
+        imgui.set_keyboard_focus_here()
+    imgui.set_next_item_width(-1)
+    ctx.state.preview[key] = widgets.input_text(
+        f"##plotter-rename-{layer.uid}", str(typed), max_length=64
+    )
+    if imgui.is_key_pressed(imgui.Key.escape):
+        state.renaming_layer = 0
+        ctx.state.preview.pop(key, None)
+        return
+    if imgui.is_item_deactivated():
+        wanted = str(ctx.state.preview.pop(key, layer.name))
+        state.renaming_layer = 0
+        if wanted != layer.name:
+            doc.set_layer_props(layer.uid, name=wanted)
 
 
 def _row_label(layer: Any, active: bool) -> None:
