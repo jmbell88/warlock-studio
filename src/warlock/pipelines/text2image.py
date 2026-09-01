@@ -29,7 +29,6 @@ from typing import Any
 from .. import leases, models
 from .prompt import (
     PROMPT_TEMPLATE,
-    SCENE_TEMPLATE,
     SHEET_TEMPLATE,
     TILE_TEMPLATE,
     TILESHEET_TEMPLATE,
@@ -879,7 +878,6 @@ class Text2Image:
         cancel_event: threading.Event | None = None,
         tile: bool = False,
         sheet: bool = False,
-        scene: bool = False,
         tilesheet: bool = False,
         size: tuple[int, int] | None = None,
     ) -> Path:
@@ -931,7 +929,6 @@ class Text2Image:
                 cancel_event=cancel_event,
                 tile=tile,
                 sheet=sheet,
-                scene=scene,
                 tilesheet=tilesheet,
                 size=size,
             )
@@ -952,7 +949,6 @@ class Text2Image:
         cancel_event: threading.Event | None = None,
         tile: bool = False,
         sheet: bool = False,
-        scene: bool = False,
         tilesheet: bool = False,
         size: tuple[int, int] | None = None,
     ) -> Path:
@@ -1033,9 +1029,6 @@ class Text2Image:
             # its left and right edges are different directions of the same
             # subject, and making them continuous would bleed one cell into
             # another.
-            # ``scene`` is last in the chain and loses to all three job-shaped
-            # flags: sheet and tile describe what the pixels are *for*, and a
-            # prompt mode must never override that.
             #
             # ``tilesheet`` sits beside ``sheet`` and shares its no-wrap rule
             # for the same reason spelled a different way: its cells are
@@ -1053,7 +1046,7 @@ class Text2Image:
                     else (
                         TILE_TEMPLATE
                         if tile
-                        else (SCENE_TEMPLATE if scene else PROMPT_TEMPLATE)
+                        else PROMPT_TEMPLATE
                     )
                 )
             )

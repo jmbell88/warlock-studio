@@ -77,26 +77,6 @@ class _PreviewCtx:
         return True
 
 
-def test_the_preview_of_a_tile_asks_for_a_tile():
-    form = default_form_2d()
-    form["prompt"] = "cobblestone"
-    form["output"] = "tile"
-    ctx = _PreviewCtx(form)
-    settings_2d._preview(ctx)
-    assert ctx.calls and ctx.calls[0][1]["tile"] is True
-
-
-def test_the_preview_of_an_object_does_not():
-    form = default_form_2d()
-    form["prompt"] = "a barrel"
-    ctx = _PreviewCtx(form)
-    settings_2d._preview(ctx)
-    assert ctx.calls and ctx.calls[0][1]["tile"] is False
-
-
-# -- the verdict the inspector draws ---------------------------------------
-
-
 def test_a_job_with_no_seam_report_gets_no_verdict():
     # Every mesh and every ordinary reference: the section is not merely empty,
     # it is absent. A non-dict is the same answer -- params is a JSON blob and

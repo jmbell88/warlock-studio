@@ -121,7 +121,6 @@ def test_every_generate_argument_survives_the_wire():
                 negative_prompt="blurry",
                 tile=True,
                 sheet=True,
-                scene=True,
                 tilesheet=True,
                 size=[1024, 512],
                 conditioning={
@@ -145,7 +144,7 @@ def test_every_generate_argument_survives_the_wire():
     assert call["lora_weight"] == pytest.approx(0.65)
     assert call["negative_prompt"] == "blurry"
     assert call["tile"] is True and call["sheet"] is True
-    assert call["scene"] is True and call["tilesheet"] is True
+    assert call["tilesheet"] is True
     # A tuple, not the list JSON delivered -- generate unpacks it as (w, h) and
     # the isometric tile sheet is the caller that relies on a 2:1 frame.
     assert call["size"] == (1024, 512)

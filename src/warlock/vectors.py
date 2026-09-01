@@ -64,12 +64,6 @@ from .pipelines.reference import REFUSAL_CODES
 # config_vector's membership test, never an error.
 VECTOR_PARAMS = (
     "platform",
-    # Prompt-expansion mode ("asset"/"scene"; absent means off). An *input*:
-    # it selects machinery that changes the text SDXL receives, so two runs
-    # that differ only in it are different configurations. The expansion text
-    # itself is ``expanded_prompt``, which is derived and deliberately absent
-    # here (like ``composed_prompt``: a property of one run's roll).
-    "expand",
     "base_model",
     "style_lora",
     "lora_weight",

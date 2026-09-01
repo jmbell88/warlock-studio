@@ -561,12 +561,6 @@ def _materialize_generative_weights(config) -> None:
         variant = f".{cn.variant}" if cn.variant else ""
         touch(root / cn.dir_name / "config.json")
         touch(root / cn.dir_name / f"diffusion_pytorch_model{variant}.safetensors")
-    for expander in models.EXPANDER_MODELS.values():
-        # Generative-path like the four above: check_weights probes it when a
-        # job turns expansion on, and a submit-shaped test must not be refused
-        # for a download it is not about. A test about the refusal unlinks it.
-        touch(root / expander.dir_name / "config.json")
-        touch(root / expander.dir_name / "pytorch_model.bin")
 
 
 @pytest.fixture(scope="session")
@@ -728,7 +722,6 @@ class FakeText2Image:
         self.references: list = []
         self.tiles: list[bool] = []
         self.sheets: list[bool] = []
-        self.scenes: list[bool] = []
         self.tilesheets: list[bool] = []
         # The frame each call asked for, including the Nones. A tile sheet is
         # sliced on a grid the caller decided in advance, so "what size did the
@@ -753,14 +746,12 @@ class FakeText2Image:
         cancel_event=None,
         tile=False,
         sheet=False,
-        scene=False,
         tilesheet=False,
         size=None,
     ):
         self.prompts.append(prompt)
         self.tiles.append(tile)
         self.sheets.append(sheet)
-        self.scenes.append(scene)
         self.tilesheets.append(tilesheet)
         self.sizes.append(size)
         self.last_prompt = prompt

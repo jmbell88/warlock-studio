@@ -298,16 +298,6 @@ class GenerateOps:
             # tile= flag below) wraps this with the TRELLIS-friendly
             # single-object scaffolding.
             composed = guidance.compose_prompt(job["prompt"] or "", params)
-            # Expansion happens once, here, outside the reroll loop: the
-            # expansion is part of the *prompt*, so every reroll attempt draws
-            # the same text at a fresh image seed rather than a fresh prompt
-            # each time. Never on a tile -- the whitelist is object-aesthetic
-            # vocabulary and a texture has no subject to describe.
-            is_scene = params.get("expand") == "scene"
-            if params.get("expand") and not is_tile:
-                composed = await self._expand_prompt(
-                    job_id, composed, params, reference_seed
-                )
             # The reroll lives *inside* the try below, so however many samples
             # it draws there is still one load and one unload around all of
             # them: the VRAM handoff is a property of the stage, not of an
@@ -346,7 +336,6 @@ class GenerateOps:
                             on_step=lambda i, n: self._t2i_step(job_id, i, n),
                             cancel_event=self._cancel.event,
                             tile=is_tile,
-                            scene=is_scene,
                         )
                     )
                     params["composed_prompt"] = t2i.last_prompt or composed
@@ -908,39 +897,6 @@ class GenerateOps:
             for scratch in (keep, keep_source):
                 with contextlib.suppress(OSError):
                     scratch.unlink()
-
-    async def _expand_prompt(
-        self: Worker, job_id: str, composed: str, params: dict[str, Any], seed: int
-    ) -> str:
-        """The composed subject through the local expander, or unchanged.
-
-        Advisory in the way the rank and the seam report are: the door
-        (``validation.check_weights``) already refused a submit whose expander
-        is missing, so a failure here is a stored row that predates the
-        weights or a broken load -- and neither must fail a job whose prompt
-        is perfectly generatable as written. What *did* run is recorded as
-        ``expanded_prompt`` (DERIVED_PARAMS: a reroll re-records it).
-        """
-        spec = models.EXPANDER_MODELS[models.DEFAULT_EXPANDER]
-        model_dir = self.config.t2i_model_root / spec.dir_name
-        try:
-            from .pipelines import expand as expand_mod
-
-            expanded = await asyncio.to_thread(
-                functools.partial(expand_mod.expand, composed, model_dir, seed=seed)
-            )
-        except Exception:
-            log.exception(
-                "prompt expansion failed for job %s; using the prompt as written",
-                job_id,
-            )
-            return composed
-        if expanded is None:
-            # The gate said this prompt is already detailed; keeping the
-            # param absent is what says "nothing was appended".
-            return composed
-        params["expanded_prompt"] = expanded
-        return expanded
 
     async def _get_text2image(self: Worker, base_key: str):
         """The resident image pipeline, swapped if the job wants a different base.

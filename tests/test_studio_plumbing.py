@@ -399,19 +399,6 @@ def test_releasing_the_strip_texture_drops_its_stamp_too():
     assert "sheet_texture:gen" not in ctx.state.preview
 
 
-def test_the_composed_prompt_preview_retries_when_its_request_was_refused():
-    """``submit`` refuses a key already in flight. Clearing the dirty flag
-    regardless dropped the edit made during a slow first preview."""
-    from warlock.studio.panes import settings_2d
-
-    source = inspect.getsource(settings_2d._preview)
-    assert "if ctx.submit(" in source
-    assert source.index("if ctx.submit(") < source.index("state.preview_dirty_at = 0.0")
-
-
-# --- caps and messages that disagreed with the service ------------------------
-
-
 def test_the_pose_panel_does_not_ask_for_a_rig_that_cannot_be_made():
     from warlock.studio.panes import pose_panel
 

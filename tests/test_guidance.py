@@ -119,7 +119,7 @@ def test_catalog_covers_every_field_and_is_json_safe():
 
     catalog = guidance.catalog()
     assert set(catalog["fields"]) == {
-        "platform", "expand", "base_model", "style_lora", "ip_adapter", "control",
+        "platform", "base_model", "style_lora", "ip_adapter", "control",
     }
     assert all(o["resolution"] for o in catalog["fields"]["platform"])
     assert all(o["default_weight"] for o in catalog["fields"]["style_lora"])
@@ -128,7 +128,7 @@ def test_catalog_covers_every_field_and_is_json_safe():
 
 def test_form_fields_covers_every_table():
     assert set(guidance.form_fields()) == {
-        "platform", "expand", "base_model", "style_lora", "ip_adapter", "control",
+        "platform", "base_model", "style_lora", "ip_adapter", "control",
     }
 
 

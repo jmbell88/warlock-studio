@@ -148,27 +148,8 @@ PLATFORMS = _table(
     ),
 )
 
-# Whether -- and toward what -- the local GPT-2 prompt expander enriches the
-# user's prompt before SDXL sees it (pipelines/expand.py). The DALL-E 3
-# principle, offline: every hosted image service rewrites short prompts into
-# dense descriptive ones before its image model runs. Not prompt *fragments*
-# (the option prompts are empty and _PROMPT_FIELDS stays empty): the field
-# selects machinery, and the expansion itself is recorded by the worker as
-# the derived ``expanded_prompt``.
-#
-# "off" is a real option rather than only the absent default so the UI combo
-# has a first entry to fall back to; normalize stores the key only when a mode
-# is actually on, so no stored vector re-keys.
-EXPAND_MODES = _table(
-    Option("off", "Off", ""),
-    Option("asset", "3D asset", ""),
-    Option("scene", "General 2D", ""),
-)
-DEFAULT_EXPAND = "off"
-
 _OPTION_TABLES: dict[str, dict[str, Option]] = {
     "platform": PLATFORMS,
-    "expand": EXPAND_MODES,
 }
 
 # Keys that used to exist, mapped onto the ones that replaced them. Every job
@@ -455,12 +436,6 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
         # base model for every text job and must never have to guess one.
         "base_model": base_model.key,
     }
-    # Only carried when a mode is actually on: "off" and absent are one state,
-    # and storing "off" on every job would re-key every same-settings vector
-    # (``expand`` is in vectors.VECTOR_PARAMS).
-    expand = chosen["expand"]
-    if expand is not None and expand.key != DEFAULT_EXPAND:
-        out["expand"] = expand.key
     # Only carried when a style was actually chosen -- a stored lora_weight with
     # no lora would read as "a LoRA at 0.9" on rerun.
     if style_lora is not None:
@@ -544,7 +519,6 @@ def catalog(*, bg_default: str | None = None) -> dict[str, Any]:
         "loras_by_base": models.loras_by_base(),
         "defaults": {
             "platform": DEFAULT_PLATFORM,
-            "expand": DEFAULT_EXPAND,
             "size_m": DEFAULT_SIZE_M,
             "base_model": models.DEFAULT_BASE_MODEL,
             "lora_weight": models.DEFAULT_LORA_WEIGHT,

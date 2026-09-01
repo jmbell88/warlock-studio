@@ -36,46 +36,14 @@ you have to discover. You can edit it freely, or empty it deliberately. Note tha
 only has an effect on a model that runs with real classifier-free guidance; the two four-step
 distilled defaults ignore it. See [Models and style LoRAs](#models-and-style-loras).
 
-Expand **Prompt actually sent** to see the complete composed prompt — your text inside the fixed
-template — along with its token count and how many chunks it was split into. It updates about a
-third of a second after you stop typing, computed on a background thread because counting tokens
-means loading a tokenizer.
+Your text is composed into a fixed template before the image model sees it; the finished job records
+the result as `composed_prompt`, which the inspector shows.
 
 The composed prompt has no hard length ceiling. CLIP's text encoders stop at 77 tokens, but the app
 splits a longer prompt into several chunks on comma boundaries — never mid-phrase — encodes each
-separately and joins them, which the image model's cross-attention accepts without complaint. That
-is why the preview reports chunks rather than warning about truncation. The soft limit still
-applies, though: a longer conditioning sequence dilutes attention, so your prompt is best kept to a
-sentence.
-
-### Prompt enrichment
-
-Under the prompt box, the **enrich** select turns on a local prompt expander — a small GPT-2 model
-(the one Fooocus ships) that appends aesthetic detail to short prompts before the image model sees
-them. This is the offline form of what every hosted image service does silently: a language model
-rewrites "a sword" into a dense descriptive caption, and the image model's output improves because
-the description did. It is **off** by default and needs its own download (about 700 MB, listed in
-Settings → Models as "Prompt expander (Fooocus GPT-2)"); with expansion selected and the weights absent, the
-submit is refused with the download command.
-
-Two modes, because the right enrichment depends on what the picture is for:
-
-- **3D asset** enriches the prompt and keeps the single-subject, plain-background framing — the
-  right choice when the image is a reference for a mesh.
-- **General 2D** enriches the prompt *and* swaps the fixed template for one that allows
-  composition, backgrounds and scene lighting. Use it for pictures that will stay pictures: a
-  reference generated this way will usually be refused at promotion, because it is no longer a
-  single centred object.
-
-Three things the expander deliberately does not do. It never touches a prompt that is already
-detailed (roughly forty tokens or more) — appending tag soup to a paragraph dilutes it. It never
-rewrites your subject: generation is constrained to a fixed whitelist of aesthetic vocabulary, so
-it can only add phrases like lighting and quality terms, not change what the picture is of. And it
-never runs on a seamless tile, whose prompt describes a surface rather than a subject.
-
-The expansion is deterministic in the job's seed and is recorded on the finished job's params as
-`expanded_prompt`, so a job's provenance always shows the text the image model actually received —
-**Prompt actually sent** previews it with the mode on.
+separately and joins them, which the image model's cross-attention accepts without complaint — so a
+long prompt costs attention rather than being cut off. The soft limit still applies, though: a
+longer conditioning sequence dilutes attention, so your prompt is best kept to a sentence.
 
 ## The pane at a glance
 

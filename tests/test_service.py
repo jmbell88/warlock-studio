@@ -1469,14 +1469,6 @@ def test_the_tile_flag_is_an_input_and_not_a_derived_value():
     assert "tile" not in DERIVED_PARAMS
 
 
-def test_the_prompt_preview_mirrors_a_tile_rather_than_an_object(svc):
-    from warlock.service import system as svc_system
-
-    body = svc_system.prompt_preview(svc, {}, "cobblestone", tile=True)
-    assert "seamless" in body["prompt"]
-    assert "single object" not in body["prompt"]
-
-
 def test_a_reroll_of_a_tile_stays_a_tile(svc):
     out = svc_jobs.create_job(svc, kind="text", prompt="cobblestone", output="tile")
     svc.store.set_status(out["id"], "done")

@@ -98,21 +98,6 @@ TILESHEET_TEMPLATE = (
     "cells, no text, no watermark, no border"
 )
 
-# The general-2D template, reachable only when the prompt-expansion mode is
-# "scene" (guidance.EXPAND_MODES). The three templates above all serve a
-# machine reader -- TRELLIS, the tiler, the sheet restyle -- and their clauses
-# exist to keep a reconstruction honest. This one serves a person looking at a
-# picture: no single-subject constraint, no plain background, no orthographic
-# flattening, because a scene *is* composition and lighting. What survives
-# from the others is exactly the clause set that is about SDXL's failure
-# modes rather than about framing: text, watermarks and borders are artifacts
-# whatever the picture is of. The expander (pipelines/expand.py) supplies the
-# aesthetic density the other templates get from their framing clauses.
-SCENE_TEMPLATE = (
-    "{prompt}, detailed illustration, coherent composition, rich lighting, "
-    "high quality, sharp focus, no text, no watermark, no border"
-)
-
 # Bumped whenever PROMPT_TEMPLATE, TILE_TEMPLATE or chunk() changes. Recorded
 # by provenance.versions() so a prompt-compiler edit cannot silently
 # invalidate a benchmark comparison -- no dependency version moves when this
@@ -149,7 +134,16 @@ SCENE_TEMPLATE = (
 # tests/test_prompt.py is the standing proof of. The bump exists because
 # provenance.versions() records this number against every job, and a stored
 # tile sheet has to be able to say which compiler drew it.
-PROMPT_VERSION = 7
+#
+# 8: SCENE_TEMPLATE deleted with the prompt expander, which was the only thing
+# that could reach it. The reverse of 6, and every surviving path is
+# byte-identical to 7 -- expansion defaulted to off and guidance.normalize
+# stored the key only when it was on, so the overwhelming majority of stored
+# jobs never touched it. The bump exists for the minority that did: their
+# composed prompt was a function of the expander's weights and seed, and this
+# compiler can no longer produce it, so a benchmark comparing across the bump
+# has to know that.
+PROMPT_VERSION = 8
 
 _tokenizer_cache: dict[Path, list[Any]] = {}
 
@@ -293,7 +287,6 @@ def build(
     *,
     trigger: str = "",
     tile: bool = False,
-    scene: bool = False,
     tilesheet: bool = False,
 ) -> str:
     """The final positive prompt.
@@ -301,14 +294,12 @@ def build(
     The composed subject, then the LoRA trigger (if any), then the template --
     the same assembly text2image.generate() does by hand, exposed here so the
     prompt preview can show it before a job runs. ``tile`` swaps in the
-    tileable template, whose framing is its own flat top-down clause;
-    ``tilesheet`` the grid one; ``scene`` the general-2D one.
+    tileable template, whose framing is its own flat top-down clause, and
+    ``tilesheet`` the grid one.
 
-    The two output kinds win over ``scene``, and ``tilesheet`` wins over
-    ``tile``, for one reason applied twice: an output kind is a property of
-    what the job produces, and a prompt mode is a property of how its subject
-    was written. A caller that set both asked for a sheet in scene *style*, and
-    the sheet is the part that decides which clauses can be present at all.
+    ``tilesheet`` wins over ``tile``: an output kind is a property of what the
+    job produces, and the sheet is the part that decides which clauses can be
+    present at all.
     """
     from .. import guidance
 
@@ -317,8 +308,6 @@ def build(
         template = TILESHEET_TEMPLATE
     elif tile:
         template = TILE_TEMPLATE
-    elif scene:
-        template = SCENE_TEMPLATE
     else:
         template = PROMPT_TEMPLATE
     text = template.format(prompt=composed)

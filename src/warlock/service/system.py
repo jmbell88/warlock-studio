@@ -9,10 +9,9 @@ import time
 from dataclasses import asdict
 from typing import Any
 
-from .. import doctor, fetch, guidance, models
+from .. import doctor, guidance
 from .core import WarlockService
-from .errors import NotFound, invalid_from
-from .validation import check_prompt
+from .errors import NotFound
 
 log = logging.getLogger(__name__)
 
@@ -141,121 +140,6 @@ def guidance_catalog(svc: WarlockService) -> dict[str, Any]:
             ],
             "custom_triangles_range": [optimize.CUSTOM_MIN, optimize.CUSTOM_MAX],
         }
-    }
-
-
-def prompt_preview(
-    svc: WarlockService,
-    raw: dict[str, Any],
-    prompt: str = "",
-    *,
-    tile: bool = False,
-    tilesheet: bool = False,
-) -> dict[str, Any]:
-    """The composed prompt and its token/chunk cost, before submission.
-
-    tokens/chunks are best-effort -- null when transformers isn't installed or
-    the base model's weights aren't downloaded, the same degrade-not-fail
-    pattern doctor.py uses. Blocking: loading the tokenizers reads from disk.
-
-    ``tile`` has to be threaded through rather than inferred from ``raw``: the
-    output kind is not a guidance field, and without it the preview of a tile
-    would show the single-centred-object framing the job will not use, which
-    is worse than no preview at all. ``tilesheet`` is the same argument for the
-    grid template, and shares ``tile``'s exemption from expansion: the
-    enrichment describes one subject and a sheet is sixty-four.
-
-    The caller sends the *subject* for a sheet -- the projection clause and the
-    detail clause are ``pipelines.tilesheet``'s and are appended before this is
-    called -- so what comes back is the whole prompt the worker will compose.
-    """
-    from ..pipelines import prompt as prompt_pipeline
-    from ..pipelines.text2image import Text2Image
-
-    try:
-        params = guidance.normalize(
-            raw, bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir)
-        )
-    except ValueError as exc:
-        raise invalid_from(exc, "Those generation settings are not usable") from exc
-
-    style = models.STYLE_LORAS.get(params.get("style_lora") or "")
-    # Same gate the real run applies (text2image.generate only prepends a
-    # trigger for an adapter that actually loaded): a LoRA missing on disk must
-    # not show its trigger in the preview and then drop it at run time.
-    #
-    # Presence is the only question left here. Fitness needs no test: normalize
-    # ran above in this same function and refuses a cross-family pair, so a
-    # style that reaches this line is one the chosen base can take.
-    # Through ``fetch.present`` rather than the path expression it wraps. Every
-    # presence probe in the codebase lives in ``fetch``, and this was the one
-    # that had reached for ``loras / filename`` itself -- so a change to where
-    # or how a LoRA is stored would have moved every check but this one, and the
-    # preview would have gone on promising a trigger the run then dropped.
-    trigger = style.trigger if style and fetch.present(svc.config, "lora", style) else ""
-    check_prompt(prompt)
-
-    # The expansion the worker would run, so "Prompt actually sent" stays
-    # true with the mode on. Best-effort in exactly the token-count way: the
-    # expander is an optional download and a real model load, and a preview
-    # with no expansion beats an error toast per keystroke. The seed comes
-    # from the form when it carries one; an unlocked seed rerolls at submit,
-    # so the preview then shows *a* roll of the expansion rather than *the*
-    # roll -- which is what a preview of a stochastic step can honestly say.
-    scene = params.get("expand") == "scene"
-    expanded = None
-    if params.get("expand") and not (tile or tilesheet):
-        try:
-            from ..pipelines import expand as expand_pipeline
-
-            spec = models.EXPANDER_MODELS[models.DEFAULT_EXPANDER]
-            expanded = expand_pipeline.expand(
-                guidance.compose_prompt(prompt, params),
-                svc.config.t2i_model_root / spec.dir_name,
-                seed=int(raw.get("seed") or 0),
-            )
-        except Exception:
-            log.debug("prompt preview could not expand the prompt", exc_info=True)
-    positive = prompt_pipeline.build(
-        expanded if expanded is not None else prompt,
-        params,
-        trigger=trigger,
-        tile=tile,
-        scene=scene,
-        tilesheet=tilesheet,
-    )
-
-    tokens = chunks = None
-    try:
-        spec = models.BASE_MODELS[params["base_model"]]
-        t2i = Text2Image(
-            spec,
-            svc.config.t2i_model_root,
-            svc.config.t2i_turbo_dir
-            if params["base_model"] == models.T2I_DIR_MODEL
-            else None,
-        )
-        tokenizers = prompt_pipeline.load_tokenizers(t2i.model_dir, spec.family)
-        tokens = prompt_pipeline.count(positive, tokenizers)
-        chunks = len(prompt_pipeline.chunk(positive, tokenizers))
-    except Exception:
-        # Every failure, not the two that were anticipated. This is a *preview*:
-        # the token count is a nicety beside a prompt box that refreshes as the
-        # user types, and the only correct response to not having it is to leave
-        # it out. The narrow ``(ImportError, OSError)`` covered "not installed"
-        # and "not downloaded" but not a corrupt tokenizer directory, which
-        # raises ValueError or JSONDecodeError out of transformers -- turning a
-        # live preview into an error toast on every keystroke (SVC-07).
-        log.debug("prompt preview could not count tokens", exc_info=True)
-
-    return {
-        "prompt": positive,
-        # What the expander appended, or None when it was off, skipped a
-        # detailed prompt, or could not run -- the pane says nothing for None.
-        "expanded": expanded,
-        "negative_prompt": params["negative_prompt"],
-        "tokens": tokens,
-        "chunks": chunks,
     }
 
 

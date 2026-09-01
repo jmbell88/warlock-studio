@@ -262,10 +262,6 @@ uvx hf download yuvalkirstain/PickScore_v1 --revision a4e4367c6dfa7288a00c550414
 uvx hf download yuvalkirstain/PickScore_v1 --revision a4e4367c6dfa7288a00c550414478f865b875800 `
   --include "*.json" --include "*.txt" --local-dir $HOME/.warlock/models/pickscore-v1
 
-# Prompt expander, Fooocus GPT-2 (~0.7 GB): turns a short prompt into a fuller
-# one. See Prompt enrichment in the references chapter.
-uvx hf download LykosAI/GPT-Prompt-Expansion-Fooocus-v2 --revision a1fa8a394dc4614ec944ed188d8873648df85a10 `
-  --include "*.json" --include "*.txt" --include "*.bin" --local-dir $HOME/.warlock/models/prompt-expander-fooocus
 
 # ViTPose base (~0.4 GB): measures a humanoid subject's joints off the reference
 # image, so a rig starts from where the limbs actually are rather than from the
@@ -290,7 +286,6 @@ the asset. What each one changes when present:
 | --- | --- | --- |
 | DINOv2 | An attached reference has no anchor similarity; the judge has no probes. | [Review](36-review.md) works fully. |
 | PickScore | Candidates rank on composition and style anchor alone. | A human-preference term joins the ranking — see [Seeds and candidates](22-generating-references.md#seeds-and-candidates). |
-| Prompt expander | The prompt is used as typed. | [Prompt enrichment](22-generating-references.md#prompt-enrichment) can rewrite it. |
 | ViTPose | Skeletons are fitted by bounding box. | Humanoid rigs start from measured joints — see [Where the joints come from](25-rigging-and-posing.md#where-the-joints-come-from). |
 | BiRefNet | A 2D export's alpha comes from a corner flood fill. | The cutout is matted properly, which shows on hair and anything thin. |
 

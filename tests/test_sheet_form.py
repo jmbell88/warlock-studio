@@ -26,7 +26,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from warlock.pipelines import tileatlas, tilesheet
+from warlock.pipelines import tileatlas
 from warlock.service import jobs as svc_jobs
 from warlock.service import sprites as svc_sprites
 from warlock.service import tilesheets as svc_tilesheets
@@ -360,69 +360,6 @@ class _PreviewCtx:
     def submit(self, _key, _fn, *args, **kwargs):
         self.calls.append((args, kwargs))
         return True
-
-
-def test_the_preview_of_a_grid_asks_for_the_grid_template():
-    ctx = _PreviewCtx(_sheet_form(tile_mode=GRID))
-    settings_2d._preview(ctx)
-    assert ctx.calls and ctx.calls[0][1]["tilesheet"] is True
-    assert ctx.calls[0][1]["tile"] is False
-
-
-def test_the_preview_of_a_grid_sends_the_pipelines_subject_not_the_bare_prompt():
-    """The view and detail clauses are appended before the template, so a
-    preview built from the raw prompt would be missing half the composition
-    this output kind adds."""
-    ctx = _PreviewCtx(_sheet_form(tile_mode=GRID, projection="isometric"))
-    settings_2d._preview(ctx)
-    subject = ctx.calls[0][0][2]
-    assert "mossy dungeon" in subject
-    assert "isometric" in subject
-    assert tilesheet.DETAIL_CLAUSE in subject
-
-
-def test_the_preview_of_a_seamless_layout_is_of_its_first_material():
-    """What will actually run. These layouts compose one material at a time
-    through ``prompt.TILE_TEMPLATE`` and never send the Description at all, so
-    previewing the grid's sheet subject here would show a sentence no generation
-    on this path ever sees."""
-    ctx = _PreviewCtx(_sheet_form(materials="wet cobblestones\ndry sand"))
-    settings_2d._preview(ctx)
-    assert ctx.calls[0][1] == {"tile": True, "tilesheet": False}
-    subject = ctx.calls[0][0][2]
-    assert subject == tileatlas.material_subject("wet cobblestones", index=0, total=2)
-    assert "mossy dungeon" not in subject
-
-
-def test_the_preview_of_a_terrain_set_is_of_its_inner_surface():
-    """The one the forty-seven cases are pictures of, carrying the shared
-    setting -- which is what ``terrain_subjects`` appends to both halves."""
-    ctx = _PreviewCtx(_terrain_form(boundary="a temperate coastline"))
-    settings_2d._preview(ctx)
-    subject = ctx.calls[0][0][2]
-    assert subject.startswith("wet grass, a temperate coastline")
-    assert "dark water" not in subject
-
-
-def test_a_seamless_layout_with_nothing_described_previews_nothing():
-    """A request with no material has no first material. Showing the
-    Description instead would be a preview of a sentence this layout does not
-    send, which is the whole failure the seamless preview exists to avoid."""
-    ctx = _PreviewCtx(_sheet_form(materials=""))
-    ctx.state.preview = {"prompt": "stale", settings_2d.CLEARED_KEY: ["kept"]}
-    settings_2d._preview(ctx)
-    assert ctx.calls == []
-    assert ctx.state.preview == {settings_2d.CLEARED_KEY: ["kept"]}
-
-
-def test_the_preview_of_a_sprite_sheet_is_an_ordinary_reference_preview():
-    """Its first step *is* an ordinary reference of one character, so it takes
-    the object template and stays eligible for expansion."""
-    ctx = _PreviewCtx(_sheet_form(sheet_type="sprite"))
-    settings_2d._preview(ctx)
-    assert ctx.calls[0][1]["tilesheet"] is False
-    assert ctx.calls[0][1]["tile"] is False
-    assert ctx.calls[0][0][2] == "mossy dungeon"
 
 
 def test_a_restored_form_with_the_old_projection_word_still_validates():

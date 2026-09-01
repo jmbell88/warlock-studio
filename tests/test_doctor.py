@@ -96,7 +96,6 @@ def test_run_checks_returns_every_check(tmp_path):
         + len(model_registry.STYLE_LORAS)
         + len(model_registry.IP_ADAPTERS)
         + len(model_registry.CONTROLNETS)
-        + len(model_registry.EXPANDER_MODELS)
         + len(model_registry.METRIC_MODELS)
         + len(model_registry.MATTING_MODELS)
         + len(model_registry.POSE_MODELS)

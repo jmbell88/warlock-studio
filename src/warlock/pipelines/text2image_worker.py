@@ -180,7 +180,6 @@ class _Server:
                 cancel_event=self.cancel,
                 tile=bool(req.get("tile")),
                 sheet=bool(req.get("sheet")),
-                scene=bool(req.get("scene")),
                 tilesheet=bool(req.get("tilesheet")),
                 size=(int(size[0]), int(size[1])) if size else None,
             )

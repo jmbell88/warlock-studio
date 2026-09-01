@@ -208,7 +208,7 @@ def test_input_png_written_before_the_db_row_is_created(svc, assets, monkeypatch
 def test_the_guidance_catalog_is_served(svc):
     body = svc_system.guidance_catalog(svc)
     assert set(body["fields"]) == {
-        "platform", "expand", "base_model", "style_lora", "ip_adapter", "control",
+        "platform", "base_model", "style_lora", "ip_adapter", "control",
     }
     assert body["defaults"]["platform"] in {o["key"] for o in body["fields"]["platform"]}
     assert body["defaults"]["base_model"] in {o["key"] for o in body["fields"]["base_model"]}
@@ -286,33 +286,6 @@ def test_stale_taxonomy_guidance_is_ignored_not_refused(svc):
 # --- prompt preview ---------------------------------------------------------
 
 
-def test_the_prompt_preview_returns_the_composed_prompt(svc):
-    body = svc_system.prompt_preview(svc, {}, "a barrel")
-    assert body["prompt"].startswith("a barrel, ")
-    assert "single subject" in body["prompt"]
-    assert body["negative_prompt"]  # falls back to the guidance default
-
-
-def test_the_prompt_preview_rejects_unknown_guidance(svc):
-    with pytest.raises(Invalid):
-        svc_system.prompt_preview(svc, {"platform": "nonsense"}, "x")
-
-
-def test_the_prompt_preview_degrades_to_null_tokens_without_a_tokenizer(svc, monkeypatch):
-    from warlock.pipelines import prompt as prompt_pipeline
-
-    def _raise(_model_dir, _family="sdxl"):
-        raise OSError("no tokenizer on disk")
-
-    monkeypatch.setattr(prompt_pipeline, "load_tokenizers", _raise)
-    body = svc_system.prompt_preview(svc, {}, "a barrel")
-    assert body["tokens"] is None
-    assert body["chunks"] is None
-
-
-# --- cancelling and deleting ------------------------------------------------
-
-
 def test_cancel_and_delete(svc):
     job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
     svc_jobs.cancel_job(svc, job_id)
@@ -357,7 +330,6 @@ def test_health_reports_the_worker_and_the_doctor_checks(svc, worker):
         + len(models.STYLE_LORAS)
         + len(models.IP_ADAPTERS)
         + len(models.CONTROLNETS)
-        + len(models.EXPANDER_MODELS)
         + len(models.METRIC_MODELS)
         + len(models.MATTING_MODELS)
         + len(models.POSE_MODELS)

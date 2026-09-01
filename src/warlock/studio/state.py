@@ -38,10 +38,6 @@ def default_form_2d() -> dict[str, Any]:
 
     return {
         "prompt": "",
-        # Prompt expansion mode: "off" | "asset" | "scene". "off" rather than
-        # "" so the combo shows its own first entry; submit sends it and
-        # normalize stores nothing for it.
-        "expand": "off",
         "negative_prompt": "",
         # Explicit rather than empty: the combo and the stored form must say
         # the same model guidance.normalize will run.  An empty selection used
@@ -942,9 +938,11 @@ class AppState:
     history: list[str] = field(default_factory=list)
     checked: set[str] = field(default_factory=set)
     toasts: list[Toast] = field(default_factory=list)
-    # The composed-prompt preview, refreshed off-thread as the prompt is typed.
+    # Frame-scratch shared by the panes: the rig sidecar's poses and bones,
+    # a sheet listing, a trellis log tail, and the several "what this change
+    # cleared" notices. Named ``preview`` from when it held the composed-prompt
+    # preview, which went with the prompt expander.
     preview: dict[str, Any] = field(default_factory=dict)
-    preview_dirty_at: float = 0.0
     # The frame-rate overlay (F10). Persisted, because someone watching for a
     # stall wants it to survive the restart they are about to do. It is the
     # *detailed* view -- mean and worst frame -- and the always-on strip beside

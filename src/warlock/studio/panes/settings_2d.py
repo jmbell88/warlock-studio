@@ -13,7 +13,6 @@ loads CLIP's tokenizers to count tokens, which is far too slow for a keystroke.
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from typing import Any
 
@@ -24,11 +23,9 @@ from ... import guidance as guidancelib
 from ... import models as modelslib
 from ...bench import findings as findings_lib
 from ...pipelines import tileatlas as tileatlaslib
-from ...pipelines import tilesheet as tilesheetlib
 from ...service import jobs as svc_jobs
 from ...service import palettes as svc_palettes
 from ...service import sprites as svc_sprites
-from ...service import system as svc_system
 from ...service import tilesheets as svc_tilesheets
 from ...service.errors import Invalid
 from ...service.validation import (
@@ -52,8 +49,6 @@ from .. import (
 from ..manual import render as manual_render
 from ..tokens import sp
 from ..widgets import field_options as _options
-
-PREVIEW_DEBOUNCE = 0.3
 
 # This pane's key in the focus ring (UX.md Phase 3). The controls on the common
 # path take a place in it: the ring exists so a first job can be composed and
@@ -167,9 +162,6 @@ def draw(ctx: Any) -> None:
                         _target_cell(ctx, form, form_ui)
                         _pixel_look(ctx, form, form_ui, sprite=sprite_arm)
                     _reset_row(ctx)
-                    widgets.section("Prompt enrichment")
-                    _expand(ctx, form)
-                    _preview(ctx)
                     if form.get("style_lora") and create_assets.selected(form).intent != "tileset":
                         widgets.section("Style strength")
                         _lora_strength(ctx, form, findings_doc)
@@ -205,7 +197,6 @@ def _asset_type(ctx: Any, form: dict[str, Any]) -> None:
     form["generation_type"] = form["asset_type"]
     spec = create_assets.sync_legacy_fields(form)
     if spec.key != before:
-        ctx.state.preview_dirty_at = time.monotonic()
         ctx.state.clear_field_error("asset_type")
     widgets.muted_wrapped(
         {
@@ -234,7 +225,6 @@ def _quality(ctx: Any, form: dict[str, Any]) -> None:
     form["quality"] = picked if picked in generation.QUALITY_TIERS else before
     widgets.field_error(ctx.state, "quality")
     if form["quality"] != before:
-        ctx.state.preview_dirty_at = time.monotonic()
         ctx.state.clear_field_error("quality")
         ctx.state.preview[QUALITY_CLEARED_KEY] = clear_for_tier(ctx, form)
     for note in ctx.state.preview.get(QUALITY_CLEARED_KEY) or ():
@@ -443,7 +433,6 @@ def _tile_layout(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
         # and the preview recomposed, because the words that will be sent are a
         # different set of words now.
         ctx.state.preview[TILE_MODE_CLEARED_KEY] = clear_for_layout(form)
-        ctx.state.preview_dirty_at = time.monotonic()
         for field in _TILE_FIELDS:
             ctx.state.clear_field_error(field)
     for note in ctx.state.preview.get(TILE_MODE_CLEARED_KEY) or ():
@@ -503,7 +492,6 @@ def _tile_materials(
     )
     if changed:
         form["materials"] = text
-        ctx.state.preview_dirty_at = time.monotonic()
         ctx.state.clear_field_error("prompt_items")
     changed, picked = form_ui.segmented_choice(
         "variants",
@@ -571,7 +559,6 @@ def _tile_terrain(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
         )
         if changed:
             form[key] = text
-            ctx.state.preview_dirty_at = time.monotonic()
             ctx.state.clear_field_error(key)
     changed, text = form_ui.text(
         "boundary",
@@ -592,7 +579,6 @@ def _tile_terrain(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     )
     if changed:
         form["boundary"] = text
-        ctx.state.preview_dirty_at = time.monotonic()
         ctx.state.clear_field_error("boundary")
     _tile_description_note()
 
@@ -617,7 +603,6 @@ def _tile_grid(
     )
     if changed and picked != before:
         form["projection"] = picked
-        ctx.state.preview_dirty_at = time.monotonic()
         ctx.state.clear_field_error("projection")
     widgets.muted_wrapped(
         "One 1024 px frame is painted through a grid guide and cut into "
@@ -850,7 +835,6 @@ def _sprite_layout(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     if changed:
         form["sheet_layout"] = sprite_layout_for(options, picked, directions)
         ctx.state.clear_field_error("sheet_type")
-        ctx.state.preview_dirty_at = time.monotonic()
         layout = str(form["sheet_layout"])
         _mode, action, directions = generation.sprite_from_layout(layout)
     entry = sprite_action_entry(options, action)
@@ -1325,7 +1309,6 @@ def _reset(ctx: Any) -> None:
 
     ctx.state.form_2d = default_form_2d()
     ctx.state.preview = {}
-    ctx.state.preview_dirty_at = time.monotonic()
     ctx.toast("The image settings are back to their defaults.")
 
 
@@ -1342,8 +1325,6 @@ def _prompt(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
             helper=f"{len(before)}/{MAX_PROMPT} characters",
         )
         anchors.mark("create/prompt")
-    if form["prompt"] != before:
-        ctx.state.preview_dirty_at = time.monotonic()
         ctx.state.clear_field_error("prompt")
 
 
@@ -1359,148 +1340,7 @@ def _history(ctx: Any, form: dict[str, Any]) -> None:
             label = entry if len(entry) <= 60 else entry[:57] + "..."
             if controls.menu_item(f"{label}##{hash(entry)}", "", False)[0]:
                 form["prompt"] = entry
-                ctx.state.preview_dirty_at = time.monotonic()
         imgui.end_popup()
-
-
-EXPAND_NOTES = {
-    "asset": (
-        "A local model enriches short prompts with detail that suits a 3D "
-        "reference: the single-subject framing stays."
-    ),
-    "scene": (
-        "A local model enriches short prompts and the single-subject framing "
-        "is dropped -- for 2D pictures, not for meshes."
-    ),
-}
-
-
-def _expand(ctx: Any, form: dict[str, Any]) -> None:
-    """The prompt-expansion mode, under the prompt it acts on.
-
-    Options come from the catalog like every other select; unlike them the
-    combo has no blank entry, because "off" is a real mode rather than "say
-    nothing about this". Detailed prompts skip expansion on their own (the
-    worker's gate), which the note under the live modes says.
-    """
-    widgets.field_label("enrich")
-    entries = (ctx.guidance.get("fields") or {}).get("expand") or []
-    options = [(e["key"], e["label"]) for e in entries] or [("off", "Off")]
-    before = form.get("expand") or "off"
-    form["expand"] = widgets.combo("##expand", before, options)
-    widgets.field_error(ctx.state, "expand")
-    if form["expand"] != before:
-        ctx.state.preview_dirty_at = time.monotonic()
-        ctx.state.clear_field_error("expand")
-    note = EXPAND_NOTES.get(form["expand"])
-    if note is not None:
-        widgets.muted_wrapped(
-            note + " Prompts that are already detailed are left as written."
-        )
-        if form.get("output") == "tile":
-            widgets.muted_wrapped(
-                "A seamless tile is never expanded: the enrichment describes "
-                "subjects, and a tile has none."
-            )
-        if _is_tile_arm(form):
-            # The sprite arm is exempt: its first step is an ordinary reference
-            # of one character, which is exactly what the enrichment describes.
-            widgets.muted_wrapped(
-                "A tileset is never expanded: each tile is generated from the "
-                "line typed for it, and the enrichment describes one subject."
-                if is_seamless(form)
-                else "A tile grid is never expanded: the enrichment describes "
-                "one subject, and a sheet is sixty-four."
-            )
-
-
-def _preview_nothing(state: Any) -> None:
-    """Drop the composition on screen and stop asking for a new one.
-
-    For the one case where "what would be sent" has no answer: a seamless layout
-    that names no material yet. Leaving the last preview up would show a
-    composition of words that are no longer in the form, which is the same
-    untruth as previewing the wrong template.
-
-    The two *cleared* notices survive it. They are not the preview -- they
-    belong to a change the user just made and are only kept in this dict because
-    it is the frame-scratch namespace (see :data:`CLEARED_KEY`).
-    """
-    state.preview = {
-        key: value
-        for key, value in (state.preview or {}).items()
-        if key in (CLEARED_KEY, TILE_MODE_CLEARED_KEY)
-    }
-    state.preview_dirty_at = 0.0
-
-
-def _preview(ctx: Any) -> None:
-    """The composed prompt, recomputed off-thread after a typing pause."""
-    state = ctx.state
-    if state.preview_dirty_at and time.monotonic() - state.preview_dirty_at > PREVIEW_DEBOUNCE:
-        raw = {k: v for k, v in state.form_2d.items() if v not in ("", None)}
-        form = state.form_2d
-        grid = _is_tile_arm(form) and not is_seamless(form)
-        seamless = _is_tile_arm(form) and is_seamless(form)
-        # The *subject*, not the raw prompt, for a grid: the projection and
-        # detail clauses are the pipeline's and are appended before the
-        # template, so a preview built from the bare prompt would be missing
-        # the half of the composition that this output kind adds.
-        #
-        # And for the two seamless layouts, the *first material* through the
-        # tile template -- which is the sentence that will actually run. The
-        # grid's own subject previewed here would be a composition no generation
-        # on this path ever sees: they compose one material at a time and the
-        # Description is not part of any of them.
-        subject = form["prompt"]
-        if grid:
-            subject = tilesheetlib.sheet_subject(form["prompt"], _view_of(form))
-        elif seamless:
-            first = seamless_subject(form)
-            if first is None:
-                # Nothing describable yet, so nothing is previewed: a request
-                # with no material has no first material, and showing the
-                # Description here would show a sentence this layout never
-                # sends.
-                _preview_nothing(state)
-                return
-            subject = first
-        # Only stop asking once the request was actually taken. ``submit``
-        # refuses a key that is already in flight, and the first preview runs a
-        # CLIP tokenizer -- so clearing the flag unconditionally dropped the
-        # edit that arrived during that first run, and the composition on
-        # screen stayed stale until the user typed again.
-        if ctx.submit(
-            "preview",
-            svc_system.prompt_preview,
-            ctx.svc,
-            {**raw, "prompt": None},
-            subject,
-            # Threaded rather than inferred: the output kind is not a guidance
-            # field, so without it a tile would be previewed through the
-            # single-centred-object framing its job will never use. A seamless
-            # layout's cells go through ``prompt.TILE_TEMPLATE`` -- the very
-            # template ``text2image.generate(tile=True)`` selects -- which is why
-            # it previews as a tile and not as a sheet.
-            tile=form.get("output") == "tile" or seamless,
-            tilesheet=grid,
-        ):
-            state.preview_dirty_at = 0.0
-    preview = state.preview
-    if not preview:
-        return
-    if imgui.tree_node("Prompt actually sent"):
-        imgui.text_wrapped(preview.get("prompt") or "")
-        # ``token_count``, not ``tokens``: that name is the design-token module
-        # this file imports, and shadowing it inside a draw function is a
-        # NameError waiting for the next person to reach for ``tokens.SP_2``.
-        token_count, chunks = preview.get("tokens"), preview.get("chunks")
-        if token_count is not None:
-            # Chunks, not a truncation warning: the composed prompt is split on
-            # comma boundaries and each chunk encoded separately, so a long one
-            # costs attention rather than being cut off.
-            widgets.muted(f"{token_count} tokens - {chunks} chunk(s)")
-        imgui.tree_pop()
 
 
 def _references(ctx: Any, form: dict[str, Any]) -> None:
@@ -1987,10 +1827,9 @@ def _negative(ctx: Any, form: dict[str, Any]) -> None:
         imgui.begin_disabled()
     # The section heading above is the label; imgui would draw a multiline's
     # own label to the *right* of a -1-wide field, clipped off the panel.
-    before = form["negative_prompt"]
-    form["negative_prompt"] = widgets.multiline("##negative", before, 54, MAX_PROMPT)
-    if form["negative_prompt"] != before:
-        ctx.state.preview_dirty_at = time.monotonic()
+    form["negative_prompt"] = widgets.multiline(
+        "##negative", form["negative_prompt"], 54, MAX_PROMPT
+    )
     if inert is not None:
         imgui.end_disabled()
         widgets.muted_wrapped(inert)
@@ -2650,18 +2489,6 @@ def weights_problem(ctx: Any, form: dict[str, Any]) -> widgets.Problem | None:
             f"Install it in Settings, or pick another.",
             field,
         )
-    # The expander, keyed differently: the form holds a *mode*, and every
-    # mode runs the one registry entry -- so the row is looked up by that
-    # entry's key rather than by the form value.
-    if (form.get("expand") or "off") != "off":
-        row = by_key.get(f"expander:{modelslib.DEFAULT_EXPANDER}")
-        if row is not None and not row.get("present"):
-            label = row.get("label") or modelslib.DEFAULT_EXPANDER
-            return widgets.Problem(
-                f"Prompt expansion needs {label!r}, which is not downloaded. "
-                f"Install it in Settings, or turn expansion off.",
-                "expand",
-            )
     if form.get("output") == "sheet" and form.get("sheet_type") == "sprite":
         # Only after the visible preliminary recipe has passed: both stages
         # are real requirements, and the first problem should point at the

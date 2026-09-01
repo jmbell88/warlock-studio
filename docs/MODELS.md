@@ -198,16 +198,6 @@ uvx hf download yuvalkirstain/PickScore_v1 --revision a4e4367c6dfa7288a00c550414
 uvx hf download yuvalkirstain/PickScore_v1 --revision a4e4367c6dfa7288a00c550414478f865b875800 `
   --include "*.json" --include "*.txt" --local-dir $HOME/.warlock/models/pickscore-v1
 
-# Prompt expander (~700 MB): the Fooocus GPT-2 (124M params, CPU) that enriches
-# short prompts with aesthetic detail before SDXL sees them -- the offline form
-# of the LLM prompt rewriting every hosted image service does. Off by default;
-# the 2D pane's "enrich" select turns it on per job, and prompts that already
-# carry their own description are left as written. positive.txt (in *.txt) is
-# the whitelist generation is constrained to. The weights are AGPL-3.0.
-uvx hf download LykosAI/GPT-Prompt-Expansion-Fooocus-v2 --revision a1fa8a394dc4614ec944ed188d8873648df85a10 `
-  --include "*.json" --include "*.txt" --include "*.bin" --local-dir $HOME/.warlock/models/prompt-expander-fooocus
-```
-
 ## Landmark-informed joint placement (rigging)
 
 ```powershell

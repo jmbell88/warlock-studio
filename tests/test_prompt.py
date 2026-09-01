@@ -161,10 +161,11 @@ DEFAULT_COMPOSITION = (
 
 def test_the_default_composition_is_byte_identical_across_the_retirement():
     assert prompt.build("a barrel", {}) == DEFAULT_COMPOSITION
-    # 6 is the scene-template/expansion bump and 7 the tile-sheet one; the
-    # literal above still holding is the proof the object path did not move
-    # with either.
-    assert prompt.PROMPT_VERSION == 7
+    # 6 was the scene-template/expansion bump, 7 the tile-sheet one and 8 the
+    # deletion of the scene template with the expander that was its only
+    # reader; the literal above still holding is the proof the object path did
+    # not move with any of them.
+    assert prompt.PROMPT_VERSION == 8
 
 
 def test_the_tilesheet_template_asks_for_separate_tiles_not_one_scene():
@@ -193,10 +194,11 @@ def test_a_sheet_prompt_keeps_the_users_words_first():
     assert "uniform grid of separate tiles" in text
 
 
-def test_the_sheet_output_kind_wins_over_the_prompt_mode():
-    """An output kind decides which clauses may be present at all; a prompt
-    mode only describes how the subject was written."""
-    both = prompt.build("stone", {}, tilesheet=True, tile=True, scene=True)
+def test_the_sheet_output_kind_wins_over_the_tile_one():
+    """A sheet's cells are sixty-four different tiles, so the grid template
+    decides which clauses may be present at all. This used to have a third
+    flag -- the scene prompt mode -- which went with the expander."""
+    both = prompt.build("stone", {}, tilesheet=True, tile=True)
     assert both == prompt.build("stone", {}, tilesheet=True)
 
 
