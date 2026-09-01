@@ -179,7 +179,7 @@ def _reorder(
 def _context_menu(ctx: Any, state: Any, doc: Any, obj: Any) -> None:
     """Rename, duplicate and delete on the row itself.
 
-    Duplicate is here rather than only on Ctrl+D because the keyboard version
+    Duplicate is here rather than only on Ctrl+J because the keyboard version
     acts on the *selection*, and the thing a user right-clicks is one row --
     which is why it selects the row first: a menu item that operated on
     something other than what was clicked would be the sharpest possible
@@ -192,7 +192,7 @@ def _context_menu(ctx: Any, state: Any, doc: Any, obj: Any) -> None:
         doc.select([obj.uid])
     if controls.menu_item(f"{icons.PENCIL} Rename", "", False)[0]:
         state.renaming = obj.uid
-    if controls.menu_item(f"{icons.COPY} Duplicate", "Ctrl+D", False)[0]:
+    if controls.menu_item(f"{icons.COPY} Duplicate", "Ctrl+J", False)[0]:
         from .. import clay_mode
 
         clay_mode._duplicate_selection(ctx, state, doc)

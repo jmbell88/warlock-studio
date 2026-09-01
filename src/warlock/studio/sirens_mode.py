@@ -944,13 +944,7 @@ def close_tab(ctx: Any, uid: str) -> None:
     if not tab.dirty:
         drop()
         return
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Close without saving?",
-            message=f"{tab.title} has unsaved changes.",
-            on_confirm=drop,
-        )
-    )
+    dialogs.ask_close_unsaved(ctx, tab.title, drop)
 
 
 def release_all(ctx: Any) -> None:

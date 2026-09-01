@@ -1708,7 +1708,7 @@ def _trash_bar(ctx: Any, jobs: list[Any]) -> None:
                 "measured against. Delete those individually if you want them "
                 "gone.",
                 confirm_label="Empty",
-                cancel_label="Cancel",
+                cancel_label="Keep",
                 on_confirm=lambda: ctx.submit("empty-trash", svc_jobs.empty_trash, ctx.svc),
             )
         )
@@ -1747,7 +1747,7 @@ def ask_prune(ctx: Any) -> None:
             "Running jobs are kept, and so is anything you accepted or "
             "labelled. This cannot be undone.",
             confirm_label="Prune",
-            cancel_label="Cancel",
+            cancel_label="Keep",
             body=body,
             on_confirm=lambda: ctx.submit(
                 "prune", svc_jobs.prune_jobs, ctx.svc, _prune_keep[0]
@@ -1786,7 +1786,7 @@ def ask_clean(ctx: Any) -> None:
             "pose library, style anchors and settings are kept. This cannot "
             "be undone.",
             confirm_label="Delete everything",
-            cancel_label="Cancel",
+            cancel_label="Keep",
             body=body,
             # The ``delete:`` prefix is load-bearing, not decoration:
             # ``main._on_task_done`` re-measures storage only for keys starting

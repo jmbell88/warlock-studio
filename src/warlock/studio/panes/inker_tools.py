@@ -745,7 +745,7 @@ def _gradient_stops(state: Any) -> None:
             "x",
             len(state.gradient_stops) > 1,
             reason="A gradient needs at least two stops.",
-            tooltip="Remove this stop.",
+            tooltip="Delete this stop.",
         ):
             remove = index
         imgui.pop_id()

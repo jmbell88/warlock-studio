@@ -46,8 +46,14 @@ class FakeCtx:
         self.result = run(*args)
         return True
 
-    def toast(self, message: str, kind: str = "info") -> None:
-        self.toasts.append((message, kind))
+    def toast(
+        self,
+        message: str,
+        kind: str = "info",
+        action: str | None = None,
+        action_arg: str | None = None,
+    ) -> None:
+        self.toasts.append((message, kind, action, action_arg))
 
 
 class _AppState:
@@ -1189,6 +1195,43 @@ def test_a_lock_stops_a_cut_but_not_a_copy():
     assert state.clipboard is None
     assert layer.data.all(), "nothing was cut"
     assert "locked" in ctx.toasts[-1][0]
+
+
+def test_the_locked_refusal_offers_the_unlock_that_undoes_it():
+    """Five sites raised this sentence as a bare toast while Inker's identical
+    refusal has carried an Unlock button since it became a tip -- so the same
+    mistake in two workspaces of one app cost one click in one and a hunt
+    through the layer list in the other."""
+    ctx = FakeCtx()
+    tab, state, layer, _value = _painted(ctx)
+    tab.doc.set_layer_props(layer.uid, locked=True)
+    state.select = (0, 0, 1, 1)
+    plotter_mode._delete(ctx, state, tab)
+
+    message, _kind, action, arg = ctx.toasts[-1]
+    assert "locked" in message
+    assert action == "unlock" and arg == str(layer.uid)
+
+    ctx.state.plotter = state
+    plotter_mode.unlock_layer(ctx, arg)
+    assert not tab.doc.layer(layer.uid).locked
+    # And it is an ordinary props edit, so it undoes.
+    tab.doc.undo()
+    assert tab.doc.layer(layer.uid).locked
+
+
+def test_unlocking_from_a_stale_toast_does_nothing_rather_than_raising():
+    """A toast lives eight seconds and the document does not stop for it: the
+    layer may be gone, or unlocked since, by the time the button is pressed."""
+    ctx = FakeCtx()
+    tab, state, layer, _value = _painted(ctx)
+    ctx.state.plotter = state
+
+    plotter_mode.unlock_layer(ctx, "999999")
+    plotter_mode.unlock_layer(ctx, "not a number")
+    head = tab.doc.history.head
+    plotter_mode.unlock_layer(ctx, str(layer.uid))
+    assert tab.doc.history.head == head, "an unlocked layer is not re-unlocked"
 
 
 def test_a_lock_stops_delete():

@@ -323,7 +323,7 @@ def test_ctrl_chords_still_reach_their_ops_during_a_drag(svc) -> None:
     depth = len(tab.doc.history)
 
     event = pygame.event.Event(
-        pygame.KEYDOWN, key=pygame.K_d, mod=pygame.KMOD_LCTRL
+        pygame.KEYDOWN, key=pygame.K_j, mod=pygame.KMOD_LCTRL
     )
     assert clay_mode.handle_key(ctx, event) is True
     assert ctx.clay_view.keys == [], "the drag was never asked"
@@ -1165,24 +1165,39 @@ def _merge_ready(svc):
     return ctx, clay_mode.ensure(ctx), tab, doc
 
 
-def test_ctrl_j_still_opens_the_merge_dialog(svc) -> None:
-    """Unshifted is unchanged. Merge takes a weld distance, so firing it stages
-    a popup rather than editing -- which is also how this tells the two apart."""
+def test_ctrl_m_opens_the_merge_dialog(svc) -> None:
+    """Merge takes a weld distance, so firing it stages a popup rather than
+    editing -- which is also how this tells the two apart. On M rather than J
+    since Clay stopped disagreeing with Inker and Plotter about Ctrl+J."""
     ctx, state, tab, doc = _merge_ready(svc)
-    assert clay_mode._ctrl_key(ctx, state, tab, doc, "j", shift=False) is True
+    assert clay_mode._ctrl_key(ctx, state, tab, doc, "m", shift=False) is True
     assert state.pending_op == "join"
     assert len(doc.objects) == 2, "the dialog has not been answered yet"
 
 
-def test_ctrl_shift_j_unions_instead_of_welding(svc) -> None:
+def test_ctrl_shift_m_unions_instead_of_welding(svc) -> None:
     """Union takes no parameters, so it acts on the keystroke. Two boxes at the
     same place become one object with one box's worth of surface -- a weld
     would have kept both sets of walls."""
     pytest.importorskip("manifold3d")
     ctx, state, tab, doc = _merge_ready(svc)
-    assert clay_mode._ctrl_key(ctx, state, tab, doc, "j", shift=True) is True
+    assert clay_mode._ctrl_key(ctx, state, tab, doc, "m", shift=True) is True
     assert not state.pending_op, "union has no dialog to stage"
     assert len(doc.objects) == 1
+
+
+def test_ctrl_j_duplicates_and_ctrl_d_deselects(svc) -> None:
+    """Clay's two chords, brought into line with Inker's and Plotter's: Ctrl+D
+    duplicated here and deselects in both of those, and Ctrl+J merged here and
+    duplicates in Plotter."""
+    ctx, state, tab, doc = _merge_ready(svc)
+    before = len(doc.objects)
+    assert clay_mode._ctrl_key(ctx, state, tab, doc, "j", shift=False) is True
+    assert len(doc.objects) == before * 2, "both selected objects are copied"
+    assert doc.selection
+
+    assert clay_mode._ctrl_key(ctx, state, tab, doc, "d", shift=False) is True
+    assert not doc.selection
 
 
 def test_g_and_s_start_a_keyboard_drag(svc) -> None:

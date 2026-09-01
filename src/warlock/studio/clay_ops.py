@@ -933,7 +933,7 @@ def _register_defaults() -> None:
             modes=("object",),
             run=_duplicate,
             enabled=has_objects,
-            key="Ctrl+D",
+            key="Ctrl+J",
             separator_before=True,
         )
     )
@@ -998,7 +998,7 @@ def _register_defaults() -> None:
             # that is what ``_join`` will actually merge -- a row enabled by an
             # object the merge then skips is the greyed one's problem again.
             enabled=has_two_visible,
-            key="Ctrl+J",
+            key="Ctrl+M",
             # The pointer at its counterpart, here rather than in the menu: this
             # dialog is the one moment the user has committed to "make these one
             # object" and can still choose which meaning of it they wanted, and
@@ -1006,7 +1006,7 @@ def _register_defaults() -> None:
             # the result -- has not been paid yet.
             hint=(
                 "Welds the shapes and keeps the surfaces inside the overlap. For "
-                "shapes that interpenetrate, Union Objects... (Ctrl+Shift+J) cuts "
+                "shapes that interpenetrate, Union Objects... (Ctrl+Shift+M) cuts "
                 "those away instead -- at the cost of the UVs and the n-gons."
             ),
             params=(
@@ -1029,7 +1029,7 @@ def _register_defaults() -> None:
     # the identity for both.
     #
     # And the same key, shifted. Union spent its first release in the context
-    # menu with no binding at all while the weld beside it held Ctrl+J, so of
+    # menu with no binding at all while the weld beside it held the merge key, so of
     # the pair the discoverable one was the one that leaves the interior walls
     # in -- users found *Merge*, got z-fighting inside the overlap, and had no
     # reason to suspect the other row existed. Shift is the right modifier for
@@ -1042,7 +1042,7 @@ def _register_defaults() -> None:
             modes=("object",),
             run=_union,
             enabled=has_two_visible,
-            key="Ctrl+Shift+J",
+            key="Ctrl+Shift+M",
         )
     )
     for axis, label in enumerate(("X", "Y", "Z")):

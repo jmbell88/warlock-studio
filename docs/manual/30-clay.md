@@ -286,7 +286,7 @@ is metres of world space and is measured from the nearest selected vertex, not f
 the selection — dragging one end of a long strip fades out away from that end rather than along the
 strip. Setting the radius to zero is the same as switching it off.
 
-Two operations act on the whole selection. **Duplicate** (`Ctrl+D`) makes a copy under a new name,
+Two operations act on the whole selection. **Duplicate** (`Ctrl+J`) makes a copy under a new name,
 counting up — `Box`, `Box.001`, `Box.002`. **Bake** folds an object's position, rotation and scale
 into its geometry and resets the transform to identity, which is what you want before measuring
 something or exporting it into a frame that has to match.
@@ -310,7 +310,7 @@ Double-clicking a name renames it in place.
 
 ## Merging objects
 
-**Merge Objects...** (`Ctrl+J`, object mode, two or more selected) turns several shapes into one.
+**Merge Objects...** (`Ctrl+M`, object mode, two or more selected) turns several shapes into one.
 The survivor is the **topmost selected object in the outliner** — it keeps its name, its transform
 and its default material — and everything else is carried into its frame, appended to its geometry
 and removed from the document. That is one undo step: a `Ctrl+Z` that put one absorbed object back
@@ -337,7 +337,7 @@ non-zero distance, and the shells you kept apart are welded together. Merge the 
 keep the parts as separate objects until last.
 
 It is a weld and not a solid union. Geometry inside an overlap is kept rather than cut away — for
-that, use **Union Objects...** (`Ctrl+Shift+J`) below — the merge dialog says so too.
+that, use **Union Objects...** (`Ctrl+Shift+M`) below — the merge dialog says so too.
 
 A merged object is no longer what a generator would build, so its generator claim is dropped along
 with the merge — the properties panel stops offering the size field that would have rebuilt a
@@ -345,7 +345,7 @@ pristine box over your work. That drop is part of the same undo step.
 
 ## Union objects
 
-**Union Objects...** (`Ctrl+Shift+J`, object mode, two or more visible objects selected) is the
+**Union Objects...** (`Ctrl+Shift+M`, object mode, two or more visible objects selected) is the
 other way of turning
 several shapes into one, and it answers a different question. A merge keeps everything: two
 interpenetrating cubes come out as one object still carrying both sets of interior walls, which

@@ -918,16 +918,17 @@ def _layer_table(ctx: Any, doc: Any, layer: Any, editable: bool) -> None:
 
 
 def _delete_layer(ctx: Any, doc: Any, layer: Any) -> None:
-    from .. import dialogs
+    """No confirm. **Undo is the confirmation** (J91), as everywhere else.
 
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Delete this layer?",
-            message=f"{layer.name or 'The layer'} and everything on it will be removed. "
-            "Ctrl+Z brings it back.",
-            on_confirm=lambda: doc.remove_layer(layer.uid),
-        )
-    )
+    This asked one, and its own message gave the reason not to: "Ctrl+Z brings
+    it back". It was the only undoable in-document delete in the app that
+    stopped to ask -- Inker, Clay, Packwright and Sirens all remove a layer, an
+    object, a page or a pattern outright -- and it asked with ``Confirm``'s
+    *unsaved-work* labels on top of that, so a reader was offered [Discard] and
+    [Keep editing] for a step that discards nothing and ends no edit. The two
+    places that really are irreversible go on asking through ``ask_delete``.
+    """
+    doc.remove_layer(layer.uid)
 
 
 def _subject(doc: Any, state: Any, layer: Any) -> str:

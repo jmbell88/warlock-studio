@@ -606,13 +606,7 @@ def close_tab(ctx: Any, uid: str) -> None:
     if not tab.dirty:
         drop()
         return
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Close without saving?",
-            message=f"{tab.title} has unsaved changes.",
-            on_confirm=drop,
-        )
-    )
+    dialogs.ask_close_unsaved(ctx, tab.title, drop)
 
 
 # --- keys -------------------------------------------------------------------
@@ -643,7 +637,7 @@ AXIS_VIEW_KEYS = {"1": "front", "3": "right", "7": "top"}
 # Ctrl-shortcuts that change the document. Serialising reads the live document
 # on a task thread, so anything that restructures it or moves the history head
 # the save captured waits for the save, exactly as a gizmo drag does.
-_MUTATING_CTRL = frozenset({"z", "y", "d", "a", "i", "j"})
+_MUTATING_CTRL = frozenset({"z", "y", "a", "i", "j", "m"})
 
 
 # --- history ------------------------------------------------------------------
@@ -919,8 +913,16 @@ def _ctrl_key(
         _select_all(doc)
     elif name == "i" and shift:
         _invert(doc)
-    elif name == "j" and doc.element_mode == "object":
-        # Object mode only, for the reason Ctrl+D is: a merge is about whole
+    elif name == "m" and doc.element_mode == "object":
+        # **Merge is Ctrl+M, and Duplicate is Ctrl+J.** Clay used to be the
+        # editor that disagreed with the other three about both keys: Ctrl+D
+        # duplicated here and deselects in Inker and Plotter, and Ctrl+J merged
+        # here and duplicates in Plotter (whose comment names the raster
+        # editor's "copy this to its own layer" as the same idea). Two chords
+        # meaning two different things in two workspaces of one app is a user
+        # pressing the one they learned and getting the other verb.
+        #
+        # Object mode only, for the reason Ctrl+J is: a merge is about whole
         # objects, and there is no element-mode reading of it to fall back on.
         # Shift picks the union rather than the weld -- one predicate gates
         # both, so the shift never changes whether the key does anything, only
@@ -930,11 +932,21 @@ def _ctrl_key(
         op = clay_ops.get("union" if shift else "join")
         if op.enabled(doc):
             _fire_op(ctx, doc, op)
-    elif name == "d" and doc.element_mode == "object":
+    elif name == "j" and doc.element_mode == "object":
         # Object mode only: duplicating a *face* selection is a different
         # operation with a different name, and doing the object one instead
         # would silently double a mesh the user is mid-edit on.
         _duplicate_selection(ctx, state, doc)
+    elif name == "d" and not tab.saving:
+        # Deselect, which is what it does in Inker and in Plotter. Not gated on
+        # the element mode: clearing a selection means something in all four.
+        # Unlike Esc it is *only* the deselect -- no mode step, no drag cancel
+        # -- because a chord a user reaches for deliberately should do one
+        # thing, and the staged key already exists for the other reading.
+        if doc.element_mode != "object":
+            doc.clear_element_sel()
+        else:
+            doc.select([])
     elif name in GROW_KEYS:
         # Ctrl+plus and Ctrl+minus, on both the number row and the keypad.
         # Four names for two verbs, because the two rows report different key

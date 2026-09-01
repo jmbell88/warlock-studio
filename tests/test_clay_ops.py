@@ -581,11 +581,26 @@ def test_merge_never_absorbs_a_hidden_object():
 
 
 def test_union_is_bound_beside_merge_rather_than_buried() -> None:
-    """Ctrl+Shift+J to Ctrl+J: the same key, shifted, for the same question
-    answered the other way. A user who knows one is one keystroke from the
-    other, which is the whole of what was missing."""
-    assert clay_ops.get("join").key == "Ctrl+J"
-    assert clay_ops.get("union").key == "Ctrl+Shift+J"
+    """The same key, shifted, for the same question answered the other way. A
+    user who knows one is one keystroke from the other, which is the whole of
+    what was missing. The pair moved from J to M when Clay's Ctrl+D/Ctrl+J
+    stopped disagreeing with Inker's and Plotter's; what matters here is that
+    they stayed a pair."""
+    assert clay_ops.get("join").key == "Ctrl+M"
+    assert clay_ops.get("union").key == "Ctrl+Shift+M"
+
+
+def test_clay_agrees_with_the_other_editors_about_ctrl_d_and_ctrl_j() -> None:
+    """Clay used to duplicate on Ctrl+D, which deselects in Inker and Plotter,
+    and merge on Ctrl+J, which duplicates in Plotter. Two chords meaning two
+    things in two workspaces of one app is a user pressing the one they learned
+    and getting the other verb."""
+    from warlock.studio import inker_ops
+
+    assert clay_ops.get("duplicate").key == "Ctrl+J"
+    assert not any(op.key == "Ctrl+D" for op in clay_ops.OPS)
+    # Inker's, for the comparison the paragraph above rests on.
+    assert inker_ops.get("deselect").key == "Ctrl+D"
 
 
 def test_no_two_ops_in_one_mode_claim_the_same_key() -> None:

@@ -445,13 +445,7 @@ def close_tab(ctx: Any, uid: str) -> None:
     if not tab.dirty:
         drop()
         return
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Close without saving?",
-            message=f"{tab.title} has unsaved changes.",
-            on_confirm=drop,
-        )
-    )
+    dialogs.ask_close_unsaved(ctx, tab.title, drop)
 
 
 def release_all(ctx: Any) -> None:
@@ -823,6 +817,38 @@ def handle_key(ctx: Any, event: Any) -> bool:
     return False
 
 
+def _locked_toast(ctx: Any, layer: Any) -> None:
+    """"*Name* is locked", with the Unlock that undoes it.
+
+    Five sites raised this sentence as a bare toast. Inker's identical refusal
+    has carried its remedy since it became a tip -- ``state.say(LOCKED_LAYER,
+    remedy="layer_properties", remedy_label="Unlock")`` -- so the same mistake
+    in two workspaces of one app cost one click in one and a hunt through the
+    layer list in the other. ``ctx.toast`` has taken an action all along.
+    """
+    ctx.toast(
+        f"{layer.name} is locked.", "error", action="unlock", action_arg=str(layer.uid)
+    )
+
+
+def unlock_layer(ctx: Any, uid: str) -> None:
+    """What the Unlock in that toast does. Undoable, like any other props edit."""
+    state = getattr(ctx.state, "plotter", None)
+    tab = None if state is None else state.active
+    if tab is None or tab.busy:
+        return
+    try:
+        target = int(uid)
+    except (TypeError, ValueError):
+        return
+    layer = tab.doc.layer(target)
+    # Gone, or unlocked since -- a toast lives eight seconds and the document
+    # does not stop for it.
+    if layer is None or not getattr(layer, "locked", False):
+        return
+    tab.doc.set_layer_props(target, locked=False)
+
+
 def _selected_tiles(ctx: Any, state: PlotterState, tab: PlotterDoc, *, writing: bool):
     """The active tile layer and the clamped selection, or ``(None, None)``.
 
@@ -845,7 +871,7 @@ def _selected_tiles(ctx: Any, state: PlotterState, tab: PlotterDoc, *, writing: 
         ctx.toast("Pick a tile layer first.", "error")
         return None, None
     if writing and layer.locked:
-        ctx.toast(f"{layer.name} is locked.", "error")
+        _locked_toast(ctx, layer)
         return None, None
     return layer, rect
 
@@ -937,7 +963,7 @@ def _copy_object(
     # nothing, because a cut that quietly became a copy would leave the user
     # pasting what they believe they moved.
     if cut and getattr(layer, "locked", False):
-        ctx.toast(f"{layer.name} is locked.", "error")
+        _locked_toast(ctx, layer)
         return
     found = next((o for o in layer.objects if o.uid == state.selected_object), None)
     if found is None:
@@ -974,7 +1000,7 @@ def _paste_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
     # A paste adds an object, which is a content edit -- the same door
     # ``_delete`` holds, because the lock is enforced at the studio layer.
     if getattr(layer, "locked", False):
-        ctx.toast(f"{layer.name} is locked.", "error")
+        _locked_toast(ctx, layer)
         return
     copy = dataclasses.replace(
         state.clipboard.obj,
@@ -1013,7 +1039,7 @@ def _duplicate_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
     # A duplicate adds an object, which is a content edit -- the same door
     # ``_delete`` holds, because the lock is enforced at the studio layer.
     if getattr(layer, "locked", False):
-        ctx.toast(f"{layer.name} is locked.", "error")
+        _locked_toast(ctx, layer)
         return
     found = next((o for o in layer.objects if o.uid == state.selected_object), None)
     if found is None:
@@ -1048,7 +1074,7 @@ def _delete(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
         if layer is None:
             return
         if getattr(layer, "locked", False):
-            ctx.toast(f"{layer.name} is locked.", "error")
+            _locked_toast(ctx, layer)
             return
         # Every selected object in one step. ``remove_objects`` is the group
         # twin of ``remove_object`` -- one ``compound`` of the same

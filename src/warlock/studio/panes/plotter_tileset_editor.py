@@ -612,7 +612,7 @@ def _animation_tab(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None
         ):
             write(moved_frame(frames, at, 1))
         imgui.same_line()
-        if widgets.icon_button(f"x##tsdel{at}", "Remove this frame", borderless=True):
+        if widgets.icon_button(f"x##tsdel{at}", "Delete this frame", borderless=True):
             write([f for pos, f in enumerate(frames) if pos != at])
         imgui.pop_id()
     if controls.button(f"Add this tile as a frame##tsaddf{local}", (-1, 0)):
@@ -1051,7 +1051,7 @@ def _wang_colours(
             )
             imgui.pop_id()
             return
-        if widgets.icon_button("x##drop", "Remove this colour", borderless=True):
+        if widgets.icon_button("x##drop", "Delete this colour", borderless=True):
             remove_wang_colour(state, tab, index, at, slot)
             imgui.pop_id()
             return

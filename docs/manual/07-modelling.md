@@ -68,11 +68,11 @@ Normals** and **Delete**.
 Two operations turn several objects into one, they sit on adjacent shortcuts, and they do different
 things. This is worth doing once by hand rather than reading about.
 
-**Merge Objects** (`Ctrl+J`) welds them into a single object. Vertices within a distance of each
+**Merge Objects** (`Ctrl+M`) welds them into a single object. Vertices within a distance of each
 other are joined. Everything else survives — including, if the shapes interpenetrated, the interior
 walls now buried inside your model, which will z-fight and which no light will ever reach.
 
-**Union Objects** (`Ctrl+Shift+J`) is a boolean. It removes the interior. What it costs is stated in
+**Union Objects** (`Ctrl+Shift+M`) is a boolean. It removes the interior. What it costs is stated in
 the operation's own hint rather than discovered afterwards: **UVs are lost** (no corner
 correspondence survives a recut), n-gons become triangles, and **every input must be a closed
 volume** — an object with a hole in it is refused by name.

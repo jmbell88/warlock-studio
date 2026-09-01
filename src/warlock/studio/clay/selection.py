@@ -36,8 +36,8 @@ def select_all(doc: Any) -> None:
     has always skipped the invisible ones, which is the asymmetry rather than a
     choice: ``visible=False`` is documented to mean an object does not render,
     does not export and **cannot be picked**, and Ctrl+A was picking them. It
-    only showed once merge existed -- Ctrl+A then Ctrl+J pulled geometry the
-    user could not see into the survivor -- but Delete and Ctrl+D were reading
+    only showed once merge existed -- Ctrl+A then Ctrl+M pulled geometry the
+    user could not see into the survivor -- but Delete and Duplicate were reading
     the same selection all along.
     """
     if doc.element_mode == "object":

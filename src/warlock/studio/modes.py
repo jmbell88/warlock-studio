@@ -219,24 +219,21 @@ PURPOSE: dict[str, str] = {
 #: The wording is the manual's own ("provisional", "untested"), deliberately,
 #: so a user who follows the tooltip into the chapter finds the same words
 #: rather than a second, differently-hedged account.
-# **Sirens' chip was narrowed at every landing and it did not come off at the
-# last one.** It went on because the mode shipped in halves and the note was
-# rewritten each time a gap closed, because a chip whose sentence names what is
-# already there teaches the reader to ignore the chip. By phase 5 the note said
-# only "no manual chapter or guided tour", and both of those now exist
-# (``docs/manual/14`` and ``34``, and the ``sirens-basics`` tour) -- but writing
-# the chapter is what found the gap that was never in the note at all: **four of
-# a cell's five columns cannot be typed into.** ``sirens_mode.handle_key``
-# answers the piano row and the note-off in column 0 and nothing anywhere else,
-# so the instrument, volume, effect and parameter columns are drawn, are
-# reachable with Left/Right, and take no input; ``write_cell`` has exactly two
-# callers and both pass ``column=0``. Every effect the synth implements --
-# ``Fxx``, ``Bxx``, the slides, the arpeggio -- is therefore unreachable from
-# the UI, and so is ``notes.NOTE_RELEASE``: the backtick writes ``NOTE_OFF``,
-# which cuts, so an instrument's release half is reachable mid-song only from a
-# document that already carries a ``~~~``. That is a bigger absence than either
-# of the two the note used to name, and a chip removed on the same day it was
-# found would be the badge doing the opposite of its job.
+# **Sirens' chip was narrowed at every landing and it has not come off yet.** It
+# went on because the mode shipped in halves and the note was rewritten each
+# time a gap closed, because a chip whose sentence names what is already there
+# teaches the reader to ignore the chip. The two absences it named at phase 5 --
+# no manual chapter, no guided tour -- are gone (``docs/manual/14`` and ``34``,
+# and the ``sirens-basics`` tour), and so is the larger one writing the chapter
+# found: **four of a cell's five columns could not be typed into**, which was
+# closed on 2026-08-27. ``handle_key`` now dispatches on ``state.column``, every
+# write goes through ``write_cell``, and a multi-digit column's sub-position is
+# ``SirensState.digit``; ``tests/test_sirens_keys.py`` is what asserts a
+# keystroke reaches the synthesiser. What is left is one thing, and it is the
+# one ``MATURITY_NOTE`` below states: a block selection can be transposed and
+# cleared but not copied, cut or pasted, so a repeated bar is retyped. The two
+# have to be read together, and this paragraph used to contradict the sentence
+# seventeen lines under it.
 MATURITY: dict[str, str] = {
     "troupe": "Experimental",
     "sirens": "Experimental",

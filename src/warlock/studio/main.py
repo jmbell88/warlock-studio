@@ -359,8 +359,9 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("G / R / S", "Switch the transform while a drag is under way"),
             ("F", "Frame the selection"),
             ("Delete", "Delete -- faces in an element mode, objects otherwise"),
-            ("Ctrl+D", "Duplicate (object mode)"),
-            ("Ctrl+J", "Merge the selected objects (object mode)"),
+            ("Ctrl+J", "Duplicate (object mode)"),
+            ("Ctrl+M / Ctrl+Shift+M", "Merge / union the selection (object mode)"),
+            ("Ctrl+D", "Deselect"),
             ("Ctrl+A", "Select all, in the current mode"),
             ("Ctrl+Shift+I", "Invert the selection"),
             ("Right-click", "Context menu"),
@@ -5537,6 +5538,10 @@ class App:
             # selection are handled exactly as they are when the trash view's
             # own Restore button is pressed.
             library.restore_asset(ctx, arg)
+        elif name == "unlock" and arg:
+            from . import plotter_mode
+
+            plotter_mode.unlock_layer(ctx, arg)
         elif name == "review":
             # The sweep is not named here: Review rescans on arrival and its
             # run list is the thing that knows which directories exist. Landing

@@ -2891,6 +2891,12 @@ TOAST_ACTIONS = {
     # Undo inside the toast's own dwell is the offer the no-confirm rule was
     # trading on.
     "undo": "Undo",
+    # The other half of a refusal that names a lock. Inker's identical refusal
+    # has offered this since it became a tip -- ``state.say(LOCKED_LAYER,
+    # remedy="layer_properties", remedy_label="Unlock")`` -- while Plotter's
+    # five copies of the same sentence were a bare toast, so the same mistake
+    # in two workspaces cost one click in one and a hunt in the other.
+    "unlock": "Unlock",
 }
 
 # How many toasts are on screen at once. The rest are counted, not dropped

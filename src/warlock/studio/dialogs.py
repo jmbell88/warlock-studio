@@ -138,6 +138,46 @@ class Confirm:
     _focused: bool = field(default=False, repr=False)
 
 
+#: What the *cancel* button is called, by what the question is. Three words for
+#: three questions, and the point is that there are three rather than one per
+#: call site: a reader answers on the buttons, and a label that varies by author
+#: carries no information. The library disagreed with itself -- "Keep" on two
+#: purges and "Cancel" on the three *larger* ones beside them.
+#:
+#: * **"Keep editing"** -- unsaved work is about to be abandoned. What is kept
+#:   is the session you are in. :func:`ask_close_unsaved`, and ``Confirm``'s own
+#:   default.
+#: * **"Keep"** -- something already saved is about to be destroyed. What is
+#:   kept is the thing. :func:`ask_delete`, and the library's five purges.
+#: * **"Cancel"** -- the action is reversible, or is a reset, and declining
+#:   costs nothing to name.
+#:
+#: A few callers say it in more words for one screen -- "Keep drawing", "Keep
+#: them", "Stay" -- which is the same verb with the object named, not a fourth
+#: answer.
+CANCEL_LABELS = ("Keep editing", "Keep", "Cancel")
+
+
+def ask_close_unsaved(ctx: Any, title: str, on_confirm: Any) -> None:
+    """Ask before closing a document with unsaved changes, in the one wording.
+
+    Five modes ask this and it was spelled two ways: four said "*Name* has
+    unsaved changes." over ``Confirm``'s own [Discard] [Keep editing], and
+    Inker said "The changes to *Name* will be lost." over [Close] [Keep
+    editing]. Same question, same stakes, different sentence and a different
+    button -- and the pair is what a reader answers on, so the one that is worth
+    keeping identical is the buttons. :func:`ask_delete`'s argument, applied to
+    the *other* of ``Confirm``'s two questions.
+    """
+    ctx.confirms.ask(
+        Confirm(
+            title="Close without saving?",
+            message=f"{title} has unsaved changes.",
+            on_confirm=on_confirm,
+        )
+    )
+
+
 def ask_delete(
     ctx: Any, *, title: str, message: str, on_confirm: Any, body: Any = None
 ) -> None:

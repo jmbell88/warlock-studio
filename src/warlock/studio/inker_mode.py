@@ -2860,15 +2860,7 @@ def request_close(ctx: Any, tab: InkerDoc) -> None:
     if not tab.dirty:
         go()
         return
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Close without saving?",
-            message=f"The changes to {tab.title} will be lost.",
-            confirm_label="Close",
-            cancel_label="Keep editing",
-            on_confirm=go,
-        )
-    )
+    dialogs.ask_close_unsaved(ctx, tab.title, go)
 
 
 def guard(ctx: Any, verb: str, proceed: Any) -> bool:
