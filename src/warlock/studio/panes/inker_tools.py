@@ -13,7 +13,6 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import anchors, controls, icons, inker, inker_mode, inker_state, theme, widgets
-from ..inker import brush
 from ..inker_state import (
     PAINT_TOOLS,
     PATTERN_TOOLS,
@@ -131,24 +130,17 @@ STAMP_ALIGN_LABELS = (
     ("aligned", "aligned to a grid"),
 )
 
-CANVAS_POPUP = "inker-canvas-options"
-
-#: The one symmetry that is **not** a mirror, and so not one of the context
-#: bar's four toggles: a radial symmetry is a set of turns about the axis, it
-#: takes a *count*, and it is reached when a mandala is being drawn rather than
-#: between strokes. It stays here in the canvas popover, beside the number it
-#: needs and the axis both it and the mirrors turn about.
-#:
-#: ``SYMMETRY_LABELS`` -- the seven-way combo this replaced -- went with the
-#: single-mode model on 2026-08-23. ``brush.SYMMETRY`` survives as the legacy
-#: spelling every stored setting still reads through; what a user picks is a
-#: *set* now (``brush.SYMMETRY_AXES``), and a combo cannot express one.
-RADIAL_AXIS = "radial"
+# ``CANVAS_POPUP`` and ``RADIAL_AXIS`` moved to ``inker_context`` on
+# 2026-08-31 with the popover they belonged to. The popover was opened
+# from a flip-horizontal glyph in this pane and held the symmetry axis,
+# the radial count and the grid's step -- three settings named after
+# none of them, a pane away from the canvas they act on. They are behind
+# the bar's ``Sym`` and ``View`` words now.
 
 
 #: The least this pane may be squeezed to, in design px, before the pane below
-#: it stops taking room: the heading, three rows of the tool grid, the view
-#: toggles and the two colour chips.
+#: it stops taking room: the heading, three rows of the tool grid and the two
+#: colour chips.
 #:
 #: Replaces ``RAIL_W``. The 90 px rail was the whole of W2.9 and it is what
 #: this wave reverses: 90 minus the pane's own 16 px of padding left 74 px of
@@ -156,7 +148,14 @@ RADIAL_AXIS = "radial"
 #: clipped both of the rows underneath -- the third view toggle and two pixels
 #: off the background chip. Those are not three defects to special-case; they
 #: are one column that was never wide enough.
-TOOLS_FLOOR = 190.0
+#:
+#: **Written as the sum rather than as the number it comes to.** It was a bare
+#: 190.0 describing a pane that included the view toggles; those moved to the
+#: context bar on 2026-08-31 and a floor that still reserved room for them
+#: would hold 66 px the pane no longer draws into. Spelling the arithmetic is
+#: what stops the constant and the pane drifting apart again, and
+#: ``tests/inker/test_inker_ux.py`` reconstructs it.
+TOOLS_FLOOR = 190.0 - 2 * BUTTON_H - GRID_GAP
 
 #: The colour chips' flags: no inputs, no label, alpha as a split square. The
 #: full editor is the colour panel's; these two are a *picture* of what the
@@ -202,40 +201,7 @@ def draw(ctx: Any) -> None:
     manual_render.help_button(ctx, "inker-tools")
     _grid(state, None if tab is None else tab.doc)
     imgui.dummy((0, sp(GRID_GAP)))
-    _view_toggles(ctx, state)
-    imgui.dummy((0, sp(GRID_GAP)))
     _colour_chips(ctx, state)
-
-
-def _view_toggles(ctx: Any, state: Any) -> None:
-    """Grid, snap and rulers, as three icon toggles rather than three rows.
-
-    ``clay_tools``' idiom. Each writes through ``inker_mode.persist``: these
-    are how the user likes to *see*, and a preference that resets on the next
-    launch is a control they have to rediscover.
-    """
-    for icon, attr, tip in (
-        (icons.GRID, "grid", "Show the pixel grid"),
-        (icons.MAGNET, "grid_snap", "Snap shapes and the marquee to the grid"),
-        (icons.RULER, "rulers", "Rulers along the top and left edges"),
-    ):
-        engaged = bool(getattr(state, attr))
-        if widgets.icon_button(f"{icon}##inkview{attr}", tip, selected=engaged):
-            setattr(state, attr, not engaged)
-            inker_mode.persist(ctx)
-        if attr != "rulers":
-            imgui.same_line()
-    imgui.new_line()
-    if widgets.icon_button(
-        f"{icons.FLIP_HORIZONTAL}##inkviewcanvas",
-        "Symmetry and the grid's step",
-    ):
-        imgui.open_popup(CANVAS_POPUP)
-    with controls.menu_popup(CANVAS_POPUP) as opened:
-        if opened:
-            imgui.push_item_width(sp(160))
-            canvas_options(ctx, state)
-            imgui.pop_item_width()
 
 
 def _colour_chips(ctx: Any, state: Any) -> None:
@@ -963,93 +929,3 @@ def _per_tool_note() -> None:
 # went: free transform is the Edit menu's row and Ctrl+T, its live handles are
 # the context bar's Transformation state, and the numbers they opened are on
 # the bar beside the canvas they turn. ``git show`` has them.
-
-
-def canvas_options(ctx: Any, state: Any) -> None:
-    """Symmetry and the grid's step, in the popover off the rail's canvas glyph.
-
-    What is left of the old sidebar "Canvas" section. Grid, snap and rulers are
-    the three icon toggles in :func:`_view_toggles` above -- a checkbox and a
-    toggle for the same flag is one control too many -- so this holds the two
-    settings that need a *number* or a *menu* and had no other way in: the
-    symmetry mode (with its ways and its axis) and the grid's step in pixels.
-
-    The four *mirrors* moved to the context bar on 2026-08-23 -- Aseprite's
-    arrangement, and see ``inker_context._symmetry_items`` for the argument.
-    What stays is the radial symmetry, which needs a number rather than a
-    toggle, the axis all of them turn about, and the grid's step. Every one of
-    them survives a tool change and is inherited by every paint mode -- erase,
-    blur, smudge -- without asking.
-    """
-
-    axes = brush.axes_of(state.symmetry)
-    changed, radial = controls.checkbox(
-        "Radial symmetry##symradial", RADIAL_AXIS in axes
-    )
-    if changed:
-        state.symmetry = brush.toggled(state.symmetry, RADIAL_AXIS)
-        inker_mode.persist(ctx)
-        axes = brush.axes_of(state.symmetry)
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(
-            "Turns about the axis rather than mirrors across it, and composes "
-            "with the four mirrors on the context bar."
-        )
-    if RADIAL_AXIS in axes:
-        imgui.set_next_item_width(sp(90))
-        changed, count = controls.slider_int(
-            "Ways", int(state.radial_count), brush.MIN_RADIAL, brush.MAX_RADIAL
-        )
-        if changed:
-            state.radial_count = int(count)
-            inker_mode.persist(ctx)
-    if axes:
-        _symmetry_axis(state)
-    else:
-        # Named rather than silent: the four mirrors moved to the context bar
-        # and this popover is where a user who remembers the old combo comes
-        # looking for them.
-        widgets.muted("The four mirrors are on the bar above the canvas.")
-    # The grid's *step*. The three flags it used to sit beside are the rail's
-    # toggles; this one is a number, and "Selection as Grid" -- the only other
-    # way to set it -- needs a selection the exact size you meant.
-    imgui.dummy((0, 4))
-    widgets.field_label("Grid size")
-    imgui.set_next_item_width(sp(80))
-    changed, size = controls.input_int("##gridsize", state.grid_size, 0)
-    if changed:
-        state.grid_size = max(2, min(512, size))
-    # Persisted on the change rather than only at quit: how the user likes to
-    # see is a preference that resetting on the next launch makes them
-    # rediscover, and persisting here is what survives a crash.
-    if imgui.is_item_deactivated_after_edit():
-        inker_mode.persist(ctx)
-
-
-def _symmetry_axis(state: Any) -> None:
-    """Where the mirrors sit. Empty means the canvas centre.
-
-    Shown only with a symmetry on, and offered as two numbers rather than a
-    draggable handle because the useful values are exact ones -- the centre, a
-    character's spine, a tile edge -- and a handle can only be dragged near
-    them.
-    """
-    axis = state.symmetry_axis
-    imgui.set_next_item_width(sp(120))
-    changed, values = controls.input_float2(
-        "Axis##symaxis", list(axis or (0.0, 0.0)), "%.0f"
-    )
-    if changed:
-        state.symmetry_axis = (float(values[0]), float(values[1]))
-    imgui.same_line()
-    if widgets.disabled_button(
-        "Centre##symcentre",
-        axis is not None,
-        reason="The axis is already centred.",
-        tooltip="Put the symmetry axis back in the middle of the canvas.",
-    ):
-        # Back to None rather than to the middle of the current document: None
-        # *is* the centre, and stays the centre across a resize.
-        state.symmetry_axis = None
-    if axis is None:
-        widgets.muted("centred")

@@ -2168,7 +2168,14 @@ def _glyph_button(
     abandoning this button for ``controls.button(role=ICON)`` purely to get
     the paint, which is what ``toolbar._draw`` used to do.
     """
-    key = f"glyph/{icon}/{tooltip}"
+    # ``imgui.get_id`` folds in the current id stack, so two rows that push
+    # their own id (a layers panel's per-row ``push_id``) and then draw the
+    # identical icon and tooltip -- every visible layer's eye button does --
+    # still land on separate slots. Keying on the icon/tooltip text alone once
+    # gave two such rows one shared slot: ``note_hover`` overwrites it
+    # mid-frame, so hovering one row's eye painted a *different* row's eye as
+    # hovered, whichever of the pair happened to draw second that frame.
+    key = f"glyph/{imgui.get_id(icon)}"
     t = _hover_amount(key)
     if borderless:
         wash = theme.ERR if danger else theme.ELEV_2

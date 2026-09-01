@@ -204,3 +204,78 @@ def test_a_field_narrows_before_a_more_important_button_does():
         100.0 + narrow, 30.0,
     )
     assert tiers == [FULL, ICON]
+
+
+# --- the trailing block's own tier ------------------------------------------
+#
+# ``trailing`` is measured and subtracted *before* the tiers are chosen, so
+# whatever sits in it wins against the tool's own settings. What the two tiers
+# add is a bound on that: a block that cannot be made to fit gives up its own
+# controls rather than pushing the row off the end -- which matters because
+# ``toolbar`` continues it with ``same_line_or_wrap``, and a wrapped trailing
+# block above Inker's canvas is a second row, the one thing that bar forbids.
+#
+# The tier is decided from the row's *smallest* width, not its largest. See
+# ``trailing_compact``: measured at the app's default size the other rule
+# folded Inker's symmetry mirrors away on the commonest tool, which is the
+# opposite of what putting them on the bar was for.
+
+FULL_W, COMPACT_W, GAP = 217.0, 93.0, 8.0
+#: Inker's context bar at 1600x950, measured rather than assumed: the mode rail
+#: takes ~70 px that a two-sidebars sum misses.
+BAR_AVAIL = 835.0
+#: The brush's row -- two labelled buttons and five fields -- at each tier.
+BRUSH_FULL, BRUSH_MIN = 689.0, 376.0
+
+
+def test_the_block_keeps_its_controls_while_the_row_can_be_squeezed_to_fit():
+    """The measured case this policy exists for. The row cannot fit *with its
+    labels* beside the mirrors (689 + 8 + 217 = 914 > 835), and that is not the
+    question: compacted it needs 376, so both survive."""
+    assert (
+        toolbar.trailing_compact(BRUSH_MIN, BAR_AVAIL, FULL_W, COMPACT_W, gap=GAP)
+        is False
+    )
+    assert BRUSH_FULL + GAP + FULL_W > BAR_AVAIL
+
+
+def test_the_block_folds_only_when_even_a_compacted_row_cannot_fit():
+    assert (
+        toolbar.trailing_compact(800.0, BAR_AVAIL, FULL_W, COMPACT_W, gap=GAP)
+        is True
+    )
+
+
+def test_the_trailing_block_never_pushes_the_row_past_the_edge():
+    """The property that matters, swept rather than sampled: wherever the full
+    block would have overrun even a minimal row, the compact one is chosen."""
+    for avail in range(200, 1300, 10):
+        for row_min in (120.0, 376.0, 500.0):
+            compact = toolbar.trailing_compact(
+                row_min, float(avail), FULL_W, COMPACT_W, gap=GAP
+            )
+            if not compact:
+                assert row_min + GAP + FULL_W <= avail
+
+
+def test_a_row_that_cannot_fit_at_all_still_folds_the_block_first():
+    """When nothing fits the row is allowed to overrun -- ``plan`` says so
+    rather than pretending -- but it must not overrun by more than it has to."""
+    assert (
+        toolbar.trailing_compact(2000.0, 300.0, FULL_W, COMPACT_W, gap=GAP) is True
+    )
+
+
+def test_a_two_tuple_trailing_still_means_one_tier():
+    """Every existing caller passes ``(width, draw)`` -- ``_float_bar`` and
+    ``_gesture_bar`` among them -- and must keep working untouched."""
+    full, compact, draw = toolbar.trailing_widths((120.0, lambda: None))
+    assert (full, compact) == (120.0, 120.0)
+    assert draw is not None
+
+
+def test_a_trailing_object_carries_both_widths():
+    block = toolbar.Trailing(FULL_W, COMPACT_W, lambda _compact: None)
+    full, compact, draw = toolbar.trailing_widths(block)
+    assert (full, compact) == (FULL_W, COMPACT_W)
+    assert draw is not None

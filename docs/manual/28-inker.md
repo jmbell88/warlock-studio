@@ -22,9 +22,11 @@ hidden and restored from **Window > Layout**.
 ## Starting a canvas
 
 **New**, **Open**, **Save**, **Save as** and **Export PNG** are in the **file** section at the top of
-the right-hand panel, where Plotter's and Packwright's have always been. The canvas's own row keeps
-only what acts on the drawing in front of you: undo and redo, the two view turns, the tiling control
-and the one word that says whether there is anything unsaved.
+the right-hand panel, where Plotter's and Packwright's have always been. There is exactly one row
+above the canvas — the context bar — and it holds what the tool in your hand is set to, then
+**View** and **Sym** at its right-hand end. What the editor is *telling* you rather than asking you
+is under the canvas instead, in the status bar: the cursor position, the layer, the zoom, the seam
+figure and the one word that says whether there is anything unsaved.
 
 **New** offers three square presets and, under them, width and height fields for anything else —
 1920 × 1080, a tall banner, a tile. Sizes are clamped rather than refused, up to 8192 px a side: the
@@ -71,9 +73,28 @@ writes. These three change nothing at all, which is also why they keep working w
 flight — an editor that would not let you *look* at your drawing while it writes a file would be a
 strange one.
 
+## Moving around
+
+**The wheel scrolls**, `Shift` and the wheel scrolls sideways, and a tilt wheel does the same
+without the key. One notch moves an eighth of the pane — so three notches move about a third of
+what you can see — and it is an eighth of the *pane* rather than a number of image pixels, which is
+what makes a scroll cover the same distance on screen at 800% as at 5%.
+
+Space-drag and middle-drag still pan, and there are **scrollbars** along the canvas's right and
+bottom edges. They can be dragged, and a click on the bare track jumps the page to it. Their length
+is the honest one: the thumb says how much of the scrollable range you are looking at, which is why
+it is about half the track at **Fit in window** rather than all of it — even fitted, there is half a
+pane of travel in each direction.
+
+**The page cannot be lost.** A drawing longer than the pane can be pushed until one of its edges
+reaches the middle of the pane and no further, so half a pane of picture is always on screen and
+every corner of a page too big to see at once can still be dragged into the middle to be worked on.
+A drawing much smaller than the pane stays inside it altogether.
+
 ## Zooming
 
-The wheel zooms in steps of 5%, and it rounds to that step first: come out of a **Fit view** at some
+`Ctrl` and the wheel zooms, in steps of 5%, and it rounds to that step first: come out of a **Fit
+view** at some
 awkward 83% and the first notch takes you to 85, not to 88. That is what makes 100% a place you can
 reach from either direction rather than a number you have to type. The zoom stops at 5% and at
 1000% — far enough out to see any page whole, far enough in to place single pixels, and no
@@ -84,11 +105,11 @@ scales — 5%, 10%, 12.5%, 25%, 50%, 100%, 200%, 300%, 400%, 500%, 600%, 800%, 1
 at a time. Those
 are the zooms at which pixel art is being shown rather than resampled. At 135% a pixel of the drawing
 is 1.35 pixels of the screen, so some are drawn one wide and some two: a checkerboard dither comes
-out as bands, and a one-pixel line thickens and thins along its length. The wheel is the fine
-control and the keys are the honest one. A step always goes past where you are, so 135% zooms out to
+out as bands, and a one-pixel line thickens and thins along its length. `Ctrl` and the wheel is the
+fine control and the keys are the honest one. A step always goes past where you are, so 135% zooms out to
 100% and in to 200%, and both keys hold at the ends of the ladder rather than wrapping.
 
-Zooming with the keys holds whatever is under the cursor still, the way the wheel does, unless the
+Zooming with the keys holds whatever is under the cursor still, the way `Ctrl` and the wheel does, unless the
 cursor is off the canvas — then it holds the middle of the pane, so a keypress cannot throw the page
 off screen because the mouse happened to be resting in another panel.
 
@@ -98,8 +119,10 @@ cannot answer it.
 
 One consequence worth knowing: an image too large to fit at 5% is centred at 5% and runs off the
 edges of the pane rather than shrinking to meet it. That is what a floor costs, and it is why this
-one is as low as the wheel goes: at 25% it was a page of 8 000 pixels that overflowed, which is a
-size a hand-opened file reaches.
+one is as low as the zoom goes: at 25% it was a page of 8 000 pixels that overflowed, which is a
+size a hand-opened file reaches. Such a page is still walkable corner to corner — the bound
+described under *Moving around* lets any edge be brought to the middle of the pane — and **Center
+the page** puts it back.
 
 ## The status bar
 
@@ -109,7 +132,7 @@ the tool and its brush size, the layer you are drawing into, the frame if the do
 the document's size, and the zoom.
 
 The zoom at the end is a picker rather than a readout: open it and choose 5%, 12.5%, 25%, 50%, 75%,
-100%, 200%, 400% or 800% and the canvas goes there, centred, in one move. A zoom the wheel has left
+100%, 200%, 400% or 800% and the canvas goes there, centred, in one move. A zoom `Ctrl`+wheel has left
 you on — 85%, say — is added to the top of the list so the control always says where you actually
 are. 75% is on this list and not on the `+`/`-` ladder above, and that is deliberate: asking for a
 number exactly is a different question from asking for the next honest scale.
@@ -324,9 +347,15 @@ always drawn.
 
 ### Symmetry
 
-At the right-hand end of the context bar are four toggles and a **Reset**: **H** mirrors every dab
-left to right, **V** top to bottom, and `\` and `/` are the two 45-degree mirrors — top-left to
-bottom-right and bottom-left to top-right.
+At the right-hand end of the context bar is the word **Sym**, and beside it four toggles: **H**
+mirrors every dab left to right, **V** top to bottom, and `\` and `/` are the two 45-degree mirrors
+— top-left to bottom-right and bottom-left to top-right. The word is a button as well as a label:
+it opens a popover holding the same four as full words, plus everything below.
+
+The word is there because the four characters were not enough on their own. They are still
+characters rather than icons — a mirror line *is* a character, and the icon set Warlock ships has no
+glyph for either diagonal — so what changed is that they are now named and grouped instead of
+floating at the end of the row.
 
 **They compose.** Any combination is legal, and each one you add reflects everything already there
 rather than replacing it: H and V together give four dabs, H and `\` give eight, and the guides on
@@ -334,26 +363,50 @@ the canvas show exactly the lines the brush is reflecting about. That compositio
 four buttons and not a menu — the old one-at-a-time control could not say "horizontal and top-left
 diagonal", which is what an isometric tile is drawn with.
 
-**Radial** is the fifth, and it is in the canvas popover off the toolbox instead, because it needs
-a number: it repeats a dab around a circle a set number of ways (2 to 32) for snowflakes and
-mandalas. It composes with the four mirrors like everything else.
+**Radial** is the fifth, and it is in the popover because it needs a number: it repeats a dab around
+a circle a set number of ways (2 to 32) for snowflakes and mandalas. It composes with the four
+mirrors like everything else.
 
-The **axis** the mirrors reflect about is in that same popover, in image coordinates, so symmetry
+The **axis** the mirrors reflect about is in the popover too, in image coordinates, so symmetry
 does not have to be about the middle of the canvas; **Centre** puts it back, and "centred" means
-exactly that even after the canvas is resized. **Reset** on the bar switches every symmetry off,
-recentres the axis and puts the radial count back to its default, all in one press.
+exactly that even after the canvas is resized. **Reset**, at the foot of the popover, switches every
+symmetry off, recentres the axis and puts the radial count back to its default, all in one press.
 
-Symmetry is a setting of the *sitting* rather than of the tool: it survives every tool change, and
-every paint mode inherits it — the eraser, blur and smudge all mirror without being told to.
+Symmetry is a setting of the *sitting* rather than of the tool: it survives every tool change, every
+paint mode inherits it — the eraser, blur and smudge all mirror without being told to — and it is
+**remembered between sessions**, so a mirror you set is still set the next time you open Warlock. It
+is deliberately not part of a saved tool preset: a preset that carried the mirrors would turn "my
+inking pen" into "my inking pen, and also mirror everything".
 
-One more canvas-wide aid sits below the tool options. **Grid** overlays a grid at a spacing you
-set, from 2 to 512 pixels — 32 by default, the most common sprite and tile cell — and **Snap to
-grid** lands shapes, lines and
-the marquee on its intersections. Freehand strokes never snap: quantising a brush to a lattice is a
-different tool, not a drawing aid. **Rulers** draws pixel rulers along the canvas's top and left
-edges, with a marker shadowing the cursor on each; tick labels follow the decimal 1/2/5 ladder, so
-the numbers you read are always round ones. The grid and the rulers remember how you left them
-across sessions.
+When the row runs out of room the tool's own settings give up their *words* before symmetry gives
+up its buttons — a slider reading `129` rather than `129 px` is still that slider, and hovering it
+still says what it is, where a folded mirror is simply not on screen. Only on a genuinely narrow
+window do the four toggles fold into the popover, leaving **Sym** alone on the bar; it lights up
+when a mirror is on, so even then the bar says symmetry is armed.
+
+### The view aids
+
+**View**, beside Sym, opens the rest of what changes how the canvas is *drawn* rather than what is
+on it.
+
+**Grid** overlays a grid at a spacing you set, from 2 to 512 pixels — 32 by default, the most common
+sprite and tile cell — and **Snap to grid** lands shapes, lines and the marquee on its
+intersections. Freehand strokes never snap: quantising a brush to a lattice is a different tool, not
+a drawing aid. **Grid from selection** sets the spacing to the size of what you have selected, which
+is how a tile size gets out of a drawing without being measured.
+
+**Rulers** draws pixel rulers along the canvas's top and left edges, with a marker shadowing the
+cursor on each; tick labels follow the decimal 1/2/5 ladder, so the numbers you read are always
+round ones. **Pixel grid** is the other grid — one line per source pixel, drawn only once you are
+zoomed in far enough that the lines are not most of what is on screen. **Layer edges** outlines what
+the active layer actually covers, and **Tile numbers** prints each cell's tile id on a tilemap
+layer.
+
+All of those are properties of how *you* like to work, so they are remembered between sessions and
+they follow you from document to document. The **Tiled** rows under them are not: tiling belongs to
+the drawing in front of you, which is why they are separated and labelled *This document*. They are
+also still in the **View** menu, with the same ticks — the menu is the second door, and it is where
+the full words live.
 
 Two modifiers apply while you drag a line, a rectangle or an ellipse. **Shift** constrains it — a
 square, a circle, or a line at a multiple of 45° — and **Ctrl** grows it from the point you pressed
@@ -381,10 +434,11 @@ because somebody pressed Right with the brush selected is not a trade worth maki
 
 ### The shape of the panel
 
-**Image brush**, **Presets** and **Canvas** are collapsing sections, closed until you open one, and
-each remembers its own state across restarts. They hold the settings of a sitting rather than of a
-gesture — a captured tip, a saved bundle of tool options, the symmetry axis, the grid and the rulers
-— and left open they push the brush controls off the bottom of the panel.
+**Image brush** and **Presets** are sections of the tool's own panels, behind the gear at the left
+of the context bar — a captured tip and a saved bundle of tool options belong to the tool in your
+hand, so they are where its other settings are. The settings of the *sitting* rather than of a
+gesture — the symmetry axis, the grid, the rulers — are behind **Sym** and **View** at the other end
+of the same row.
 
 Every divider in the workspace can be dragged: the two column boundaries, the handles between the
 stacked panes in each column, and the one along the top of the timeline. They are separate settings

@@ -30,6 +30,7 @@ trellis run.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import json
 import logging
@@ -137,117 +138,123 @@ class TroupeOps:
         # The staging name ``_publish_text`` and every other served write use.
         atlas_path = png.with_name(f".{png.name}.render")
         reduce_mode = str(params.get("reduce_mode", "box"))
-        result, trims = await self._render_charsheet(
-            rig_glb, layout, cells, on_progress=on_progress, job_id=job_id,
-            pack_target=atlas_path, reduce_mode=reduce_mode,
-        )
-
-        # --- the pixel-art pass -------------------------------------------
-        #
-        # Over the packed atlas rather than per cell: one nearest search
-        # instead of 256 of them, and -- the part that matters -- **one palette
-        # across every cell**, which is what stops the same shirt coming out
-        # two shades in two directions. ``pixelize_atlas`` still runs the
-        # neighbourhood passes per cell, because a dense atlas has no gutter
-        # and a sprite touching its edge would otherwise be outlined against
-        # the sprite beside it.
-        # The Blender subprocess has exited, so from here a cancel has no
-        # leverage on anything running -- and this is the expensive tail: a
-        # whole-atlas nearest search over 256 cells. Every sibling stage checks
-        # between its phases; without it a cancel clicked here does nothing,
-        # visibly, for a long time.
-        if self._cancel is not None and self._cancel.event.is_set():
-            return
-        self.progress.update(
-            job_id, phase="pixel", label="Quantising", inner=0.0,
-            inner_next=1.0, nominal=8.0, detail="",
-        )
-        palette_name = str(params.get("palette") or "")
-        colors = int(params.get("colors", 64))
-
-        def _quantise() -> tuple[dict[str, Any], dict[int, dict[str, int] | None]]:
-            from PIL import Image
-
-            with Image.open(atlas_path) as opened:
-                opened.load()
-                atlas = opened.convert("RGBA")
-            # Designed or median-cut, the colours are then handed to
-            # ``pixelize_atlas`` as one ordinary palette -- so the outline and
-            # orphan passes run identically whichever branch produced them, and
-            # a derived sheet is not a second code path with its own bugs.
-            # ``resolve_palette`` is that branch, and its docstring carries the
-            # reason a palette file does not cost the shared-across-cells
-            # property.
-            designed = queue_mod._palette_entries(self.config, palette_name)
-            entries, chosen = pixelsheet.resolve_palette(
-                atlas, colors=colors, entries=designed or None
+        # **The render and the quantise share one ``finally``.** Both write
+        # ``atlas_path``, and it lands in ``source_dir`` -- the *mesh* job's
+        # directory, not this job's -- so an exception in either used to orphan
+        # up to an 8192-square PNG somewhere that deleting the failed sheet
+        # would never reclaim, and nothing sweeps. ``_discard_artifacts`` is
+        # not the answer: the queue calls that on a cancel, not on an error.
+        try:
+            result, trims = await self._render_charsheet(
+                rig_glb, layout, cells, on_progress=on_progress, job_id=job_id,
+                pack_target=atlas_path, reduce_mode=reduce_mode,
             )
-            out, report = pixelize.pixelize_atlas(
-                atlas,
-                columns=layout.columns,
-                rows=layout.rows,
-                cell=logical,
-                palette=entries,
-                dither=bool(params.get("dither")),
-                # Still passed, and still a no-op on this path -- the atlas
-                # arrives already reduced. Kept rather than dropped because
-                # ``pixelize_atlas`` is shared with the restyle door, where the
-                # atlas is *not* pre-reduced and the mode is live; the report
-                # below is corrected instead.
-                reduce_mode=reduce_mode,
-                outline_mode=str(params.get("outline", "none")),
-            )
-            # About the reduction that actually happened, which is
-            # ``reduce_frames``' and not ``pixelize_atlas``'. Computed here
-            # rather than trusted from the report: on this path the atlas is
-            # already at the target, so ``pixelize_atlas`` measured a stride of
-            # 1 and answered ``True`` unconditionally -- including at 24, 48 and
-            # 96px, where 512 does not divide and the real reduction fell back
-            # to a NEAREST resize.
-            report["exact_stride"] = charsheet.RENDER_SIZE % logical == 0
-            report["palette"] = chosen
-            report["palette_name"] = palette_name
-            report["palette_size"] = len(entries)
-            # Re-measured off the atlas that is actually published, not the one
-            # that was packed. ``pack`` measures each frame as it composites --
-            # correct there, and stale by the time this pass has finished with
-            # it: ``snap_alpha`` zeroes alpha below 128 and shrinks the
-            # silhouette, and ``outline`` in the default ``"outer"`` mode grows
-            # it by a pixel on every side. The packed trims were written into
-            # the sidecar unchanged, so every cell's rectangle was a pixel
-            # short all round and a packer that honoured it -- which is the
-            # field's whole purpose -- clipped the outline off every sprite.
+
+            # --- the pixel-art pass -------------------------------------------
             #
-            # Cell-local, like ``measure_trim``'s own answer: the crop is taken
-            # at the cell's place in the atlas and the box comes back relative
-            # to the crop, so nothing downstream has to know where the cell sat.
-            trimmed = {
-                cell.index: sheetlib.measure_trim(
-                    out.crop(
-                        (
-                            cell.x,
-                            cell.y,
-                            cell.x + layout.cell_w,
-                            cell.y + layout.cell_h,
+            # Over the packed atlas rather than per cell: one nearest search
+            # instead of 256 of them, and -- the part that matters -- **one palette
+            # across every cell**, which is what stops the same shirt coming out
+            # two shades in two directions. ``pixelize_atlas`` still runs the
+            # neighbourhood passes per cell, because a dense atlas has no gutter
+            # and a sprite touching its edge would otherwise be outlined against
+            # the sprite beside it.
+            # The Blender subprocess has exited, so from here a cancel has no
+            # leverage on anything running -- and this is the expensive tail: a
+            # whole-atlas nearest search over 256 cells. Every sibling stage checks
+            # between its phases; without it a cancel clicked here does nothing,
+            # visibly, for a long time.
+            if self._cancel is not None and self._cancel.event.is_set():
+                return
+            self.progress.update(
+                job_id, phase="pixel", label="Quantising", inner=0.0,
+                inner_next=1.0, nominal=8.0, detail="",
+            )
+            palette_name = str(params.get("palette") or "")
+            colors = int(params.get("colors", 64))
+
+            def _quantise() -> tuple[dict[str, Any], dict[int, dict[str, int] | None]]:
+                from PIL import Image
+
+                with Image.open(atlas_path) as opened:
+                    opened.load()
+                    atlas = opened.convert("RGBA")
+                # Designed or median-cut, the colours are then handed to
+                # ``pixelize_atlas`` as one ordinary palette -- so the outline and
+                # orphan passes run identically whichever branch produced them, and
+                # a derived sheet is not a second code path with its own bugs.
+                # ``resolve_palette`` is that branch, and its docstring carries the
+                # reason a palette file does not cost the shared-across-cells
+                # property.
+                designed = queue_mod._palette_entries(self.config, palette_name)
+                entries, chosen = pixelsheet.resolve_palette(
+                    atlas, colors=colors, entries=designed or None
+                )
+                out, report = pixelize.pixelize_atlas(
+                    atlas,
+                    columns=layout.columns,
+                    rows=layout.rows,
+                    cell=logical,
+                    palette=entries,
+                    dither=bool(params.get("dither")),
+                    # Still passed, and still a no-op on this path -- the atlas
+                    # arrives already reduced. Kept rather than dropped because
+                    # ``pixelize_atlas`` is shared with the restyle door, where the
+                    # atlas is *not* pre-reduced and the mode is live; the report
+                    # below is corrected instead.
+                    reduce_mode=reduce_mode,
+                    outline_mode=str(params.get("outline", "none")),
+                )
+                # About the reduction that actually happened, which is
+                # ``reduce_frames``' and not ``pixelize_atlas``'. Computed here
+                # rather than trusted from the report: on this path the atlas is
+                # already at the target, so ``pixelize_atlas`` measured a stride of
+                # 1 and answered ``True`` unconditionally -- including at 24, 48 and
+                # 96px, where 512 does not divide and the real reduction fell back
+                # to a NEAREST resize.
+                report["exact_stride"] = charsheet.RENDER_SIZE % logical == 0
+                report["palette"] = chosen
+                report["palette_name"] = palette_name
+                report["palette_size"] = len(entries)
+                # Re-measured off the atlas that is actually published, not the one
+                # that was packed. ``pack`` measures each frame as it composites --
+                # correct there, and stale by the time this pass has finished with
+                # it: ``snap_alpha`` zeroes alpha below 128 and shrinks the
+                # silhouette, and ``outline`` in the default ``"outer"`` mode grows
+                # it by a pixel on every side. The packed trims were written into
+                # the sidecar unchanged, so every cell's rectangle was a pixel
+                # short all round and a packer that honoured it -- which is the
+                # field's whole purpose -- clipped the outline off every sprite.
+                #
+                # Cell-local, like ``measure_trim``'s own answer: the crop is taken
+                # at the cell's place in the atlas and the box comes back relative
+                # to the crop, so nothing downstream has to know where the cell sat.
+                trimmed = {
+                    cell.index: sheetlib.measure_trim(
+                        out.crop(
+                            (
+                                cell.x,
+                                cell.y,
+                                cell.x + layout.cell_w,
+                                cell.y + layout.cell_h,
+                            )
                         )
                     )
-                )
-                for cell in layout.cells
-            }
-            # Onto the served name last, staged: the sidecar is what marks the
-            # sheet complete, so nothing is reading this yet -- but the rule
-            # that a write onto a served path is staged does not have an
-            # exception for "nothing is reading it yet".
-            tmp = png.with_name(f".{png.name}.tmp")
-            out.save(tmp, format="PNG")
-            tmp.replace(png)
-            # The un-quantised render has no readers once the pixel-art atlas
-            # is on disk, and leaving it behind would double every character
-            # sheet's footprint in a directory the user never cleans.
-            atlas_path.unlink(missing_ok=True)
-            return report, trimmed
+                    for cell in layout.cells
+                }
+                # Onto the served name last, staged: the sidecar is what marks the
+                # sheet complete, so nothing is reading this yet -- but the rule
+                # that a write onto a served path is staged does not have an
+                # exception for "nothing is reading it yet".
+                tmp = png.with_name(f".{png.name}.tmp")
+                out.save(tmp, format="PNG")
+                tmp.replace(png)
+                return report, trimmed
 
-        pixel_report, trims = await asyncio.to_thread(_quantise)
+            pixel_report, trims = await asyncio.to_thread(_quantise)
+        finally:
+            with contextlib.suppress(OSError):
+                atlas_path.unlink(missing_ok=True)
 
         # The sidecar is written last and is what ``list_sheets`` treats as the
         # completion marker -- ``_sheet``'s rule, and ``rig.json``'s before it.

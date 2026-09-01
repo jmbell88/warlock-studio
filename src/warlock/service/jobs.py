@@ -138,7 +138,7 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
     issues = generation.validate_request(request, resolved)
     if issues:
         raise Invalid(issues[0].message, field=issues[0].field)
-    legacy = generation.request_to_legacy(request)
+    legacy = generation.request_to_legacy(request, resolved)
     native_payloads: list[bytes] = []
     if request.references:
         from .files import to_png
@@ -213,7 +213,7 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
             tile_size=tile_size,
             view=tile.view,
             seed=request.seed,
-            negative_prompt=request.negative_prompt or None,
+            negative_prompt=generation.effective_negative_prompt(request, resolved) or None,
             reference=reference,
             asset_type="tileset",
             asset_intent="tileset",

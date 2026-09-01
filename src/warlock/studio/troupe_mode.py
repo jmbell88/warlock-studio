@@ -29,6 +29,7 @@ prefix: a key without one is a result delivered nowhere.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from . import icons
@@ -46,6 +47,13 @@ log = logging.getLogger(__name__)
 #: thousands is a frame-thread cost that grows with how long the user has owned
 #: the app.
 SCAN_LIMIT = 400
+
+#: How often the cast is re-read while something is on the chain, and while
+#: nothing is. ``jobs_cache``'s two numbers, for its reason -- the library
+#: settled on 0.5s live and 3.0s idle over the same store, and a second cadence
+#: over the same rows would be a second answer to a question already answered.
+CAST_REFRESH_LIVE = 0.5
+CAST_REFRESH_IDLE = 3.0
 
 
 # --- characters -------------------------------------------------------------
@@ -94,6 +102,38 @@ def characters(ctx: Any) -> list[dict[str, Any]]:
             "created_at": row["created_at"],
         }
     return list(seen.values())
+
+
+def cast_and_pending(ctx: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(characters, in_progress)``, throttled. What the cast pane draws from.
+
+    **Both halves are SQL, and the pane that wants them draws every frame.**
+    ``characters`` is a ``kind``-filtered page and ``in_progress`` an unfiltered
+    one, each up to :data:`SCAN_LIMIT` rows with per-row JSON parsing and a sort
+    on top -- and both used to run per draw, serialised behind ``JobStore``'s
+    one lock, contending with the worker thread that is updating those very
+    rows at the moment a user is watching this mode.
+
+    ``db.list``'s own docstring sizes it for "twice a second"; ``jobs_cache``
+    holds the library to exactly that. This is the same rule for the same
+    store. :func:`invalidate_cast` closes the gap the interval would otherwise
+    leave, so a submission still shows up on the next frame rather than up to
+    three seconds later.
+    """
+    state = ensure(ctx)
+    now = time.monotonic()
+    if state.cast_cache is None or now >= state.cast_next:
+        pending = in_progress(ctx)
+        state.cast_cache = (characters(ctx), pending)
+        # Faster while the chain is moving: a row that is going to change soon
+        # is worth re-reading soon, and one that is not, is not.
+        state.cast_next = now + (CAST_REFRESH_LIVE if pending else CAST_REFRESH_IDLE)
+    return state.cast_cache
+
+
+def invalidate_cast(ctx: Any) -> None:
+    """Drop the throttled cast so the next draw re-reads it."""
+    ensure(ctx).cast_cache = None
 
 
 def sheets(ctx: Any, job_id: str) -> list[dict[str, Any]]:
@@ -771,6 +811,10 @@ def on_task_done(ctx: Any, done: Any) -> None:
     (``in_progress`` finds them by kind and source, so the id is not kept).
     """
     state = ensure(ctx)
+    # Every one of these queues or finishes a row the cast is built from, so
+    # the throttled copy is dropped rather than waited out: the interval is
+    # there to stop idle polling, not to delay news this pane already has.
+    invalidate_cast(ctx)
     result = getattr(done, "result", None)
     if done.key == "troupe-start":
         # The form's own choice: this fires on the way out of the submit, and
@@ -800,6 +844,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
 
 def on_task_failed(ctx: Any, done: Any) -> None:
     """A refused request, said once and in the pane's own words."""
+    invalidate_cast(ctx)
     ctx.toast(str(getattr(done, "error", "") or "That request was refused."), "error")
 
 

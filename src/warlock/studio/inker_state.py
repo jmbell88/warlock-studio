@@ -1000,6 +1000,200 @@ def view_extent(
     return (min(xs), min(ys)), (max(xs), max(ys))
 
 
+#: What one wheel notch scrolls, as a fraction of the pane along that axis.
+#: An eighth means three notches move about a third of what you can see, which
+#: is the order imgui's own five-lines-per-notch reaches on a list -- and being
+#: a *fraction* it scales down with the narrow panes of a split view instead of
+#: throwing them across the page.
+SCROLL_FRACTION = 0.125
+
+#: ...with a floor in screen pixels, so a very short pane still moves at all.
+#: It only bites under about 200 px.
+SCROLL_MIN = 24.0
+
+
+def scroll_step(span: float) -> float:
+    """How far one wheel notch scrolls a pane ``span`` pixels along.
+
+    **Screen pixels, not image pixels.** A scroll moves the *view*, so it has
+    to cover the same distance on screen at every zoom; an image-space step
+    would crawl at 800% and throw the page across the pane at 5%.
+    """
+    return max(float(span) * SCROLL_FRACTION, SCROLL_MIN)
+
+
+def page_box(
+    view: PaintView, size: tuple[int, int]
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Where the page actually is, in *pane* coordinates, as ``(low, high)``.
+
+    :func:`view_extent` scaled by the zoom and offset by the pan -- the one
+    place those three are combined, so everything below is arithmetic on a
+    rectangle and none of it has to know the view can be turned or mirrored.
+    """
+    (lo_x, lo_y), (hi_x, hi_y) = view_extent(view, size)
+    zoom, (pan_x, pan_y) = view.zoom, view.pan
+    return (
+        (lo_x * zoom + pan_x, lo_y * zoom + pan_y),
+        (hi_x * zoom + pan_x, hi_y * zoom + pan_y),
+    )
+
+
+def pan_limits(
+    view: PaintView, size: tuple[int, int], region: tuple[float, float]
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """How far the pan may travel on each axis, as ``((lo_x, hi_x), (lo_y, hi_y))``.
+
+    Aseprite's rule, which pads the scrollable area by half a viewport rather
+    than by nothing. The padding is ``max(pane / 2, pane - span)``, and the
+    boundary between its two halves is **half the pane**, not the whole of it:
+
+    * a page longer than **half** the pane may be pushed until one of its edges
+      reaches the *middle* of the pane and no further, so at least half a pane
+      of drawing is always on screen -- and, the reason the padding exists at
+      all, every corner of a page too big to see at once can still be dragged
+      into the middle to be worked on;
+    * a page shorter than half the pane may go anywhere inside it and never
+      partly outside it, because for those the second term is the larger one.
+
+    A page between the two -- longer than half the pane but shorter than it --
+    is in the first case, so it *may* hang off an edge. That is deliberate and
+    is what lets you push a nearly-pane-sized drawing aside to see what is
+    under it.
+
+    ``hi - lo`` is the page's span in the first case and the pane's leftover in
+    the second, so it is never negative: the interval cannot invert and
+    :func:`clamp_pan` is total at every zoom and every document size.
+
+    Rotation and flip cost this nothing -- :func:`view_extent` is already the
+    *oriented* box, so at a quarter turn the horizontal limit is derived from
+    the document's height, which is also what the rulers already do.
+    """
+    low, high = page_box(view, size)
+    limits = []
+    for axis in (0, 1):
+        # Back to a pan-independent box: the limits are about where the pan may
+        # put the page, so the pan it currently has must come out first.
+        near = low[axis] - view.pan[axis]
+        far = high[axis] - view.pan[axis]
+        pane = float(region[axis])
+        span = far - near
+        margin = max(pane * 0.5, pane - span)
+        limits.append((pane - margin - far, margin - near))
+    return (limits[0], limits[1])
+
+
+def clamp_pan(
+    view: PaintView, size: tuple[int, int], region: tuple[float, float]
+) -> None:
+    """Pull the pan inside :func:`pan_limits`. Idempotent, and the identity on
+    anything :func:`_place` produced.
+
+    Called once a frame by the pane rather than from the three writers, because
+    two of them -- ``_place`` and ``_anchor`` -- are shared with Plotter and
+    Packwright, and Plotter's canvas has no bound *by design* (an infinite map
+    has nothing to bound it against). The guarantee this buys is therefore the
+    stronger one anyway: **no frame of Inker's canvas is drawn from an
+    unclamped pan**, which also covers the cause no write-site clamp could see
+    -- a pane that shrinks under a pan that was legal a frame ago.
+    """
+    (lo_x, hi_x), (lo_y, hi_y) = pan_limits(view, size, region)
+    view.pan = (
+        min(max(view.pan[0], lo_x), hi_x),
+        min(max(view.pan[1], lo_y), hi_y),
+    )
+
+
+def pan_by(
+    view: PaintView,
+    size: tuple[int, int],
+    region: tuple[float, float],
+    dx: float,
+    dy: float,
+) -> None:
+    """Move the view by a screen-space delta, bounded. The wheel and both drags."""
+    view.pan = (view.pan[0] + float(dx), view.pan[1] + float(dy))
+    clamp_pan(view, size, region)
+
+
+def scroll_thumb(
+    view: PaintView,
+    size: tuple[int, int],
+    region: tuple[float, float],
+    axis: int,
+    *,
+    min_length: float = 0.0,
+) -> tuple[float, float]:
+    """One scrollbar's thumb as ``(offset, length)``, both fractions of the track.
+
+    **Derived from :func:`pan_limits` rather than computed beside it**, and
+    that is the whole design: a thumb worked out from page-versus-pane overlap
+    and a pan clamped by a second rule are two rules that will disagree, and
+    the disagreement shows up as a thumb that springs back after a drag. Here
+    ``offset`` is 0 exactly at ``hi`` and ``offset + length`` is 1 exactly at
+    ``lo``, so the thumb cannot be dragged anywhere the clamp refuses.
+
+    Two consequences worth knowing. At **Fit** the thumb is *half* the track,
+    not all of it, because the rule still allows half a pane of travel each way
+    -- and it is never longer than two thirds. ``min_length`` keeps a very long
+    page's thumb grabbable; it is applied inside the mapping, so an end-to-end
+    drag still lands exactly on the limit.
+    """
+    lo, hi = pan_limits(view, size, region)[axis]
+    pane = float(region[axis])
+    travel = hi - lo
+    total = pane + travel
+    if total <= 0.0:
+        return (0.0, 1.0)
+    length = min(1.0, max(min_length, pane / total))
+    offset = 0.0 if travel <= 0.0 else (hi - view.pan[axis]) / total
+    return (min(max(offset, 0.0), max(0.0, 1.0 - length)), length)
+
+
+def scroll_drag(
+    view: PaintView,
+    size: tuple[int, int],
+    region: tuple[float, float],
+    axis: int,
+    delta: float,
+    travel_px: float,
+) -> None:
+    """Move the view by a thumb drag of ``delta`` px along ``travel_px`` of free
+    track. The thumb goes one way and the page the other, which is what a
+    scrollbar means."""
+    if travel_px <= 0.0:
+        return
+    lo, hi = pan_limits(view, size, region)[axis]
+    shift = -float(delta) / float(travel_px) * (hi - lo)
+    pan = list(view.pan)
+    pan[axis] += shift
+    view.pan = (pan[0], pan[1])
+    clamp_pan(view, size, region)
+
+
+def scroll_thumb_to(
+    view: PaintView,
+    size: tuple[int, int],
+    region: tuple[float, float],
+    axis: int,
+    centre: float,
+) -> None:
+    """Put the thumb's *centre* at ``centre`` (a fraction of the track), which
+    is what a click on the bare track means -- Plotter's minimap gesture."""
+    lo, hi = pan_limits(view, size, region)[axis]
+    pane = float(region[axis])
+    travel = hi - lo
+    total = pane + travel
+    if total <= 0.0 or travel <= 0.0:
+        return
+    length = pane / total
+    offset = min(max(float(centre) - length / 2.0, 0.0), max(0.0, 1.0 - length))
+    pan = list(view.pan)
+    pan[axis] = hi - offset * total
+    view.pan = (pan[0], pan[1])
+    clamp_pan(view, size, region)
+
+
 def _place(
     view: PaintView,
     size: tuple[int, int],

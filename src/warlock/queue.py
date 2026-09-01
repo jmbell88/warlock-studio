@@ -317,6 +317,14 @@ next allocation. It needs no watchdog thread: the stage boundaries _log_mem
 already runs at are exactly the moments the number can be acted on.
 """
 
+COMMIT_REFUSAL_BACKOFF = 3.0
+"""Seconds ``_run`` waits after a ``CommitRefused`` before pulling the next
+queued job, on top of whatever settling ``_require_commit_headroom_settled``
+already did. A refusal is not a crash the loop should race past to the next
+job: three back-to-back klein jobs failed this way within the same second on
+2026-08-31, each check re-asking a commit figure the previous job's own
+teardown had not finished giving back."""
+
 
 _ALWAYS_CONDITIONED = object()
 """Stand-in ``cond`` for a caller whose every pass is conditioned.
@@ -615,10 +623,55 @@ def _palette_entries(config: Config, name: str) -> tuple[tuple[int, int, int], .
     raise RuntimeError(f"palette {name!r} is no longer installed")
 
 
+class CommitRefused(RuntimeError):
+    """Raised by ``_require_commit_headroom`` -- a resource-exhaustion refusal,
+    not a crash. The dispatch loop backs off before pulling the next queued
+    job on this, specifically so a refusal cannot cascade through the rest of
+    the queue in the same tick (2026-08-31: three back-to-back klein jobs
+    failed the same way within the same second)."""
+
+
+class _CommitShortfall(CommitRefused):
+    """The ``need_gib`` quantity check specifically, never the percentage
+    ceiling. This is the branch ``_require_commit_headroom_settled`` retries:
+    it always follows a teardown (trellis stop / t2i unload) that this same
+    acquire just triggered, and Windows does not credit that commit back
+    instantly."""
+
+
+COMMIT_SETTLE_ATTEMPTS = 3
+"""Tries at the quantity check before ``_require_commit_headroom_settled``
+gives up: one immediate, two after a short wait."""
+
+COMMIT_SETTLE_DELAY = 1.0
+"""Seconds between settle retries -- room for a just-killed child's commit
+charge to actually leave ``CommitTotal``, not a number measured against a
+specific machine."""
+
+
+async def _require_commit_headroom_settled(
+    when: str, remedy: str, need_gib: float
+) -> None:
+    """``_require_commit_headroom``, with a few seconds' grace for a shortfall
+    that is only there because this same call sequence just tore something
+    down. Never retries the percentage ceiling -- that one means the machine
+    is generally under pressure, not that a number is about to catch up."""
+    for attempt in range(COMMIT_SETTLE_ATTEMPTS):
+        try:
+            _require_commit_headroom(when, remedy, need_gib=need_gib)
+            return
+        except _CommitShortfall:
+            if attempt == COMMIT_SETTLE_ATTEMPTS - 1:
+                raise
+            await asyncio.sleep(COMMIT_SETTLE_DELAY)
+
+
 def _require_commit_headroom(when: str, remedy: str, need_gib: float = 0.0) -> None:
     """Refuse to go on if host commit cannot take what comes next.
 
-    Raises RuntimeError. The enforcing half of what ``_log_mem`` only records.
+    Raises ``CommitRefused`` (the percentage ceiling) or its subclass
+    ``_CommitShortfall`` (the quantity check) -- both are still a
+    ``RuntimeError``. The enforcing half of what ``_log_mem`` only records.
     It was one check, at dispatch, before ``_generate`` -- and nothing re-asked
     it across the whole stop-trellis / load-image-model / generate / unload /
     start-trellis sequence, which is precisely where the charge moves.
@@ -644,7 +697,7 @@ def _require_commit_headroom(when: str, remedy: str, need_gib: float = 0.0) -> N
     """
     pressure = commit_fraction()
     if pressure is not None and pressure >= COMMIT_CEILING:
-        raise RuntimeError(
+        raise CommitRefused(
             f"host memory is {pressure * 100:.0f}% committed{when}, at or past the "
             f"{COMMIT_CEILING * 100:.0f}% ceiling. {remedy}"
         )
@@ -656,7 +709,7 @@ def _require_commit_headroom(when: str, remedy: str, need_gib: float = 0.0) -> N
     free = sysmem.commit_limit - sysmem.commit_total
     want = need_gib + COMMIT_MARGIN_GIB
     if free < want:
-        raise RuntimeError(
+        raise _CommitShortfall(
             f"loading this model needs about {need_gib:.1f} GiB of host memory "
             f"(plus a {COMMIT_MARGIN_GIB:.1f} GiB margin){when}, and only "
             f"{free:.1f} GiB of the commit limit is free. {remedy}"
@@ -872,11 +925,11 @@ class Worker(
         # to a model.glb (and is why ``optimize_job`` refuses a job that is
         # queued or running rather than trying to interleave with it).
         #
-        # Only ``_retexture`` uses it, and only to *delete* the exports that
-        # describe the skin it just replaced -- the one place the worker touches
-        # a finished job's derived artifacts, and so the one place an in-flight
-        # conversion could otherwise rename a stale copy back into existence
-        # after the unlink.
+        # ``_retexture`` and ``_remesh`` use it, and only to *delete* the
+        # exports that describe the geometry or skin they just replaced -- the
+        # places the worker touches a finished job's derived artifacts, and so
+        # the places an in-flight conversion could otherwise rename a stale copy
+        # back into existence after the unlink.
         self.artifact_lock: Any = lambda _job_id, _name: contextlib.nullcontext()
         self.fatal: BaseException | None = None
         self.progress = ProgressBus()
@@ -1048,6 +1101,12 @@ class Worker(
         # Consecutive failures, not a total: the loop is meant to survive a
         # hiccup and meant to give up on a wall. See LOOP_FAILURE_LIMIT.
         failures = 0
+        # Set by a CommitRefused, consumed by the next queued job's dispatch --
+        # never by the idle branch, which must reach _maybe_evict_idle() with
+        # no extra delay: that sweep is what frees the memory a refusal is
+        # about, and holding it back is exactly the trap COMMIT_REFUSAL_BACKOFF
+        # exists to avoid repeating, not to recreate here.
+        commit_refused = False
         while not self._stop.is_set():
             try:
                 job = await asyncio.to_thread(self.store.next_queued)
@@ -1058,12 +1117,17 @@ class Worker(
                 # on its own row rather than being the queue's problem.
                 failures = 0
                 if job is None:
+                    commit_refused = False
                     await self._maybe_evict_idle()
                     woke = await self._wait_for_work(wait)
                     wait = POLL_INTERVAL if woke else IDLE_POLL_INTERVAL
                     continue
                 wait = POLL_INTERVAL
-                await self._process(job)
+                if commit_refused:
+                    # ``_wait_for_work`` rather than a flat sleep so shutdown
+                    # is not held up for the whole backoff.
+                    await self._wait_for_work(COMMIT_REFUSAL_BACKOFF)
+                commit_refused = await self._process(job)
             except Exception as exc:
                 # A crash here used to kill the worker permanently and
                 # silently -- next_queued or a DB hiccup would strand every
@@ -1370,7 +1434,7 @@ class Worker(
         # pipe resident" (see that teardown's comment), and gating on the
         # object alone let every reuse of it re-allocate ~16 GiB unchecked.
         if self._text2image is None or not self._text2image.loaded:
-            _require_commit_headroom(
+            await _require_commit_headroom_settled(
                 f" before loading {spec.label}",
                 "Close other applications, or use a smaller image model.",
                 need_gib=_host_peak_gib(spec),
@@ -1551,12 +1615,15 @@ class Worker(
                 await asyncio.sleep(POLL_INTERVAL * attempt)
         return False  # unreachable; the loop either returns or raises
 
-    async def _process(self, job: dict[str, Any]) -> None:
+    async def _process(self, job: dict[str, Any]) -> bool:
+        """Run one queued job. Returns whether ``_run`` should pause before
+        pulling the next one -- true only for a ``CommitRefused``, never for
+        an ordinary job failure (see ``COMMIT_REFUSAL_BACKOFF``)."""
         job_id = job["id"]
         claimed = await asyncio.to_thread(self.store.claim, job_id)
         if not claimed:
             # Cancelled or deleted between next_queued() and here.
-            return
+            return False
         self.current_job_id = job_id
         self._cancel = _Cancel(job_id)
         # A cold trellis server loads ~8 GB inside its first stage. Text jobs
@@ -1587,11 +1654,13 @@ class Worker(
         # Whether the job got past the door. Only work that *ran* may re-arm the
         # idle clock below -- see that ``finally`` for the loop this closes.
         admitted = False
+        needs_backoff = False
         try:
             self._check_resources(job)
             admitted = True
             await self._generate(job)
         except Exception as exc:
+            needs_backoff = isinstance(exc, CommitRefused)
             if self._cancel.event.is_set() and self._cancel.committed:
                 # The cancel arrived too late to take anything back -- the
                 # artifact is published and the row will read "done" -- so
@@ -1731,3 +1800,4 @@ class Worker(
                     self._last_job_at = time.monotonic()
                     self._caches_evicted_at = 0.0
                 self.progress.end(job_id)
+        return needs_backoff

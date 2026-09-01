@@ -29,6 +29,10 @@ from warlock.studio.panes import inker_canvas
 
 SIZE = (32, 32)
 ORIGIN = (0.0, 0.0)
+#: The pane ``_input`` is driven in. Large enough that these documents sit
+#: unclamped at ``pan=(0, 0)``, so the gestures under test are unaffected
+#: by the canvas pan bound.
+REGION = (400.0, 300.0)
 TRIANGLE = [(4.0, 4.0), (24.0, 6.0), (10.0, 26.0)]
 
 
@@ -57,6 +61,7 @@ class _Mouse:
         return SimpleNamespace(
             get_io=lambda: SimpleNamespace(
                 mouse_wheel=0.0,
+                mouse_wheel_h=0.0,
                 key_shift=self.shift,
                 key_ctrl=False,
                 key_alt=self.alt,
@@ -93,7 +98,7 @@ def scene(monkeypatch):
             mouse.clicked[pressed] = True
             mouse.double[pressed] = double
         mouse.down = {b: b in down for b in (0, 1, 2)}
-        inker_canvas._input(None, state, tab, ORIGIN, active=True, hovered=True)
+        inker_canvas._input(None, state, tab, ORIGIN, REGION, active=True, hovered=True)
 
     def click(point, *, button: int = 0, double: bool = False, shift=False, alt=False):
         mouse.shift, mouse.alt = shift, alt
@@ -273,7 +278,7 @@ def test_the_press_guard_does_not_eat_the_second_click(monkeypatch):
         if click is not None:
             mouse.clicked[click] = True
         mouse.down = {b: b in down for b in (0, 1, 2)}
-        inker_canvas._input(None, state, tab, ORIGIN, active=True, hovered=True)
+        inker_canvas._input(None, state, tab, ORIGIN, REGION, active=True, hovered=True)
 
     for point in TRIANGLE:
         frame(point, click=0, down=(0,))  # press
@@ -329,7 +334,7 @@ def test_the_tab_going_busy_drops_the_polygon(monkeypatch):
     state.gesture_pts = list(TRIANGLE)
 
     tab.saving = True
-    inker_canvas._input(None, state, tab, ORIGIN, active=True, hovered=True)
+    inker_canvas._input(None, state, tab, ORIGIN, REGION, active=True, hovered=True)
     assert state.gesture_pts == []
 
 

@@ -20,6 +20,30 @@ def test_every_option_is_reachable_from_some_tools_bar():
     assert listed == set(inker_state.TOOL_OPTION_DEFAULTS)
 
 
+def test_every_context_key_reaches_a_widget():
+    """A key in the table that ``_field`` has no branch for is dropped in
+    silence -- ``_tool_bar`` filters the ``None`` out -- so the option is
+    listed, counted, reachable by every test above, and undrawable.
+
+    That is what happened to ``corner_radius``: it is in the table and in
+    ``TOOL_OPTION_DEFAULTS``, so both directions above passed, and the only way
+    to set it was to hold ``C`` and roll the wheel. The two tests above assert
+    the table against the *options*; this one asserts it against the *bar*,
+    which is the direction that was missing.
+
+    Pure: ``_field`` builds closures and returns a ``Field``, and
+    ``Field.widths()`` only calls ``sp()``. No imgui context is needed.
+    """
+    from warlock.studio.panes import inker_context
+
+    for key, _label, applies, _group in inker_state.CONTEXT_WIDGETS:
+        state = inker_state.InkerState()
+        state.set_tool(sorted(applies)[0])
+        field = inker_context._field(None, state, None, key)
+        assert field is not None, f"{key} is in the table and _field drops it"
+        assert field.widths()[0] > 0, key
+
+
 def test_every_widget_names_a_real_option_and_at_least_one_real_tool():
     tools = {tool for tool, _l, _k in inker_state.TOOLS}
     for key, label, applies, group in inker_state.CONTEXT_WIDGETS:

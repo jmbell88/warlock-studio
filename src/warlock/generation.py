@@ -777,14 +777,12 @@ def validate_request(
                     ),
                 )
             )
-        if request.negative_prompt.strip() and not resolved.recipe.supports_negative_prompt:
-            issues.append(
-                CompatibilityIssue(
-                    "negative_prompt",
-                    f"{resolved.recipe.label} does not support negative prompts; "
-                    "remove Avoid text or choose another model.",
-                )
-            )
+        # A saved brief can carry Avoid text from a full-CFG model into a
+        # distilled one. That is not an invalid request: the negative branch
+        # is simply absent for the selected recipe. Refusing here stranded the
+        # text behind a hidden control and stopped FLUX.2 klein distilled
+        # generations from starting. The worker omits the inert value through
+        # ``effective_negative_prompt`` instead.
         if request.style_lora:
             lora = models.STYLE_LORAS.get(request.style_lora)
             base = models.BASE_MODELS.get(resolved.base_model)
@@ -919,7 +917,18 @@ def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
     )
 
 
-def request_to_legacy(request: GenerationRequest) -> dict[str, Any]:
+def effective_negative_prompt(
+    request: GenerationRequest, resolved: ResolvedRecipe | None
+) -> str:
+    """Return the Avoid text a resolved generation can actually consume."""
+    if resolved is None or resolved.recipe.supports_negative_prompt:
+        return request.negative_prompt
+    return ""
+
+
+def request_to_legacy(
+    request: GenerationRequest, resolved: ResolvedRecipe | None = None
+) -> dict[str, Any]:
     """Compatibility adapter for existing ``create_job`` doors.
 
     ``sprite_sheet`` is ``reference`` and not ``sheet``, which looks like a
@@ -952,7 +961,7 @@ def request_to_legacy(request: GenerationRequest) -> dict[str, Any]:
         }[request.generation_type],
         "output": output,
         "prompt": request.prompt,
-        "negative_prompt": request.negative_prompt or None,
+        "negative_prompt": effective_negative_prompt(request, resolved) or None,
         "seed": request.seed,
         "count": request.count,
     }
@@ -1089,7 +1098,17 @@ def remove_imported_lora(config: Any, key: str) -> bool:
         fh.write(payload)
         temp = Path(fh.name)
     temp.replace(lora_manifest_path(config))
-    (root / gone.filename).unlink(missing_ok=True)
+    # Resolved and re-checked against the directory before it is deleted, the
+    # rule ``service.palettes._path`` and ``fetch.removal_plan`` both follow.
+    # ``import_lora`` cannot write a filename with a separator in it, so today
+    # this refuses nothing -- but ``manifests.json`` is a file on disk that a
+    # user can edit and a restore can replace, and this is a call to ``unlink``.
+    # A file outside the directory is left where it is: the manifest entry is
+    # already gone, so the style has disappeared from the app either way, and
+    # an orphan is a much better outcome than an ``unlink`` somewhere else.
+    target = (root / gone.filename).resolve()
+    if target.parent == root.resolve():
+        target.unlink(missing_ok=True)
     models.STYLE_LORAS.pop(key, None)
     return True
 

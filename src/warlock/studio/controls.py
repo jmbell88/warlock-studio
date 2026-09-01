@@ -891,6 +891,56 @@ def switch(
     return bool(clicked and enabled), value
 
 
+def segmented_flags(
+    control_id: str,
+    options: Sequence[tuple[str, str]],
+    active: Any,
+    *,
+    enabled: bool = True,
+    reason: str = "",
+    tooltips: dict[str, str] | None = None,
+    compact: bool = False,
+    width: float = 0.0,
+) -> str:
+    """:func:`segmented_choice`'s multi-select sibling. -> the key hit, or "".
+
+    The same pill group, and that is the point rather than a convenience: a set
+    of toggles that *compose* -- Inker's four symmetry mirrors, where H and V
+    together give four dabs -- drawn as four loose buttons reads as four
+    unrelated things, which is exactly what made them hard to find. Drawn as
+    one group they read as one control with several switches in it, which is
+    what they are.
+
+    Multi-select, so it returns the key pressed rather than a new value: the
+    caller owns how the set composes (``brush.toggled`` here), and a control
+    that guessed would be a second, quieter copy of that rule.
+    """
+
+    hit = ""
+    size = ControlSize.COMPACT if compact else ControlSize.REGULAR
+    for index, (key, label) in enumerate(options):
+        if index:
+            # **Contiguous, with no spacing between the segments.** That is what
+            # a segmented control *is*: four buttons with the row's ordinary gap
+            # between them read as four separate things, which is the complaint
+            # Inker's symmetry mirrors existed as. It also gives the group back
+            # three gaps of width, which is what lets it stay on the bar beside
+            # a five-field tool instead of collapsing at the default size.
+            imgui.same_line(0.0, 0.0)
+        if button(
+            f"{label}##{control_id}/{key}",
+            (width, width) if width else (0, 0),
+            role=ButtonRole.GHOST,
+            control_size=size,
+            selected=key in active,
+            enabled=enabled,
+            reason=reason,
+            tooltip=(tooltips or {}).get(key, ""),
+        ):
+            hit = key
+    return hit
+
+
 def segmented_choice(
     control_id: str,
     options: Sequence[tuple[str, str]],

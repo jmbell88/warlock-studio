@@ -978,3 +978,48 @@ def test_the_sheet_cap_counts_every_door_that_reserves_a_slot(svc, monkeypatch):
     svc_troupe.create_charsheet(svc, rigged, logical_size=64)
     with pytest.raises(Conflict, match="at most 1 sheet"):
         svc_sheets.create_sheet(svc, rigged, frame_size=64)
+
+
+# -- the staged render is not left behind -------------------------------------
+
+
+async def test_a_failed_character_sheet_leaves_no_orphaned_render(worker):
+    """The un-quantised atlas is cleaned up when the sheet fails, not only
+    when it succeeds.
+
+    It is written to ``pack_target`` inside the **mesh** job's directory, not
+    the sheet job's, so an orphan here survives deleting the failed sheet and
+    is only reclaimed by deleting the source asset. ``_discard_artifacts`` does
+    not cover it: the queue calls that on a cancel, not on an ordinary error.
+
+    Driven through a real failure rather than a patched one -- an unreadable
+    ``rig.glb`` is what the Blender worker actually refuses -- so the test
+    cannot pass because a fake returned early.
+    """
+    source_id = "a" * 12
+    sheet_id = "b" * 12
+    source_dir = worker.config.job_dir(source_id)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "rig.glb").write_bytes(b"not a glb")
+
+    png = rigging.sheet_png_path(source_dir, sheet_id)
+    atlas = png.with_name(f".{png.name}.render")
+    atlas.parent.mkdir(parents=True, exist_ok=True)
+    atlas.write_bytes(b"a partially written render")
+
+    # Named, not blind: an unreadable ``rig.glb`` is refused by the Blender
+    # worker, and asserting *which* failure keeps this test honest if the
+    # fixture ever stops reaching the render at all.
+    with pytest.raises(rigging.BlenderError):
+        await worker._charsheet(
+            {
+                "id": "c" * 12,
+                "params": {
+                    "source_job": source_id,
+                    "sheet_id": sheet_id,
+                    "logical_size": 32,
+                },
+            }
+        )
+
+    assert not atlas.exists(), "the staged render outlived the job that made it"

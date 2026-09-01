@@ -36,6 +36,10 @@ from warlock.studio.inker.selection import SelectionMask, render_transform_about
 from warlock.studio.panes import inker_canvas
 
 SIZE = (32, 24)
+#: The pane ``_input`` is driven in. Large enough that these documents sit
+#: unclamped at ``pan=(0, 0)``, so the gestures under test are unaffected
+#: by the canvas pan bound.
+REGION = (400.0, 300.0)
 
 
 # --- the standing negative control ------------------------------------------
@@ -468,6 +472,7 @@ class _Mouse:
         return SimpleNamespace(
             get_io=lambda: SimpleNamespace(
                 mouse_wheel=self.wheel,
+                mouse_wheel_h=0.0,
                 key_shift=self.shift,
                 key_alt=False,
                 key_ctrl=False,
@@ -542,7 +547,7 @@ def driven(monkeypatch):
             mouse.clicked[click] = True
         mouse.down = {button: button in down for button in (0, 1, 2)}
         mouse.shift = shift
-        inker_canvas._input(None, state, tab, (0.0, 0.0), active=True, hovered=True)
+        inker_canvas._input(None, state, tab, (0.0, 0.0), REGION, active=True, hovered=True)
 
     frame.mouse = mouse
     return state, tab, frame

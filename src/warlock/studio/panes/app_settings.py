@@ -1060,7 +1060,15 @@ def _lora_train_form(ctx: Any) -> None:
     form = ctx.state.preview.get("lora_train")
     if not form:
         return
-    images = training_images(Path(form["folder"]))
+    # Scanned when the folder changes, not every frame this form is drawn.
+    # ``training_images`` is an ``iterdir`` plus a filter and a sort, and this
+    # form stays on screen for as long as it takes to type a name -- on a
+    # network path or a large training set that was a per-frame disk hit on the
+    # frame thread, for a count that cannot change while the dialog is up.
+    if form.get("scanned_folder") != form["folder"]:
+        form["images"] = training_images(Path(form["folder"]))
+        form["scanned_folder"] = form["folder"]
+    images = form["images"]
     widgets.muted(
         f"Training from {Path(form['folder']).name}: {len(images)} images "
         f"({lora_train.MIN_IMAGES} to {lora_train.MAX_IMAGES})"

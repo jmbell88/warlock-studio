@@ -113,6 +113,7 @@ def _tileset_popup(ctx: Any, state: Any) -> None:
         if state.tileset_import_open:
             state.tileset_import_open = False
             state.tileset_import = None
+            state.tileset_preview_key = None
         return
     widgets.popup_chrome(_imgui=imgui)
     if state.tileset_import is None:
@@ -136,23 +137,42 @@ def _tileset_popup(ctx: Any, state: Any) -> None:
     # The counts the numbers above actually produce, computed from the same
     # occupancy grid the import slices by -- so what the popup promises and
     # what the import does cannot disagree.
-    occupied = tileset_occupancy(pixels, tile=state.tileset_cell)
-    rows, columns = occupied.shape
-    kept = int(occupied.sum())
-    dropped = rows * columns - kept
-    duplicates = 0
-    if state.tileset_dedup and kept and kept <= MAX_SPRITES:
-        # **The same call the import runs**, not a second count of its own: the
-        # popup-promise contract ``tileset_occupancy`` already enforces for
-        # emptiness, applied to the dedup it now also promises.
-        tile = state.tileset_cell
-        _kept, duplicates = dedup_tiles(
-            sprites_from_tileset(
-                pixels, tile=tile, prefix=f"{path}@{tile[0]}x{tile[1]}", name=stem
-            ),
-            orientations=state.tileset_dedup_flips,
-        )
-        kept -= duplicates
+    #
+    # **Recomputed only when one of its inputs changes**, not every frame the
+    # popup is drawn. The dedup branch below re-slices the sheet into up to
+    # ``MAX_SPRITES`` fresh ``Sprite`` copies and hashes all eight dihedral
+    # variants of each: measured at some hundreds of milliseconds on a full
+    # 8192-square sheet, which is a legal thing to drop on this picker and was
+    # about two frames a second for as long as the popup stayed up. The decode
+    # that produced ``pixels`` is already behind ``ctx.submit``; this was the
+    # half left on the frame thread.
+    key = (
+        id(pixels),
+        tuple(state.tileset_cell),
+        bool(state.tileset_dedup),
+        bool(state.tileset_dedup_flips),
+    )
+    if state.tileset_preview_key != key:
+        occupied = tileset_occupancy(pixels, tile=state.tileset_cell)
+        rows, columns = occupied.shape
+        kept = int(occupied.sum())
+        dropped = rows * columns - kept
+        duplicates = 0
+        if state.tileset_dedup and kept and kept <= MAX_SPRITES:
+            # **The same call the import runs**, not a second count of its own:
+            # the popup-promise contract ``tileset_occupancy`` already enforces
+            # for emptiness, applied to the dedup it now also promises.
+            tile = state.tileset_cell
+            _kept, duplicates = dedup_tiles(
+                sprites_from_tileset(
+                    pixels, tile=tile, prefix=f"{path}@{tile[0]}x{tile[1]}", name=stem
+                ),
+                orientations=state.tileset_dedup_flips,
+            )
+            kept -= duplicates
+        state.tileset_preview_key = key
+        state.tileset_preview = (rows, columns, kept, dropped, duplicates)
+    rows, columns, kept, dropped, duplicates = state.tileset_preview
     problem = ""
     if kept == 0:
         problem = "No occupied cells at that tile size."
@@ -176,6 +196,7 @@ def _tileset_popup(ctx: Any, state: Any) -> None:
     imgui.same_line()
     if controls.button("Cancel##tileset", (sp(90), 0)):
         state.tileset_import = None
+        state.tileset_preview_key = None
         state.tileset_import_open = False
         imgui.close_current_popup()
     imgui.end_popup()

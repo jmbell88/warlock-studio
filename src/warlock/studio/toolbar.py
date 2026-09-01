@@ -133,6 +133,71 @@ class Field:
         return full, (sp(self.compact) if self.compact else full)
 
 
+@dataclass(frozen=True)
+class Trailing:
+    """The fixed block at the end of a row, with a tier of its own.
+
+    A bare ``(width, draw)`` tuple still works and means "one width, never
+    collapses", which is what a combo or a help marker wants. This exists for
+    the case that tuple gets wrong: a block holding the *sitting's* settings --
+    Inker's symmetry group and its view aids -- is measured and subtracted
+    before :func:`plan` runs, so at one fixed width it wins unconditionally
+    against the tool's own size, ink and nib. That is how a row of things
+    nobody touches twice an hour crowds out the things a hand reaches for
+    between strokes, which is the failure that deleted Inker's second bar on
+    2026-08-23 and would have come back through this door.
+
+    The ordering it establishes, measured rather than assumed (see
+    :func:`trailing_compact`): **a label is cheaper to lose than a control.**
+    The row gives up its words first -- a slider that reads ``129`` instead of
+    ``129 px`` is still the slider, and its name is a hover away -- and the
+    block gives up its controls only when even a fully compacted row cannot fit
+    beside them, because a folded mirror is not a smaller mirror, it is a
+    button that is no longer there.
+
+    ``draw`` is called with the chosen tier, exactly as :class:`Field`'s is.
+    """
+
+    width: float
+    compact: float
+    draw: Any
+
+
+def trailing_widths(trailing: Any) -> tuple[float, float, Any]:
+    """``(full, compact, draw)`` for either shape of trailing block."""
+    if isinstance(trailing, Trailing):
+        return (trailing.width, trailing.compact, trailing.draw)
+    width, draw = trailing
+    return (width, width, draw)
+
+
+def trailing_compact(
+    row_min: float,
+    avail: float,
+    full_w: float,
+    compact_w: float,
+    *,
+    gap: float = 0.0,
+) -> bool:
+    """Whether the trailing block must collapse. Pure, and takes numbers.
+
+    ``row_min`` is what the items and fields need at their **smallest** tier,
+    not their largest, and that is the whole of the policy: the block keeps its
+    controls as long as the row can be made to fit beside them at all, and
+    folds only when even a fully compacted row cannot.
+
+    The other way round was tried first and measured wrong. At the app's
+    default 1600x950 Inker's context bar has about 835 px -- the mode rail
+    takes 70 that a sidebars-only sum misses -- while the brush's row wants 689
+    and the symmetry block 217. Deciding from the row's *full* width therefore
+    folded the mirrors away on the commonest tool in the commonest window,
+    which is the opposite of what putting them on the bar was for. Deciding
+    from its smallest width keeps them, and the price is paid where it is
+    legible: a slider drops from ``129 px`` to ``129`` and stays a number.
+    """
+    return not (row_min + gap + full_w <= avail)
+
+
 def plan(
     widths_full: Any,
     widths_icon: Any,
@@ -228,14 +293,30 @@ def toolbar(
     avail = imgui.get_content_region_avail().x
     gap = imgui.get_style().item_spacing.x
     overflow_w = imgui.get_frame_height()
-    if trailing is not None:
-        avail -= trailing[0] + gap
     entries = [*items, *fields]
     full, icon = _measure(items)
     for field in fields:
         wide, narrow = field.widths()
         full.append(wide)
         icon.append(narrow)
+    trailing_draw = None
+    trailing_w = 0.0
+    trailing_tight = False
+    if trailing is not None:
+        trailing_full, trailing_small, trailing_draw = trailing_widths(trailing)
+        # The block's tier is chosen *before* the row's, because its width is
+        # what the row is then planned against -- and from the row's *smallest*
+        # width, so the question asked is "can the row be made to fit beside
+        # this at all", not "does it fit with every label on".
+        trailing_tight = trailing_compact(
+            sum(icon) + gap * max(len(icon) - 1, 0),
+            avail,
+            trailing_full,
+            trailing_small,
+            gap=gap,
+        )
+        trailing_w = trailing_small if trailing_tight else trailing_full
+        avail -= trailing_w + gap
     tiers = plan(
         full,
         icon,
@@ -332,7 +413,7 @@ def toolbar(
                 ):
                     imgui.set_tooltip(note)
             imgui.end_popup()
-    if trailing is not None:
+    if trailing_draw is not None:
         if drawn or MENU in tiers:
             # ``same_line_or_wrap``, not ``same_line``: :func:`plan` can return
             # a row that does not fit -- an all-pinned row has nothing left to
@@ -342,8 +423,13 @@ def toolbar(
             # which is a row that got taller rather than a control that
             # vanished. Found by the timeline's transport at 150 %, where five
             # pinned steps plus a pinned Delete overrun a 500 px strip.
-            widgets.same_line_or_wrap(trailing[0])
-        trailing[1]()
+            widgets.same_line_or_wrap(trailing_w)
+        # A tuple's ``draw`` takes nothing and a ``Trailing``'s takes the tier,
+        # which is what keeps every existing caller working unchanged.
+        if isinstance(trailing, Trailing):
+            trailing_draw(trailing_tight)
+        else:
+            trailing_draw()
     if clicked is not None and on_click is not None:
         on_click(clicked)
     return clicked

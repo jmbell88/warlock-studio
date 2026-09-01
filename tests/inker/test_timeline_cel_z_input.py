@@ -23,34 +23,17 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from _ui_context import imgui_context
 
 from warlock.studio import inker_state, probe
 
 
 @pytest.fixture
 def ui(monkeypatch):
-    """An imgui context with the control census on, torn down after."""
-    from imgui_bundle import imgui
-
-    from warlock.studio import theme
-
-    previous = imgui.get_current_context()
-    ctx = imgui.create_context()
-    io = imgui.get_io()
-    io.set_ini_filename(None)
-    io.display_size = (1600.0, 950.0)
-    io.delta_time = 1.0 / 60.0
-    io.fonts.add_font_default()
-    # No renderer backend here, so imgui has to be told not to expect one to
-    # have built the font atlas for it.
-    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures.value
-    theme.apply(imgui)
-    monkeypatch.setattr(probe, "ENABLED", True)
-    yield imgui
-    imgui.destroy_context(ctx)
-    if previous is not None:
-        imgui.set_current_context(previous)
-
+    """The shared imgui context; see ``_ui_context`` for why it is not a
+    conftest fixture."""
+    with imgui_context(monkeypatch) as imgui:
+        yield imgui
 
 def _doc():
     from warlock.studio.inker.document import Document

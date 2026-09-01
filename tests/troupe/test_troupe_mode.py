@@ -756,3 +756,66 @@ def test_no_pane_hard_codes_a_pose_it_cannot_know(ctx):
                 f"{Path(module.__file__).name}:{node.lineno} names a pose in prose: "
                 f"{node.value!r}"
             )
+
+
+# -- the cast is read on a clock, not per frame --------------------------------
+
+
+def _count_store_list(ctx, monkeypatch):
+    """Count ``store.list`` calls without changing what it answers."""
+    calls: list[dict] = []
+    real = ctx.svc.store.list
+
+    def counted(*args, **kw):
+        calls.append(kw)
+        return real(*args, **kw)
+
+    monkeypatch.setattr(ctx.svc.store, "list", counted)
+    return calls
+
+
+def test_the_cast_pane_reads_the_store_once_across_many_frames(ctx, svc, monkeypatch):
+    """A call-count assertion, deliberately, rather than a timing one.
+
+    The defect was two full job-table walks *per draw* -- one ``kind``-filtered
+    and one unfiltered, both up to ``SCAN_LIMIT`` rows, both behind the store's
+    single lock while the worker wants it. What matters is the number of reads
+    per frame, and that is what this pins; how long a read takes belongs to the
+    perf lane.
+    """
+    _character(svc)
+    calls = _count_store_list(ctx, monkeypatch)
+
+    for _ in range(60):
+        troupe_mode.cast_and_pending(ctx)
+
+    assert len(calls) == 2, "one page per half, once -- not once per frame"
+
+
+def test_the_cast_still_answers_the_same_thing_it_did_uncached(ctx, svc, monkeypatch):
+    """The throttle must not change the answer, only how often it is computed."""
+    job_id, _sheets = _character(svc)
+    cast, pending = troupe_mode.cast_and_pending(ctx)
+    assert [c["id"] for c in cast] == [job_id]
+    assert [c["id"] for c in cast] == [c["id"] for c in troupe_mode.characters(ctx)]
+    assert pending == troupe_mode.in_progress(ctx)
+
+
+def test_a_landed_task_drops_the_cache_rather_than_waiting_the_interval(ctx, svc):
+    """The interval exists to stop idle polling, not to delay news."""
+    _character(svc)
+    troupe_mode.cast_and_pending(ctx)
+    assert troupe_mode.ensure(ctx).cast_cache is not None
+
+    troupe_mode.on_task_failed(ctx, SimpleNamespace(key="troupe-send:x", error="no"))
+    assert troupe_mode.ensure(ctx).cast_cache is None, "the next draw re-reads"
+
+
+def test_an_idle_cast_is_reread_less_often_than_a_moving_one(ctx, svc):
+    """Both cadences are ``jobs_cache``'s, over the same store."""
+    assert troupe_mode.CAST_REFRESH_IDLE > troupe_mode.CAST_REFRESH_LIVE
+    _character(svc)
+    troupe_mode.cast_and_pending(ctx)
+    state = troupe_mode.ensure(ctx)
+    # Nothing on the chain, so the slower of the two.
+    assert state.cast_cache is not None and state.cast_cache[1] == []

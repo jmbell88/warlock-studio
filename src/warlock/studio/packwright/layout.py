@@ -60,11 +60,20 @@ DEFAULT_MAX_SIZE = 2048
 # arithmetic overflows nothing but the user's patience.
 MAX_PADDING = 256
 
-# The most sprites one atlas may hold. MaxRects is quadratic in the free-rect
-# list, so a document claiming a million sources is not a slow pack but a hung
-# frame thread; 4096 is well past any real sheet (a 64x64 grid at the 8192px
-# ceiling) and short of where the search stops answering.
-MAX_SPRITES = 4096
+# The most sprites one atlas may hold. MaxRects is super-quadratic in practice
+# -- `_prune` is O(F^2) per placement and the free-rect count F grows with the
+# items placed -- so a document claiming a million sources is not a slow pack
+# but one that never returns.
+#
+# **1024, measured.** This said 4096 and called it "short of where the search
+# stops answering"; that half was never measured and was wrong. One pack of
+# 4096 random 8-64px items takes 190 seconds on the reference machine, and
+# `maxrects_layout` can call pack once per candidate size. 1024 is the largest
+# count whose single pack stays under five seconds. See
+# docs/measurements/2026-08-31-packwright-max-sprites.md for the table and for
+# what would lift it again (bucketing the free-rect list so neither `_score`
+# nor `_prune` scans all of it).
+MAX_SPRITES = 1024
 
 
 def next_pot(value: int) -> int:

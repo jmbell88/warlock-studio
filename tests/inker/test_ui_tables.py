@@ -25,19 +25,25 @@ def test_every_symmetry_the_engine_composes_has_a_control():
     """The combo this replaced pinned the same fact one model earlier.
 
     A symmetry is a *set* now (``brush.SYMMETRY_AXES``), so a seven-way combo
-    cannot express one and the control is five: the four mirrors as toggles on
-    the context bar, and the radial as a checkbox in the canvas popover, where
-    the count it needs already lives. The two directions still both matter --
-    a toggle the engine does not implement fails on the first click, and an
-    axis with no control hides the feature.
+    cannot express one and the control is five: the four mirrors as a pill
+    group on the context bar, and the radial as a checkbox in the popover
+    behind the same ``Sym`` word, where the count it needs already lives. The
+    two directions still both matter -- a toggle the engine does not implement
+    fails on the first click, and an axis with no control hides the feature.
+
+    Sourced from ``inker_context`` throughout since 2026-08-31, when the radial
+    followed the mirrors out of the toolbox.
     """
     from warlock.studio.panes import inker_context
 
     mirrors = tuple(axis for axis, _label, _tip in inker_context.SYMMETRY_TOGGLES)
-    assert mirrors + (inker_tools.RADIAL_AXIS,) == brush.SYMMETRY_AXES
+    assert mirrors + (inker_context.RADIAL_AXIS,) == brush.SYMMETRY_AXES
     # And each carries a tooltip: a bar of "H V \ /" with no words is four
     # buttons a user has to press to find out about.
     assert all(tip for _axis, _label, tip in inker_context.SYMMETRY_TOGGLES)
+    # Every mirror also has a *word* for the popover, which is where the
+    # characters stop being enough.
+    assert set(inker_context._MIRROR_WORDS) == set(mirrors)
 
 
 def test_the_legacy_symmetry_names_all_still_read():
@@ -614,6 +620,5 @@ def test_the_two_u32_helpers_are_deliberately_different():
 def test_the_two_rgba_helpers_are_deliberately_different():
     """One clamps and one does not, and the clamping one reads a colour back
     out of a drag where a value can leave 0..1 mid-gesture."""
-    from warlock.studio.panes import inker_tools
 
     assert inker_tools._rgba((1.5, -0.2, 0.5, 1.0)) == (255, 0, 128, 255)

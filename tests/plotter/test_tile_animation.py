@@ -50,14 +50,55 @@ def test_frame_at_has_no_answer_for_an_empty_animation():
     assert tileset_lib.frame_at((), 0) is None
 
 
+def _animated_doc():
+    """A 4x4 map whose tileset has one three-frame animated tile."""
+    pixels = np.zeros((8, 32, 4), dtype=np.uint8)
+    pixels[..., 3] = 255
+    doc = MapDoc(4, 4, 8, 8)
+    doc.add_tile_layer("Ground")
+    doc.add_tileset(Tileset(name="Set", tile_w=8, tile_h=8, pixels=pixels))
+    frames = _frames((0, 100), (1, 150), (2, 200))
+    doc.set_tile_meta(0, 0, TileMeta(animation=frames))
+    return doc, frames
+
+
 def test_the_canvas_substitutes_gids_through_the_same_function():
     """One implementation, or the map and this editor come to disagree about
-    which frame a tile is on."""
-    import inspect
+    which frame a tile is on.
 
+    Asserted on the answer rather than on the source text this used to grep.
+    The canvas builds a substitution map once per frame now instead of calling
+    a scalar per cell, and a scan for ``frame_at(`` would have gone on passing
+    across that change while saying nothing about whether it still agreed.
+    """
     from warlock.studio.panes import plotter_canvas
 
-    assert "frame_at(" in inspect.getsource(plotter_canvas.animated_gid)
+    doc, frames = _animated_doc()
+    ref = doc.tilesets[0]
+    animated = ref.firstgid
+
+    for clock_ms in (0, 120, 300, 460, 700):
+        index = tileset_lib.frame_at(frames, clock_ms)
+        expected = ref.firstgid + frames[index].local_id
+        subs = plotter_canvas.animated_substitutions(doc, clock_ms)
+        assert subs.get(animated, animated) == expected
+
+
+def test_a_map_with_nothing_animated_hands_the_block_straight_back():
+    """The common case, and the one that used to pay a Python call per cell."""
+    from warlock.studio.panes import plotter_canvas
+    from warlock.studio.tilegrid import gid as gidlib
+
+    pixels = np.zeros((8, 32, 4), dtype=np.uint8)
+    pixels[..., 3] = 255
+    doc = MapDoc(4, 4, 8, 8)
+    doc.add_tile_layer("Ground")
+    doc.add_tileset(Tileset(name="Set", tile_w=8, tile_h=8, pixels=pixels))
+
+    subs = plotter_canvas.animated_substitutions(doc, 500)
+    assert subs == {}
+    block = np.array([[1, 2], [3, 0]], dtype=gidlib.DTYPE)
+    assert plotter_canvas.substitute_animated(block, subs) is block
 
 
 @pytest.mark.parametrize(

@@ -202,6 +202,39 @@ def draw(ctx: Any) -> None:
 # * The seam figure and the "unsaved" word are in the status bar under the
 #   canvas, with the zoom, the cursor position and the layer name. They are
 #   *readouts*, and that is the row of readouts.
+#
+# --- 2026-08-31: what came back, and why it is not that row -------------------
+#
+# The view aids are reachable from the bar again -- the grid, snapping, the
+# rulers, the pixel grid, the layer edges, the tile numbers and the tiling four
+# -- behind one word, ``View``, beside the symmetry group. Three things make
+# that a different decision from the one undone above rather than a reversal of
+# it:
+#
+# * **It is not a row.** It is one button on the row that already exists, in the
+#   trailing block that already exists. The count above is still one.
+# * **It costs the tool a label, never a control.** The block has two tiers now
+#   (``toolbar.Trailing``) and so a floor of 93 px, where the five buttons it
+#   replaces took their 201 unconditionally and a bar with no room clipped or
+#   wrapped. Measured at the default 1600x950 the bar has ~835 px, the brush's
+#   row wants 689 with every label on and the block wants 217, so both cannot
+#   have everything -- and what gives way is the row's *words*: ``129`` instead
+#   of ``129 px``, still the same slider, still named on hover. A folded mirror
+#   is not a narrower mirror, it is a button that is gone.
+# * **It files them by kind, which is what the paragraph above does.** The
+#   deleted row's contents were *verbs* (Rotate, Flip, Center, Wrap) and
+#   *readouts* (the seam figure, the status word), and they went to the menu and
+#   the status bar accordingly. The aids are neither: they are app-level state
+#   about how the canvas is drawn, persisted beside the swatches, and until now
+#   they had never been filed anywhere -- three were unlabelled glyphs in the
+#   toolbox, a pane away from the canvas they act on, and three were reachable
+#   only from a menu.
+#
+# The tiling four are the exception and stayed View-menu ops: ``tab.tiled`` is
+# per-*document* where every other aid is per-person, and a four-way setting
+# nobody changes mid-stroke is what a checked menu row is for. They are mirrored
+# in the popover, separated and labelled, because a trip to the menu bar to see
+# a seam is a trip away from the drawing.
 
 
 def _status(tab: Any) -> tuple[int, str] | None:
@@ -547,6 +580,14 @@ def _one_canvas(
                 view.pending_zoom = None
             elif not view.fitted:
                 inker_state.fit(view, tab.doc.size, region, **_BOUNDS)
+            # **The scrollbars go in before the paint surface**, because imgui
+            # gives an overlapping hover to whichever item was submitted first.
+            # That one ordering is the whole of the arbitration: with the
+            # pointer on a bar the surface below is neither hovered nor active,
+            # so every arm of ``_input`` stands down without being told about
+            # the bars at all.
+            lit = _scrollbar_input(state, tab, (origin.x, origin.y), region, index)
+            imgui.set_cursor_screen_pos(origin)
             # The right button is taken as well as the left: it paints with the
             # background colour (C12d) and the canvas has no context menu to
             # conflict with. Without the flag imgui simply never reports the press.
@@ -562,7 +603,7 @@ def _one_canvas(
             # a wheel zoom already obeyed, so making the keyboard agree with it is
             # the smaller surprise; a press matters because a stroke that starts
             # in one pane must keep its view even if the pointer leaves.
-            if hovered or active:
+            if hovered or active or any(lit):
                 tab.focus = index
             if view.pending_zoom_rung:
                 # Anchored on the cursor while it is over the canvas and on the
@@ -579,13 +620,27 @@ def _one_canvas(
                     view, (origin.x, origin.y), focus, view.pending_zoom_rung, **_BOUNDS
                 )
                 view.pending_zoom_rung = 0
-            _input(ctx, state, tab, (origin.x, origin.y), active=active, hovered=hovered)
+            _input(
+                ctx, state, tab, (origin.x, origin.y), region, active=active, hovered=hovered
+            )
+            # **After every gesture and before anything is drawn.** The three
+            # writers of ``view.pan`` cannot all clamp at source: two of them
+            # (``_place`` and ``_anchor``) are shared with Plotter, whose canvas
+            # has no bound by design. So the guarantee is made here instead, and
+            # it is the stronger one -- no frame is drawn from an unclamped pan,
+            # which also covers the cause no write-site clamp could see: a pane
+            # that shrinks under a pan that was legal a frame ago.
+            inker_state.clamp_pan(view, tab.doc.size, region)
             _paint(ctx, state, tab, (origin.x, origin.y), hovered=hovered)
             # After everything ``_paint`` draws, because the bands sit on top of
             # the canvas -- and outside it, because ``_paint`` early-outs when
             # there is no composite yet and the rulers should not blink with it.
             if state.rulers:
                 _rulers(tab, (origin.x, origin.y), region, hovered=hovered)
+            # After the rulers, so where a bar meets a band's far end the bar
+            # is the one on top -- and after ``_paint`` for the reason every
+            # other overlay is: they sit over the drawing, not under it.
+            _scrollbars(state, tab, (origin.x, origin.y), region, lit)
             # Inside the child, because that is where ``_press`` opened it from and
             # an imgui popup's id is computed off the id stack it was opened on.
             _text_popup(ctx, state, tab)
@@ -818,24 +873,49 @@ def _remedy(ctx: Any, state: Any, tip: Any) -> None:
 # --- input ------------------------------------------------------------------
 
 
-def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: bool) -> None:
+def _input(
+    ctx: Any, state: Any, tab: Any, origin, region, *, active: bool, hovered: bool
+) -> None:
     io = imgui.get_io()
     mouse = imgui.get_mouse_pos()
     point = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
 
-    if hovered and io.mouse_wheel:
+    if hovered and (io.mouse_wheel or io.mouse_wheel_h):
         # Back to physical notches before stepping: the backend halves every
         # wheel event so lists scroll at a sane rate, and this pane wants the
         # count the user's hand made, not a fraction of it.
         notches = io.mouse_wheel / imgui_backend.WHEEL_SCALE
+        sideways = io.mouse_wheel_h / imgui_backend.WHEEL_SCALE
+        # **The wheel scrolls and Ctrl+wheel zooms**, which is Aseprite's
+        # default and the opposite of what this pane did until 2026-08-31.
+        # Precedence is C, then Ctrl, then Shift, then plain: ``C`` is a *tool*
+        # modifier rather than a navigation one -- the hand holding it is
+        # dragging a rectangle out, not moving around -- and keeping
+        # ``state.tool == "rect"`` as the left operand also keeps
+        # ``is_key_down`` off the path for every other tool.
         if state.tool == "rect" and imgui.is_key_down(imgui.Key.c):
             # **Hold C and roll while dragging a rectangle**: Aseprite's own
             # corner-radius gesture. On the wheel rather than on a drag of its
             # own because the hand is already holding the shape out, and the
             # only spare axis is the one the wheel turns.
             state.corner_radius = max(0, int(state.corner_radius) + int(notches))
-        else:
+        elif io.key_ctrl:
             inker_state.zoom_step(tab.view, origin, (mouse.x, mouse.y), notches, **_BOUNDS)
+        else:
+            # A tilt wheel scrolls sideways on its own, and its sign is the
+            # opposite of Shift+wheel's: imgui reports a positive
+            # ``mouse_wheel_h`` as "towards the right", where a positive
+            # ``mouse_wheel`` is "away from the user", which moves the page the
+            # other way. Written out rather than folded into one term.
+            along = (notches if io.key_shift else 0.0) - sideways
+            down = 0.0 if io.key_shift else notches
+            inker_state.pan_by(
+                tab.view,
+                tab.doc.size,
+                region,
+                inker_state.scroll_step(region[0]) * along,
+                inker_state.scroll_step(region[1]) * down,
+            )
 
     _os_cursor(state, tab, hovered=hovered)
 
@@ -858,7 +938,7 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
         delta = imgui.get_mouse_drag_delta(button)
         imgui.reset_mouse_drag_delta(button)
         state.drag_kind = "pan"
-        tab.view.pan = (tab.view.pan[0] + delta.x, tab.view.pan[1] + delta.y)
+        inker_state.pan_by(tab.view, tab.doc.size, region, delta.x, delta.y)
         return
     if state.drag_kind == "pan" and not (imgui.is_mouse_down(2) or imgui.is_mouse_down(0)):
         state.drag_kind = ""
@@ -2860,6 +2940,130 @@ def _grid(
         a = inker_state.to_screen(view, origin, 0, y)
         b = inker_state.to_screen(view, origin, width, y)
         draw_list.add_line(a, b, colour)
+
+
+# --- scrollbars ---------------------------------------------------------------
+#
+# Hand-drawn rather than imgui's own, and that is not a stylistic choice. The
+# drawing is draw-list geometry (``_blit``), so it contributes nothing to
+# layout: to get an imgui scrollbar the child would have to emit a *dummy*
+# sized ``page * zoom``, whose size depends on the zoom and whose scroll
+# position then feeds back into it. Worse, ``get_scroll_x/y`` would become a
+# second source of truth beside ``view.pan``, mirrored both ways every frame --
+# the exact failure ``tests/inker/test_duplicate_view.py`` names as its reason
+# for the view having no setter. And imgui clamps scroll to ``[0, max]`` where
+# this pane's rule is Aseprite's half-a-pane padding, which differs everywhere
+# it matters.
+#
+# The bars are submitted **before** the paint surface. imgui refuses to hover an
+# item when another, earlier, overlapping item already holds ``HoveredId``, so
+# first-submitted wins: with the pointer on a bar the surface is neither hovered
+# nor active, and ``_input``'s arms -- all gated on one or the other -- do
+# nothing at all without a single guard being added to them. In reverse, a
+# stroke in flight owns the ActiveId and the bars refuse themselves, so dragging
+# a stroke over the bottom edge neither stops nor lights the bar up. The cost is
+# that the outer few pixels of the pane stop being paintable, which is what a
+# scrollbar costs in Aseprite too.
+
+#: The bars' thickness in design pixels (through ``sp`` at draw time).
+SCROLL_THICKNESS = 10.0
+
+#: The shortest a thumb may be drawn, so a 40 000 px page still has something
+#: to grab. Applied inside the mapping, so an end-to-end drag still lands
+#: exactly on the pan limit rather than stopping short by the stolen pixels.
+SCROLL_MIN_THUMB = 24.0
+
+
+def _scroll_tracks(state: Any, origin, region) -> tuple[tuple, tuple]:
+    """The horizontal and vertical tracks, each ``(x0, y0, x1, y1)``.
+
+    They keep off the ruler bands, which own the top and left strips, so the
+    two overlays never draw over each other; the corner square where the two
+    bars would meet belongs to neither.
+    """
+    left, top = origin
+    right, bottom = left + region[0], top + region[1]
+    thick = sp(SCROLL_THICKNESS)
+    inset = sp(RULER_THICKNESS) if state.rulers else 0.0
+    return (
+        (left + inset, bottom - thick, right - thick, bottom),
+        (right - thick, top + inset, right, bottom - thick),
+    )
+
+
+def _scrollbar_input(state: Any, tab: Any, origin, region, index: int) -> list[bool]:
+    """The two bars' buttons. -> whether each bar has the pointer this frame.
+
+    Submitted before the paint surface; see the note above. The drag continues
+    outside the child because imgui keeps the ActiveId on a held button, which
+    is why this needs no ``drag_kind`` of its own and why none of ``_input``'s
+    gesture arms can see a scroll happening.
+
+    The returned flags are also what ``_scrollbars`` lights the thumb from: the
+    buttons are submitted here and drawn several calls later, by which point
+    ``is_item_hovered`` is answering about some entirely different item.
+    """
+    view = tab.view
+    lit = [False, False]
+    for axis, track in enumerate(_scroll_tracks(state, origin, region)):
+        x0, y0, x1, y1 = track
+        length_px = (x1 - x0) if axis == 0 else (y1 - y0)
+        if length_px <= 0.0:
+            continue
+        imgui.set_cursor_screen_pos((x0, y0))
+        imgui.invisible_button(f"##inker-scroll-{axis}-{index}", (x1 - x0, y1 - y0))
+        active = imgui.is_item_active()
+        lit[axis] = imgui.is_item_hovered() or active
+        offset, fraction = inker_state.scroll_thumb(
+            view, tab.doc.size, region, axis, min_length=sp(SCROLL_MIN_THUMB) / length_px
+        )
+        if imgui.is_item_clicked():
+            mouse = imgui.get_mouse_pos()
+            at = ((mouse.x - x0) if axis == 0 else (mouse.y - y0)) / length_px
+            # Only a press on the bare track jumps; a press that landed on the
+            # thumb is the start of a drag and must not move anything first.
+            if not offset <= at <= offset + fraction:
+                inker_state.scroll_thumb_to(view, tab.doc.size, region, axis, at)
+        elif active:
+            delta = imgui.get_mouse_drag_delta(0)
+            imgui.reset_mouse_drag_delta(0)
+            moved = delta.x if axis == 0 else delta.y
+            if moved:
+                inker_state.scroll_drag(
+                    view,
+                    tab.doc.size,
+                    region,
+                    axis,
+                    moved,
+                    max(length_px * (1.0 - fraction), 1.0),
+                )
+    return lit
+
+
+def _scrollbars(state: Any, tab: Any, origin, region, lit) -> None:
+    """Draw both bars. After the rulers, so a bar wins where the two meet."""
+    draw_list = imgui.get_window_draw_list()
+    back = _u32(theme.ELEV_1, 0.6)
+    for axis, track in enumerate(_scroll_tracks(state, origin, region)):
+        x0, y0, x1, y1 = track
+        length_px = (x1 - x0) if axis == 0 else (y1 - y0)
+        if length_px <= 0.0:
+            continue
+        draw_list.add_rect_filled((x0, y0), (x1, y1), back)
+        offset, fraction = inker_state.scroll_thumb(
+            tab.view,
+            tab.doc.size,
+            region,
+            axis,
+            min_length=sp(SCROLL_MIN_THUMB) / length_px,
+        )
+        ink = _u32(theme.TEXT if lit[axis] else theme.MUTED, 0.8)
+        near = offset * length_px
+        far = near + fraction * length_px
+        if axis == 0:
+            draw_list.add_rect_filled((x0 + near, y0), (x0 + far, y1), ink, sp(2.0))
+        else:
+            draw_list.add_rect_filled((x0, y0 + near), (x1, y0 + far), ink, sp(2.0))
 
 
 # --- rulers ------------------------------------------------------------------

@@ -275,3 +275,31 @@ def test_the_merged_face_inherits_material_and_smoothing() -> None:
     out, sel = dis.dissolve_edges(marked, el.ElementSel(edges=a.edge_verts[a.edge_uses == 2]))
     assert out.material[sel.faces[0]] == 7
     assert bool(out.smooth[sel.faces[0]])
+
+
+# --- the growth ceiling ------------------------------------------------------
+
+
+def test_a_dissolve_whose_outline_is_too_big_is_refused(monkeypatch) -> None:
+    """``ops_subdiv`` refuses past ``MAX_SUBDIVIDED_FACES``; this is the other
+    unbounded growth an edit can ask for.
+
+    The n-gon goes to ``earclip``, whose ear search is quadratic in the corner
+    count and runs in Python on the frame thread -- so the refusal has to come
+    before the merge, not after it. Driven with the ceiling lowered rather than
+    with a twenty-thousand-corner mesh, which would cost more to build than the
+    thing it is testing.
+    """
+    m = _grid(3, 3)
+    monkeypatch.setattr(dis, "MAX_DISSOLVED_RING", 4)
+    with pytest.raises(el.OpError, match="corners, past the"):
+        dis.dissolve_faces(m, el.ElementSel(faces=[0, 1, 3, 4]))
+
+
+def test_the_ceiling_is_far_above_any_ordinary_dissolve() -> None:
+    """It must not be felt: the 2x2 block above is an eight-corner outline."""
+    assert dis.MAX_DISSOLVED_RING >= 20_000
+    m = _grid(3, 3)
+    out, sel = dis.dissolve_faces(m, el.ElementSel(faces=[0, 1, 3, 4]))
+    bm.validate(out)
+    assert len(sel.faces) == 1

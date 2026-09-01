@@ -204,9 +204,19 @@ def test_a_weighted_area_fill_writes_only_brush_members() -> None:
 
 
 def _animated(doc: MapDoc, value: int, clock_ms: int) -> int:
+    """One cell through the canvas's substitution.
+
+    The canvas builds the map once per frame and applies it to the whole
+    visible block; one cell is that same pair over a 1x1 array. Kept as a
+    helper so every assertion below stays about the *answer* rather than about
+    the arrangement that produces it -- these tests outlived one change of
+    arrangement already, from a scalar called per cell to this.
+    """
     from warlock.studio.panes import plotter_canvas
 
-    return plotter_canvas.animated_gid(doc, value, clock_ms)
+    subs = plotter_canvas.animated_substitutions(doc, clock_ms)
+    block = np.array([[value]], dtype=gidlib.DTYPE)
+    return int(plotter_canvas.substitute_animated(block, subs)[0, 0])
 
 
 def test_the_current_frame_is_substituted_by_the_clock() -> None:

@@ -48,7 +48,7 @@ from . import topo
 from .document import ClayDoc, Obj, new_uid
 from .elements import OpError
 
-__all__ = ["MAX_TRIANGLES", "glb_to_claydoc"]
+__all__ = ["MAX_OBJECTS", "MAX_TRIANGLES", "glb_to_claydoc"]
 
 # Above this an import is refused rather than attempted. A Clay document holds
 # every mesh in memory twice per undo step, and the rebuild-per-edit cost is
@@ -56,10 +56,39 @@ __all__ = ["MAX_TRIANGLES", "glb_to_claydoc"]
 # past it the app stops responding rather than becoming slower.
 MAX_TRIANGLES = 2_000_000
 
+# And above this, likewise, on the object count. Clay's outliner, undo stack
+# and per-object GPU cache are all scoped for a modelling document rather than
+# a scene graph: tens of thousands of instances overwhelm all three long before
+# the triangle budget above notices, because a glTF that instances one small
+# mesh a hundred thousand times is a few megabytes of JSON.
+MAX_OBJECTS = 4_096
+
 # How closely a corner normal must agree with its face's own normal to count as
 # flat. cos(2.5 degrees); tighter than this and float noise in an exporter's
 # normals reads every flat face as smooth.
 FLAT_COSINE = 0.999
+
+
+def _instanced_budget(model: gltf.Model) -> tuple[int, int]:
+    """Triangles and objects this GLB will actually build. -> (tris, objects)
+
+    Counted over *nodes*, not over ``model.meshes``. The two disagree whenever
+    a glTF instances -- one mesh definition referenced by a thousand nodes is a
+    thousand independent ``Obj`` here, because ``_object_for`` bakes the node's
+    own transform into a fresh copy rather than sharing one. Summing the mesh
+    list instead counted such a file once and then allocated it a thousand
+    times, which is how a few megabytes of JSON got past a two-million-triangle
+    ceiling.
+    """
+    tris = 0
+    objects = 0
+    for node in model.nodes:
+        if node.mesh is None:
+            continue
+        for prim in model.meshes[node.mesh]:
+            tris += len(prim.indices) // 3
+            objects += 1
+    return tris, objects
 
 
 def glb_to_claydoc(data: bytes, name: str = "Imported") -> ClayDoc:
@@ -81,11 +110,17 @@ def glb_to_claydoc(data: bytes, name: str = "Imported") -> ClayDoc:
             "would drop the rig. Import it from the Library instead "
             "(Home > Import mesh..., or drop it on Home or the Library)."
         )
-    total = sum(len(p.indices) // 3 for prims in model.meshes for p in prims)
+    total, objects_wanted = _instanced_budget(model)
     if total > MAX_TRIANGLES:
         raise OpError(
             f"This mesh has {total:,} triangles, past the {MAX_TRIANGLES:,} Clay "
             "can edit. Retarget its triangle budget in the library first."
+        )
+    if objects_wanted > MAX_OBJECTS:
+        raise OpError(
+            f"This GLB places {objects_wanted:,} objects, past the "
+            f"{MAX_OBJECTS:,} Clay holds. It is a scene rather than a model -- "
+            "import the part you mean to edit."
         )
 
     materials: list[gltf.Material] = []

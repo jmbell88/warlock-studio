@@ -37,6 +37,10 @@ from warlock.studio.panes import inker_canvas, inker_tools
 
 SIZE = (32, 32)
 ORIGIN = (0.0, 0.0)
+#: The pane ``_input`` is driven in. Large enough that these documents sit
+#: unclamped at ``pan=(0, 0)``, so the gestures under test are unaffected
+#: by the canvas pan bound.
+REGION = (400.0, 300.0)
 RED = (255, 0, 0, 255)
 #: An open path with a bend in it, well inside the canvas.
 BEND = [(4.0, 6.0), (16.0, 24.0), (28.0, 6.0)]
@@ -426,6 +430,7 @@ class _Mouse:
         return SimpleNamespace(
             get_io=lambda: SimpleNamespace(
                 mouse_wheel=0.0,
+                mouse_wheel_h=0.0,
                 key_shift=self.shift,
                 key_ctrl=False,
                 key_alt=self.alt,
@@ -475,7 +480,7 @@ def scene(monkeypatch):
             mouse.clicked[pressed] = True
             mouse.double[pressed] = double
         mouse.down = {b: b in down for b in (0, 1, 2)}
-        inker_canvas._input(ctx, state, tab, ORIGIN, active=True, hovered=True)
+        inker_canvas._input(ctx, state, tab, ORIGIN, REGION, active=True, hovered=True)
 
     def click(point, *, button: int = 0, double: bool = False):
         frame(point, pressed=button, down=(button,), double=double)

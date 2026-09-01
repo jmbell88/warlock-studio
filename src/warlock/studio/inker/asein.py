@@ -197,6 +197,17 @@ _PER_PIXEL = {_RGBA: 4, _GRAYSCALE: 2, _INDEXED: 1}
 #: lower it rather than building a gigabyte.
 MAX_DECOMPRESSED_BYTES = 1 << 30
 
+#: The ceiling on a colour table, for ``MAX_DECOMPRESSED_BYTES``' reason and
+#: against the same threat. Every other size-bearing field here is checked
+#: before it sizes an allocation; the palette chunk's were not, and its
+#: ``size``/``first``/``last`` are three u32s whose *loop* is bounded by the
+#: bytes that follow while the *list* :func:`_final_palette` builds is not --
+#: so ``size = 0xFFFFFFFF`` beside one six-byte entry asked for a 4.3-billion
+#: element list out of about a hundred and fifty bytes of file. 2**16 is far
+#: past any real sprite: Aseprite indexes a colour table with a byte in the
+#: indexed mode that gives it meaning.
+_MAX_PALETTE_ENTRIES = 1 << 16
+
 
 def _inflate(raw: bytes, expected: int, what: str) -> bytes:
     """Unpack one chunk's payload, refusing anything past what it declares.
@@ -993,6 +1004,11 @@ def _read_palette(state: _Parse, r: _Reader) -> None:
     first = r.u32()
     last = r.u32()
     r.take(8)
+    if size > _MAX_PALETTE_ENTRIES or first > last or last >= _MAX_PALETTE_ENTRIES:
+        raise ValueError(
+            f"a palette chunk declares {size} entries spanning {first}-{last},"
+            f" past the {_MAX_PALETTE_ENTRIES} this build will hold"
+        )
     state.palette_size = max(state.palette_size, size)
     for index in range(first, last + 1):
         flags = r.u16()
@@ -1024,6 +1040,14 @@ def _read_old_palette(state: _Parse, r: _Reader, six_bit: bool) -> None:
     index = 0
     for _ in range(packets):
         index += r.u8()
+        if index >= _MAX_PALETTE_ENTRIES:
+            # The pad loop below grows ``table`` to wherever ``index`` reaches,
+            # and ``index`` advances up to 255 for the two bytes a packet costs
+            # -- 65535 packets is ~330 KB of file for ~16.7M entries.
+            raise ValueError(
+                f"this .aseprite's legacy palette reaches index {index}, past"
+                f" the {_MAX_PALETTE_ENTRIES} this build will hold"
+            )
         count = r.u8() or 256
         for _ in range(count):
             red, green, blue = r.u8(), r.u8(), r.u8()
@@ -1092,7 +1116,12 @@ def _read_color_profile(state: _Parse, r: _Reader) -> None:
 def _final_palette(state: _Parse) -> list[RGBA] | None:
     """The colour table, modern chunk first. None when the file carries none."""
     if state.palette:
-        size = max(state.palette_size, max(state.palette) + 1)
+        # Clamped as well as refused at the read: this is the line that sizes
+        # the allocation, and a future caller of ``_read_palette`` that forgets
+        # the check must not reopen the hole through it.
+        size = min(
+            max(state.palette_size, max(state.palette) + 1), _MAX_PALETTE_ENTRIES
+        )
         return [state.palette.get(i, (0, 0, 0, 255)) for i in range(size)]
     return state.old_palette or None
 

@@ -361,20 +361,43 @@ def wang_field(data: np.ndarray, ref: TilesetRef, wangset: Any) -> Any:
 
 
 def _wang_cell(
-    work: np.ndarray, ref: TilesetRef, wangset: Any, x: int, y: int
+    work: np.ndarray,
+    ref: TilesetRef,
+    wangset: Any,
+    x: int,
+    y: int,
+    field: Any = None,
+    cache: dict[tuple[tuple[int, int], ...], list[int]] | None = None,
 ) -> bool:
     """Re-choose one cell's tile from what its neighbours say. Wrote anything?
 
     **No match leaves the cell untouched** rather than writing a near-miss: a
     wrong tile is the silent half-read in picture form, and a field with a hole
     in it is a thing the user can see and fix.
+
+    ``field`` and ``cache`` are the caller's, when it has a whole box to re-fit.
+    ``wangset.matching`` scans every tile in the set and *sorts* the survivors,
+    and a fill asks it once per cell -- but the interior of a filled region asks
+    the same question at every one of those cells, because an all-one-colour
+    neighbourhood has one constraint dict however large it is. Memoising on the
+    constraints collapses a fill from one scan-and-sort per cell to one per
+    *distinct* neighbourhood, which on a large open area is a handful.
     """
     from ..tilegrid import wang as wanglib
 
-    wanted = wanglib.constraints_from(wang_field(work, ref, wangset), x, y, wangset)
+    if field is None:
+        field = wang_field(work, ref, wangset)
+    wanted = wanglib.constraints_from(field, x, y, wangset)
     if not wanted:
         return False
-    found = wangset.matching(wanted)
+    if cache is None:
+        found = wangset.matching(wanted)
+    else:
+        key = tuple(sorted(wanted.items()))
+        found = cache.get(key)
+        if found is None:
+            found = wangset.matching(wanted)
+            cache[key] = found
     if not found:
         return False
     value = gidlib.DTYPE(ref.firstgid + found[0])
@@ -434,10 +457,16 @@ def paint_wang_cells(
         work[y, x] = value
     asserted = set(inside)
     x0, y0, x1, y1 = box
+    # One field closure and one match cache for the whole box, rather than a
+    # fresh pair per cell. The re-fit is unavoidably sequential -- each cell
+    # reads neighbours the loop may already have re-chosen -- so this is the
+    # part that can be shared, and it is the expensive part.
+    field = wang_field(work, ref, wangset)
+    cache: dict[tuple[tuple[int, int], ...], list[int]] = {}
     for y in range(y0, y1):
         for x in range(x0, x1):
             if (x, y) not in asserted:
-                _wang_cell(work, ref, wangset, x, y)
+                _wang_cell(work, ref, wangset, x, y, field, cache)
     return _finish(data, work, box)
 
 

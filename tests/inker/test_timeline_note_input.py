@@ -21,6 +21,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from _ui_context import imgui_context
 
 from warlock.studio import inker_state, probe
 from warlock.studio.inker.animation import Note
@@ -28,27 +29,10 @@ from warlock.studio.inker.animation import Note
 
 @pytest.fixture
 def ui(monkeypatch):
-    """``test_timeline_cel_opacity_input``'s fixture verbatim: an imgui context
-    with the control census on, no renderer backend, torn down after."""
-    from imgui_bundle import imgui
-
-    from warlock.studio import theme
-
-    previous = imgui.get_current_context()
-    ctx = imgui.create_context()
-    io = imgui.get_io()
-    io.set_ini_filename(None)
-    io.display_size = (1600.0, 950.0)
-    io.delta_time = 1.0 / 60.0
-    io.fonts.add_font_default()
-    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures.value
-    theme.apply(imgui)
-    monkeypatch.setattr(probe, "ENABLED", True)
-    yield imgui
-    imgui.destroy_context(ctx)
-    if previous is not None:
-        imgui.set_current_context(previous)
-
+    """The shared imgui context; see ``_ui_context`` for why it is not a
+    conftest fixture."""
+    with imgui_context(monkeypatch) as imgui:
+        yield imgui
 
 class _Prompts:
     """``dialogs.PromptQueue``'s surface, as much of it as the pane touches."""

@@ -22,8 +22,9 @@ def draw(ctx: Any) -> None:
     widgets.section("Cast")
     manual_render.help_button(ctx, "troupe-characters")
 
-    cast = troupe_mode.characters(ctx)
-    pending = troupe_mode.in_progress(ctx)
+    # Throttled, not per draw: both halves are a page of job rows apiece and
+    # this pane draws every frame. See ``troupe_mode.cast_and_pending``.
+    cast, pending = troupe_mode.cast_and_pending(ctx)
     if not cast:
         # Two registers, because "you have made none" and "the one you just
         # made is still on its way" are different facts and the second one used

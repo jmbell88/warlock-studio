@@ -199,10 +199,16 @@ and `source.glb` is the authority, always. And a remesh changes geometry, so eve
 is deleted and a rig, its poses and its sheets are reported stale before the button, exactly as a
 retarget reports them.
 
+Coincident vertices are welded before the remesh runs, and that is not a detail. glTF stores one
+position per texture coordinate, so *every* GLB splits its vertices along each UV seam — which makes
+a mesh non-manifold before anything is actually wrong with it, and the quad remesher refuses
+non-manifold input. Until 2026-08-30 that weld was missing, so every remesh silently took the
+triangle fallback below.
+
 The last remesh's result is printed under the button: faces, the quad fraction, and the bake
-size. If Blender's quad remesher refused the surface — a reconstruction is often not manifold
-enough — the line says the mesh was **decimated** instead, in triangles at the same budget, so a
-triangle mesh is never presented as a quad one. The result also records whether anything the
+size. If Blender's quad remesher still refused the surface — a reconstruction is often not manifold
+enough on its own merits — the line says the mesh was **decimated** instead, in triangles at the
+same budget, so a triangle mesh is never presented as a quad one. The result also records whether anything the
 mesh had before (UVs, both PBR maps, material assignment) was lost, in the same terms the triangle
 tiers are qualified in.
 

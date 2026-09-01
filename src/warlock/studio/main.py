@@ -413,7 +413,9 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Shift+click", "Paint a line from where the last stroke ended"),
             ("+ / -", "Zoom in / out, by whole scales"),
             ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
-            ("Space / middle drag", "Pan (wheel zooms in 5% steps)"),
+            ("Space / middle drag", "Pan"),
+            ("Shift+wheel", "Scroll sideways (the wheel alone scrolls up and down)"),
+            ("Ctrl+wheel", "Zoom in 5% steps"),
             ("Ctrl+4 / Ctrl+5", "Rotate the view a quarter turn / flip it"),
             ("Arrows", "Nudge a pixel (Shift: eight)"),
             ("Delete", "Delete what is selected"),
@@ -5639,8 +5641,10 @@ class App:
         from imgui_bundle import imgui
 
         from . import create_stages
+        from . import generation_workspace
         from . import layout as layout_mod
         from .panes import overlay
+        from .tokens import sp
 
         ctx = self.app_ctx
         # Leave room for the inspector; the progress card floats over the image
@@ -5655,16 +5659,38 @@ class App:
         ) as visible:
             if visible:
                 overlay.toolbar(ctx)
-                image_pos = imgui.get_cursor_screen_pos()
                 avail = imgui.get_content_region_avail()
                 height = max(avail.y, 64)
                 reference_stage = create_stages.at(ctx.state, "reference")
-                if not reference_stage and self.viewer.has_model:
-                    self._draw_viewport_image(image_pos, width, height)
+                # Once a Create run exists, the canvas gains an in-context
+                # results tray.  The viewer remains above it, so a reference
+                # can still be judged at useful scale while progress and the
+                # next variation stay in the same creative loop.
+                tray = reference_stage and generation_workspace.should_draw(ctx)
+                tray_height = min(sp(280), max(sp(180), height * 0.36)) if tray else 0.0
+                canvas_height = max(height - tray_height - (imgui.get_style().item_spacing.y if tray else 0), sp(64))
+                if tray:
+                    # ``placeholder`` centres itself by consuming the available
+                    # height, so it needs its own top child; otherwise it would
+                    # consume the tray's room before the tray is drawn.
+                    if imgui.begin_child(
+                        "generation-canvas", (0, canvas_height), False,
+                        imgui.WindowFlags_.no_scroll_with_mouse.value,
+                    ):
+                        if self.viewer.reference is not None:
+                            self._draw_reference(width, canvas_height)
+                        else:
+                            overlay.placeholder(ctx)
+                    imgui.end_child()
+                elif not reference_stage and self.viewer.has_model:
+                    self._draw_viewport_image(imgui.get_cursor_screen_pos(), width, height)
                 elif reference_stage and self.viewer.reference is not None:
                     self._draw_reference(width, height)
                 else:
                     overlay.placeholder(ctx)
+                if tray:
+                    imgui.separator()
+                    generation_workspace.draw(ctx, tray_height)
 
     def _draw_viewport_image(self, pos: Any, width: float, height: float) -> None:
         from imgui_bundle import imgui

@@ -645,6 +645,9 @@ async def test_a_load_is_refused_when_commit_is_short_in_bytes_not_in_percent(
 
     # Comfortably under the ceiling...
     monkeypatch.setattr(queue_mod, "commit_fraction", lambda: 0.85)
+    # No settle retries here -- this is a permanent shortfall, not a transient
+    # one, and the retry loop would just spend it waiting for nothing.
+    monkeypatch.setattr(queue_mod, "COMMIT_SETTLE_DELAY", 0.0)
     # ...and 6 GiB free against a ~16 GiB load.
     monkeypatch.setattr(
         memlog, "system_memory", lambda: memlog.SystemMemory(54.0, 60.0)
@@ -665,6 +668,42 @@ async def test_a_load_is_refused_when_commit_is_short_in_bytes_not_in_percent(
         worker.store.close()
 
 
+async def test_a_transient_shortfall_settles_before_the_load_is_refused(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """2026-08-31: three back-to-back klein reloads all failed within the same
+    second while free commit crept up 24.6 -> 24.8 -> 25.6 GiB -- the teardown
+    this same acquire just triggered (trellis stop / t2i unload) had not been
+    credited back by the time the very next check ran. The quantity check now
+    gets a couple of short settle-retries before it gives up, since it always
+    follows a teardown of its own making."""
+    import warlock.queue as queue_mod
+    from warlock import memlog, models
+
+    klein = next(
+        key
+        for key, spec in models.BASE_MODELS.items()
+        if spec.residency == models.OFFLOAD
+    )
+    spec = models.BASE_MODELS[klein]
+
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: 0.85)
+    monkeypatch.setattr(queue_mod, "COMMIT_SETTLE_DELAY", 0.0)
+    # Short, short, then settled -- the shape of the real machine's readings.
+    readings = iter([54.0, 54.0])
+    monkeypatch.setattr(
+        memlog,
+        "system_memory",
+        lambda: memlog.SystemMemory(next(readings, 10.0), 60.0),
+    )
+    worker = _make_worker(tmp_path)
+    try:
+        pipe, _handoff = await worker._acquire_t2i(spec, klein)
+        assert pipe is not None
+    finally:
+        worker.store.close()
+
+
 def _commit_scenario(monkeypatch):
     """MDL-04's memory setup, made switchable mid-test.
 
@@ -677,6 +716,9 @@ def _commit_scenario(monkeypatch):
 
     state = {"free": 40.0}
     monkeypatch.setattr(queue_mod, "commit_fraction", lambda: 0.85)
+    # These scenarios flip "free" by hand mid-test rather than waiting out a
+    # real settle window -- the retry loop has its own dedicated test above.
+    monkeypatch.setattr(queue_mod, "COMMIT_SETTLE_DELAY", 0.0)
     monkeypatch.setattr(
         memlog,
         "system_memory",
@@ -1065,6 +1107,33 @@ async def test_a_job_is_refused_at_dispatch_when_the_host_is_out_of_commit(
         worker.start()
         await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
         assert "97% committed" in worker.store.get(job_id)["error"]
+        await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
+async def test_a_commit_refusal_backs_off_before_the_next_queued_job(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """2026-08-31: three queued klein jobs failed on the commit-headroom check
+    within the same second -- the dispatch loop advanced to the next queued
+    job with no delay at all, giving the commit figure the refusal was about
+    no chance to move before it was asked again. A refusal now buys the next
+    job a short pause instead of an instant retry."""
+    import warlock.queue as queue_mod
+
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: 0.97)
+    backoff = 0.3
+    monkeypatch.setattr(queue_mod, "COMMIT_REFUSAL_BACKOFF", backoff)
+    worker = _make_worker(tmp_path)
+    try:
+        first = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+        second = worker.store.create("text", "a barrel", {"seed": 2, "resolution": 512})
+        worker.start()
+        await _wait_until(lambda: worker.store.get(second)["status"] == "error")
+        t1 = worker.store.get(first)["finished_at"]
+        t2 = worker.store.get(second)["finished_at"]
+        assert t2 - t1 >= backoff * 0.9
         await worker.shutdown()
     finally:
         worker.store.close()

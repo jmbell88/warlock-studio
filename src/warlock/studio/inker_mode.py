@@ -14,6 +14,7 @@ state (``InkerDoc.saving``) rather than a function call that returns.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import time
 from collections.abc import Sequence
@@ -240,6 +241,25 @@ def persist(ctx: Any) -> None:
         "pixel_grid": bool(state.pixel_grid),
         "layer_edges": bool(state.layer_edges),
         "tile_numbers": bool(state.tile_numbers),
+        # **The symmetry, which for a long time was the same bug one row
+        # down.** ``inker_context._symmetry_hit`` called ``persist`` on every
+        # press and said in a comment that symmetry rode in this block; it did
+        # not, so a mirror set to draw one thing was gone by the next launch.
+        # It belongs *here*, with the grid and the swatches, because it is a
+        # property of the person rather than of any document -- which is also
+        # why it stays out of ``TOOL_OPTION_DEFAULTS`` and out of a saved
+        # preset. A preset that dragged the mirrors along would turn "my
+        # inking pen" into "my inking pen, and also mirror everything".
+        "symmetry": str(state.symmetry),
+        # A list rather than a tuple: settings round-trip through JSON and a
+        # tuple comes back a list anyway. Saying so here is what stops the read
+        # from having to guess which it is looking at.
+        "symmetry_axis": (
+            None
+            if state.symmetry_axis is None
+            else [float(state.symmetry_axis[0]), float(state.symmetry_axis[1])]
+        ),
+        "radial_count": int(state.radial_count),
     }
     # The last-used export controls -- app-level and shared across tabs, like
     # the canvas furniture beside it, not a per-document ``InkerDoc.
@@ -270,6 +290,28 @@ def _restore_canvas(state: InkerState, stored: Any) -> None:
     state.pixel_grid = bool(stored.get("pixel_grid", state.pixel_grid))
     state.layer_edges = bool(stored.get("layer_edges", state.layer_edges))
     state.tile_numbers = bool(stored.get("tile_numbers", state.tile_numbers))
+    # **Through ``axes_of`` then ``compose``, never assigned raw.** That is the
+    # rule every *reader* of this field follows, and it is what makes the round
+    # trip safe in both directions at once: a legacy ``"xy"`` normalises to
+    # ``"x+y"``, an axis this build no longer knows is dropped rather than kept
+    # as a word the engine will not match, and a hand-edited ``"sideways"`` or
+    # ``null`` comes out as no symmetry rather than raising on the first frame.
+    from .inker import brush
+
+    state.symmetry = brush.compose(
+        brush.axes_of(stored.get("symmetry", state.symmetry))
+    )
+    axis = stored.get("symmetry_axis")
+    if isinstance(axis, list | tuple) and len(axis) == 2 and all(
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        for value in axis
+    ):
+        state.symmetry_axis = (float(axis[0]), float(axis[1]))
+    count = stored.get("radial_count")
+    if isinstance(count, int) and not isinstance(count, bool):
+        state.radial_count = max(brush.MIN_RADIAL, min(brush.MAX_RADIAL, count))
 
 
 def _restore_export(state: InkerState, stored: Any) -> None:
@@ -507,15 +549,15 @@ def ask_import_sheet(ctx: Any) -> None:
     ensure(ctx)
 
     def run() -> dict[str, Any] | None:
-        import numpy as np
-        from PIL import Image
+        from . import pixelguard
 
         path = dialogs.open_file("Import sprite sheet", OPEN_FILTER)
         if path is None:
             return None
-        with Image.open(path) as opened:
-            opened.load()
-            atlas = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
+        # Through the same door ``Document.open`` uses. A file picker is the
+        # one place an *arbitrary* image reaches this mode -- nothing upstream
+        # has bounded it the way ``service.files.to_png`` bounds an upload.
+        atlas = pixelguard.decode_rgba(path, Path(path).name)
         return {"atlas": atlas, "title": Path(path).stem, "suggest": _suggest_grid(atlas)}
 
     ctx.submit("inker-sheetin", run)
@@ -742,17 +784,13 @@ def _load_sprite_draft(
     svc: Any, job_id: str, draft_id: str, candidate: str
 ) -> dict[str, Any]:
     """Blocking; task thread only."""
-    import numpy as np
-    from PIL import Image
-
     from ..service import sprites as svc_sprites
+    from . import pixelguard
     from .inker import sheetin
 
     record = svc_sprites.get_sprite_draft(svc, job_id, draft_id)
     png = svc_sprites.sprite_draft_png(svc, job_id, draft_id, candidate)
-    with Image.open(png) as opened:
-        opened.load()
-        atlas = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
+    atlas = pixelguard.decode_rgba(png, png.name)
     doc = sheetin.document_from_atlas(
         atlas, record["cells"], str(record.get("sheet_type") or "")
     )
@@ -827,11 +865,8 @@ def open_pixel_artifact(
 
     def run() -> dict[str, Any]:
         """Blocking; task thread only."""
-        import numpy as np
-        from PIL import Image
-
         from ..service import derive as svc_derive
-        from . import inker
+        from . import inker, pixelguard
 
         path = svc_derive.get_file(
             ctx.svc,
@@ -841,9 +876,7 @@ def open_pixel_artifact(
             pixel_palette=pixel_palette,
             pixel_dither=pixel_dither,
         )
-        with Image.open(path) as opened:
-            opened.load()
-            array = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
+        array = pixelguard.decode_rgba(path, Path(path).name)
         return {"doc": inker.Document.from_pixels(array, name="Pixels"), "title": title}
 
     # The ``inker-open`` prefix is what makes ``on_task_done`` adopt this with
@@ -879,10 +912,8 @@ def _load_rendered_sheet(
     svc: Any, job_id: str, sheet_id: str, pixel: bool
 ) -> dict[str, Any]:
     """Blocking; task thread only."""
-    import numpy as np
-    from PIL import Image
-
     from ..service import sheets as svc_sheets
+    from . import pixelguard
     from .inker import sheetin
 
     if pixel:
@@ -892,9 +923,7 @@ def _load_rendered_sheet(
         record = svc_sheets.get_sheet(svc, job_id, sheet_id)
         png = svc_sheets.sheet_png(svc, job_id, sheet_id)
     cell, count = sheet_grid(record)
-    with Image.open(png) as opened:
-        opened.load()
-        atlas = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
+    atlas = pixelguard.decode_rgba(png, png.name)
     cells = record.get("cells") or []
     animation = record.get("animation")
     if cells and animation:
@@ -2519,6 +2548,17 @@ def on_task_done(ctx: Any, done: Any) -> None:
     key, result = done.key, done.result
     name = key.split(":", 1)[0]
 
+    if name == "inker-inpaint-land":
+        # The frame-thread half of ``inker_bridge.poll_inpaint``: the read,
+        # the decode and the resize happened on the task thread.
+        from .panes import inker_bridge
+
+        if isinstance(result, dict):
+            inker_bridge.land_inpaint(ctx, result["pending"], result["pixels"])
+        else:
+            ctx.toast("The regeneration produced no picture.", "warn")
+        return
+
     if name in ("inker-open",):
         if isinstance(result, dict):
             _adopt(
@@ -4063,10 +4103,11 @@ def palette_from_image(ctx: Any) -> None:
         if path is None:
             return None
         import numpy as np
-        from PIL import Image
 
-        with Image.open(path) as image:
-            pixels = np.asarray(image.convert("RGBA"))
+        from . import pixelguard
+
+        # A picked file, so the same ceiling as the sheet import above.
+        pixels = pixelguard.decode_rgba(path, Path(path).name)
         # Counted through ``np.unique`` on a packed uint32 rather than through a
         # set of tuples: a phone photo is twelve million pixels, and the set
         # costs a gigabyte to answer one number.

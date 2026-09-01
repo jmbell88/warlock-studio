@@ -22,8 +22,8 @@ from typing import Any
 from .. import generation, models
 from ..pipelines import lora_train
 from .core import WarlockService
-from .errors import Invalid
-from .validation import check_base_model_weights, check_vram
+from .errors import Invalid, TooLarge
+from .validation import MAX_IMAGE_PIXELS, check_base_model_weights, check_vram
 
 log = logging.getLogger(__name__)
 
@@ -153,9 +153,21 @@ def train_lora(
             raise Invalid(f"{path.name} is not an image file", field="images")
         try:
             with Image.open(path) as im:
+                # Size before integrity: ``verify`` checks that the file is a
+                # whole image, not that it is one this build will decode. These
+                # are read straight from the user's folder by
+                # ``lora_train_worker._load_images`` -- they never pass through
+                # ``files.to_png``, which is where every *uploaded* image gets
+                # this same ceiling -- so the door has to apply it here.
+                width, height = im.width, im.height
                 im.verify()
         except Exception as exc:
             raise Invalid(f"{path.name} could not be read: {exc}", field="images") from exc
+        if width * height > MAX_IMAGE_PIXELS:
+            raise TooLarge(
+                f"{path.name} is {width}x{height}; the limit is "
+                f"{MAX_IMAGE_PIXELS:,} pixels"
+            )
 
     base_key = str(base_model or models.DEFAULT_BASE_MODEL)
     spec = models.BASE_MODELS.get(base_key)

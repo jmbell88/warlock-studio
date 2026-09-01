@@ -192,9 +192,10 @@ def test_a_base_that_cannot_run_a_controlnet_clears_the_structure_control():
 
 
 def test_the_negative_prompt_is_deliberately_not_cleared():
-    """It is the one gate of the three that refuses nothing: ``validate`` never
-    mentions it, so an inert negative prompt is a note and not a dead end --
-    and the field holds text the user typed, which a base change may not eat.
+    """An inert Avoid text stays in the authored brief.
+
+    The generation boundary removes it from a model that cannot consume it,
+    rather than erasing it on a base-model change or blocking Generate.
     """
     form = _form(base_model="turbo", negative_prompt="blurry, watermark")
     settings_2d.clear_unusable(_ctx(), form)

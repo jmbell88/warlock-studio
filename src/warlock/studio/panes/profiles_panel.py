@@ -384,10 +384,10 @@ def _anchor(ctx: Any, name: str) -> None:
 def _pick_anchor(ctx: Any, name: str) -> dict[str, Any] | None:
     """Runs on a task thread: both the dialog and the read block.
 
-    Only those two. The settings write and the toast are handed back for
-    ``adopt_anchor`` to do on the frame thread -- ``Settings`` is frame-thread
-    state and a toast is UI, and this was the one place doing both from a
-    worker.
+    The dialog, the read *and* the write. Only the settings entry and the
+    toast are handed back for ``adopt_anchor`` to do on the frame thread --
+    ``Settings`` is frame-thread state and a toast is UI, and this was the one
+    place doing both from a worker.
     """
     chosen = dialogs.open_file("Choose a style anchor", dialogs.IMAGE_FILTER)
     if chosen is None:
@@ -396,7 +396,9 @@ def _pick_anchor(ctx: Any, name: str) -> dict[str, Any] | None:
         data = fh.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         return {"name": name, "too_big": True}
-    return {"name": name, "png": data}
+    # The write happens here too, not in ``adopt_anchor``: those are up to
+    # twenty megabytes, and ``adopt_anchor`` runs on the frame thread.
+    return {"name": name, "file": profiles.stage_anchor(ctx.svc.config, data)}
 
 
 def adopt_anchor(ctx: Any, result: Any) -> None:
@@ -407,10 +409,12 @@ def adopt_anchor(ctx: Any, result: Any) -> None:
         ctx.toast("That image is over 20 MB.", "error")
         return
     name = str(result.get("name") or "")
-    png = result.get("png")
-    if not name or not png:
+    filename = str(result.get("file") or "")
+    if not name or not filename:
         return
-    profiles.set_anchor(ctx.settings, ctx.svc.config, name, png)
+    # Settings and a toast only. The image is already on disk; see
+    # ``profiles.stage_anchor``.
+    profiles.adopt_anchor(ctx.settings, ctx.svc.config, name, filename)
     ctx.toast(f"Anchor set for {name}.")
 
 

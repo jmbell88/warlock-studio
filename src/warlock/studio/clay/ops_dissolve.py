@@ -80,6 +80,33 @@ class _Union:
         return list(out.values())
 
 
+#: The largest outline a dissolve will produce. ``ops_subdiv`` refuses past
+#: ``MAX_SUBDIVIDED_FACES`` and states why; this is the same argument for the
+#: other unbounded growth an edit can ask for. The n-gon a dissolve makes is
+#: handed to ``earclip``, whose ear search is worst-case quadratic in the
+#: corner count, in Python, one triangle removed per scan of the remainder --
+#: and ``clay_ops.run_mesh_op`` calls it synchronously from the key handler,
+#: which is the frame thread. Past this the app stops responding rather than
+#: becoming slower, which is the outcome every ceiling in this package exists
+#: to prevent.
+#:
+#: Twenty thousand keeps that search well under a second. No hand-made
+#: selection approaches it: a dissolve of a whole subdivided face loop on a
+#: dense mesh is a few thousand corners.
+MAX_DISSOLVED_RING = 20_000
+
+
+def _refuse_ring(rings: list[np.ndarray]) -> None:
+    """Refuse before the merge when the outline is too big to triangulate."""
+    worst = max((len(r) for r in rings), default=0)
+    if worst > MAX_DISSOLVED_RING:
+        raise OpError(
+            f"That merge would make a face with {worst:,} corners, past the "
+            f"{MAX_DISSOLVED_RING:,} Clay can triangulate without stalling. "
+            "Dissolve a smaller region."
+        )
+
+
 def _ring_corners(mesh: Mesh, group: np.ndarray) -> np.ndarray:
     """The group's outline as an ordered array of corner indices.
 
@@ -134,6 +161,9 @@ def merge_groups(mesh: Mesh, groups: list[np.ndarray]) -> tuple[Mesh, ElementSel
     Groups of a single face are dropped rather than rebuilt: there is nothing to
     merge, and rebuilding would move the face to the end of the list for no
     reason.
+
+    Refused past :data:`MAX_DISSOLVED_RING`, for the reason ``ops_subdiv``
+    refuses past ``MAX_SUBDIVIDED_FACES``.
     """
     real = [np.asarray(g, dtype="i8") for g in groups if len(g) > 1]
     if not real:
@@ -143,6 +173,7 @@ def merge_groups(mesh: Mesh, groups: list[np.ndarray]) -> tuple[Mesh, ElementSel
         )
 
     rings = [_ring_corners(mesh, g) for g in real]
+    _refuse_ring(rings)
     consumed = np.concatenate(real)
     keep = np.ones(face_count(mesh), dtype=bool)
     keep[consumed] = False

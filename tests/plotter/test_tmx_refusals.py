@@ -854,3 +854,66 @@ def test_a_plain_orthogonal_map_loads():
     doc = tmx.read_tmx(_map(), **LOADERS)
     assert (doc.width, doc.height) == (2, 2)
     assert [layer.name for layer in doc.layers] == ["L"]
+
+
+# --- allocation ceilings on the way in ----------------------------------------
+#
+# Not a "feature Plotter does not model" but the same doctrine one layer down:
+# a number in the file must not size an array before anything has checked it.
+# Both cases below are amplification -- the file is tiny and the array is not.
+
+
+def test_two_far_apart_chunks_are_refused_rather_than_allocated():
+    """``_chunk_side`` caps a chunk's sides; nothing capped its *offset*.
+
+    Two individually legal 16x16 chunks a billion cells apart are a few hundred
+    bytes of XML and a 64 GB dense box. ``_settle_infinite`` checks the same
+    ceiling but only after every chunked layer has already been built.
+    """
+    body = (
+        '<layer id="1" name="L"><data encoding="csv">'
+        '<chunk x="0" y="0" width="1" height="1">3</chunk>'
+        '<chunk x="999999999" y="0" width="1" height="1">3</chunk>'
+        "</data></layer>"
+    )
+    data = _map(attrs='infinite="1"', body=body)
+    assert len(data) < 500
+    with pytest.raises(ValueError, match="past the 4096 a side this build reads"):
+        tmx.read_tmx(data, **LOADERS)
+
+
+def test_far_apart_json_chunks_are_refused_the_same_way():
+    payload = {
+        "type": "map",
+        "orientation": "orthogonal",
+        "infinite": True,
+        "width": 2,
+        "height": 2,
+        "tilewidth": 16,
+        "tileheight": 16,
+        "tilesets": [{"firstgid": 1, "source": "t.tsx"}],
+        "layers": [
+            {
+                "type": "tilelayer",
+                "name": "L",
+                "chunks": [
+                    {"x": 0, "y": 0, "width": 1, "height": 1, "data": [3]},
+                    {"x": 999999999, "y": 0, "width": 1, "height": 1, "data": [3]},
+                ],
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="past the 4096 a side this build reads"):
+        tmx.read_tmj(json.dumps(payload).encode(), **LOADERS)
+
+
+def test_an_ordinary_spread_of_chunks_still_reads():
+    """The ceiling is far above a real infinite map; it must not be felt."""
+    body = (
+        '<layer id="1" name="L"><data encoding="csv">'
+        '<chunk x="0" y="0" width="1" height="1">3</chunk>'
+        '<chunk x="64" y="0" width="1" height="1">3</chunk>'
+        "</data></layer>"
+    )
+    doc = tmx.read_tmx(_map(attrs='infinite="1"', body=body), **LOADERS)
+    assert doc.tile_layers()[0].data.shape == (1, 65)

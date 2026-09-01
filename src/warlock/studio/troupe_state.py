@@ -65,6 +65,12 @@ class TroupeState:
     #: survives a trip to another mode and back.
     form: dict[str, Any] = field(default_factory=dict)
 
+    #: The throttled cast, and when it next goes stale. See
+    #: ``troupe_mode.cast_and_pending``: the two walks behind it are SQL, and
+    #: the pane that wants them draws every frame.
+    cast_cache: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
+    cast_next: float = 0.0
+
 
 
 def ensure(ctx: Any) -> TroupeState:

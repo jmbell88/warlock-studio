@@ -493,6 +493,22 @@ def placeholder(ctx: Any) -> None:
     """What the viewport says when there is nothing in it."""
     from .. import create_stages
 
+    # The reference stage is a composition workspace before it is a viewer.
+    # Give its generous central canvas a useful next action rather than the
+    # generic missing-asset copy downstream stages need.
+    if create_stages.at(ctx.state, "reference"):
+        from .. import create_assets
+
+        form = getattr(ctx.state, "form_2d", {})
+        asset = create_assets.selected(form).label
+        prompt = str(form.get("prompt") or "").strip()
+        hint = (
+            f"Ready to generate a {asset.lower()}. Review the brief at left, then create it."
+            if prompt
+            else f"Choose a {asset.lower()}, describe the outcome at left, then create it."
+        )
+        centred_empty(icons.WAND, "Start with a brief", hint)
+        return
     key = (
         f"{create_stages.MODE}/{ctx.state.create_stage}"
         if create_stages.in_create(ctx.state)

@@ -425,10 +425,24 @@ guessed over it.
 ### Whether it actually tiles
 
 When a tile finishes, the app measures its own wrap seam and reports it in the inspector's **Seam**
-section. The number is a ratio: how much sharper the difference across the wrap edge is than the
-picture's own grain. Around 1 means the seam is indistinguishable from ordinary texture detail;
-above 3.5 the app calls it a visible seam and says so. Both directions are measured and reported
-separately, because an image that wraps one way and not the other is not a tile.
+section. The number is a ratio, and since 2026-08-30 the ratio it quotes is the wrap seam against
+the *largest* step the picture already contains — the seam over its worst interior join. That makes
+the threshold fixed by construction rather than fitted: at 1.00 the seam is exactly as large as the
+hardest edge the texture has anyway, so at or below 1.00 the app says *likely seamless* and above it
+says *visible seam*. Both directions are measured, because an image that wraps one way and not the
+other is not a tile, and the worse of the two decides.
+
+The verdict used to divide the seam by the picture's *average* grain, with a threshold of 3.5. That
+statistic collapses on flat cells parted by thin hard lines — pixel art, grout, riveted panels —
+where the average is near zero and the ratio inflates: on a held-out corpus it called 18 of 72
+confirmed-seamless tiles seamed, 15 of them under the pixel-art LoRA the tileset track ships with,
+where the new statistic called none. Tiles generated before that change keep the number they were
+judged by, and the inspector words them in the old vocabulary ("edge/grain") rather than restating
+them in the new one.
+
+*Likely*, not *seamless*, and the hedge is measured: the statistic trades a miss for the false
+alarms it removed. A picture whose interior already contains a step as hard as its seam ties at 1.00
+and passes — 4 of 44 visibly seamed control units did. The wrapped view below is the real check.
 
 A ratio is hard to calibrate against by eye, so the section also offers a wrapped view: the image
 rolled by half, which puts what was the wrap edge through the middle of the frame where a

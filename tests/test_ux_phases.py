@@ -322,7 +322,7 @@ def test_the_2d_form_keeps_the_creation_decision_simple():
     source = inspect.getsource(settings_2d.draw)
     for call in ("_asset_type", "_prompt", "_model", "_lora"):
         assert call in source
-    assert 'collapsing_header("Advanced##create")' in source
+    assert 'collapsing_header("Advanced controls##create")' in source
     for call in ("_profiles", "_references", "_run_controls", "_negative"):
         assert call in source
     assert "section_blocks" in source

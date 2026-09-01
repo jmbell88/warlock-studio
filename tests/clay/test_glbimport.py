@@ -268,3 +268,53 @@ def test_a_palette_edit_keeps_the_baked_textures() -> None:
     edited = replace(material, base_color_factor=(0.1, 0.2, 0.3, 1.0))
     assert edited.base_color is material.base_color
     assert edited.normal is material.normal
+
+
+# --- the budget counts what will be built, not what is declared --------------
+
+
+def _instanced(count: int) -> bytes:
+    """One mesh definition, ``count`` nodes that each place it.
+
+    Ordinary glTF instancing -- a prop repeated across a scene -- and the shape
+    that used to be counted once and allocated ``count`` times.
+    """
+    # A quad: four distinct corners, two triangles. Small and exact, so the
+    # arithmetic in the assertions below is readable.
+    prim = gltf.Primitive(
+        positions=np.array(
+            [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], dtype="f4"
+        ),
+        indices=np.array([0, 1, 2, 0, 2, 3], dtype="u4"),
+    )
+    nodes = [gltf.Node(name=f"n{i}", mesh=0) for i in range(count)]
+    return glbwrite.write_glb(gltf.Model(nodes, list(range(count)), [[prim]], []))
+
+
+def test_instances_are_counted_against_the_triangle_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The defect: ``sum(model.meshes)`` saw one copy, the loop built eight.
+
+    With the cap at six, one two-triangle mesh placed by eight nodes is
+    sixteen triangles and must be refused -- counting the mesh list alone
+    would have called it two and let it through.
+    """
+    monkeypatch.setattr(glbimport, "MAX_TRIANGLES", 6)
+    with pytest.raises(OpError, match="triangles, past the"):
+        glbimport.glb_to_claydoc(_instanced(8))
+
+
+def test_too_many_instances_are_refused_as_a_scene(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half: small meshes, but more objects than Clay is scoped for."""
+    monkeypatch.setattr(glbimport, "MAX_OBJECTS", 3)
+    with pytest.raises(OpError, match="objects, past the"):
+        glbimport.glb_to_claydoc(_instanced(8))
+
+
+def test_an_ordinary_instanced_glb_still_imports() -> None:
+    """Instancing is legal; the budget must count it, not forbid it."""
+    out = glbimport.glb_to_claydoc(_instanced(3))
+    assert len(out.objects) == 3

@@ -44,6 +44,7 @@ from .. import (
     dialogs,
     focus,
     forms,
+    generation_workspace,
     profiles,
     theme,
     tokens,
@@ -103,11 +104,16 @@ def draw(ctx: Any) -> None:
             # ``with`` closes before end_child -- an unbalanced splitter
             # corrupts the next frame (widgets.py, _BlockScope).
             with widgets.section_blocks():
-                widgets.section("Asset type")
+                # Keep the first screen to the decisions that compose the
+                # creative brief. The detailed run controls remain available
+                # below one disclosure instead of competing with the canvas.
+                widgets.section("Brief")
                 _asset_type(ctx, form)
-                widgets.section("Prompt")
+                widgets.section("Describe the outcome")
                 manual_render.help_button(ctx, "settings-2d")
                 _prompt(ctx, form, form_ui)
+                widgets.section("Reference")
+                _references(ctx, form)
                 if _negative_supported(ctx, form):
                     widgets.section("Negative prompt / Avoid")
                     _negative(ctx, form)
@@ -126,30 +132,27 @@ def draw(ctx: Any) -> None:
                     # press is one generation or sixteen.
                     widgets.section("Sprite layout")
                     _sprite_layout(ctx, form, form_ui)
-                widgets.section("Image model")
-                if create_assets.selected(form).intent == "tileset":
-                    _locked_sheet_recipe(ctx, "Tile-set recipe", part="model")
-                else:
-                    _model(ctx, form, findings_doc)
-                widgets.section("Style LoRA")
-                if create_assets.selected(form).intent == "tileset":
-                    _locked_sheet_recipe(ctx, "Locked for coherent pixel tiles", part="lora")
-                else:
-                    _lora(ctx, form, show_strength=False, findings_doc=findings_doc)
-                if create_assets.selected(form).intent == "sprite":
-                    _locked_sheet_recipe(ctx, "Final sheet recipe", sprite=True)
-
-                # Disclosure state belongs to this running workspace, not the
-                # recipe, so it is kept only in AppState and never settings.
+                # Recipe, style, dimensions and conditioning are deliberately
+                # one disclosure.  The brief stays short, while all the
+                # existing controls remain available without changing what a
+                # service receives.
                 imgui.set_next_item_open(
                     bool(getattr(state, "create_advanced", False)),
                     imgui.Cond_.always.value,
                 )
-                opened = controls.collapsing_header("Advanced##create")
+                opened = controls.collapsing_header("Advanced controls##create")
                 state.create_advanced = bool(opened)
                 if opened:
-                    widgets.section("References & conditioning")
-                    _references(ctx, form)
+                    widgets.section("Recipe")
+                    if create_assets.selected(form).intent == "tileset":
+                        _locked_sheet_recipe(ctx, "Tile-set recipe", part="model")
+                        _locked_sheet_recipe(ctx, "Locked for coherent pixel tiles", part="lora")
+                    else:
+                        _model(ctx, form, findings_doc)
+                        widgets.section("Style")
+                        _lora(ctx, form, show_strength=False, findings_doc=findings_doc)
+                    if create_assets.selected(form).intent == "sprite":
+                        _locked_sheet_recipe(ctx, "Final sheet recipe", sprite=True)
                     widgets.section("Seed & count")
                     _run_controls(ctx, form, form_ui)
                     if form.get("output") == "sheet":
@@ -192,17 +195,29 @@ def field_label(field: str) -> str:
 
 
 def _asset_type(ctx: Any, form: dict[str, Any]) -> None:
-    """The one top-level choice; legacy service switches follow it."""
+    """The one top-level outcome choice; legacy service switches follow it."""
     before = create_assets.selected(form).key
+    # One compact picker leaves the first screen for the words and reference
+    # that make the image. The descriptive line below retains the orientation
+    # the previous five-row selector supplied without taking over the brief.
     picked = widgets.combo(
-        "##generation_type", before, list(generation.GENERATION_TYPE_OPTIONS)
+        "##generation-type", before, list(create_assets.ASSET_TYPE_OPTIONS)
     )
-    form["asset_type"] = picked if picked in generation.GENERATION_TYPES else before
+    form["asset_type"] = picked if picked in create_assets.ASSET_TYPES else before
     form["generation_type"] = form["asset_type"]
     spec = create_assets.sync_legacy_fields(form)
     if spec.key != before:
         ctx.state.preview_dirty_at = time.monotonic()
         ctx.state.clear_field_error("asset_type")
+    widgets.muted_wrapped(
+        {
+            "image": "A standalone 2D image.",
+            "model_3d": "A reference image you can turn into a 3D model.",
+            "seamless_material": "A seamless surface texture.",
+            "tileset": "A coherent pixel-art tile sheet.",
+            "sprite_sheet": "A character reference followed by a sprite sheet.",
+        }[spec.key]
+    )
 
 
 #: Where the sentences explaining a *tier* change's clears are kept between
@@ -1823,9 +1838,10 @@ def clear_unusable(ctx: Any, form: dict[str, Any]) -> list[str]:
     one thing the user cannot reach, and the only recovery was to guess which
     earlier choice to undo. It applies to exactly the two gates ``validate``
     refuses: the style LoRA, whose picker goes disabled, and the structure
-    control, whose whole group ``structure_note`` hides. The negative prompt is
-    deliberately absent -- nothing refuses a submit over it, so its own note is
-    the whole remedy, and it holds text the user typed.
+    control, whose whole group ``structure_note`` hides. The negative prompt
+    stays in the brief: a distilled recipe cannot consume it, but that is not a
+    reason to reject the generation. ``generation.effective_negative_prompt``
+    removes it from the worker payload without erasing the authored text.
     """
     cleared: list[str] = []
     base = form.get("base_model") or ""
@@ -2137,38 +2153,11 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
     imgui.dummy((0, sp(8)))
     imgui.separator()
     problems = validate(form)
-    for problem in problems:
-        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
-        imgui.text_wrapped(problem)
-        imgui.pop_style_color()
-    count = _safe_int(form.get("count"), 1)
+    weight = weights_problem(ctx, form)
+    if weight is not None:
+        problems = [*problems, weight]
     spec = create_assets.selected(form)
-    if form.get("output") == "sheet":
-        # Its own sentence rather than a third noun in the line below: a sheet
-        # is one press and either one generation or three, which "One sheet - a
-        # few seconds" would misreport in the sprite case by a factor of three.
-        if form.get("sheet_type") != "sprite":
-            widgets.muted("One sheet - about a minute")
-        else:
-            # The arithmetic rather than "a few minutes", which was written when
-            # a sprite sheet was always one generation twice and is a factor of
-            # eight out for an eight-direction one. Same numbers as the line
-            # under the layout controls, from the same function.
-            plan = sprite_plan(form)
-            widgets.muted(
-                f"A character, then {plan['generations']} generations of sheet"
-            )
-    else:
-        noun = {
-            "image_2d": "image",
-            "model_3d": "reference",
-            "seamless_tile": "tile",
-        }.get(spec.key, "reference")
-        widgets.muted(
-            f"{count} {noun}s - a few seconds each"
-            if count > 1
-            else f"One {noun} - a few seconds"
-        )
+    _generation_plan(ctx, form, problems)
     busy = ctx.busy("submit")
     enabled = not problems and not busy
     with focus.item(ctx.state, FOCUS_PANE, "generate") as focused:
@@ -2184,6 +2173,69 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
         generate(ctx, form)
     if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
         imgui.set_tooltip("Ctrl+Enter")
+
+
+def _generation_plan(ctx: Any, form: dict[str, Any], problems: list[widgets.Problem]) -> None:
+    """The persistent, actionable statement of what Generate will do.
+
+    Validation still belongs to :func:`validate` and the service.  This is the
+    in-place account of their answer, kept immediately beside the commitment
+    rather than in a footer whose errors explain nothing about the run.
+    """
+    widgets.secondary("Generation plan")
+    resolved = _resolved_recipe(ctx, form)
+    plan = generation_workspace.plan_for(form, resolved)
+    imgui.text_wrapped(plan.stages)
+    widgets.muted(
+        f"{plan.candidates} candidate{'s' if plan.candidates != 1 else ''} · "
+        f"{plan.generations} image generation{'s' if plan.generations != 1 else ''} · "
+        f"{plan.duration}"
+    )
+    widgets.muted(f"Recipe: {plan.recipe}")
+    active = getattr(ctx.cache, "active", None)
+    if active is not None:
+        position = generation_workspace._queue_position(ctx, str(active.get("id") or ""))
+        if active.get("status") == "queued":
+            widgets.muted(f"Queue: position {position}" if position else "Queue: waiting")
+        else:
+            widgets.muted("Queue: one local generation is running")
+    else:
+        widgets.muted("Queue: ready")
+    if not problems:
+        widgets.muted("Ready to generate.")
+        return
+    for problem in problems:
+        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
+        imgui.text_wrapped(f"Needs attention: {problem}")
+        imgui.pop_style_color()
+        _preflight_fix(ctx, form, problem)
+
+
+def _preflight_fix(ctx: Any, form: dict[str, Any], problem: widgets.Problem) -> None:
+    """Offer the safe, direct repairs which do not need another decision."""
+    field = getattr(problem, "field", "")
+    message = str(problem)
+    if field == "ref_path":
+        if controls.button(
+            "Choose a reference##preflight-reference", role=controls.ButtonRole.GHOST
+        ):
+            ctx.submit(
+                "ref-upload", dialogs.open_file, "Choose a reference image", dialogs.IMAGE_FILTER
+            )
+        return
+    if "full-CFG" in message or "guidance 0" in message:
+        if controls.button("Switch to Quality##preflight-quality", role=controls.ButtonRole.GHOST):
+            form["quality"] = "quality"
+            form["model_mode"] = "auto"
+            clear_for_tier(ctx, form)
+            ctx.state.clear_field_error("base_model")
+        return
+    if "not downloaded" in message and controls.button(
+        "Open model setup##preflight-models", role=controls.ButtonRole.GHOST
+    ):
+        from ..state import set_mode
+
+        set_mode(ctx, "settings")
 
 
 def _enter_pressed() -> bool:
@@ -2774,6 +2826,9 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         # copied after the legacy door accepts the request so reruns retain the
         # exact model/checksum even if the registry changes later.
         kwargs["guidance_fields"]["base_model"] = resolved.base_model
+        # The request document preserves the user's Avoid text, but an inert
+        # negative branch must not be sent through to a distilled worker.
+        kwargs["negative_prompt"] = generation.effective_negative_prompt(request, resolved) or None
     ref_path = form.get("ref_path") or anchor_kwargs(ctx, form, kwargs)
 
     # The form values are read here, on the frame thread, because they are UI

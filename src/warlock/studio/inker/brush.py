@@ -192,6 +192,13 @@ STAMP_ALIGN = ("free", "aligned")
 #: user draws and small enough that the worst case is a few milliseconds.
 MAX_STAMP = 512
 
+#: The most dabs one :meth:`StrokeState.spray` call will lay down. A cost
+#: ceiling rather than a correctness one, like :data:`MAX_STAMP` and
+#: :data:`MAX_MIRRORS` above it: every dab is a composite, multiplied by up to
+#: ``MAX_MIRRORS`` under full symmetry, and this call is synchronous on the
+#: frame thread. A rate high enough to exceed this is one no airbrush needs.
+MAX_SPRAY_PER_CALL = 4096
+
 #: The three nibs, and the split is between *antialiased* and *not*.
 #:
 #: ``soft`` is the disc this brush has always stamped: a smoothstep falloff with
@@ -961,7 +968,7 @@ class StrokeState:
         r, so the number of dabs landing in it has to as well or the spray reads
         as a dot with a halo.
         """
-        whole = int(count)
+        whole = min(int(count), MAX_SPRAY_PER_CALL)
         if whole <= 0:
             return
         radius = max(0.0, float(self.scatter))

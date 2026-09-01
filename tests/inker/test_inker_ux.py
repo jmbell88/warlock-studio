@@ -532,25 +532,37 @@ def test_the_blocks_that_are_the_panel_do_not_fold() -> None:
 
 
 def test_the_canvas_settings_are_reachable() -> None:
-    """``canvas_options`` had **zero callers**: the symmetry mode, its ways and
-    its axis are the only writers of ``state.symmetry`` and friends, so
-    symmetry was permanently off in the shipped app while the whole mirror
-    engine behind it stayed live and tested. The grid's numeric step went the
-    same way. Both are the toolbox's canvas popover now -- except the four
-    mirrors, which are the context bar's toggles (2026-08-23), so what this
-    checks is that *every* writer is reachable rather than that one of them is
-    a combo.
+    """``canvas_options`` once had **zero callers**: the symmetry mode, its
+    ways and its axis are the only writers of ``state.symmetry`` and friends,
+    so symmetry was permanently off in the shipped app while the whole mirror
+    engine behind it stayed live and tested. That is the failure this guards,
+    and it is why the test survives every move the controls make: what it
+    checks is that *every* writer is reachable, not where it happens to live.
+
+    They all live in ``inker_context`` now (2026-08-31). The four mirrors went
+    to the bar on 2026-08-23; the radial count and the axis followed on
+    2026-08-31, out of a toolbox popover opened by a flip-horizontal glyph and
+    named after neither of them.
     """
     from warlock.studio.panes import inker_context
 
-    source = Path(inker_tools.__file__).read_text(encoding="utf-8")
-    assert "canvas_options(ctx, state)" in source
-    assert "imgui.open_popup(CANVAS_POPUP)" in source
-    assert "state.symmetry = brush.toggled(" in source
-    assert "state.radial_count = int(count)" in source
-    assert "state.symmetry_axis = " in source
     bar = Path(inker_context.__file__).read_text(encoding="utf-8")
+    assert "imgui.open_popup(SYMMETRY_POPUP)" in bar
+    assert "imgui.open_popup(VIEW_POPUP)" in bar
     assert "state.symmetry = brush.toggled(state.symmetry, axis)" in bar
+    assert "state.radial_count = int(count)" in bar
+    assert "state.symmetry_axis = " in bar
+    # ...and none of them stayed behind. A second writer in the pane the
+    # controls left is how the two get to disagree.
+    source = Path(inker_tools.__file__).read_text(encoding="utf-8")
+    for gone in (
+        "canvas_options",
+        "_view_toggles",
+        "CANVAS_POPUP = ",
+        "state.symmetry",
+        "state.radial_count",
+    ):
+        assert gone not in source, gone
 
 
 def test_every_folding_key_is_namespaced_to_this_pane() -> None:
@@ -611,6 +623,48 @@ def test_both_floors_are_named_where_the_panes_are() -> None:
     assert floors["inker-picker"] == inker_picker.PICKER_FLOOR
     assert floors["inker-generate"] == inker_generate.GENERATE_FLOOR
     assert floors["inker-tiles"] == inker_tiles.PANEL_FLOOR
+    # The toolbox was the one squeezable pane missing from this list, which is
+    # how its floor came to describe a pane that no longer existed.
+    assert floors["inker-tools"] == inker_tools.TOOLS_FLOOR
+
+
+def test_the_toolbox_floor_is_the_sum_of_what_it_still_draws() -> None:
+    """A floor is a claim about a pane's content, so it has to be arithmetic
+    over that content rather than a number somebody measured once.
+
+    It was a bare ``190.0`` describing a heading, three rows of the tool grid,
+    *the view toggles* and the colour chips. The view toggles moved to the
+    context bar on 2026-08-31 and the number did not, which would have left the
+    pane reserving 66 px it no longer draws into -- room taken from the
+    Generation pane below it for nothing.
+    """
+    assert pytest.approx(
+        190.0 - 2 * inker_tools.BUTTON_H - inker_tools.GRID_GAP
+    ) == inker_tools.TOOLS_FLOOR
+    assert inker_tools.TOOLS_FLOOR > 0
+
+
+def test_the_toolbox_has_one_door_per_setting() -> None:
+    """Nothing the context bar now owns may still be drawn here.
+
+    Two writers of ``state.grid`` in two panes is how the toolbox glyph and the
+    View menu get to disagree about whether the grid is on; the second door
+    that survives is the View *menu*, which is where the tombstone at
+    ``inker_canvas`` puts second doors -- with full words, and now with ticks.
+    """
+    source = Path(inker_tools.__file__).read_text(encoding="utf-8")
+    for gone in (
+        "_view_toggles",
+        "canvas_options",
+        "CANVAS_POPUP = ",
+        "icons.MAGNET",
+        "icons.RULER",
+        "inkview",
+    ):
+        assert gone not in source, gone
+    # The colour chips stay: they are a *picture* of what the tool writes with,
+    # which is a readout you glance at mid-stroke, not a toggle.
+    assert "_colour_chips(ctx, state)" in source
 
 
 def test_a_pinned_give_way_handle_does_not_drive_the_share() -> None:

@@ -725,24 +725,48 @@ def poll_inpaint(ctx: Any) -> None:
     if status != "done":
         ctx.toast(f"The regeneration {status}: {job.get('error') or 'no result'}.", "warn")
         return
-    land_inpaint(ctx, pending, ctx.svc.job_dir(pending["job_id"]) / "input.png")
+    # **Off the frame thread.** This is called from ``popups``, which
+    # ``inker_canvas.draw`` runs every frame, and the landing is a disk read, a
+    # PNG decode and a LANCZOS resize up to the size of the user's selection --
+    # which can be the whole canvas. The hitch also arrives on whichever frame
+    # the job happens to finish, so it is both avoidable and unpredictable.
+    # ``inker_mode.on_task_done`` applies what this returns.
+    image_path = ctx.svc.job_dir(pending["job_id"]) / "input.png"
+    ctx.submit(
+        f"inker-inpaint-land:{pending['tab_uid']}",
+        _decode_inpaint,
+        pending,
+        image_path,
+    )
 
 
-def land_inpaint(ctx: Any, pending: dict[str, Any], image_path: Any) -> bool:
-    """Blend the finished picture into the layer it was asked about."""
+def _decode_inpaint(pending: dict[str, Any], image_path: Any) -> dict[str, Any] | None:
+    """Blocking; task thread only. The picture, fitted to the box it fills."""
     from PIL import Image
 
     from ..inker import inpaint
 
+    try:
+        with Image.open(image_path) as im:
+            pixels = inpaint.fit_back(im, tuple(pending["box"]))
+    except OSError:
+        return None
+    return {"pending": pending, "pixels": pixels}
+
+
+def land_inpaint(ctx: Any, pending: dict[str, Any], pixels: Any) -> bool:
+    """Blend the finished picture into the layer it was asked about.
+
+    The frame-thread half: the document is frame-thread state and so is the
+    toast. ``pixels`` comes from :func:`_decode_inpaint`, which did the reading
+    and the resizing on a task thread.
+    """
     state = inker_mode.ensure(ctx)
     tab = state.get(pending["tab_uid"])
     if tab is None:
         ctx.toast("The document the regeneration was for is closed.", "warn")
         return False
-    try:
-        with Image.open(image_path) as im:
-            pixels = inpaint.fit_back(im, tuple(pending["box"]))
-    except OSError:
+    if pixels is None:
         ctx.toast("The regeneration produced no picture.", "warn")
         return False
     ok = tab.doc.apply_pixels(

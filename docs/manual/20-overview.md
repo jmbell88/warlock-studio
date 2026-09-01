@@ -83,7 +83,9 @@ Then the six workspaces:
   rather than belonging to any one asset. Covered in [Poser](26-poser.md).
 - **Troupe.** A character-sprite factory: a prompt becomes a reference, a mesh, a fitted rig and
   then a rendered, pixelised sprite sheet of the clips a character walks and swings through.
-  Covered in [Troupe](33-troupe.md).
+  Experimental — the chain runs end to end, but the shipped keyframes are provisional and the
+  prompt-to-character half does not currently produce usable humanoids (measured 2026-08-30), so
+  the route worth using is a mesh you supply. Covered in [Troupe](33-troupe.md).
 - **Plotter.** A tile-map editor: a grid, a layer stack, one or more tilesets, and the objects an
   engine reads as spawn points and trigger volumes — where a sheet of tiles becomes a level. It
   speaks Tiled's formats in both directions. Covered in [Plotter](31-plotter.md).
@@ -93,8 +95,8 @@ Then the six workspaces:
   pattern grid, stitched into a song by an order list, and saved as a `.wsng`. Instruments carry
   four envelope sequences you drag into shape, a `.wav` dropped on the window becomes a sample, and
   the whole thing exports as a mix, one WAV per channel and one per sound effect. Experimental —
-  only the note column of the grid can be typed into, so volume and the effect column are not yet
-  editable. Covered in [Sirens](34-sirens.md).
+  all five grid columns take keys, but a block selection can be transposed and cleared and not
+  copied, cut or pasted. Covered in [Sirens](34-sirens.md).
 
 And in the footer:
 

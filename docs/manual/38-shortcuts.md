@@ -260,7 +260,9 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Ctrl+0 / Ctrl+1 | Fit to the pane / 100% |
 | Ctrl+4 / Ctrl+Shift+4 | Turn the view a quarter clockwise / anticlockwise |
 | Ctrl+5 | Mirror the view left to right |
-| Space drag, middle drag | Pan (the wheel zooms) |
+| Space drag, middle drag | Pan |
+| Shift+wheel | Scroll the canvas sideways (the wheel alone scrolls it up and down) |
+| Ctrl+wheel | Zoom in 5% steps |
 | Delete | Clear the selected pixels |
 | Esc | Cancel a floating selection, then deselect |
 
@@ -283,8 +285,9 @@ key restores the tool you were using.
 
 `+` and `-` step through whole zoom scales — 25%, 50%, 100%, 200%, 300% and up — rather than the
 wheel's 5% notches. Pixel art wants the whole ones: at 135% a source pixel is 1.35 screen pixels, so
-some are drawn one wide and some two, and a dither comes out as bands. The wheel is still the fine
-control, and Ctrl+0 and Ctrl+1 still fit and reset.
+some are drawn one wide and some two, and a dither comes out as bands. Ctrl+wheel is still the fine
+control, and Ctrl+0 and Ctrl+1 still fit and reset. The wheel on its own scrolls rather than zooming,
+which is Aseprite's default.
 
 ### Inker — an animated document
 

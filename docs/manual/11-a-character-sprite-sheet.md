@@ -5,8 +5,8 @@ rendering it from eight directions and reducing every frame to pixels. Two hundr
 cells from one description.
 
 It is the most ambitious thing in the app, and it is the one where being straight with you about what
-is proven matters most. This chapter says which half is solid, which half is untested, and which
-features do not exist yet at all.
+is proven matters most. This chapter says which half is solid, which half has been measured and
+found wanting, and which features do not exist yet at all.
 
 ## How it actually works
 
@@ -42,9 +42,15 @@ To use it: import your mesh, rig it in Poser against the humanoid template, then
 
 Your mesh needs to meet a contract the app cannot enforce, only state. GLB or glTF. T-pose or
 A-pose — a dynamically posed mesh degrades both the joint fit and the automatic weights. **+Z up, −Y
-forward.** Bone names mapping onto the nineteen-bone template if it is already rigged. **No very
-short bones** — Blender deletes them silently along with their children, and fingers and toes are the
-usual casualties. Under about 300,000 faces. And a licence that permits you to ship what comes out.
+forward.** **No very short bones** — Blender deletes them silently along with their children, and
+fingers and toes are the usual casualties. Under about 300,000 faces. And a licence that permits you
+to ship what comes out.
+
+A rig it arrives with is **discarded**, not adopted, so bone names do not have to match anything.
+Warlock fits its own nineteen-bone skeleton, because a supplied rig is not evidence about where the
+template's joints go — CesiumMan has nineteen bones like the template and still splits them
+differently, three per arm and four per leg against the template's four and three. The mesh is
+unbound and the old armature removed before a single measurement is taken.
 
 ## What a sheet contains
 
@@ -103,9 +109,13 @@ Read this part before building expectations on top of it.
 from real meshes through real Blender. The supplied-base-mesh path in particular works today and
 needs no GPU.
 
-**Untested.** Reconstructing a *humanoid* from a single generated image has never been judged for
-quality. The mechanism runs; whether it gives you clean limb separation and a good silhouette on a
-character is an open question, not a promise. Related and permanent: reconstruction works from one
+**Measured, and the answer is no — for now.** Reconstructing a *humanoid* from a single generated
+image was judged on a graded corpus on 2026-08-30, and it came back with limbs bent and stretched.
+The references themselves were fine; it is the mesh that is lost, because a character asks the
+reconstruction for separable limbs from one view and it does not deliver them. So the prompt-to-
+character half of this chapter is a mechanism that runs rather than a route to a usable sheet, and
+**the supplied-base-mesh path is the one to build on**. That verdict is on today's default
+reconstruction, not on the idea. Related and permanent either way: reconstruction works from one
 image, so **the back of a generated character is invented**, not observed.
 
 **Provisional.** The shipped animation keyframes are placeholders — enough to prove the pipeline,
@@ -139,7 +149,7 @@ With a GPU and weights:
 1. Describe a character and let Troupe draw the pose reference.
 2. Approve it in Create — and notice that nothing expensive happened until you did.
 3. Watch the mesh, rig and sheet stages go by in the in-progress list.
-4. Judge the result honestly against the "untested" note above, especially from behind.
+4. Judge the result honestly against the measured note above, especially from behind.
 
 ## What to read next
 

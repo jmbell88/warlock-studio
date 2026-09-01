@@ -538,6 +538,16 @@ class JobOps:
             # a row recorded "cancelled" with most of its work still on disk.
             with contextlib.suppress(OSError):
                 shutil.rmtree(job_dir / "materials")
+        elif job["kind"] == "lora_train":
+            # The trainer writes adapter weights into its own directory as it
+            # goes, so a cancel lands on a partial set of them. Its own
+            # directory, unlike the branches above, which is why the generic
+            # arm below -- a list of *mesh* filenames, none of which a training
+            # job ever writes -- swept up nothing at all here.
+            job_dir = self.config.job_dir(job["id"])
+            paths = []
+            with contextlib.suppress(OSError):
+                shutil.rmtree(job_dir / "lora")
         else:
             # Both halves of the contract: model.glb is what the user would
             # see, source.glb is what it was derived from. Leaving the source

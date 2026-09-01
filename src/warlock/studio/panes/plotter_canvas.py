@@ -837,12 +837,10 @@ def _layers(
     # Whether any tileset carries an animation at all, decided once per frame
     # rather than per cell: on the overwhelmingly common map this is one `any`
     # over a handful of tilesets and the substitution below never runs.
-    animating = any(
-        meta.animation
-        for ref in doc.tilesets
-        for meta in ref.tileset.tiles.values()
-    )
     clock_ms = int(clock() * 1000.0)
+    # Once per frame, over the tilesets. Empty on a map with nothing animated,
+    # which is what makes the per-layer substitution below free in that case.
+    subs = animated_substitutions(doc, clock_ms)
 
     # **In this pane only, never in ``scene.resolve``.** ``render.py`` composites
     # every export off the same resolver, so a dim living there would export
@@ -871,16 +869,12 @@ def _layers(
             continue
         tint = _layer_tint(imgui, entry)
         block = layer.data[r0 : r1 + 1, c0 : c1 + 1]
-        if animating:
-            # **Draw-time only.** The document's arrays are untouched: a clock
-            # that wrote gids would dirty a saved map sixty times a second.
-            # ``render.py``, the minimap and every export draw frame 1 -- an
-            # export is a still, which is the parallax precedent (canvas and
-            # export deliberately disagree, and the disagreement is stated).
-            block = np.vectorize(
-                lambda value: animated_gid(doc, int(value), clock_ms),
-                otypes=[gidlib.DTYPE],
-            )(block)
+        # **Draw-time only.** The document's arrays are untouched: a clock that
+        # wrote gids would dirty a saved map sixty times a second. ``render.py``,
+        # the minimap and every export draw frame 1 -- an export is a still,
+        # which is the parallax precedent (canvas and export deliberately
+        # disagree, and the disagreement is stated).
+        block = substitute_animated(block, subs)
         ids = gidlib.tile_ids(block)
         flags = gidlib.flags(block)
         # Back to front. For an orthogonal map that is row-major and this is
@@ -2111,34 +2105,67 @@ def _tile_weights(doc: Any) -> Any:
     return weight
 
 
-def animated_gid(doc: Any, value: int, clock_ms: int) -> int:
-    """``value`` with an animated tile's current frame substituted in.
+def animated_substitutions(doc: Any, clock_ms: int) -> dict[int, int]:
+    """``{tile id: the id to draw instead}`` for this instant. Empty when still.
 
     **Draw-time only, and the document arrays never move.** A clock that wrote
-    gids would dirty a saved map sixty times a second, which is why this is a
-    function the canvas calls on its way to the draw list rather than anything
-    the document knows about.
+    gids would dirty a saved map sixty times a second, which is why this is
+    something the canvas computes on its way to the draw list rather than
+    anything the document knows about.
 
-    The cell's flip flags are preserved: a mirrored animated tile animates
-    mirrored, exactly as a mirrored still one draws mirrored.
+    Built once per frame over the *tilesets* rather than once per cell over the
+    visible block. The per-cell shape this replaced was an ``np.vectorize`` --
+    a Python call per element, not a vectorised anything -- and each call
+    re-walked ``doc.tilesets`` through ``ref_for``, which is the very linear
+    scan ``_index_memo`` exists to keep out of the static path. One torch tile
+    made the whole visible block pay it, sixty times a second.
+
+    A tile whose current frame is itself is left out, so the caller's map is
+    empty on the overwhelmingly common map and the substitution is skipped
+    outright.
     """
-    tile = int(value) & gidlib.GID_MASK
-    if not tile:
-        return value
-    ref = doc.ref_for(tile)
-    if ref is None:
-        return value
-    frames = ref.tileset.meta_of(tile - ref.firstgid).animation
-    if not frames:
-        return value
-    index = tileset_lib.frame_at(frames, clock_ms)
-    if index is None:
-        return value
-    # The flags live in the top bits and the id in the rest, so the substitution
-    # is a masked write rather than a re-encode.
-    return int(
-        (int(value) & ~gidlib.GID_MASK) | (ref.firstgid + frames[index].local_id)
+    out: dict[int, int] = {}
+    for ref in doc.tilesets:
+        for local_id, meta in ref.tileset.tiles.items():
+            frames = meta.animation
+            if not frames:
+                continue
+            index = tileset_lib.frame_at(frames, clock_ms)
+            if index is None:
+                continue
+            source = ref.firstgid + int(local_id)
+            target = ref.firstgid + frames[index].local_id
+            if source != target:
+                out[source] = target
+    return out
+
+
+def substitute_animated(block: np.ndarray, subs: dict[int, int]) -> np.ndarray:
+    """``block`` with :func:`animated_substitutions` applied. Never in place.
+
+    The flip flags live in the top bits and the id in the rest, so this is a
+    masked write rather than a re-encode -- a mirrored animated tile animates
+    mirrored, exactly as a mirrored still one draws mirrored.
+
+    Python runs once per *animated cell*, not once per cell: ``np.isin`` finds
+    them, and on a map whose animated tiles are off screen it finds none and
+    the block is handed back untouched.
+    """
+    if not subs:
+        return block
+    ids = gidlib.tile_ids(block)
+    hit = np.isin(ids, np.fromiter(subs, dtype=block.dtype, count=len(subs)))
+    if not hit.any():
+        return block
+    out = block.copy()
+    # Through ``gidlib.flags`` rather than ``& ~GID_MASK``: the complement of
+    # the mask is a *negative* Python int, and numpy refuses to apply one to an
+    # unsigned array rather than wrapping it quietly.
+    swapped = np.fromiter(
+        (subs[int(v)] for v in ids[hit]), dtype=block.dtype, count=int(hit.sum())
     )
+    out[hit] = gidlib.flags(out[hit]) | swapped
+    return out
 
 
 def _fill_rng(state: Any):

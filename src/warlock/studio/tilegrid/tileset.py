@@ -286,6 +286,15 @@ RENDER_SIZES = ("tile", "grid")
 #: How a fitted tile fills the cell it was fitted to.
 FILL_MODES = ("stretch", "preserve-aspect-fit")
 
+#: The ceiling on a composed collection atlas. Each tile image is already
+#: bounded by ``pixelguard``, but the atlas is tile-*count* times the largest
+#: cell and neither factor was checked -- so ten thousand ``<tile>`` entries
+#: all naming one ordinary 1024px file, under a megabyte of ``.tsx``, asked for
+#: 42 GB. 8192 squared is ``pixelguard.MAX_DECODE_PIXELS``: the largest picture
+#: this app will hold, and past what a GL implementation need accept as one
+#: texture anyway.
+MAX_COLLECTION_PIXELS = 8192 * 8192
+
 
 @dataclass(frozen=True)
 class Collection:
@@ -371,6 +380,13 @@ def compose_collection(
     cell_h = max(h for _, h in sizes)
     across = int(columns) if columns else max(1, math.ceil(math.sqrt(len(ids))))
     down = -(-len(ids) // across)
+    # Checked here rather than at the three call sites, so a fourth reader of a
+    # collection cannot miss it. See ``MAX_COLLECTION_PIXELS``.
+    if down * cell_h * across * cell_w > MAX_COLLECTION_PIXELS:
+        raise ValueError(
+            f"this image collection packs to {across * cell_w}x{down * cell_h},"
+            f" past the {MAX_COLLECTION_PIXELS} pixels this build will allocate"
+        )
     atlas = np.zeros((down * cell_h, across * cell_w, 4), dtype=np.uint8)
     for slot, frame in enumerate(frames):
         y, x = (slot // across) * cell_h, (slot % across) * cell_w

@@ -226,6 +226,7 @@ def import_tileset(ctx: Any) -> bool:
             sprites, orientations=state.tileset_dedup_flips
         )
     state.tileset_import = None
+    state.tileset_preview_key = None
     state.tileset_import_open = False
     added = _add_sprites(ctx, tab, sprites)
     ctx.toast(

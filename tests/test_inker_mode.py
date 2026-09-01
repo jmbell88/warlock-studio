@@ -300,6 +300,227 @@ def test_centring_sets_an_exact_zoom():
     assert view.pan == pytest.approx((150.0, 150.0))
 
 
+# --- the bound, and the scrollbars that are its dual -------------------------
+
+
+def test_a_page_larger_than_the_pane_stops_with_its_edge_at_the_middle():
+    """Aseprite's rule, and the reason it is half a pane rather than nothing:
+    every corner of a page too big to see at once must still be draggable into
+    the middle of the pane to be worked on."""
+    view = PaintView(zoom=1.0)
+    (lo_x, hi_x), _ = inker_state.pan_limits(view, (1000, 1000), (400.0, 400.0))
+    assert (lo_x, hi_x) == pytest.approx((-800.0, 200.0))
+    # At either end the page's near edge is exactly on the pane's centre.
+    view.pan = (hi_x, hi_x)
+    assert inker_state.page_box(view, (1000, 1000))[0][0] == pytest.approx(200.0)
+    view.pan = (lo_x, lo_x)
+    assert inker_state.page_box(view, (1000, 1000))[1][0] == pytest.approx(200.0)
+
+
+def test_a_page_under_half_the_pane_may_go_anywhere_inside_it():
+    """...and never partly outside it, which is the other half of the rule.
+
+    The boundary is *half* the pane rather than the whole of it, because the
+    padding is ``max(pane / 2, pane - span)`` and the second term only wins
+    while the page is the shorter one. 100 into 400 is well under it.
+    """
+    view = PaintView(zoom=1.0)
+    (lo_x, hi_x), _ = inker_state.pan_limits(view, (100, 100), (400.0, 400.0))
+    assert (lo_x, hi_x) == pytest.approx((0.0, 300.0))
+
+
+def test_a_page_between_half_the_pane_and_all_of_it_may_still_hang_off_an_edge():
+    """The case that sits between the two halves of the rule, pinned because it
+    is the one a reader predicts wrongly: a 100 px page in a 120 px pane is
+    *smaller* than the pane and is still allowed to hang off it, which is what
+    lets you push a nearly-pane-sized drawing aside to see under it."""
+    view = PaintView(zoom=1.0)
+    (lo_x, hi_x), _ = inker_state.pan_limits(view, (100, 100), (120.0, 120.0))
+    assert (lo_x, hi_x) == pytest.approx((-40.0, 60.0))
+
+
+def test_a_turned_page_is_bounded_on_the_axis_it_now_occupies():
+    """``view_extent`` is already the oriented box, so rotation costs the bound
+    nothing -- at a quarter turn the horizontal limit is the document's
+    *height*."""
+    view = PaintView(zoom=1.0, rotation=90)
+    (lo_x, hi_x), (lo_y, hi_y) = inker_state.pan_limits(view, (100, 50), (400.0, 400.0))
+    # Turned, the 50 px axis runs across the screen and the 100 px axis down.
+    assert hi_x - lo_x == pytest.approx(400.0 - 50.0)
+    assert hi_y - lo_y == pytest.approx(400.0 - 100.0)
+
+
+def test_a_flipped_view_bounds_the_mirror_of_the_same_box():
+    plain = inker_state.pan_limits(PaintView(zoom=1.0), (100, 50), (400.0, 400.0))
+    flipped = inker_state.pan_limits(
+        PaintView(zoom=1.0, flipped=True), (100, 50), (400.0, 400.0)
+    )
+    # The same width of freedom either way -- a mirror moves the box, it does
+    # not change how far it may travel.
+    assert plain[0][1] - plain[0][0] == pytest.approx(flipped[0][1] - flipped[0][0])
+
+
+def test_the_interval_never_inverts():
+    """A ``lo`` above its ``hi`` would make ``clamp_pan`` snap to a corner and
+    the thumb's length go negative, at some zoom nobody tested by hand."""
+    for zoom in (inker_state.INKER_MIN_ZOOM, 0.5, 1.0, 3.0, inker_state.INKER_MAX_ZOOM):
+        for size in ((1, 1), (32, 32), (400, 400), (4000, 4000)):
+            view = PaintView(zoom=zoom)
+            for axis in inker_state.pan_limits(view, size, (400.0, 300.0)):
+                assert axis[0] <= axis[1], (zoom, size, axis)
+
+
+def test_clamping_a_centred_view_changes_nothing():
+    """Fit and Actual size must survive the clamp untouched, including the
+    documented case where a page too large to fit at the floor overflows the
+    pane -- if the clamp moved that one, ``fit`` would stop meaning fit."""
+    for size, zoom in (((100, 50), None), ((4000, 4000), None), ((100, 50), 1.0)):
+        view = PaintView()
+        if zoom is None:
+            inker_state.fit(view, size, (400.0, 400.0), **_inker_bounds())
+        else:
+            inker_state.centre(view, size, (400.0, 400.0), zoom, **_inker_bounds())
+        before = view.pan
+        inker_state.clamp_pan(view, size, (400.0, 400.0))
+        assert view.pan == pytest.approx(before), size
+    # And the floor-overflow case by name, so this cannot be "fixed" by a
+    # clamp that quietly pulls the huge page back on screen.
+    view = PaintView()
+    inker_state.fit(view, (40000, 40000), (400.0, 400.0), **_inker_bounds())
+    before = view.pan
+    inker_state.clamp_pan(view, (40000, 40000), (400.0, 400.0))
+    assert view.pan == pytest.approx(before)
+    assert 40000 * view.zoom > 400.0
+
+
+def test_clamping_pulls_a_page_dragged_off_the_pane_back():
+    view = PaintView(zoom=1.0, pan=(9e9, -9e9))
+    inker_state.clamp_pan(view, (1000, 1000), (400.0, 400.0))
+    (x0, y0), (_x1, y1) = inker_state.page_box(view, (1000, 1000))
+    assert x0 == pytest.approx(200.0)
+    assert y1 == pytest.approx(200.0)
+    assert y0 < 0.0
+
+
+def test_a_pane_that_shrinks_pulls_the_pan_in():
+    """The cause a clamp at the write sites would never see: nothing wrote the
+    pan, the *pane* changed under it -- a window resize, a sidebar widening,
+    the split canvas opening."""
+    view = PaintView(zoom=1.0)
+    inker_state.centre(view, (100, 100), (400.0, 400.0), 1.0)
+    inker_state.clamp_pan(view, (100, 100), (400.0, 400.0))
+    assert view.pan == pytest.approx((150.0, 150.0))
+    # 100 px of page in a 120 px pane is over half of it, so the limit is the
+    # edge-to-the-middle one: pan stops at pane/2 rather than at pane - span.
+    inker_state.clamp_pan(view, (100, 100), (120.0, 120.0))
+    assert view.pan == pytest.approx((60.0, 60.0))
+
+
+def test_a_wheel_notch_moves_an_eighth_of_the_pane():
+    """Screen pixels, not image pixels: a scroll moves the *view*, so it must
+    cover the same distance on screen at 5% as at 800%."""
+    assert inker_state.scroll_step(800.0) == pytest.approx(100.0)
+
+
+def test_a_very_short_pane_still_scrolls():
+    assert inker_state.scroll_step(80.0) == pytest.approx(inker_state.SCROLL_MIN)
+
+
+def test_panning_by_notches_walks_to_the_limit_and_stops():
+    view = PaintView(zoom=1.0)
+    for _ in range(200):
+        inker_state.pan_by(view, (100, 100), (400.0, 400.0), 0.0, -50.0)
+    assert view.pan[1] == pytest.approx(0.0)
+
+
+def test_the_thumb_is_the_pane_over_the_whole_scrollable_span():
+    view = PaintView(zoom=1.0)
+    inker_state.centre(view, (2000, 2000), (400.0, 400.0), 1.0)
+    _offset, length = inker_state.scroll_thumb(view, (2000, 2000), (400.0, 400.0), 0)
+    # Pane 400, travel 2000 (the page's own span) -> 400 / 2400.
+    assert length == pytest.approx(400.0 / 2400.0)
+
+
+def test_the_thumb_is_centred_when_the_view_is():
+    view = PaintView(zoom=1.0)
+    inker_state.centre(view, (2000, 2000), (400.0, 400.0), 1.0)
+    offset, length = inker_state.scroll_thumb(view, (2000, 2000), (400.0, 400.0), 0)
+    assert offset + length / 2.0 == pytest.approx(0.5)
+
+
+def test_the_thumb_reaches_the_ends_of_the_track_exactly_at_the_pan_limits():
+    """The load-bearing property: the bar is *derived* from the bound rather
+    than computed beside it, so a thumb can never be dragged somewhere the
+    clamp then refuses -- which is what a thumb that springs back looks like."""
+    size, region = (2000, 1000), (400.0, 300.0)
+    for axis in (0, 1):
+        (lo, hi) = inker_state.pan_limits(PaintView(zoom=1.0), size, region)[axis]
+        view = PaintView(zoom=1.0)
+        pan = list(view.pan)
+        pan[axis] = hi
+        view.pan = tuple(pan)
+        offset, _length = inker_state.scroll_thumb(view, size, region, axis)
+        assert offset == pytest.approx(0.0)
+        pan[axis] = lo
+        view.pan = tuple(pan)
+        offset, length = inker_state.scroll_thumb(view, size, region, axis)
+        assert offset + length == pytest.approx(1.0)
+
+
+def test_the_thumb_is_half_the_track_at_fit_because_the_pan_may_still_move():
+    """Not a bug, and named so it is not "fixed" into one. At Fit the page is
+    exactly the pane, so the rule still allows half a pane of travel each way
+    -- and a bar that claimed otherwise would be lying about what a drag can
+    do."""
+    view = PaintView()
+    inker_state.fit(view, (100, 100), (400.0, 400.0), **_inker_bounds())
+    _offset, length = inker_state.scroll_thumb(view, (100, 100), (400.0, 400.0), 0)
+    assert length == pytest.approx(0.5)
+
+
+def test_dragging_the_free_track_end_to_end_walks_the_whole_pan_range():
+    size, region = (2000, 2000), (400.0, 400.0)
+    view = PaintView(zoom=1.0)
+    inker_state.centre(view, size, region, 1.0)
+    lo, hi = inker_state.pan_limits(view, size, region)[0]
+    view.pan = (hi, view.pan[1])
+    inker_state.scroll_drag(view, size, region, 0, 250.0, 250.0)
+    assert view.pan[0] == pytest.approx(lo)
+
+
+def test_a_short_thumb_stays_grabbable_and_still_maps_the_whole_range():
+    """A 40 000 px page gives a thumb under a pixel; the floor is applied in
+    the mapping rather than after it, so an end-to-end drag still lands exactly
+    on the limit."""
+    size, region = (40000, 40000), (400.0, 400.0)
+    view = PaintView(zoom=1.0)
+    _offset, length = inker_state.scroll_thumb(
+        view, size, region, 0, min_length=24.0 / 400.0
+    )
+    assert length == pytest.approx(24.0 / 400.0)
+
+
+def test_a_turned_view_puts_the_documents_height_on_the_horizontal_bar():
+    """A quarter turn swaps which document axis each bar measures, and it comes
+    out of ``view_extent`` for free rather than being handled here.
+
+    Asserted as an equality between the two bars rather than as an inequality
+    on one of them: on a square pane the turned horizontal bar is *exactly* the
+    upright vertical one, which says "the axes swapped" and nothing else. (The
+    thumb is not simply "longer for a shorter page" -- a page with room to roam
+    inside the pane has more travel, so its thumb is smaller.)
+    """
+    size, region = (100, 50), (400.0, 400.0)
+    upright = PaintView(zoom=1.0)
+    turned = PaintView(zoom=1.0, rotation=90)
+    assert inker_state.scroll_thumb(turned, size, region, 0)[1] == pytest.approx(
+        inker_state.scroll_thumb(upright, size, region, 1)[1]
+    )
+    assert inker_state.scroll_thumb(turned, size, region, 1)[1] == pytest.approx(
+        inker_state.scroll_thumb(upright, size, region, 0)[1]
+    )
+
+
 def test_the_view_belongs_to_the_document_not_to_the_app():
     """Switching tabs must not scroll you back to the origin of the other."""
     a, b = _tab("a"), _tab("b")
@@ -1348,6 +1569,85 @@ class _Ctx:
 
     def toast(self, message, kind="info"):
         pass
+
+
+def _reopened(ctx):
+    """A second launch against the same settings store."""
+    ctx.state.inker = None
+    return inker_mode.ensure(ctx)
+
+
+def test_the_mirrors_survive_a_restart():
+    """``_symmetry_hit`` has always called ``persist`` and said in a comment
+    that symmetry rides in the session snapshot beside the colours and the
+    grid. It did not: ``persist`` wrote seven canvas keys and none of them was
+    a symmetry, so every mirror, the axis and the radial count reset on the
+    next launch.
+
+    The same defect is recorded one comment further up in ``persist`` for the
+    pixel grid, the layer edges and the tile numbers, which is why this is a
+    test and not just a fix.
+    """
+    from warlock.studio.inker import brush
+
+    ctx = _Ctx()
+    state = inker_mode.ensure(ctx)
+    state.symmetry = "x+diag"
+    state.symmetry_axis = (12.0, 34.0)
+    state.radial_count = 9
+    inker_mode.persist(ctx)
+
+    back = _reopened(ctx)
+    assert brush.axes_of(back.symmetry) == ("x", "diag")
+    assert back.symmetry_axis == pytest.approx((12.0, 34.0))
+    assert back.radial_count == 9
+
+
+def test_a_settings_file_from_before_symmetry_was_saved_opens_unchanged():
+    """No migration and no version bump: the three keys are simply absent, so
+    every ``get`` falls back to the field's own default."""
+    from warlock.studio.inker import brush
+
+    ctx = _Ctx()
+    ctx.settings.set(
+        "inker",
+        {"canvas": {"grid": True, "grid_size": 16, "rulers": False}},
+    )
+    state = inker_mode.ensure(ctx)
+    assert state.symmetry == "none"
+    assert state.symmetry_axis is None
+    assert state.radial_count == brush.DEFAULT_RADIAL
+    # ...and the keys that were there still arrive.
+    assert state.grid is True and state.grid_size == 16 and state.rulers is False
+
+
+def test_a_hand_edited_symmetry_block_is_ignored_rather_than_fatal():
+    """Validated, not trusted -- the module's doctrine for a file a person can
+    open. Read *through* ``axes_of``/``compose`` rather than assigned raw,
+    which is also what normalises a legacy spelling."""
+    from warlock.studio.inker import brush
+
+    ctx = _Ctx()
+    ctx.settings.set(
+        "inker",
+        {
+            "canvas": {
+                "symmetry": "sideways",
+                "symmetry_axis": "middle",
+                "radial_count": 900,
+            }
+        },
+    )
+    state = inker_mode.ensure(ctx)
+    assert state.symmetry == "none"
+    assert state.symmetry_axis is None
+    assert state.radial_count == brush.MAX_RADIAL
+
+    ctx2 = _Ctx()
+    ctx2.settings.set("inker", {"canvas": {"symmetry": "xy"}})
+    # The legacy spelling, normalised on the way in rather than kept as a
+    # second way of saying the same thing.
+    assert brush.axes_of(inker_mode.ensure(ctx2).symmetry) == ("x", "y")
 
 
 def test_a_none_detection_keeps_the_previous_field_values():

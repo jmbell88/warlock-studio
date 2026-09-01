@@ -10,6 +10,21 @@ guesses differently every time; a mesh rendered from eight angles is exact, but 
 animating it. Troupe is the second of those, with a clip library and a pixel-art reduction on the
 end of it.
 
+Troupe carries an **Experimental** chip on the rail, and the chip points here for the reason. Two
+things are behind it. The shipped animation keyframes are provisional — they are authored placeholders
+rather than an animator's work, and a walk that reads as a walk is not the same as a walk you would
+ship. And the *prompt-to-character* half of the chain is measured not to work yet: on a graded corpus
+run at the shipped default on 2026-08-30, humanoids came back with limbs bent and stretched, which is
+the one failure a character sheet cannot survive — the reconstruction is being asked for separable
+limbs from a single view and does not deliver them. The reference stage is fine; it is the mesh that
+is lost.
+
+What follows from that is a recommendation rather than a refusal: **the route worth using today is
+[a mesh you already have](#from-a-mesh-you-already-have)** — generated and kept, uploaded, or built in
+Clay. Everything downstream of the mesh (the rig, the clips, the render, the reduction) runs on both
+routes and is the same code. The form is left in place because it is how you get a reference and
+because the verdict is on today's default reconstruction, not on the idea.
+
 The output is an ordinary sprite sheet — the same PNG-and-sidecar pair chapter
 [Sprite sheets](27-sprite-sheets.md) describes — plus an `animation` block that carries the frame
 durations and one tag per animation and direction. Everything that already reads a sheet reads

@@ -172,18 +172,68 @@ def anchor_path(config: Any, fields: dict[str, Any] | None) -> Path | None:
     return path if path.exists() else None
 
 
-def set_anchor(
-    settings: Any, config: Any, name: str, png: bytes, scale: float | None = None
-) -> None:
-    """Point a profile at a new anchor image, replacing any it had."""
-    profiles = list_profiles(settings)
-    if name not in profiles:
-        return
-    previous = profiles[name].get("anchor")
+def stage_anchor(config: Any, png: bytes) -> str:
+    """Write an anchor image and return the filename it took. **I/O: off the
+    frame thread.**
+
+    Split out of :func:`set_anchor` so the picker can do it on the task thread
+    it is already on. ``png`` is up to ``MAX_UPLOAD_BYTES`` -- twenty megabytes
+    -- and the write used to land in ``_on_task_done``, which is the frame
+    loop; ``ref-upload`` beside it in ``main`` already splits this way, and
+    said so, which is what made the asymmetry look accidental rather than
+    considered.
+
+    The name is random rather than derived from the profile's: an anchor is
+    replaced in place, and a stable name would have a half-written file under
+    the one the profile is still pointing at.
+    """
     filename = f"{secrets.token_hex(6)}.png"
     directory = anchor_dir(config)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / filename).write_bytes(png)
+    return filename
+
+
+def adopt_anchor(
+    settings: Any, config: Any, name: str, filename: str, scale: float | None = None
+) -> None:
+    """Point a profile at an anchor :func:`stage_anchor` already wrote.
+
+    Settings only, so this is the half that is safe on the frame thread.
+    """
+    profiles = list_profiles(settings)
+    if name not in profiles:
+        return
+    previous = profiles[name].get("anchor")
+    _finish_anchor(settings, config, name, profiles, previous, filename, scale)
+
+
+def set_anchor(
+    settings: Any, config: Any, name: str, png: bytes, scale: float | None = None
+) -> None:
+    """Point a profile at a new anchor image, replacing any it had.
+
+    The two halves together, for callers that are not on the frame thread and
+    do not care. The app's own picker uses :func:`stage_anchor` and
+    :func:`adopt_anchor` separately, because it is.
+    """
+    profiles = list_profiles(settings)
+    if name not in profiles:
+        return
+    previous = profiles[name].get("anchor")
+    filename = stage_anchor(config, png)
+    _finish_anchor(settings, config, name, profiles, previous, filename, scale)
+
+
+def _finish_anchor(
+    settings: Any,
+    config: Any,
+    name: str,
+    profiles: dict[str, Any],
+    previous: Any,
+    filename: str,
+    scale: float | None,
+) -> None:
     save_profile(
         settings,
         name,

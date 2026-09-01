@@ -450,7 +450,7 @@ def outline(
     not draw an outline along the cut: what is past the edge is unknown, not
     empty.
     """
-    steps = int(round(float(size)))
+    steps = min(int(round(float(size))), OUTLINE_MAX_SIZE)
     if steps <= 0:
         return pixels.copy()
     tiled = bool(wrap)
@@ -470,6 +470,15 @@ def outline(
 
 #: The widest window :func:`despeckle` will build. See it for why it is small.
 DESPECKLE_MAX = 9
+
+#: The most single-pixel steps :func:`outline` will dilate by. ``RANGES["size"]``
+#: is what the slider offers and this is what the *function* will do, for
+#: :data:`DESPECKLE_MAX`'s reason stated one filter along: a stale settings
+#: entry or a caller passing a large value must not reach the unaffordable case
+#: by going round the slider. Each step is a full-canvas pass in eight
+#: directions, so the cost is linear in this and it runs on the frame thread
+#: through ``Document.preview_filter``.
+OUTLINE_MAX_SIZE = 32
 
 
 def despeckle(pixels: np.ndarray, *, speck: float = 0.0) -> np.ndarray:

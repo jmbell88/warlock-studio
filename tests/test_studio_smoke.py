@@ -3093,6 +3093,55 @@ def test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other(app_ctx, 
             )
 
 
+def test_two_rows_with_the_same_icon_and_tooltip_keep_separate_hover_state(imgui_ctx):
+    """Every visible layer's eye button in Inker draws the identical icon glyph
+    and the identical "Hide this layer" tooltip -- the only thing that tells
+    two rows' buttons apart to imgui is the ``push_id`` each row wraps them in.
+
+    The hover-fade cache in :func:`widgets._glyph_button` keyed itself off the
+    icon and tooltip text alone, with nothing from that id stack -- so every
+    row sharing a glyph and a tooltip shared one animation slot. Hovering one
+    row's eye then painted a *different* row's eye as hovered, because
+    ``note_hover`` overwrites the shared slot mid-frame and whichever row of
+    the pair draws second in that same frame reads the just-written value back
+    out before it has a chance to decay -- the "wrong icon lights up" bug.
+    """
+    imgui, _renderer = imgui_ctx
+    from warlock.studio import widgets
+
+    seen: list[str] = []
+    real_note_hover = widgets.note_hover
+
+    def spy(key, hovered):
+        seen.append(key)
+        real_note_hover(key, hovered)
+
+    widgets.note_hover = spy
+    try:
+        imgui.get_io().add_mouse_pos_event(-1, -1)
+        imgui.new_frame()
+        imgui.set_next_window_pos((0, 0))
+        imgui.set_next_window_size((400, 400))
+        imgui.begin("##hover-collision", None, imgui.WindowFlags_.no_decoration.value)
+        imgui.push_id("row-a")
+        widgets.icon_button("##visible", "Hide this layer", borderless=True)
+        imgui.pop_id()
+        imgui.push_id("row-b")
+        widgets.icon_button("##visible", "Hide this layer", borderless=True)
+        imgui.pop_id()
+        imgui.end()
+        imgui.render()
+        _renderer.render(imgui.get_draw_data())
+    finally:
+        widgets.note_hover = real_note_hover
+
+    assert len(seen) == 2
+    assert seen[0] != seen[1], (
+        "two different rows' eye buttons shared one hover-animation key "
+        f"({seen[0]!r}); hovering one paints the other"
+    )
+
+
 @pytest.mark.parametrize("stage", ["reference", "tile", "model", "rig", "sheet"])
 def test_a_library_card_says_which_kind_of_asset_it_is(app_ctx, imgui_ctx, stage):
     """The card never read ``stage``, and the only tells were a 72 px

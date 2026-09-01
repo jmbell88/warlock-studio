@@ -1554,3 +1554,76 @@ def test_a_transparent_index_past_the_palette_is_clamped_before_the_fill():
     doc.check_materialized()
     # And it materialises as nothing, rather than as the last swatch.
     assert tuple(doc.stack[0].pixels[1, 1]) == (0, 0, 0, 0)
+
+
+# --- the palette chunks' own ceilings ----------------------------------------
+#
+# Both of these are amplification rather than size: the *loop* that reads a
+# palette is bounded by the bytes that follow it, so a large declared count
+# runs out of file and stops. The *allocation* was not, which is the whole
+# defect -- a hundred and fifty bytes named a four-billion-element list.
+
+
+def _raw_palette(size: int, first: int, last: int, entries: int = 1) -> bytes:
+    """A 0x2019 chunk whose header and body are allowed to disagree."""
+    body = struct.pack("<III8s", size, first, last, b"\0" * 8)
+    for _ in range(entries):
+        body += struct.pack("<HBBBB", 0, 1, 2, 3, 255)
+    return _chunk(0x2019, body)
+
+
+def test_a_palette_declaring_more_entries_than_it_holds_is_refused_by_name():
+    """The 150-byte file. ``size`` alone drives ``_final_palette``'s range."""
+    data = _file(
+        _header(1, 1, 1, INDEXED_DEPTH),
+        [_frame([_layer("Art"), _raw_palette(0xFFFFFFFF, 0, 0)])],
+    )
+    assert len(data) < 400
+    with pytest.raises(ValueError, match="past the 65536 this build will hold"):
+        asein.document_from_aseprite(data)
+
+
+def test_a_palette_entry_at_a_far_index_is_refused_by_name():
+    """The other way in: ``max(state.palette) + 1`` sizes the same list."""
+    data = _file(
+        _header(1, 1, 1, INDEXED_DEPTH),
+        [_frame([_layer("Art"), _raw_palette(1, 0xFFFFFFFE, 0xFFFFFFFE)])],
+    )
+    with pytest.raises(ValueError, match="past the 65536 this build will hold"):
+        asein.document_from_aseprite(data)
+
+
+def test_a_palette_spanning_backwards_is_refused_by_name():
+    with pytest.raises(ValueError, match="spanning 9-4"):
+        asein.document_from_aseprite(
+            _file(
+                _header(1, 1, 1, INDEXED_DEPTH),
+                [_frame([_layer("Art"), _raw_palette(4, 9, 4)])],
+            )
+        )
+
+
+def test_a_legacy_palette_that_skips_past_the_ceiling_is_refused_by_name():
+    """~330 KB of packets reached ~16.7M padded entries before this."""
+    packets = 300
+    body = struct.pack("<H", packets)
+    for _ in range(packets):
+        # Skip 255, then one real entry: two bytes of file, 256 of index.
+        body += struct.pack("<BB", 255, 1) + struct.pack("<BBB", 7, 8, 9)
+    data = _file(
+        _header(1, 1, 1, INDEXED_DEPTH),
+        [_frame([_layer("Art"), _chunk(0x0004, body)])],
+    )
+    with pytest.raises(ValueError, match="legacy palette reaches index"):
+        asein.document_from_aseprite(data)
+
+
+def test_an_ordinary_palette_still_reads():
+    """The ceiling is far above any real file; the guard must not be felt."""
+    colours = [(i, i, i, 255) for i in range(8)]
+    data = _file(
+        _header(1, 1, 1, INDEXED_DEPTH),
+        [_frame([_layer("Art"), _palette(colours)])],
+    )
+    doc, _warnings = asein.document_from_aseprite(data)
+    assert len(doc.palette) == 8

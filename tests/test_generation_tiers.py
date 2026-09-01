@@ -110,6 +110,20 @@ def test_the_form_does_not_offer_avoid_under_fast():
     assert settings_2d._negative_supported(_ctx(), form) is True
 
 
+def test_klein_distilled_accepts_a_saved_negative_prompt():
+    """A prior full-CFG brief must not prevent a Klein run from starting."""
+    request = _request(
+        model_mode="advanced",
+        model_override="flux_klein_distilled",
+        negative_prompt="blurry, watermark",
+    )
+    resolved = generation.resolve_recipe(request, None)
+    assert resolved is not None
+    assert generation.validate_request(request, resolved) == []
+    assert generation.effective_negative_prompt(request, resolved) == ""
+    assert generation.request_to_legacy(request, resolved)["negative_prompt"] is None
+
+
 def test_avoid_text_typed_under_quality_is_cleared_by_switching_to_fast():
     """The dead end the clear exists to prevent.
 

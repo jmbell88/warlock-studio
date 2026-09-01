@@ -328,6 +328,32 @@ def test_composing_an_empty_collection_is_refused():
         compose_collection({})
 
 
+def test_composing_a_collection_past_the_pixel_ceiling_is_refused():
+    """Every tile image is bounded by ``pixelguard``; the *atlas* was not.
+
+    Ten thousand ``<tile>`` entries all naming one ordinary 1024px file is
+    under a megabyte of ``.tsx`` and a 42 GB ``np.zeros``, which is the shape
+    this ceiling exists for -- nothing in such a file is individually oversized.
+    The fixture shares one array between every id rather than building ten
+    thousand of them, because the refusal happens before any of them is read.
+    """
+    from warlock.studio.tilegrid.tileset import compose_collection
+
+    one = _tile_image(1024, 1024, 7)
+    images = dict.fromkeys(range(10_000), one)
+    with pytest.raises(ValueError, match="past the .* pixels this build will allocate"):
+        compose_collection(images)
+
+
+def test_an_ordinary_collection_still_composes():
+    """The ceiling must not be felt by a real collection of images."""
+    from warlock.studio.tilegrid.tileset import compose_collection
+
+    atlas, collection = compose_collection(_collection_pixels())
+    assert collection.cell_w == 16 and collection.cell_h == 32
+    assert atlas.shape[2] == 4
+
+
 @pytest.mark.parametrize(
     ("attribute", "field", "value"),
     [

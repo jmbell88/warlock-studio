@@ -2031,6 +2031,14 @@ def _set_tiled(mode: str) -> Callable[..., Any]:
     return run
 
 
+def _flag_is(attr: str) -> Callable[[Any, Any], bool]:
+    """A view preference's own tick. ``tiled_*`` has had one since it became
+    four checked rows; these six had none, so the View menu -- the only
+    always-visible door to four of them -- could not say whether the aid it was
+    offering was already on."""
+    return lambda state, tab: state is not None and bool(getattr(state, attr, False))
+
+
 def _tiled_is(mode: str) -> Callable[[Any, Any], bool]:
     return lambda state, tab: tab is not None and tab.tiled == mode
 
@@ -2126,6 +2134,7 @@ register(
         enabled=has_doc,
         reason=NO_DOC,
         separator_before=True,
+        checked=_flag_is("pixel_grid"),
     )
 )
 register(
@@ -2136,6 +2145,7 @@ register(
         menu="View",
         enabled=has_doc,
         reason=NO_DOC,
+        checked=_flag_is("layer_edges"),
     )
 )
 register(
@@ -2146,6 +2156,7 @@ register(
         menu="View",
         enabled=has_doc,
         reason=NO_DOC,
+        checked=_flag_is("tile_numbers"),
     )
 )
 register(
@@ -2171,6 +2182,7 @@ register(
         enabled=has_doc,
         reason=NO_DOC,
         separator_before=True,
+        checked=_flag_is("grid"),
     )
 )
 register(
@@ -2181,6 +2193,7 @@ register(
         menu="View",
         enabled=has_doc,
         reason=NO_DOC,
+        checked=_flag_is("grid_snap"),
     )
 )
 register(
@@ -2191,6 +2204,7 @@ register(
         menu="View",
         enabled=has_doc,
         reason=NO_DOC,
+        checked=_flag_is("rulers"),
     )
 )
 

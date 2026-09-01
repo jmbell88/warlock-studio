@@ -394,6 +394,17 @@ def chunks_from(pieces: list[tuple[int, int, np.ndarray]]) -> tuple[np.ndarray, 
     y0 = min(y for _x, y, _b in pieces)
     x1 = max(x + block.shape[1] for x, _y, block in pieces)
     y1 = max(y + block.shape[0] for _x, y, block in pieces)
+    # ``_chunk_side`` caps a chunk's own sides; nothing caps its *offset*, and
+    # the dense box below is the product of the two. Two legal 16x16 chunks at
+    # x=0 and x=999999999 are a few hundred bytes of file and a 64 GB array.
+    # ``_settle_infinite`` checks the same ceiling, but only after every
+    # chunked layer has already been built. Raised as ValueError so
+    # ``plotter_io._load`` reports it, rather than dying on the allocation.
+    if x1 - x0 > MAX_DIMENSION or y1 - y0 > MAX_DIMENSION:
+        raise ValueError(
+            f"this map's chunks span {x1 - x0}x{y1 - y0} cells, past the"
+            f" {MAX_DIMENSION} a side this build reads"
+        )
     out = gidlib.empty_layer(x1 - x0, y1 - y0)
     for x, y, block in pieces:
         out[y - y0 : y - y0 + block.shape[0], x - x0 : x - x0 + block.shape[1]] = block

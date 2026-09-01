@@ -404,6 +404,15 @@ def _chain(
 # --- the magic wand ---------------------------------------------------------
 
 
+#: The most single-pixel steps a grow, shrink or border will take. The ops
+#: that reach here bound their own sliders at 32 (``inker_ops``), so this
+#: refuses nothing a user can ask for -- it is the same defence
+#: ``filters.DESPECKLE_MAX`` and ``filters.OUTLINE_MAX_SIZE`` are, for the same
+#: reason: the numpy fallback is ``radius`` full-canvas passes on the frame
+#: thread, and a caller going round the slider must not reach that.
+MAX_MORPH_RADIUS = 256
+
+
 def _morph(mask: np.ndarray, radius: int, combine) -> np.ndarray:
     """*radius* passes of an octagonal max (dilate) or min (erode) filter.
 
@@ -414,6 +423,7 @@ def _morph(mask: np.ndarray, radius: int, combine) -> np.ndarray:
     from four sides at once. ``mode="edge"`` gives both, which is why the
     padding is not conditional on the operation.
     """
+    radius = min(int(radius), MAX_MORPH_RADIUS)
     if radius <= 0:
         return mask.copy()
     fast = _morph_native(mask, radius, combine)

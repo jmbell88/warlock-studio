@@ -21,6 +21,12 @@ from warlock.studio.panes import inker_canvas, inker_tools
 SIZE = (32, 32)
 FG = (255, 0, 0, 255)
 BG = (0, 0, 255, 255)
+#: The pane the fake canvas is drawn in. ``_input`` needs it because a scroll
+#: step is a fraction of the pane and the pan clamp is measured against it --
+#: comfortably larger than ``SIZE`` at zoom 1, so ``pan=(0, 0)`` is a legal
+#: place for the page to sit and the existing screen-equals-image tests are
+#: unaffected.
+REGION = (400.0, 300.0)
 
 
 @pytest.fixture
@@ -71,19 +77,36 @@ class _Mouse:
         #: Which buttons imgui reports as *dragging*, which is what arms
         #: the pan arm -- middle-drag, or space plus left-drag.
         self.dragging = {0: False, 1: False, 2: False}
+        #: How far each button has been dragged since the delta was last reset.
+        #: It used to be a hard ``(0, 0)``, which meant the pan arm could be
+        #: *entered* by a test and never asserted to have moved anything -- so
+        #: the one line that actually pans the canvas had no coverage at all.
+        self.drag = {0: (0.0, 0.0), 1: (0.0, 0.0), 2: (0.0, 0.0)}
         # As the backend delivers it -- already scaled by ``WHEEL_SCALE`` -- so
         # a test that sets it is exercising the same number the pane sees.
         self.wheel = 0.0
+        #: The horizontal wheel, as the backend delivers it. A tilt wheel.
+        self.wheel_h = 0.0
+        #: Keys held this frame, by name -- see the ``Key`` namespace below.
+        self.keys: set[str] = set()
         #: Every pointer shape asked for, newest last. See ``module``.
         self.cursors: list[str] = []
         #: Held modifiers, for the gestures that read them at the press.
         self.shift = False
         self.ctrl = False
 
+    def _reset_drag(self, button: int) -> None:
+        """imgui's own semantics: the delta is measured from the last reset, so
+        a pane that resets every frame sees one frame's movement rather than the
+        whole drag. The pan arm depends on that and would accelerate without
+        it."""
+        self.drag[button] = (0.0, 0.0)
+
     def module(self) -> SimpleNamespace:
         return SimpleNamespace(
             get_io=lambda: SimpleNamespace(
                 mouse_wheel=self.wheel,
+                mouse_wheel_h=self.wheel_h,
                 key_shift=self.shift,
                 key_alt=False,
                 key_ctrl=self.ctrl,
@@ -93,8 +116,17 @@ class _Mouse:
             is_mouse_clicked=lambda button: self.clicked[button],
             is_mouse_down=lambda button: self.down[button],
             is_mouse_dragging=lambda button: self.dragging[button],
-            get_mouse_drag_delta=lambda button: SimpleNamespace(x=0.0, y=0.0),
-            reset_mouse_drag_delta=lambda button: None,
+            get_mouse_drag_delta=lambda button: SimpleNamespace(
+                x=self.drag[button][0], y=self.drag[button][1]
+            ),
+            reset_mouse_drag_delta=self._reset_drag,
+            # The corner-radius arm reads one key. It is unreachable in these
+            # tests unless the tool is already ``rect``, because the pane keeps
+            # ``state.tool == "rect"`` as the left operand precisely so that
+            # every other tool short-circuits before touching imgui -- which is
+            # what lets this fake be as small as it is.
+            is_key_down=lambda key: key.name in self.keys,
+            Key=SimpleNamespace(c=SimpleNamespace(name="c")),
             # The pointer shape ``_os_cursor`` sets. Recorded rather than
             # ignored: what the pointer says over a locked layer is the whole
             # point of that helper, so a fake that swallowed it would let the
@@ -128,10 +160,14 @@ def driven(monkeypatch):
         click=None,
         down=(),
         dragging=(),
+        drag=(0.0, 0.0),
         wheel=0.0,
+        wheel_h=0.0,
         shift=False,
         ctrl=False,
+        keys=(),
         hovered=True,
+        region=REGION,
     ):
         mouse.at = (float(at[0]), float(at[1]))
         mouse.clicked = {0: False, 1: False, 2: False}
@@ -139,10 +175,20 @@ def driven(monkeypatch):
             mouse.clicked[click] = True
         mouse.down = {b: b in down for b in (0, 1, 2)}
         mouse.dragging = {b: b in dragging for b in (0, 1, 2)}
+        # On the dragging buttons only, which is what imgui reports: a delta on
+        # a button that is not down is not a thing the pane can ever see.
+        mouse.drag = {
+            b: ((float(drag[0]), float(drag[1])) if b in dragging else (0.0, 0.0))
+            for b in (0, 1, 2)
+        }
         mouse.wheel = float(wheel)
+        mouse.wheel_h = float(wheel_h)
         mouse.shift = shift
         mouse.ctrl = ctrl
-        inker_canvas._input(None, state, tab, (0.0, 0.0), active=True, hovered=hovered)
+        mouse.keys = set(keys)
+        inker_canvas._input(
+            None, state, tab, (0.0, 0.0), region, active=True, hovered=hovered
+        )
 
     frame.mouse = mouse
     return state, tab, frame
@@ -543,32 +589,142 @@ def test_cancelling_a_move_that_is_not_open_falls_through(scene):
     assert tab.doc.cancel_layer_move() is False
 
 
+# --- panning ----------------------------------------------------------------
+
+
+def test_a_middle_drag_moves_the_pan(driven):
+    """The one line that actually pans the canvas.
+
+    It had no coverage until the fake mouse learned to report a drag delta:
+    every pan test before this asserted that the *arm was entered* -- that a
+    stroke was closed, that ``drag_kind`` became ``"pan"`` -- and none of them
+    could tell whether the view moved, because the delta was hard-coded to
+    zero.
+
+    The delta is a legal one on purpose: a small document in a large pane is
+    bounded on every side, so a negative pan here would be asserting the clamp
+    rather than the pan. ``test_a_drag_cannot_lose_the_drawing`` is the one
+    that asserts the bound.
+    """
+    _state, tab, frame = driven
+    frame((10.0, 10.0), down=(2,), dragging=(2,), drag=(12.0, 7.0))
+    assert tab.view.pan == pytest.approx((12.0, 7.0))
+
+
+def test_a_space_drag_moves_the_pan_too(driven):
+    """Space plus the left button, which is what a tablet uses."""
+    state, tab, frame = driven
+    state.space_held = True
+    frame((10.0, 10.0), down=(0,), dragging=(0,), drag=(5.0, 9.0))
+    assert tab.view.pan == pytest.approx((5.0, 9.0))
+
+
+def test_a_drag_cannot_lose_the_drawing(driven):
+    """The pan is bounded, so a page cannot be thrown off the pane.
+
+    The bound is Aseprite's: a page smaller than the pane may go anywhere
+    inside it and never partly outside, so a 32 px document in a 400 px pane
+    stops with its far edge on the pane's far edge rather than continuing into
+    the empty grey for as long as the mouse is dragged.
+    """
+    _state, tab, frame = driven
+    frame((10.0, 10.0), down=(2,), dragging=(2,), drag=(9999.0, 9999.0))
+    assert tab.view.pan == pytest.approx((REGION[0] - SIZE[0], REGION[1] - SIZE[1]))
+    frame((10.0, 10.0), down=(2,), dragging=(2,), drag=(-9999.0, -9999.0))
+    assert tab.view.pan == pytest.approx((0.0, 0.0))
+
+
 # --- the wheel --------------------------------------------------------------
 
 
-def test_one_wheel_notch_moves_the_zoom_by_five_percent(driven):
+def test_the_wheel_scrolls_the_page(driven):
+    """Aseprite's default, and the reverse of what this pane did until
+    2026-08-31: the wheel moves the view and the zoom is left alone."""
+    _state, tab, frame = driven
+    tab.view.pan = (0.0, 100.0)
+    frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE)
+    assert tab.view.pan[1] == pytest.approx(100.0 - inker_state.scroll_step(REGION[1]))
+    assert tab.view.pan[0] == pytest.approx(0.0)
+    assert tab.view.zoom == pytest.approx(1.0)
+
+
+def test_shift_and_the_wheel_scrolls_sideways(driven):
+    _state, tab, frame = driven
+    tab.view.pan = (100.0, 100.0)
+    frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE, shift=True)
+    assert tab.view.pan[0] == pytest.approx(100.0 - inker_state.scroll_step(REGION[0]))
+    assert tab.view.pan[1] == pytest.approx(100.0)
+
+
+def test_a_tilt_wheel_scrolls_sideways_too(driven):
+    """``mouse_wheel_h`` has been arriving from the backend since the port and
+    nothing in the app read it, so a tilt wheel did nothing anywhere."""
+    _state, tab, frame = driven
+    tab.view.pan = (100.0, 100.0)
+    frame((16.0, 16.0), wheel_h=imgui_backend.WHEEL_SCALE)
+    assert tab.view.pan[0] == pytest.approx(100.0 - inker_state.scroll_step(REGION[0]))
+    assert tab.view.pan[1] == pytest.approx(100.0)
+
+
+def test_ctrl_and_one_wheel_notch_moves_the_zoom_by_five_percent(driven):
     """The backend halves every wheel event; the pane divides that back out.
 
     Asserted through ``_input`` rather than against ``zoom_step`` directly,
     because the number under test is exactly the one that crosses the boundary
-    between the two modules.
+    between the two modules. Re-keyed to Ctrl rather than deleted when the
+    plain wheel became a scroll -- the number it pins did not change.
     """
     _state, tab, frame = driven
     tab.view.zoom = 1.0
-    frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE)
+    frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE, ctrl=True)
     assert tab.view.zoom == pytest.approx(1.05)
-    frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE)
+    frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE, ctrl=True)
     assert tab.view.zoom == pytest.approx(1.0)
 
 
-def test_the_wheel_stops_at_the_inker_bounds(driven):
+def test_ctrl_and_the_wheel_stops_at_the_inker_bounds(driven):
     _state, tab, frame = driven
     for _ in range(400):
-        frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE)
+        frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE, ctrl=True)
     assert tab.view.zoom == pytest.approx(inker_state.INKER_MAX_ZOOM)
     for _ in range(400):
-        frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE)
+        frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE, ctrl=True)
     assert tab.view.zoom == pytest.approx(inker_state.INKER_MIN_ZOOM)
+
+
+def test_ctrl_and_the_wheel_still_holds_the_pixel_under_the_cursor(driven):
+    _state, tab, frame = driven
+    at = (24.0, 18.0)
+    before = inker_state.to_image(tab.view, (0.0, 0.0), *at)
+    frame(at, wheel=imgui_backend.WHEEL_SCALE, ctrl=True)
+    assert inker_state.to_image(tab.view, (0.0, 0.0), *at) == pytest.approx(before)
+
+
+def test_holding_c_over_a_rectangle_still_rolls_the_corner_radius(driven):
+    """The one gesture the new precedence had to keep, and the reason ``C`` is
+    tested before ``Ctrl``: it is a tool modifier, not a navigation one."""
+    state, tab, frame = driven
+    state.set_tool("rect")
+    frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE * 3, keys=("c",))
+    assert state.corner_radius == 3
+    assert tab.view.zoom == pytest.approx(1.0)
+    assert tab.view.pan == pytest.approx((0.0, 0.0))
+
+
+def test_c_beats_ctrl_over_a_rectangle(driven):
+    state, tab, frame = driven
+    state.set_tool("rect")
+    frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE, ctrl=True, keys=("c",))
+    assert state.corner_radius == 1
+    assert tab.view.zoom == pytest.approx(1.0)
+
+
+def test_the_wheel_does_nothing_off_the_pane(driven):
+    _state, tab, frame = driven
+    tab.view.pan = (10.0, 10.0)
+    frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE, hovered=False)
+    assert tab.view.pan == pytest.approx((10.0, 10.0))
+    assert tab.view.zoom == pytest.approx(1.0)
 
 
 # --- Shift paints a line from where the last stroke ended --------------------
