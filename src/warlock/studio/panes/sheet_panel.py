@@ -46,7 +46,16 @@ def draw(ctx: Any, job: Any) -> None:
     form = _form(ctx, job["id"])
     _preview(ctx, form)
     # Form.help_text renders widgets.help_marker beside the owning label.
-    with forms.Form("sheet-settings") as form_ui:
+    #
+    # ``errors``/``on_edit``: ``create_sheet`` refuses by name -- ``clip_from``,
+    # ``clip_to``, ``clip_frames``, ``name`` -- and each of those is a field on
+    # this form, so the refusal had an address and nothing at the other end of
+    # it. See ``main._collect_tasks``.
+    with forms.Form(
+        "sheet-settings",
+        errors=ctx.state.field_errors,
+        on_edit=ctx.state.clear_field_error,
+    ) as form_ui:
         _controls(ctx, job, form, form_ui)
         _summary(ctx, form)
         _submit(ctx, job, form)
@@ -249,7 +258,9 @@ def _controls(
     # without an input there was no way to ever set it, so every sheet showed
     # its raw id.
     _changed, form["name"] = form_ui.text(
-        "sheet-name",
+        # ``name``, not ``sheet-name``: the field id is the refusal's address,
+        # and ``create_sheet`` refuses an over-long one with ``field="name"``.
+        "name",
         "Name",
         form["name"],
         max_length=rigging.MAX_SHEET_NAME,
@@ -334,6 +345,8 @@ def _submit(ctx: Any, job: Any, form: dict[str, Any]) -> None:
         if busy
         else "; ".join(problems),
     ):
+        # Last time's rings first: a new submit is judged on its own.
+        ctx.state.clear_field_errors()
         ctx.submit(
             f"sheet:{job_id}",
             svc_sheets.create_sheet,
@@ -506,6 +519,13 @@ def _pixelate(ctx: Any, job_id: str, sheet: Any) -> None:
         form = _pixel_form(ctx, sheet_id)
         if form["logical_size"] not in sizes:
             form["logical_size"] = sizes[-1]
+        # ``field_error`` after each of the two controls a refusal can name --
+        # ``create_pixel_sheet`` raises ``field="logical_size"`` and
+        # ``field="strength"``. This block is raw controls rather than a
+        # ``forms.Form``, so the ring is placed by hand the way ``settings_2d``
+        # places its own; the ``clear`` beside it is what the form's
+        # ``on_edit`` does for the section above.
+        was = form["logical_size"]
         form["logical_size"] = int(
             widgets.labeled_combo(
                 "Pixel size",
@@ -513,6 +533,9 @@ def _pixelate(ctx: Any, job_id: str, sheet: Any) -> None:
                 [(str(s), f"{s} px") for s in sizes],
             )
         )
+        widgets.field_error(ctx.state, "logical_size")
+        if form["logical_size"] != was:
+            ctx.state.clear_field_error("logical_size")
         form["colors"] = int(
             widgets.labeled_combo(
                 "Colours",
@@ -526,8 +549,10 @@ def _pixelate(ctx: Any, job_id: str, sheet: Any) -> None:
             models.IMG2IMG_STRENGTH_MIN,
             models.IMG2IMG_STRENGTH_MAX,
         )
+        widgets.field_error(ctx.state, "strength")
         if changed:
             form["strength"] = float(value)
+            ctx.state.clear_field_error("strength")
         toggled, locked = controls.checkbox("Lock silhouettes", form["structure_lock"])
         if toggled:
             form["structure_lock"] = bool(locked)
@@ -554,6 +579,8 @@ def _pixelate(ctx: Any, job_id: str, sheet: Any) -> None:
             if busy
             else "The weights this needs are not installed; see the note above.",
         ):
+            # Last time's rings first: a new submit is judged on its own.
+            ctx.state.clear_field_errors()
             ctx.submit(
                 key,
                 svc_sheets.create_pixel_sheet,

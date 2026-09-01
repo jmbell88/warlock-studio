@@ -776,6 +776,9 @@ def start_character(ctx: Any, form: dict[str, Any]) -> bool:
     key = "troupe-start"
     if ctx.busy(key):
         return False
+    # Last time's rings first: a new submit is judged on its own, and this
+    # request's refusals name controls on ``panes/troupe_settings``'s form.
+    ctx.state.clear_field_errors()
     return ctx.submit(
         key,
         svc_jobs.create_job,
@@ -809,6 +812,7 @@ def build_sheet(ctx: Any, job_id: str, form: dict[str, Any]) -> bool:
     key = f"troupe-sheet:{job_id}"
     if ctx.busy(key):
         return False
+    ctx.state.clear_field_errors()
     return ctx.submit(
         key,
         svc_troupe.create_charsheet,

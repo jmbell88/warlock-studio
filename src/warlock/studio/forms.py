@@ -59,10 +59,14 @@ class Form:
         form_id: str,
         *,
         errors: Mapping[str, str] | None = None,
+        on_edit: Callable[[str], None] | None = None,
         available_width: float | None = None,
     ) -> None:
         self.form_id = form_id
+        # A snapshot, so a clear partway down the form cannot change what the
+        # rest of this frame is showing.
         self.errors = dict(errors or {})
+        self.on_edit = on_edit
         self.available_width = available_width
         self.layout = FormLayout(True, 0.0, 0.0)
         self._entered = False
@@ -85,6 +89,21 @@ class Form:
 
     def _error(self, field: str, explicit: str = "") -> str:
         return explicit or str(self.errors.get(field, "") or "")
+
+    def _answer(self, field: str, answer: Any) -> Any:
+        """Report an edit to the owner, and hand the control's answer back.
+
+        Editing the control a refusal named is the clearest possible "I have
+        dealt with that", and a ring that outlived it would be an app arguing
+        about a value that is no longer there -- ``State.clear_field_error``'s
+        own sentence. ``settings_2d`` says it by hand at some thirty call
+        sites; every form that takes ``errors`` gets it here instead, which is
+        why the three panes that already passed ``errors`` and cleared nothing
+        showed rings that only a *successful* submit could dismiss.
+        """
+        if self.on_edit is not None and isinstance(answer, tuple) and answer and answer[0]:
+            self.on_edit(field)
+        return answer
 
     def _label(self, label: str, help_text: str) -> None:
         room = imgui.get_content_region_avail().x
@@ -173,7 +192,7 @@ class Form:
                     reason=reason,
                     error=problem,
                 )
-        changed, out = result
+        changed, out = self._answer(field, result)
         return changed, out[:max_length] if changed else value
 
     def multiline_text(
@@ -200,7 +219,7 @@ class Form:
                 reason=reason,
                 error=problem,
             )
-        changed, out = result
+        changed, out = self._answer(field, result)
         return changed, out[:max_length] if changed else value
 
     def multiline(
@@ -248,7 +267,7 @@ class Form:
                     reason=reason,
                     error=problem,
                 )
-        return result
+        return self._answer(field, result)
 
     def combo(
         self,
@@ -272,7 +291,7 @@ class Form:
                 reason=reason,
                 error=problem,
             )
-        return result
+        return self._answer(field, result)
 
     def slider(
         self,
@@ -311,7 +330,7 @@ class Form:
                     reason=reason,
                     error=problem,
                 )
-        return result
+        return self._answer(field, result)
 
     def switch(
         self,
@@ -332,7 +351,7 @@ class Form:
                 enabled=enabled,
                 reason=reason,
             )
-        return result
+        return self._answer(field, result)
 
     # **There is no ``checkbox`` on this form, on purpose.** There was, and it
     # drew nothing at all when off: the field grid puts the label in the left
@@ -373,7 +392,28 @@ class Form:
                 reason=reason,
                 compact=compact,
             )
-        return result
+        return self._answer(field, result)
+
+    def note(self, field: str) -> bool:
+        """Draw a recorded refusal that belongs to no single control. -> shown.
+
+        Some addresses name a *composition* rather than a field: Troupe's
+        ``layout`` is the whole movement table, and ringing an arbitrary row of
+        it would point at the wrong switch. The message still has to appear on
+        the pane the refusal came from, so it goes above the block it is about,
+        in the same colour and the same words the field version uses.
+
+        No ring, deliberately -- ``widgets.field_error`` draws one around the
+        item just submitted, and here there is no such item.
+        """
+        message = self._error(field)
+        if not message:
+            return False
+        imgui.push_text_wrap_pos(0.0)
+        imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.ERR)), message)
+        imgui.pop_text_wrap_pos()
+        imgui.dummy((0, sp(tokens.SP_1)))
+        return True
 
     def readonly(
         self,

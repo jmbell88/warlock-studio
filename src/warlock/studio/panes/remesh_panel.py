@@ -49,7 +49,14 @@ def draw(ctx: Any, job: Any) -> None:
 
     job_id = job["id"]
     form = _form(ctx, job_id)
-    with forms.Form("remesh-settings", errors=ctx.state.field_errors) as form_ui:
+    # ``on_edit``: this pane read the recorded refusal and never cleared it, so
+    # a ring could only be dismissed by a *successful* submit -- the app going
+    # on arguing about a value the user had already changed.
+    with forms.Form(
+        "remesh-settings",
+        errors=ctx.state.field_errors,
+        on_edit=ctx.state.clear_field_error,
+    ) as form_ui:
         _changed, form["remesh_profile"] = form_ui.combo(
             "remesh_profile",
             "Quads",
@@ -164,4 +171,6 @@ def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
         if busy
         else "; ".join(problems),
     ):
+        # Last time's rings first: a new submit is judged on its own.
+        ctx.state.clear_field_errors()
         ctx.submit(key, svc_jobs.remesh_job, ctx.svc, job_id, **submit_kwargs(form))

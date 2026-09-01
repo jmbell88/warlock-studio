@@ -74,9 +74,21 @@ def draw(ctx: Any, job: Any) -> None:
         form["profile"] = "raw"
         widgets.muted("Only full density is available: gltfpack is not installed.")
     # Form.help_text renders widgets.help_marker beside the owning label.
-    with forms.Form("retarget-settings") as form_ui:
+    #
+    # **The field id is the refusal's address.** ``optimize_job`` raises
+    # ``field="remesh_profile"`` and ``field="custom_faces"``, which is what
+    # ``remesh_panel`` -- the other pane over the same service call -- already
+    # names its two fields. This one called them ``profile`` and
+    # ``custom_triangles``, so even with ``errors`` wired the ring would have
+    # had nothing to land on. The *form dict* keys are unchanged: they are the
+    # door's parameter names, which are a different vocabulary and stay.
+    with forms.Form(
+        "retarget-settings",
+        errors=ctx.state.field_errors,
+        on_edit=ctx.state.clear_field_error,
+    ) as form_ui:
         _changed, form["profile"] = form_ui.combo(
-            "profile",
+            "remesh_profile",
             "Budget",
             form["profile"],
             options,
@@ -89,7 +101,7 @@ def draw(ctx: Any, job: Any) -> None:
 
         if form["profile"] == "custom":
             changed, value = form_ui.number(
-                "custom_triangles",
+                "custom_faces",
                 "Triangles",
                 int(form["custom_triangles"]),
                 helper=f"{optimize.CUSTOM_MIN:,} to {optimize.CUSTOM_MAX:,}",
@@ -178,6 +190,10 @@ def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
         if busy
         else "; ".join(problems),
     ):
+        # A new submit is judged on its own, so last time's rings go first --
+        # ``settings_2d.generate``'s rule, and the half a bare ``errors=``
+        # cannot supply.
+        ctx.state.clear_field_errors()
         ctx.submit(
             key,
             svc_jobs.optimize_job,

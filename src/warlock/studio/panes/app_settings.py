@@ -1026,7 +1026,13 @@ def _lora_import_form(ctx: Any) -> None:
     if not form:
         return
     widgets.muted(f"Importing {Path(form['source']).name}")
-    with forms.Form("lora-import", errors=ctx.state.field_errors) as form_ui:
+    # ``on_edit``: this form read the recorded refusal and never cleared it, so
+    # a ring could only be dismissed by a *successful* submit.
+    with forms.Form(
+        "lora-import",
+        errors=ctx.state.field_errors,
+        on_edit=ctx.state.clear_field_error,
+    ) as form_ui:
         _c, form["label"] = form_ui.text("label", "Name", form["label"], max_length=64)
         _c, form["trigger_text"] = form_ui.text(
             "trigger_text", "Trigger words", form["trigger_text"], max_length=64,
@@ -1042,12 +1048,17 @@ def _lora_import_form(ctx: Any) -> None:
         _c, form["commercial"] = controls.checkbox(
             "Licensed for commercial use", bool(form["commercial"])
         )
-    if widgets.disabled_button("Add style", not ctx.busy("lora:import")) and ctx.submit(
-        "lora:import", svc_loras.import_lora, ctx.svc, form["source"],
-        **lora_import_kwargs(form),
-    ):
-        ctx.state.preview.pop("lora_import", None)
-        ctx.toast("Style added.")
+    if widgets.disabled_button("Add style", not ctx.busy("lora:import")):
+        # Last time's rings first: a new submit is judged on its own. Spelled
+        # as a nested ``if`` rather than the ``and`` chain this was, because a
+        # statement has to run between the press and the submit.
+        ctx.state.clear_field_errors()
+        if ctx.submit(
+            "lora:import", svc_loras.import_lora, ctx.svc, form["source"],
+            **lora_import_kwargs(form),
+        ):
+            ctx.state.preview.pop("lora_import", None)
+            ctx.toast("Style added.")
     imgui.same_line()
     if controls.small_button("Cancel##lora-import"):
         ctx.state.preview.pop("lora_import", None)
@@ -1073,7 +1084,11 @@ def _lora_train_form(ctx: Any) -> None:
         f"Training from {Path(form['folder']).name}: {len(images)} images "
         f"({lora_train.MIN_IMAGES} to {lora_train.MAX_IMAGES})"
     )
-    with forms.Form("lora-train", errors=ctx.state.field_errors) as form_ui:
+    with forms.Form(
+        "lora-train",
+        errors=ctx.state.field_errors,
+        on_edit=ctx.state.clear_field_error,
+    ) as form_ui:
         _c, form["label"] = form_ui.text("label", "Name", form["label"], max_length=64)
         _c, form["trigger"] = form_ui.text(
             "trigger", "Trigger words", form["trigger"], max_length=64,
@@ -1092,12 +1107,15 @@ def _lora_train_form(ctx: Any) -> None:
         ok and not ctx.busy("lora:train"),
         reason="" if ok else "The folder needs between 3 and 100 images.",
     )
-    if pressed and ctx.submit(
-        "lora:train", svc_loras.train_lora, ctx.svc, images,
-        label=form["label"], trigger=form["trigger"], steps=int(form["steps"]),
-    ):
-        ctx.state.preview.pop("lora_train", None)
-        ctx.toast("Training queued. The card is yours again when it finishes.")
+    if pressed:
+        # Last time's rings first: a new submit is judged on its own.
+        ctx.state.clear_field_errors()
+        if ctx.submit(
+            "lora:train", svc_loras.train_lora, ctx.svc, images,
+            label=form["label"], trigger=form["trigger"], steps=int(form["steps"]),
+        ):
+            ctx.state.preview.pop("lora_train", None)
+            ctx.toast("Training queued. The card is yours again when it finishes.")
     imgui.same_line()
     if controls.small_button("Cancel##lora-train"):
         ctx.state.preview.pop("lora_train", None)

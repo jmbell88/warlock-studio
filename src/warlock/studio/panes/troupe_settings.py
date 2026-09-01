@@ -27,7 +27,15 @@ def draw(ctx: Any) -> None:
 
     options = _options(ctx)
     form = _form(state, options)
-    with forms.Form("troupe-settings") as form_ui:
+    # ``errors``/``on_edit``: the chain this form starts refuses by name --
+    # ``prompt``, ``pose``, ``variant``, ``palette``, ``outline``,
+    # ``reduce_mode`` -- and each is a field here, so the refusal had an
+    # address and nothing at the other end of it. See ``main._collect_tasks``.
+    with forms.Form(
+        "troupe-settings",
+        errors=ctx.state.field_errors,
+        on_edit=ctx.state.clear_field_error,
+    ) as form_ui:
         _changed, form["prompt"] = form_ui.text("prompt", "Describe them", form["prompt"])
         _changed, form["variant"] = form_ui.combo(
             "variant",
@@ -188,6 +196,13 @@ def _layout(form: dict[str, Any], form_ui: forms.Form, options: dict[str, Any]) 
     """Per-movement frame and direction controls; the total is always derived."""
 
     layout = form["layout"]
+    # ``check_troupe`` refuses the composed sheet with ``field="layout"``, and
+    # the layout is not one control -- it is this whole table. So the message
+    # goes above it rather than being rung onto an arbitrary row: the reader
+    # needs to be pointed at the *set* of switches and counts that add up to
+    # the refusal. ``widgets.field_error`` is the same helper the single-control
+    # case uses, which keeps the wording and the colour identical.
+    form_ui.note("layout")
     limits = {row["name"]: row for row in options.get("animations") or ()}
     presets = [int(n) for n in options.get("direction_presets") or (1, 4, 8, 16)]
     for movement in layout.get("movements") or ():
