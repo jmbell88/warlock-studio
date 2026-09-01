@@ -37,6 +37,11 @@ class FakeCtx:
         self.accept = accept
         self.result: Any = None
 
+        self.busy_keys: set[str] = set()
+
+    def busy(self, key: str) -> bool:
+        return key in self.busy_keys
+
     def submit(self, key: str, run: Any, *args: Any) -> bool:
         self.submitted.append(key)
         if not self.accept:
@@ -197,6 +202,31 @@ def test_a_failed_render_clears_the_flag_and_records_why():
         ctx, _Done(f"sirens-render:{tab.uid}", message="that song is too long")
     )
     assert not tab.rendering and tab.render_error == "that song is too long"
+
+
+def test_a_render_already_in_flight_is_not_re_serialised_every_frame(monkeypatch):
+    """``wsng_bytes`` DEFLATEs every pattern and encodes every sample, on the
+    frame thread. ``submit`` refuses a key already in flight and the dirty flag
+    deliberately stays armed when it does -- so the whole song was serialised
+    and thrown away once per frame for as long as the render took."""
+    from warlock.studio.sirens import wsng as wsng_mod
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    calls: list[int] = []
+    real = wsng_mod.wsng_bytes
+    monkeypatch.setattr(
+        wsng_mod, "wsng_bytes", lambda doc: (calls.append(1), real(doc))[1]
+    )
+
+    ctx.busy_keys.add(f"sirens-render:{tab.uid}")
+    sirens_mode.request_render(ctx, tab)
+    assert calls == [] and ctx.submitted == []
+    assert tab.render_dirty, "still armed -- it is asked again when the render lands"
+
+    ctx.busy_keys.clear()
+    sirens_mode.request_render(ctx, tab)
+    assert len(calls) == 1 and not tab.render_dirty
 
 
 def test_the_render_task_reads_a_snapshot_rather_than_the_document():

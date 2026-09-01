@@ -1455,6 +1455,16 @@ class App:
         # judged, which is the one thing the mode exists to make obvious.
         if state.mode == "troupe" and getattr(state.troupe, "playing", False):
             return True
+        # Sirens for the same reason, and it was missing: the playhead is drawn
+        # from the mixer's clock and nothing else moves, so at IDLE_FPS the row
+        # cursor crawled down the pattern at 12 fps while the audio ran at full
+        # speed -- the one readout that says *where in the song you are*,
+        # visibly disagreeing with what you can hear.
+        if state.mode == "sirens":
+            from . import sirens_audio
+
+            if sirens_audio.playing():
+                return True
         inker = state.inker
         tab = None if inker is None else inker.active
         return tab is not None and bool(getattr(tab, "playing", False))

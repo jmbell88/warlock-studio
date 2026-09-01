@@ -82,6 +82,47 @@ _TILESET_MEMO: dict[str, tuple[int, dict[int, int | None]]] = {}
 _UNMEMOISED = object()
 
 
+#: ``{(shape, renderorder, isometric): [(row, column), ...]}``. The visit order
+#: is a pure function of those three, and it was rebuilt -- and on an isometric
+#: map *sorted* -- once per tile layer per frame. A 60x40 viewport over four
+#: layers is four 2,400-element lists a frame, four sorts on top of them, for an
+#: answer that changes when the window is resized or the map is reoriented.
+#: Bounded by the handful of viewport shapes a session actually produces.
+_CELL_ORDER: dict[tuple[tuple[int, int], str, bool], list[tuple[int, int]]] = {}
+_CELL_ORDER_MAX = 64
+
+
+def _cell_order(
+    shape: tuple[int, int], renderorder: str, isometric: bool
+) -> list[tuple[int, int]]:
+    """Back-to-front visit order for a block of this shape. Memoised.
+
+    For an orthogonal map that is row-major -- the order the block already has
+    -- with either axis reversed by ``renderorder``; for an isometric one depth
+    is ``column + row``, and row-major is not monotone in it.
+    """
+    key = (shape, renderorder, isometric)
+    order = _CELL_ORDER.get(key)
+    if order is None:
+        if len(_CELL_ORDER) >= _CELL_ORDER_MAX:
+            # A window dragged wider mints a shape per pixel of width, so this
+            # is emptied rather than grown. Cleared whole rather than evicted
+            # one at a time: the entries that matter are the ones the *next*
+            # frames ask for, and after a resize those are all new anyway.
+            _CELL_ORDER.clear()
+        rows = list(range(shape[0]))
+        columns = list(range(shape[1]))
+        if renderorder.startswith("left"):
+            columns.reverse()
+        if renderorder.endswith("up"):
+            rows.reverse()
+        order = [(row, column) for row in rows for column in columns]
+        if isometric:
+            order.sort(key=lambda cell: cell[0] + cell[1])
+        _CELL_ORDER[key] = order
+    return order
+
+
 def _index_memo(uid: str, epoch: int) -> dict[int, int | None]:
     """This document's id -> tileset-index map, emptied when the epoch moves."""
     entry = _TILESET_MEMO.get(uid)
@@ -999,15 +1040,7 @@ def _layers(
         # Back to front. For an orthogonal map that is row-major and this is
         # the order the block already has; for an isometric one depth is
         # ``column + row``, and row-major is not monotone in it.
-        rows = list(range(ids.shape[0]))
-        columns = list(range(ids.shape[1]))
-        if doc.renderorder.startswith("left"):
-            columns.reverse()
-        if doc.renderorder.endswith("up"):
-            rows.reverse()
-        cells = [(row, column) for row in rows for column in columns]
-        if doc.isometric:
-            cells.sort(key=lambda cell: cell[0] + cell[1])
+        cells = _cell_order(ids.shape[:2], doc.renderorder, doc.isometric)
         for row, column in cells:
             tile_id = int(ids[row, column])
             if not tile_id:

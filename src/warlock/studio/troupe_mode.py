@@ -55,6 +55,11 @@ SCAN_LIMIT = 400
 CAST_REFRESH_LIVE = 0.5
 CAST_REFRESH_IDLE = 3.0
 
+#: How often :func:`sheets` and :func:`active_sheet` go back to disk. Between
+#: the two of them the Troupe panes asked three to four times *per frame*; this
+#: is ``db.list``'s "twice a second" applied to a directory instead of a table.
+SHEETS_REFRESH = 0.5
+
 
 # --- characters -------------------------------------------------------------
 
@@ -143,11 +148,37 @@ def sheets(ctx: Any, job_id: str) -> list[dict[str, Any]]:
     they have no ``animation`` block, no direction runs and nothing this mode
     can play. Filtered on the block rather than on the row that made it,
     because the *artifact* is what the preview reads.
-    """
-    from .. import rigging
 
+    **Throttled, for ``cast_and_pending``'s reason one directory over.** This is
+    a glob plus a stat plus a read plus a JSON parse *per sheet*, and the cast
+    pane calls it from its draw -- so a mode left open on a character with ten
+    sheets hit the disk ten times a frame for a directory that changes only when
+    a sheet is built. Keyed on ``job_id`` as well as timed, so switching
+    character reads immediately; :func:`invalidate_sheets` closes the same gap a
+    build would otherwise leave.
+    """
+    state = ensure(ctx)
     if not job_id:
         return []
+    now = time.monotonic()
+    if state.sheets_cache is None or state.sheets_key != job_id or now >= state.sheets_next:
+        state.sheets_cache = _read_sheets(ctx, job_id)
+        state.sheets_key = job_id
+        state.sheets_next = now + SHEETS_REFRESH
+    return state.sheets_cache
+
+
+def invalidate_sheets(ctx: Any) -> None:
+    """Drop the throttled sheet reads so the next draw re-reads the directory."""
+    state = ensure(ctx)
+    state.sheets_cache = None
+    state.sheet_cache = None
+
+
+def _read_sheets(ctx: Any, job_id: str) -> list[dict[str, Any]]:
+    """The uncached read :func:`sheets` throttles."""
+    from .. import rigging
+
     out = [
         record
         for record in rigging.list_sheets(ctx.job_dir(job_id))
@@ -448,6 +479,10 @@ def select(ctx: Any, job_id: str, sheet_id: str = "") -> None:
     """
     state = ensure(ctx)
     state.job_id = job_id
+    # The throttled directory read is dropped rather than waited out, for the
+    # reason ``on_task_done`` drops the cast: the interval exists to stop idle
+    # polling, not to delay news the user has just asked for by name.
+    invalidate_sheets(ctx)
     available = sheets(ctx, job_id)
     if sheet_id and any(r["id"] == sheet_id for r in available):
         state.sheet_id = sheet_id
@@ -460,13 +495,28 @@ def select(ctx: Any, job_id: str, sheet_id: str = "") -> None:
 
 
 def active_sheet(ctx: Any) -> dict[str, Any] | None:
-    """The selected sheet's sidecar, or None."""
+    """The selected sheet's sidecar, or None. Throttled like :func:`sheets`.
+
+    Three panes ask for this in their draw -- the preview twice and the sheet
+    list once -- so it was three JSON reads a frame of a file that changes only
+    when a sheet is rebuilt.
+    """
     from .. import rigging
 
     state = ensure(ctx)
     if not (state.job_id and state.sheet_id):
         return None
-    return rigging.read_sheet(ctx.job_dir(state.job_id), state.sheet_id)
+    key = (state.job_id, state.sheet_id)
+    now = time.monotonic()
+    if (
+        state.sheet_cache is None
+        or state.sheet_cache_key != key
+        or now >= state.sheet_cache_next
+    ):
+        state.sheet_cache = rigging.read_sheet(ctx.job_dir(key[0]), key[1])
+        state.sheet_cache_key = key
+        state.sheet_cache_next = now + SHEETS_REFRESH
+    return state.sheet_cache
 
 
 def preview_layout(ctx: Any) -> dict[str, Any]:
@@ -815,6 +865,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
     # the throttled copy is dropped rather than waited out: the interval is
     # there to stop idle polling, not to delay news this pane already has.
     invalidate_cast(ctx)
+    invalidate_sheets(ctx)
     result = getattr(done, "result", None)
     if done.key == "troupe-start":
         # The form's own choice: this fires on the way out of the submit, and
@@ -845,6 +896,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
 def on_task_failed(ctx: Any, done: Any) -> None:
     """A refused request, said once and in the pane's own words."""
     invalidate_cast(ctx)
+    invalidate_sheets(ctx)
     ctx.toast(str(getattr(done, "error", "") or "That request was refused."), "error")
 
 

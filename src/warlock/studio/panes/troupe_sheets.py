@@ -9,6 +9,7 @@ chain at all.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from .. import troupe_mode, widgets
@@ -55,15 +56,35 @@ def _pixel_report(ctx: Any, state: Any) -> dict[str, Any]:
     sidecar: it is a measurement of one run, which is exactly what
     ``DERIVED_PARAMS`` keeps out of a rerun -- and the sidecar is the
     engine-neutral description of the atlas, not a place to file verdicts.
+
+    **Keyed on the sheet id**, because this is a draw: a ``SCAN_LIMIT``-row page
+    with per-row JSON parsing, taken under ``JobStore``'s one lock, ran once per
+    frame for a measurement that cannot change while the same sheet is selected.
+    A rebuild lands as a new sheet with a new id, which is what makes the id the
+    whole of the key -- and the interval beside it is what lets a report the
+    worker has not written *yet* still appear, without the id having changed to
+    say so.
     """
+    now = time.monotonic()
+    if (
+        state.pixel_report_cache is not None
+        and state.pixel_report_key == state.sheet_id
+        and now < state.pixel_report_next
+    ):
+        return state.pixel_report_cache
+    found: dict[str, Any] = {}
     # Narrowed in SQL: filtering a mixed page in Python meant that past
     # ``SCAN_LIMIT`` newer jobs of any kind this line silently vanished for a
     # sheet that was still perfectly findable.
     for row in ctx.svc.store.list(limit=troupe_mode.SCAN_LIMIT, kind="charsheet"):
         params = row.get("params") or {}
         if params.get("sheet_id") == state.sheet_id:
-            return dict(params.get("pixel_report") or {})
-    return {}
+            found = dict(params.get("pixel_report") or {})
+            break
+    state.pixel_report_cache = found
+    state.pixel_report_key = state.sheet_id
+    state.pixel_report_next = now + troupe_mode.SHEETS_REFRESH
+    return found
 
 
 def _rebuild(ctx: Any, state: Any) -> None:

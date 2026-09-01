@@ -293,6 +293,47 @@ def test_only_character_sheets_are_listed_under_a_character(ctx, svc):
     assert plain not in listed
 
 
+def test_the_sheet_directory_is_not_re_read_every_frame(ctx, svc, monkeypatch):
+    """``sheets`` is a glob plus a stat plus a read plus a JSON parse per sheet
+    and the cast pane calls it from its draw; ``active_sheet`` is another read
+    and three panes ask for it. Between them Troupe hit the disk three or four
+    times a frame for a directory that changes when a sheet is *built*."""
+    from warlock import rigging as rigging_mod
+
+    job_id, listed = _character(svc, sheets=2)
+    troupe_mode.select(ctx, job_id)
+
+    globs: list[int] = []
+    reads: list[int] = []
+    real_list, real_read = rigging_mod.list_sheets, rigging_mod.read_sheet
+    monkeypatch.setattr(
+        rigging_mod,
+        "list_sheets",
+        lambda d: (globs.append(1), real_list(d))[1],
+    )
+    monkeypatch.setattr(
+        rigging_mod,
+        "read_sheet",
+        lambda d, i: (reads.append(1), real_read(d, i))[1],
+    )
+
+    for _ in range(10):
+        troupe_mode.sheets(ctx, job_id)
+        troupe_mode.active_sheet(ctx)
+    assert globs == [] and reads == [], "the selection already read both"
+
+    # And a selection is read at once rather than waited out, which is the half
+    # a bare interval would get wrong.
+    troupe_mode.select(ctx, job_id, listed[0])
+    assert len(globs) == 1
+    assert troupe_mode.active_sheet(ctx)["id"] == listed[0]
+    settled = len(reads)
+    assert settled, "a selection reads at once rather than waiting out the interval"
+    for _ in range(10):
+        troupe_mode.active_sheet(ctx)
+    assert len(reads) == settled, "and then stops"
+
+
 def test_selecting_a_character_takes_its_newest_sheet(ctx, svc):
     job_id, sheets = _character(svc, sheets=3)
     troupe_mode.select(ctx, job_id)

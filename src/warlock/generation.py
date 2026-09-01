@@ -1030,6 +1030,14 @@ def lora_manifest_path(config: Any) -> Path:
     return Path(config.t2i_model_root) / "loras" / "manifests.json"
 
 
+#: ``{path: (mtime_or_None, rows)}`` -- ``None`` for a cached miss (absent or
+#: unreadable), which can never collide with a real mtime. ``bench/findings.py``
+#: verbatim, and for the same reason: ``resolve_recipe`` calls this and the
+#: Create pane resolves a recipe *three times a frame*, so an idle Create tab
+#: re-read and re-parsed ``manifests.json`` 180 times a second.
+_MANIFEST_CACHE: dict[Any, tuple[float | None, list[LoraManifest]]] = {}
+
+
 def load_lora_manifests(config: Any) -> list[LoraManifest]:
     # Total by construction: managed adapters are an optional extra, and
     # ``resolve_recipe`` calls this on every submit. A config that cannot say
@@ -1037,8 +1045,24 @@ def load_lora_manifests(config: Any) -> list[LoraManifest]:
     # adapters", never a failed generate. The *write* path above still requires
     # the root, because there is nowhere to put the file without it.
     try:
-        raw = json.loads(lora_manifest_path(config).read_text(encoding="utf-8"))
+        path = lora_manifest_path(config)
+    except (AttributeError, TypeError, ValueError):
+        return []
+    try:
+        mtime: float | None = path.stat().st_mtime
+    except OSError:
+        _MANIFEST_CACHE[path] = (None, [])
+        return []
+    cached = _MANIFEST_CACHE.get(path)
+    if cached is not None and cached[0] == mtime:
+        # The same list object, deliberately: every reader here treats it as
+        # read-only, and copying it per call would give back the allocation the
+        # cache exists to save.
+        return cached[1]
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (AttributeError, TypeError, FileNotFoundError, OSError, ValueError):
+        _MANIFEST_CACHE[path] = (mtime, [])
         return []
     rows = raw.get("manifests", raw) if isinstance(raw, Mapping) else []
     out: list[LoraManifest] = []
@@ -1047,6 +1071,7 @@ def load_lora_manifests(config: Any) -> list[LoraManifest]:
             out.append(LoraManifest(**row))
         except (TypeError, ValueError):
             continue
+    _MANIFEST_CACHE[path] = (mtime, out)
     return out
 
 

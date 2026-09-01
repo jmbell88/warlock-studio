@@ -70,6 +70,25 @@ class TroupeState:
     #: the pane that wants them draws every frame.
     cast_cache: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
     cast_next: float = 0.0
+    #: The same throttle for the two *disk* reads beside the SQL one. ``sheets``
+    #: globs a job directory and reads a JSON sidecar per sheet, and
+    #: ``active_sheet`` reads one -- both from pane draws, three to four times a
+    #: frame between them, for a directory that changes only when a sheet is
+    #: built. Keyed so a job or sheet change is read immediately rather than up
+    #: to the interval later; see ``troupe_mode.invalidate_sheets``.
+    sheets_cache: list[dict[str, Any]] | None = None
+    sheets_key: str = ""
+    sheets_next: float = 0.0
+    sheet_cache: dict[str, Any] | None = None
+    sheet_cache_key: tuple[str, str] = ("", "")
+    sheet_cache_next: float = 0.0
+    #: The pixel-art measurement for the selected sheet, keyed on its id. Read
+    #: with a ``kind``-filtered 400-row page under the store's one lock, which
+    #: this pane was doing *per frame* -- contending with the worker updating
+    #: those very rows.
+    pixel_report_cache: dict[str, Any] | None = None
+    pixel_report_key: str = ""
+    pixel_report_next: float = 0.0
 
 
 

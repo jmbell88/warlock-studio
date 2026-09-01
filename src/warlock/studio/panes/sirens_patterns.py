@@ -45,6 +45,20 @@ CHANNEL_W = 116.0
 #: the grid silently stops drawing it.
 COLUMN_CHARS: tuple[int, ...] = (3, 2, 2, 1, 2)
 
+#: Every byte a cell can hold, formatted once. Three of the five columns are a
+#: byte, and a visible grid is up to ``visible x channels`` cells *per frame* --
+#: so this is three ``f"{n:02X}"`` calls per cell that never had to happen.
+_HEX: tuple[str, ...] = tuple(f"{value:02X}" for value in range(256))
+
+#: ``{(text, font_size): advance}``. The grid measures every column of every
+#: visible cell, twice where the caret is, and the strings come from a tiny
+#: fixed vocabulary -- 256 byte spellings, the note names, the effect letters --
+#: so the measurement is the same answer over and over. Keyed on the font size
+#: as well as the text because ``sp`` scales with the display and a cached
+#: advance from another scale would misplace every caret. Bounded by that
+#: vocabulary; nothing here is user text.
+_ADVANCE: dict[tuple[str, float], float] = {}
+
 
 def draw(ctx: Any) -> None:
 
@@ -116,20 +130,20 @@ def _cell_text(cells: Any, row: int, channel: int) -> tuple[str, ...]:
     finds the rows where *something* happens, and a blank there makes a pattern
     unreadable at a glance.
     """
+    from ..sirens import synth
+
     note = int(cells[row, channel, D.NOTE])
     instrument = int(cells[row, channel, D.INSTRUMENT])
     volume = int(cells[row, channel, D.VOLUME])
     effect = int(cells[row, channel, D.EFFECT])
     param = int(cells[row, channel, D.PARAM])
-    from ..sirens import synth
-
-    letter = synth.EFFECT_NAMES.get(effect, ("." , ""))[0] if effect >= 0 else "."
+    letter = synth.EFFECT_NAMES.get(effect, (".", ""))[0] if effect >= 0 else "."
     return (
         notes.name(note) if note != notes.EMPTY else "...",
-        f"{instrument:02X}" if instrument >= 0 else "..",
-        f"{volume:02X}" if volume >= 0 else "..",
+        _HEX[instrument] if instrument >= 0 else "..",
+        _HEX[volume] if volume >= 0 else "..",
         letter,
-        f"{param:02X}" if param >= 0 else "..",
+        _HEX[param] if param >= 0 else "..",
     )
 
 
@@ -148,6 +162,16 @@ def _caret_span(column: int, digit: int, part: str) -> tuple[int, int]:
     if sirens_mode.COLUMN_DIGITS[column] > 1 and 0 <= digit < len(part):
         return (digit, 1)
     return (0, len(part))
+
+
+def _advance(imgui: Any, text: str) -> float:
+    """``calc_text_size(text).x``, memoised. See :data:`_ADVANCE`."""
+    key = (text, float(imgui.get_font_size()))
+    got = _ADVANCE.get(key)
+    if got is None:
+        got = float(imgui.calc_text_size(text).x)
+        _ADVANCE[key] = got
+    return got
 
 
 def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
@@ -210,8 +234,8 @@ def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
                 draw_list.add_text((cx, y), colour, part)
                 if row == state.row and channel == state.channel and column == state.column:
                     start, count = _caret_span(column, state.digit, part)
-                    lead = imgui.calc_text_size(part[:start]).x if start else 0.0
-                    width = imgui.calc_text_size(part[start : start + count]).x
+                    lead = _advance(imgui, part[:start]) if start else 0.0
+                    width = _advance(imgui, part[start : start + count])
                     # ``add_rect`` is (p_min, p_max, col, rounding, thickness,
                     # flags), and the thickness comes *before* the flags. The
                     # other order type-errors, and only on the frames that draw
@@ -225,7 +249,7 @@ def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
                         0.0,
                         1.5,
                     )
-                cx += imgui.calc_text_size(part).x + sp(6)
+                cx += _advance(imgui, part) + sp(6)
 
     # One invisible button over the whole grid, which is what makes a click a
     # caret move without 1,600 widget ids. Sized to the region rather than to

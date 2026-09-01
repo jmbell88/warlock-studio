@@ -2818,6 +2818,41 @@ def _floating(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
     draw_list.add_rect(a, b, _u32(theme.ACCENT))
 
 
+#: ``{(doc_id, layer_uid): (stamp, box_or_None)}``. Keyed on the document's own
+#: identity as well as the layer's, because a uid is unique within a document
+#: and this dict outlives one. Bounded by the layers of the open documents.
+_CONTENT_BOX: dict[
+    tuple[int, int], tuple[tuple[int, int], tuple[int, int, int, int] | None]
+] = {}
+
+
+def _content_box(doc: Any, layer: Any) -> tuple[int, int, int, int] | None:
+    """The layer's opaque bounds, or None if it holds nothing. Memoised.
+
+    ``rev`` as well as ``layer_stamp``, and that pairing is load-bearing rather
+    than cautious: ``_stamp_all`` returns without stamping anything when the
+    document is a still one, so a whole-canvas op on an unanimated drawing --
+    a filter, a matte, a snapshot restore -- moves no layer stamp at all.
+    ``rev`` moves on every invalidation, which is the superset. The cost of the
+    coarser half is a recompute on a layer switch, which is a click.
+    """
+    import numpy as np
+
+    key = (id(doc), layer.uid)
+    stamp = (int(doc.rev), doc.layer_stamp(layer.uid))
+    cached = _CONTENT_BOX.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    opaque = layer.pixels[..., 3] > 0
+    rows = np.flatnonzero(opaque.any(axis=1))
+    box = None
+    if rows.size:
+        cols = np.flatnonzero(opaque.any(axis=0))
+        box = (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
+    _CONTENT_BOX[key] = (stamp, box)
+    return box
+
+
 def _layer_edges(tab: Any, draw_list: Any, view: Any, origin) -> None:
     """Outline what the active layer actually holds (6.8).
 
@@ -2825,17 +2860,17 @@ def _layer_edges(tab: Any, draw_list: Any, view: Any, origin) -> None:
     this engine, so a border round the whole page would say nothing. Nothing is
     drawn for an empty layer, which is the honest answer -- an outline of
     nothing at the origin would read as a one-pixel drawing.
-    """
-    import numpy as np
 
+    **Cached on ``doc.layer_stamp``**, ``inker_textures.cel_thumb``'s key: this
+    is four full-canvas passes over the alpha channel -- a ``> 0``, an ``any``
+    and two reductions -- run every frame to place four lines, on a layer whose
+    content changes only when something writes to it.
+    """
     layer = tab.doc.stack.active
-    opaque = layer.pixels[..., 3] > 0
-    if not opaque.any():
+    box = _content_box(tab.doc, layer)
+    if box is None:
         return
-    rows = np.flatnonzero(opaque.any(axis=1))
-    cols = np.flatnonzero(opaque.any(axis=0))
-    x0, y0 = int(cols[0]), int(rows[0])
-    x1, y1 = int(cols[-1]) + 1, int(rows[-1]) + 1
+    x0, y0, x1, y1 = box
     corners = [
         inker_state.to_screen(view, origin, x, y)
         for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
@@ -2865,8 +2900,25 @@ def _tile_numbers(state: Any, tab: Any, draw_list: Any, view: Any, origin) -> No
         return
     colour = _u32(theme.TEXT, 0.75)
     height, width = refs.shape[:2]
-    for row in range(height):
-        for column in range(width):
+    # Only the visible index range, ``_grid``'s rule (B22) applied to the other
+    # per-cell walk over the same lattice: this walked every cell of the tilemap
+    # to place the dozen labels on screen, which on a 256x256 map is 65,536
+    # index reads and mask operations a frame for a few hundred glyphs. Derived
+    # by inverse-transforming the window's corners, for ``_grid``'s reason too
+    # -- a quarter turn makes ``top_left`` a different corner of the canvas.
+    win = imgui.get_window_pos()
+    wsz = imgui.get_window_size()
+    seen = [
+        inker_state.to_image(view, origin, sx, sy)
+        for sx in (win.x, win.x + wsz.x)
+        for sy in (win.y, win.y + wsz.y)
+    ]
+    lo_col = max(0, int(min(p[0] for p in seen) // tile_w))
+    hi_col = min(width, int(max(p[0] for p in seen) // tile_w) + 2)
+    lo_row = max(0, int(min(p[1] for p in seen) // tile_h))
+    hi_row = min(height, int(max(p[1] for p in seen) // tile_h) + 2)
+    for row in range(lo_row, hi_row):
+        for column in range(lo_col, hi_col):
             local = int(refs[row, column]) & 0x1FFFFFFF
             if not local:
                 continue

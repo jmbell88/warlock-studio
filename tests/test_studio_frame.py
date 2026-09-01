@@ -815,5 +815,6 @@ def test_every_input_free_animation_is_named_in_the_idle_check():
         "camera.settled()",         # the viewers
         'state.troupe, "playing"',  # Troupe's sheet playback
         'tab, "playing"',           # Inker's timeline playback
+        "sirens_audio.playing()",   # Sirens' playhead, off the mixer clock
     ):
         assert surface in body, f"{surface} animates with no input and is not named"

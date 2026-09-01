@@ -648,12 +648,21 @@ def request_render(ctx: Any, tab: SongTab | None = None) -> None:
         tab.pcm, tab.loop, tab.render_dirty, tab.render_error = None, None, False, ""
         return
 
+    uid = tab.uid
+    # Asked *before* the snapshot, because the snapshot is the expensive half:
+    # ``wsng_bytes`` DEFLATEs every pattern and encodes every sample, on the
+    # frame thread. ``submit`` refuses a key already in flight and
+    # ``render_dirty`` deliberately stays armed when it does, so a song being
+    # rendered was re-serialised in full on every frame until the render landed
+    # -- the work thrown away, once per frame, for as long as the render took.
+    if ctx.busy(f"sirens-render:{uid}"):
+        return
+
     from .sirens import wsng
 
     # The snapshot; see the module docstring. Taken on the frame thread, which
     # is where the document is safe to read.
     data = wsng.wsng_bytes(tab.doc)
-    uid = tab.uid
 
     def run() -> dict[str, Any]:
         from ..service.errors import invalid_from
