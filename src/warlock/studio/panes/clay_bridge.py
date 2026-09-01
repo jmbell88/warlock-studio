@@ -20,6 +20,13 @@ panel states.
 
 from __future__ import annotations
 
+from typing import Any
+
+from imgui_bundle import imgui
+
+from .. import clay_mode, controls, icons, widgets
+from ..manual import render as manual_render
+
 #: What this pane refuses to shrink past, in design pixels: the path line, the
 #: undo pair, the step count and the two ways out.
 #:
@@ -30,14 +37,6 @@ from __future__ import annotations
 #: zero pixels and the Document panel is not on screen at all. Plotter's map
 #: file panel went the same way on the same day and for the same reason.
 BRIDGE_FLOOR = 170.0
-
-
-from typing import Any
-
-from imgui_bundle import imgui
-
-from .. import clay_mode, controls, icons, widgets
-from ..manual import render as manual_render
 
 
 def draw(ctx: Any) -> None:

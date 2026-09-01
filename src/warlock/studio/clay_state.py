@@ -222,6 +222,22 @@ class ClayState:
     proportional_radius: float = 0.5
     grid: bool = True
 
+    # How the surface itself is drawn: "solid", "material" or "wireframe".
+    #
+    # Three modes rather than the one wireframe toggle this replaced, and the
+    # addition that matters is **Solid** -- the albedo with no lighting, which
+    # is what a modeller works in: it shows silhouette and topology without a
+    # specular highlight sitting on the vertex being dragged. Material is the
+    # lit render and is what the object will look like; wireframe replaces the
+    # fill entirely.
+    shading: str = "material"
+
+    # The see-through pass. Off by default because it changes what a click
+    # picks as well as what is drawn -- an element behind the surface becomes
+    # reachable, which is the whole point and is also a surprise if it happens
+    # without being asked for.
+    xray: bool = False
+
     # What the viewport draws *over* the model, by name. A dict rather than a
     # field apiece because the header's popover is a loop over
     # ``clay_header.OVERLAY_ROWS`` and a sixth overlay should be one line there

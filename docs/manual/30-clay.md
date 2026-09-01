@@ -59,9 +59,27 @@ narrow enough the rightmost group moves into a `…` menu with the full words ba
 falloff radius. The button stays lit while the setting is on, so a shut popover still says what is
 armed. Neither greys out while a document is saving: neither touches the document.
 
-**Overlays** is what the viewport draws over the model, and **View** is where the camera looks from
-and how it projects. Both are described below, under [Axis views](#axis-views) and
-[Snapping](#snapping).
+**Solid / Material / Wire** is how the surface itself is drawn. *Material* is the lit render — what
+the object will look like. *Solid* is the albedo with no lighting, and it is what you model in: it
+shows silhouette and topology without a specular highlight sitting on the vertex you are dragging.
+*Wire* replaces the surface with its edges entirely.
+
+**X-ray** makes the surface see-through, so an element behind it can be picked. It is off by default
+because it changes what a click *selects* as well as what is drawn.
+
+**Overlays** is what the viewport draws over the model — the grid, a wireframe over whichever shading
+is showing, and the statistics line. **View** is where the camera looks from and how it projects; both
+are described below, under [Axis views](#axis-views) and [Snapping](#snapping).
+
+### Statistics
+
+The **Statistics** overlay puts one line in the top-left corner: objects, vertices, edges, faces and
+triangles, and how many are selected in whichever element mode you are in. Every one of those numbers
+was unavailable anywhere in Clay before — the outliner counted objects and nothing counted the rest —
+so "is this mesh 500 triangles or 50,000" was a question the app could not answer about the thing on
+screen. It is the question that decides whether a game asset is finished.
+
+The edge figure is the count of *distinct* edges, not of face corners: a cube reads 12, not 24.
 
 ### The navigation widget
 

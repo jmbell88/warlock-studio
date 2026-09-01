@@ -120,6 +120,12 @@ class _Composite:
         return None
 
 
+#: How opaque the surface is in X-ray. A third: enough to read the silhouette
+#: and the shading, and little enough that an edge on the far side is pickable
+#: through it -- which is the whole point of the mode.
+XRAY_ALPHA = 0.33
+
+
 class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
     """The Clay viewport, from the UI's point of view."""
 
@@ -139,6 +145,17 @@ class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
         self.viewport = glctx.Viewport(ctx, (16, 16))
         self.camera = Camera()
         self.wireframe = False
+        # What the surface is drawn as, and what is drawn over it. Set by the
+        # pane each frame beside ``wireframe`` and ``show_grid``, which is how
+        # every other view setting reaches here.
+        #
+        # ``flat`` is Blender's *Solid*: the albedo with no lighting, which is
+        # the shading a modeller works in because it shows silhouette and
+        # topology without a specular highlight sitting on the vertex being
+        # dragged. ``xray`` is the see-through pass -- see ``Renderer.draw``.
+        self.flat = False
+        self.wire_overlay = False
+        self.xray = False
         # The grid toggle in the tools pane had no reader at all: the pane wrote
         # ``state.grid`` and the renderer was never told. One field, set by the
         # pane layer beside ``wireframe``, which already worked that way.
@@ -238,6 +255,10 @@ class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
         width, height = int(max(rect[2], 1)), int(max(rect[3], 1))
         key = (
             width, height, bool(self.wireframe), bool(self.show_grid),
+            # Every view setting that changes the picture has to be in the key,
+            # or the frame that turns one on is skipped as "nothing moved" and
+            # the switch reads as broken until something else forces a redraw.
+            bool(self.flat), bool(self.wire_overlay), bool(self.xray),
             id(doc), doc.rev, getattr(self.state, "tool", "select"),
         )
         if (
@@ -258,7 +279,10 @@ class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
             self.camera,
             self._composite(doc),
             wireframe=self.wireframe,
+            flat=self.flat,
             show_grid=self.show_grid,
+            wire_overlay=self.wire_overlay,
+            alpha=XRAY_ALPHA if self.xray else 1.0,
             overlays=self._element_overlays(doc) + self._gizmo_draws(doc, height),
         )
         return self.viewport.texture

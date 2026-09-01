@@ -193,6 +193,13 @@ out vec4 f_color;
 
 uniform vec3 u_camera_pos;
 uniform float u_exposure;
+// Multiplied into the output alpha, and 1.0 for every draw but one: Clay's
+// X-ray, which renders the surface see-through so the elements behind it can
+// be picked. A uniform rather than a factor folded into
+// ``u_base_color_factor`` because that one is the *material's* opacity and
+// belongs to the document -- writing a view setting into it would make an
+// export come out translucent.
+uniform float u_alpha;
 
 uniform vec4 u_base_color_factor;
 uniform float u_metallic;
@@ -317,7 +324,7 @@ void main() {
     lit *= texture(u_ao_map, v_uv).r;
 #endif
 
-    f_color = outputColor(lit, base.a);
+    f_color = outputColor(lit, base.a * u_alpha);
 }
 """
 
@@ -331,6 +338,7 @@ in vec2 v_uv;
 out vec4 f_color;
 
 uniform float u_exposure;
+uniform float u_alpha;
 uniform vec4 u_base_color_factor;
 #ifdef HAS_BASE_COLOR_MAP
 uniform sampler2D u_base_color_map;
@@ -347,7 +355,7 @@ void main() {
     // Tone-mapped like everything else: three's MeshBasicMaterial defaults to
     // toneMapped = true, so a flat sheet frame and a lit one agree about what
     // a given albedo looks like.
-    f_color = outputColor(base.rgb, base.a);
+    f_color = outputColor(base.rgb, base.a * u_alpha);
 }
 """
 

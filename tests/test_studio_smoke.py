@@ -5787,3 +5787,58 @@ def test_the_stamps_pane_is_offered_only_on_a_tile_layer(app_ctx, imgui_ctx):
     objects = tab.doc.add_object_layer()
     tab.doc.set_active_layer(objects.uid)
     assert plotter_stamps.on_tile_layer(app_ctx) is False
+
+
+def test_the_clay_stats_overlay_draws_when_it_is_asked_for(app_ctx, imgui_ctx):
+    """Off, on, and on with a selection in each element mode -- none of which
+    the pane walk reaches, because the overlay draws nothing at all unless it
+    has been switched on."""
+    from warlock.studio import clay_mode
+    from warlock.studio.clay import elements as el
+    from warlock.studio.panes import clay_hud
+
+    tab = _clay_tab(app_ctx)
+    state = clay_mode.ensure(app_ctx)
+    rect = (10.0, 10.0, 600.0, 400.0)
+    uid = tab.doc.objects[0].uid
+
+    # Off: draws nothing, and must not raise for it.
+    state.overlays["stats"] = False
+    _frame(imgui_ctx, lambda: clay_hud.stats_overlay(app_ctx, rect))
+
+    state.overlays["stats"] = True
+    _frame(imgui_ctx, lambda: clay_hud.stats_overlay(app_ctx, rect))
+
+    tab.doc.select([uid])
+    _frame(imgui_ctx, lambda: clay_hud.stats_overlay(app_ctx, rect))
+    for mode, sel in (
+        ("vertex", el.ElementSel(verts=[0, 1])),
+        ("edge", el.ElementSel(edges=[[0, 1]])),
+        ("face", el.ElementSel(faces=[0])),
+    ):
+        tab.doc.set_element_mode(mode)
+        tab.doc.set_element_sel(uid, sel)
+        _frame(imgui_ctx, lambda: clay_hud.stats_overlay(app_ctx, rect))
+    tab.doc.set_element_mode("object")
+    state.overlays["stats"] = False
+
+
+def test_the_clay_header_shading_pill_and_xray_render(app_ctx, imgui_ctx):
+    """Each shading mode and the X-ray switch, which the walk draws only in
+    whatever state the header happens to open in."""
+    from warlock.studio import clay_mode
+    from warlock.studio.panes import clay_header
+
+    imgui, _renderer = imgui_ctx
+    _clay_tab(app_ctx)
+    state = clay_mode.ensure(app_ctx)
+
+    for key, _label, _short, _tip in clay_header.SHADING:
+        state.shading = key
+        labels = _drawn_labels(imgui, lambda: clay_header.draw(app_ctx), "##shading")
+        assert _index_of(labels, f"##clay-shading/{key}") >= 0, labels
+    state.shading = "material"
+
+    state.xray = True
+    _frame(imgui_ctx, lambda: clay_header.draw(app_ctx))
+    state.xray = False

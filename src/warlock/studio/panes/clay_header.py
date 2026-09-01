@@ -50,6 +50,17 @@ PROPORTIONAL_POPUP = "clay-proportional"
 OVERLAYS_POPUP = "clay-overlays"
 VIEW_POPUP = "clay-view"
 
+#: How the surface is drawn, in the order Blender lists them: the flat albedo,
+#: the lit render, the edges alone. Glyph-free -- lucide has nothing for a
+#: shading mode and ``icons.py`` forbids inventing a codepoint -- so the compact
+#: tier is the first letter, which is unambiguous across three.
+SHADING: tuple[tuple[str, str, str, str], ...] = (
+    ("solid", "Solid", "S", "The albedo with no lighting: silhouette and topology, "
+     "with no highlight sitting on the vertex you are dragging"),
+    ("material", "Material", "M", "The lit render -- what the object will look like"),
+    ("wireframe", "Wire", "W", "The edges alone, with no surface at all"),
+)
+
 #: The element modes, compact. ``clay_tools.MODE_BUTTONS`` carries the full
 #: labels and the keys; this is only what a narrow window shows instead.
 MODE_SHORT = {"object": "Obj", "vertex": "V", "edge": "E", "face": "F"}
@@ -252,6 +263,13 @@ def _proportional_popup(state: Any) -> None:
 OVERLAY_ROWS: tuple[tuple[str, str, str], ...] = (
     ("grid", "Grid", "The ground plane, at the snap size"),
     ("wire", "Wireframe", "Every edge, over the shaded surface"),
+    (
+        "stats",
+        "Statistics",
+        "Objects, vertices, edges, faces and triangles -- and how many are "
+        "selected. Every one of these was unavailable anywhere in Clay before "
+        "the overlay existed.",
+    ),
 )
 
 
@@ -355,8 +373,16 @@ def _trailing(ctx: Any, state: Any, view: Any) -> Any:
     style = imgui.get_style()
     gap = style.item_spacing.x
     pad = style.frame_padding.x * 2.0
+    shading = sum(
+        imgui.calc_text_size(short).x + pad for _key, _label, short, _tip in SHADING
+    )
     width = (
-        imgui.calc_text_size("Overlays").x
+        shading
+        + gap
+        + imgui.calc_text_size("X-ray").x
+        + pad
+        + gap
+        + imgui.calc_text_size("Overlays").x
         + pad
         + gap
         + imgui.calc_text_size("View").x
@@ -366,6 +392,28 @@ def _trailing(ctx: Any, state: Any, view: Any) -> Any:
     )
 
     def draw_it() -> None:
+        # The shading pill first, because it is the one control here that
+        # changes what the render *is* rather than what is drawn over it.
+        changed, picked = controls.segmented_choice(
+            "clay-shading",
+            [(key, short) for key, _label, short, _tip in SHADING],
+            state.shading,
+            tooltips={key: f"{label} -- {tip}" for key, label, _s, tip in SHADING},
+            compact=True,
+        )
+        if changed:
+            state.shading = picked
+        imgui.same_line()
+        if controls.button(
+            f"X-ray##{BAR}/xray",
+            role=controls.ButtonRole.GHOST,
+            control_size=controls.ControlSize.COMPACT,
+            selected=bool(state.xray),
+            tooltip="See through the surface, so an element behind it can be "
+            "picked (Alt+Z)",
+        ):
+            state.xray = not state.xray
+        imgui.same_line()
         if controls.button(
             f"Overlays##{BAR}/overlays",
             role=controls.ButtonRole.GHOST,

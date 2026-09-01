@@ -202,3 +202,130 @@ def angle_of(dx: float, dy: float) -> float:
     the drag machinery both want one and neither should own it."""
 
     return math.atan2(float(dy), float(dx))
+
+
+# --- the statistics overlay ---------------------------------------------------
+
+
+def stats(doc: Any) -> str:
+    """What the document holds, and how much of it is selected. One line.
+
+    Blender's statistics overlay, and the reason it earns a place on a viewport
+    that already has a hint line: **every number here was otherwise unavailable
+    anywhere in Clay**. The outliner counts objects and nothing counted
+    vertices, edges, faces or triangles -- so "is this mesh 500 triangles or
+    50,000" was a question the app could not answer about the thing on screen,
+    which is the question that decides whether a game asset is finished.
+
+    Selected counts are shown only when there *is* a selection, and only for the
+    element mode in hand: a face count while vertices are being picked is a
+    number about a selection the user does not have.
+
+    Pure, and derived per call rather than cached. It walks the meshes, which
+    is O(objects) in numpy shape reads -- the arrays are not touched, only
+    their lengths -- so there is nothing to invalidate and nothing to go stale.
+    """
+
+    objects = [obj for obj in doc.objects if getattr(obj, "visible", True)]
+    verts = edges = faces = tris = 0
+    for obj in objects:
+        mesh = obj.mesh
+        verts += int(len(mesh.positions))
+        count = _faces_of(mesh)
+        faces += count
+        loops = getattr(mesh, "loops", None)
+        # ``or ()`` is wrong on a numpy array -- truthiness of one with more
+        # than one element raises -- so the absence is tested with ``is None``.
+        corners = 0 if loops is None else int(len(loops))
+        # A polygon of n corners fans into n-2 triangles, so the triangle count
+        # is the corner count less twice the face count. The *edge* count is
+        # not the corner count: a cube has 24 corners and 12 edges, because
+        # every edge is shared by two faces, and reporting 24 would be a number
+        # a reader can check against a cube and find wrong.
+        edges += _unique_edges(mesh)
+        tris += max(0, corners - 2 * count)
+    parts = [
+        f"{len(objects)} object{'' if len(objects) == 1 else 's'}",
+        f"{verts:,} verts",
+        f"{edges:,} edges",
+        f"{faces:,} faces",
+        f"{tris:,} tris",
+    ]
+    picked = _selected(doc)
+    if picked:
+        parts.append(picked)
+    return "  ".join(parts)
+
+
+#: Unique-edge counts, keyed on the mesh object and pinning it.
+#:
+#: Keyed on the ``Mesh`` itself rather than on an id or a revision, which is
+#: ``ClayState.manifold``'s rule and its reason: a ``Mesh`` is immutable and
+#: every op replaces it, so "this count is still about what is on screen" is
+#: exactly ``mesh is measured``. An ``id()`` would be recycled by the allocator
+#: onto a different mesh and silently report the last edit's edges.
+#:
+#: Bounded, because the pin keeps every measured mesh alive: this is a readout
+#: and must not become a second undo stack. The whole cache is dropped rather
+#: than evicted one by one -- a readout that recomputes once is a readout that
+#: was free, and an LRU here would be machinery for nothing.
+_EDGE_CACHE: dict[Any, int] = {}
+_EDGE_CACHE_MAX = 64
+
+
+def _unique_edges(mesh: Any) -> int:
+    """How many distinct edges a mesh has. Memoised on the mesh.
+
+    The pair per face corner, sorted within the pair so ``(a, b)`` and
+    ``(b, a)`` are one edge, then counted distinct. O(L log L) and run once per
+    mesh rather than once per frame -- a statistics overlay that rebuilt an
+    adjacency sixty times a second would cost more than everything it reports.
+    """
+    hit = _EDGE_CACHE.get(mesh)
+    if hit is not None:
+        return hit
+    loops = getattr(mesh, "loops", None)
+    starts = getattr(mesh, "starts", None)
+    if loops is None or starts is None or len(loops) == 0:
+        return 0
+    loops = np.asarray(loops)
+    starts = np.asarray(starts)
+    # The next corner within each face, which is the corner after it except at
+    # a face's last corner, where it wraps to that face's first.
+    nxt = np.arange(1, len(loops) + 1, dtype="i8")
+    nxt[starts[1:] - 1] = starts[:-1]
+    pairs = np.stack([loops, loops[nxt]], axis=1)
+    pairs = np.sort(pairs, axis=1)
+    count = int(len(np.unique(pairs, axis=0)))
+    if len(_EDGE_CACHE) >= _EDGE_CACHE_MAX:
+        _EDGE_CACHE.clear()
+    _EDGE_CACHE[mesh] = count
+    return count
+
+
+def _faces_of(mesh: Any) -> int:
+    """How many faces a mesh has, off its CSR offsets.
+
+    ``starts`` is ``(F+1,)`` -- one offset per face plus the terminator -- which
+    is the shape every op in ``clay/`` reads it as.
+    """
+    starts = getattr(mesh, "starts", None)
+    if starts is None:
+        return 0
+    return max(0, int(len(starts)) - 1)
+
+
+def _selected(doc: Any) -> str:
+    """The selected count, in the mode it is a count of."""
+
+    mode = getattr(doc, "element_mode", "object")
+    if mode == "object":
+        count = len(getattr(doc, "selection", ()) or ())
+        return f"{count} selected" if count else ""
+    total = 0
+    for sel in (getattr(doc, "element_sel", {}) or {}).values():
+        total += sel.count(mode)
+    if not total:
+        return ""
+    word = {"vertex": "vert", "edge": "edge", "face": "face"}.get(mode, mode)
+    return f"{total:,} {word}{'' if total == 1 else 's'} selected"

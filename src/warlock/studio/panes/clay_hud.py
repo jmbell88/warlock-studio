@@ -100,6 +100,33 @@ def axis_widget(ctx: Any, view: Any, rect: tuple[float, float, float, float]) ->
             view.camera.look_along(ball.view)
 
 
+def stats_overlay(ctx: Any, rect: tuple[float, float, float, float]) -> None:
+    """The statistics line, in the viewport's top-left corner.
+
+    Drawn straight to the window's draw list rather than as a control: it is a
+    readout, nothing about it is clickable, and an imgui item at this position
+    would sit over the render and eat the click that was meant for the mesh
+    under it.
+
+    Opposite corner from the navigation widget, which is the only placement
+    rule it needs -- both are corner chrome and two in one corner is one of
+    them unreadable.
+    """
+
+    state = clay_mode.ensure(ctx)
+    tab = state.active
+    if tab is None or not state.overlays.get("stats", False):
+        return
+    line = clay_hints.stats(tab.doc)
+    draw_list = imgui.get_window_draw_list()
+    inset = sp(INSET)
+    draw_list.add_text(
+        (rect[0] + inset, rect[1] + inset),
+        imgui.get_color_u32(theme.rgba(theme.MUTED, 0.9)),
+        line,
+    )
+
+
 def hint_line(ctx: Any) -> None:
     """One line of what the mouse and the keyboard do right now.
 

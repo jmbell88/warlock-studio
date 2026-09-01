@@ -22,6 +22,12 @@ from .grid import Grid, span_for
 from .programs import ProgramCache
 from .scene import GpuModel
 
+#: What the wire overlay's lines are drawn in: a near-black at three quarters
+#: alpha. Chrome rather than material, so it is one colour whatever is under it
+#: -- an overlay that took the material's colour would be invisible on exactly
+#: the meshes a wireframe is reached for.
+WIRE_TINT = (0.05, 0.05, 0.06, 0.75)
+
 
 @dataclass
 class DrawItem:
@@ -73,7 +79,21 @@ class Renderer:
         show_grid: bool = True,
         background: tuple[float, float, float, float] | None = None,
         overlays: list[DrawItem] | None = None,
+        wire_overlay: bool = False,
+        alpha: float = 1.0,
     ) -> None:
+        """One frame: the grid, the model, and the overlays over it.
+
+        ``wireframe`` *replaces* the fill and ``wire_overlay`` draws over it,
+        and the two are different questions: the first is a shading mode -- show
+        me the edges instead of the surface -- and the second is an overlay,
+        show me the edges as well. Blender has both and calls them that.
+
+        ``alpha`` below 1 is X-ray: the surface goes see-through so an element
+        behind it can be picked. It also turns the depth *write* off, because a
+        translucent surface that still wrote depth would hide exactly what it
+        was made transparent to reveal -- the far side of its own mesh.
+        """
         ctx = self.ctx
         viewport.use()
         clear = background if background is not None else (*self.env.background, 1.0)
@@ -96,9 +116,30 @@ class Renderer:
             # Desktop-only: GLES has no glPolygonMode, so a GLES port would
             # need a barycentric shader instead. Left as-is deliberately --
             # this app ships a window, not a web page.
+            translucent = alpha < 0.999
+            if translucent:
+                ctx.depth_mask = False
             ctx.wireframe = wireframe
-            self._draw_model(gpu, camera, view, proj, model_matrix, flat)
+            self._draw_model(gpu, camera, view, proj, model_matrix, flat, alpha)
             ctx.wireframe = False
+            if translucent:
+                ctx.depth_mask = True
+            if wire_overlay and not wireframe:
+                # A second pass over the same geometry, edges only, pulled a
+                # hair toward the eye. Without the polygon offset the lines sit
+                # in exactly the plane of the faces they outline and z-fighting
+                # makes them dashed -- which reads as a broken mesh rather than
+                # as a wireframe.
+                ctx.wireframe = True
+                ctx.enable(moderngl.POLYGON_OFFSET_FILL)
+                ctx.polygon_offset = (-1.0, -1.0)
+                self._draw_model(
+                    gpu, camera, view, proj, model_matrix, True, 1.0,
+                    tint=WIRE_TINT,
+                )
+                ctx.polygon_offset = (0.0, 0.0)
+                ctx.disable(moderngl.POLYGON_OFFSET_FILL)
+                ctx.wireframe = False
 
         if overlays:
             # Depth-tested first, then depth-off over the top -- see
@@ -136,7 +177,19 @@ class Renderer:
         proj: np.ndarray,
         model_matrix: np.ndarray,
         flat: bool,
+        alpha: float = 1.0,
+        *,
+        tint: tuple[float, float, float, float] | None = None,
     ) -> None:
+        """One pass over every primitive. ``tint`` overrides the material.
+
+        The override exists for the wire overlay and for nothing else: those
+        lines are chrome, so they must not take the colour of whatever material
+        happens to be under them -- a dark wireframe over a dark material is a
+        wireframe nobody can see. It is written *after* ``material.bind`` for
+        the same reason it is a parameter rather than a mutation of the
+        material: the material is the document's and this is the view's.
+        """
         name = "unlit" if flat else "pbr"
         # The per-frame constants -- view, projection, exposure, camera, the
         # environment -- are written once per *program* rather than once per
@@ -158,6 +211,8 @@ class Renderer:
                 program["u_view"].write(view_bytes)
                 program["u_proj"].write(proj_bytes)
                 program["u_exposure"].value = self.exposure
+                if "u_alpha" in program:
+                    program["u_alpha"].value = float(alpha)
                 if "u_camera_pos" in program:
                     program["u_camera_pos"].value = camera_pos
                     self.env.bind(program)
@@ -184,6 +239,8 @@ class Renderer:
                         np.ascontiguousarray(normal_matrix.T, dtype="f4").tobytes()
                     )
             primitive.material.bind(program)
+            if tint is not None and "u_base_color_factor" in program:
+                program["u_base_color_factor"].value = tint
             if len(primitive.material.textures) >= 5 and "u_camera_pos" in program:
                 # A five-texture material walks its units up to 4, which is
                 # the environment probe's slot -- rebind it, since the hoist

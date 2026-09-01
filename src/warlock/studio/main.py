@@ -3934,7 +3934,14 @@ class App:
             clay_mode.remember_camera(ctx, state.get(self._clay_camera_tab))
             clay_mode.apply_camera(ctx, tab)
             self._clay_camera_tab = tab.uid
-        view.wireframe = bool(state.overlays.get("wire", False))
+        # The shading mode decides two of the renderer's three switches and the
+        # overlay decides the third: *Wire* is the surface replaced by its
+        # edges, *Solid* is the surface drawn unlit, and the Wireframe overlay
+        # is edges drawn over whichever of those is showing.
+        view.wireframe = state.shading == "wireframe"
+        view.flat = state.shading == "solid"
+        view.wire_overlay = bool(state.overlays.get("wire", False))
+        view.xray = bool(state.xray)
         view.show_grid = state.grid
         texture = view.draw(tab.doc, rect, 1.0 / TARGET_FPS)
         imgui.image(widgets.texture_ref(texture), (rect[2], rect[3]), (0, 1), (1, 0))
@@ -3945,6 +3952,9 @@ class App:
         # reach for without looking away from what you are turning, which is the
         # whole of why it is in the corner rather than in a pane.
         clay_hud.axis_widget(ctx, view, rect)
+        # Opposite corner from the widget: two readouts in one corner is one of
+        # them unreadable.
+        clay_hud.stats_overlay(ctx, rect)
         clay_menu.draw(ctx, view)
         # Last, and under the image: read when you are stuck, and a line over
         # the model covers the thing you are stuck on.
