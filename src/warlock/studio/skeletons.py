@@ -149,29 +149,64 @@ def inker(ctx: Any) -> dict[str, Column]:
 
 
 def plotter(ctx: Any) -> dict[str, Column]:
-    """Plotter's two sidebars: tools over the tileset palette, layers over the
-    bridge -- Clay's shape, deliberately, so the editors do not drift into
-    looking like different applications."""
+    """Plotter's two sidebars, in **Tiled's** default arrangement.
 
-    from .panes import plotter_bridge, plotter_layers, plotter_tileset, plotter_tools
+    Properties on the left with the map file under it; the layer stack on the
+    right over the tileset palette; the tools in a strip across the top of the
+    centre column, which ``plotter_canvas`` composes by hand.
+
+    This reverses the shape the workspace shipped with -- tools over tilesets
+    on the left, layers over properties over the file on the right -- and it is
+    the same argument that turned Inker round on 2026-08-31. What put Plotter's
+    panes where they were was that they mirrored ``_clay_workspace`` "so the
+    editors do not drift into looking like different applications". That is a
+    real cost and it is the smaller one: a user arriving at Plotter has Tiled
+    in their hands, not Clay, and every reach they have learnt -- the layer list
+    on the right, the properties of the thing they just clicked on the left --
+    was answered here by the opposite side of the window. Internal consistency
+    is worth having between two panels nobody has seen before; it is not worth
+    having against the muscle memory of the program this one is trying to be.
+
+    The tileset palette takes the **fill** slot rather than sharing, because it
+    is the pane whose useful size has no ceiling: an atlas is scrolled through,
+    where a layer stack is read down. Its floor is declared for the first time
+    here, which is what stops a short window squeezing the picker to a heading.
+
+    No ``layouts.VERSION`` bump and no migration. ``layout_skeleton.reconcile``
+    is per column against ``set(builtin)``, so a saved v2 arrangement --
+    ``left=[tools, tileset]``, ``right=[layers, properties, bridge]`` -- lands
+    on this one on its own: the two slots that changed column are unknown to
+    their old side and are dropped there, and unlisted on their new side and
+    are appended there. An orphaned ``shares["plotter-tools"]`` and any hidden
+    entry naming a moved slot are inert rather than wrong.
+    """
+
+    from .panes import plotter_bridge, plotter_layers, plotter_tileset
 
     left = Column(
         "left",
         (
+            # **The selected thing, then the file.** These fields used to be
+            # drawn *inside* the layer list, between two sibling rows, so
+            # choosing a layer pushed its neighbours a hundred and fifty lines
+            # apart and there was no column of names left to read down. They
+            # have been their own pane since 2026-08-29; this moves that pane
+            # to the side Tiled puts it on.
             Slot(
-                "plotter-tools",
-                "Tools",
-                plotter_tools.draw,
-                role=_role("sidebar"),
+                "plotter-properties",
+                "Properties",
+                plotter_layers.draw_properties,
+                role=_role("inspector"),
                 edge=_edge("right"),
                 sizing=SHARE,
-                share_key="plotter-tools",
+                share_key="plotter-properties",
+                floor=plotter_layers.PROPERTIES_FLOOR,
             ),
             Slot(
-                "plotter-tileset",
-                "Tileset",
-                plotter_tileset.draw,
-                role=_role("sidebar"),
+                "plotter-bridge",
+                "Map file",
+                plotter_bridge.draw,
+                role=_role("inspector"),
                 edge=_edge("right"),
                 sizing=FILL,
             ),
@@ -190,29 +225,14 @@ def plotter(ctx: Any) -> dict[str, Column]:
                 share_key="plotter-layers",
                 floor=plotter_layers.LAYERS_FLOOR,
             ),
-            # **The stack, then the selected thing, then the file** -- Tiled's
-            # own arrangement, and the reason this slot exists at all: these
-            # fields used to be drawn *inside* the list, between two sibling
-            # rows, so choosing a layer pushed its neighbours a hundred and
-            # fifty lines apart and there was no column of names left to read
-            # down.
             Slot(
-                "plotter-properties",
-                "Properties",
-                plotter_layers.draw_properties,
-                role=_role("inspector"),
-                edge=_edge("left"),
-                sizing=SHARE,
-                share_key="plotter-properties",
-                floor=plotter_layers.PROPERTIES_FLOOR,
-            ),
-            Slot(
-                "plotter-bridge",
-                "Map file",
-                plotter_bridge.draw,
-                role=_role("inspector"),
+                "plotter-tileset",
+                "Tilesets",
+                plotter_tileset.draw,
+                role=_role("sidebar"),
                 edge=_edge("left"),
                 sizing=FILL,
+                floor=plotter_tileset.TILESET_FLOOR,
             ),
         ),
     )

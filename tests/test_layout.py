@@ -310,11 +310,12 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         "inker-timeline",
         "packwright-sources",
         "packwright-items",
-        "plotter-tools",
-        # The right column stacks the layer list over the selected layer's own
-        # settings over the map file, so it carries two split handles. The
-        # properties pane was drawn *inside* the list until 2026-08-29, which
-        # is what made the list unreadable rather than merely unstyled.
+        # Two handles, one per column, since Plotter took Tiled's arrangement:
+        # Properties over the map file on the left, the layer stack over the
+        # tileset palette on the right. ``plotter-tools`` left this set with
+        # the pane -- the tools are a strip inside the centre column now, and a
+        # strip is not a slot. An orphaned share under the old key in a user's
+        # settings file is inert; see ``skeletons.plotter``.
         "plotter-layers",
         "plotter-properties",
         "review-runs",

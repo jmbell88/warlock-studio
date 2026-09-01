@@ -378,7 +378,7 @@ def test_a_scope_inside_a_child_window_is_a_real_second_scope(frame):
     assert x0 <= child_left
 
 
-def test_the_four_sidebars_the_report_named_still_ask_for_blocks():
+def test_the_sidebars_the_report_named_still_ask_for_blocks():
     """The regression guard for the flat-pane change.
 
     ``layout.pane`` no longer opens a scope, so the grouping these four panes
@@ -394,9 +394,12 @@ def test_the_four_sidebars_the_report_named_still_ask_for_blocks():
     import ast
     import inspect
 
-    from warlock.studio.panes import clay_outliner, clay_props, clay_tools, plotter_tools
+    from warlock.studio.panes import clay_outliner, clay_props, clay_tools
 
-    for module in (clay_tools, clay_outliner, clay_props, plotter_tools):
+    # ``plotter_tools`` was the fourth. It is a toolbar now rather than a
+    # sidebar -- a strip over the canvas with no headings to group -- so it
+    # left this list when it left the column; see its module docstring.
+    for module in (clay_tools, clay_outliner, clay_props):
         tree = ast.parse(inspect.getsource(module))
         draw = next(
             node

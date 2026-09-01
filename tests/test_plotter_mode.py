@@ -3151,14 +3151,32 @@ def test_every_plotter_tool_has_its_own_icon():
     """Wand had no entry, fell through to the ``icons.SQUARE`` default, and so
     drew Shape's glyph two buttons along -- while ``icons.WAND`` sat on
     Terrain. A missing entry here is a *wrong* picture, not a blank one, so the
-    table's completeness and its distinctness are both pinned."""
+    table's completeness and its distinctness are both pinned.
+
+    **Per palette**, since the tools became a pill of bare glyphs on the
+    toolbar. Distinctness cannot hold *across* the two lists and must not be
+    asserted: six letters already mean two things and ``object`` is a member of
+    both palettes. The eight object tools had no entries at all until the bar
+    landed -- at 300 px with a label beside it a wrong glyph was survivable,
+    and on a 28 px pill the glyph is the whole of what is on screen.
+    """
     from warlock.studio import plotter_state
     from warlock.studio.panes import plotter_tools
 
-    keys = [key for key, _label, _letter in plotter_state.TOOLS]
-    assert set(plotter_tools._ICONS) == set(keys)
-    glyphs = [plotter_tools._ICONS[key] for key in keys]
-    assert len(set(glyphs)) == len(glyphs), "two tools cannot share one glyph"
+    palettes = (plotter_state.TILE_TOOLS, plotter_state.OBJECT_TOOLS)
+    named = set()
+    for palette in palettes:
+        keys = [key for key, _label, _letter in palette]
+        named |= set(keys)
+        missing = [key for key in keys if key not in plotter_tools._ICONS]
+        assert not missing, f"no glyph for {missing}"
+        glyphs = [plotter_tools._ICONS[key] for key in keys]
+        assert len(set(glyphs)) == len(glyphs), (
+            f"two tools in one palette cannot share one glyph: {keys}"
+        )
+    # And nothing extra: a glyph for a tool that no longer exists is a picture
+    # nobody would notice had stopped being drawn.
+    assert set(plotter_tools._ICONS) == named
 
 
 def test_use_as_tileset_with_no_map_starts_one_rather_than_refusing():

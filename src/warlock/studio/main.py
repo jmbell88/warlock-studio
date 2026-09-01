@@ -4176,13 +4176,16 @@ class App:
         )
 
     def _plotter_workspace(self) -> None:
-        """The same sidebar / centre / sidebar skeleton every other mode uses:
+        """The same sidebar / centre / sidebar skeleton every other mode uses,
+        arranged the way Tiled arranges its own:
 
-            [ plotter-tools   ]           [ plotter-layers ]
-            [ plotter-tileset ]  the map  [ plotter-bridge ]
+            [ plotter-properties ]  the toolbar  [ plotter-layers  ]
+            [ plotter-bridge     ]  the map      [ plotter-tileset ]
 
-        Mirrors ``_clay_workspace`` line for line, its share key included,
-        so the editors do not drift into looking like different applications.
+        Both sidebars are ``skeletons.plotter``, which is where the argument
+        for that arrangement is written down. The toolbar is not a slot: it is
+        a strip inside the centre pane, drawn by ``plotter_canvas`` between the
+        tab bar and the map, exactly as Inker's context bar is.
         """
         from imgui_bundle import imgui
 

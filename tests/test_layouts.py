@@ -458,3 +458,72 @@ def test_the_toolbox_is_an_ordinary_movable_pane():
     slots = {slot.id: slot for slot in skeletons.inker(None)["right"].slots}
     tools = slots["inker-tools"]
     assert tools.movable is True and tools.hideable is True
+
+
+def test_a_saved_wave4_plotter_layout_reconciles_into_the_tiled_default():
+    """The arrangement change needs no ``VERSION`` bump and no migration.
+
+    Plotter's panes moved sides on 2026-09-01 -- Properties and the map file to
+    the left, the layer stack over the tileset palette on the right -- and the
+    tools pane stopped being a slot at all. Anybody who had ever dragged a
+    Plotter pane has the *old* two lists in their settings file, and this is
+    the assertion that says what happens to them.
+
+    ``reconcile`` is per column against ``set(builtin)``, so both halves fall
+    out of rules that already existed: a slot the saved column names but the
+    new one does not is dropped there, and a slot the new column has but the
+    saved one does not is inserted after its last placed predecessor. Nothing
+    is rewritten, so a user who then drags nothing keeps their file untouched.
+    """
+
+    settings = _Settings()
+    library = layouts.Library(settings)
+    # Exactly what a v2 file written before the change holds.
+    library.record(
+        "plotter",
+        {
+            "left": ["plotter-tools", "plotter-tileset"],
+            "right": ["plotter-layers", "plotter-properties", "plotter-bridge"],
+        },
+        set(),
+        shares={"plotter-tools": 0.4, "plotter-layers": 0.6},
+    )
+    again = layouts.Library(settings)
+
+    left = again.order("plotter", "left", ["plotter-properties", "plotter-bridge"])
+    right = again.order("plotter", "right", ["plotter-layers", "plotter-tileset"])
+
+    assert left == ["plotter-properties", "plotter-bridge"]
+    # The layer stack was saved first on the right and stays first; the tileset
+    # palette arrives from the other column and lands under it rather than
+    # displacing it.
+    assert right == ["plotter-layers", "plotter-tileset"]
+    # And reading it wrote nothing: one ``record`` above, and no more.
+    assert settings.writes == 1
+    # The orphaned share is still in the file and is simply never consulted --
+    # inert, not wrong. Deleting it would be a migration, which is the thing
+    # this test exists to say is unnecessary.
+    assert again.share("plotter", "plotter-tools") == 0.4
+
+
+def test_a_plotter_layout_that_hid_a_moved_pane_still_hides_it():
+    """A hidden entry names a slot, not a column, so it survives the move.
+
+    ``skeletons.ordered`` drops a hidden slot wherever it now lives; the
+    failure this guards against is the opposite one -- a pane a user had put
+    away reappearing on the other side of the window after an upgrade.
+    """
+
+    settings = _Settings()
+    library = layouts.Library(settings)
+    library.record(
+        "plotter",
+        {"left": ["plotter-tools", "plotter-tileset"], "right": ["plotter-layers"]},
+        {"plotter-tileset"},
+    )
+    again = layouts.Library(settings)
+
+    assert again.hidden("plotter") == {"plotter-tileset"}
+    assert "plotter-tileset" in again.order(
+        "plotter", "right", ["plotter-layers", "plotter-tileset"]
+    )

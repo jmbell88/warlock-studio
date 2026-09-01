@@ -1,6 +1,6 @@
-"""Plotter's menu strip: Map, Layer, Tileset.
+"""Plotter's menu strip: Map, View, Layer, Tileset.
 
-``inker_menu``'s shape, and Tiled's three menus. Drawn from
+``inker_menu``'s shape, and Tiled's four menus. Drawn from
 ``plotter_canvas.draw`` before the tab bar, inside the centre window, because
 an imgui popup only renders in the id stack of the window that opened it -- and
 through :mod:`~warlock.studio.toolbar`, so a strip too wide for the pane
@@ -21,12 +21,19 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, plotter_mode, plotter_tilesets, toolbar
+from .. import controls, layout_edit, plotter_mode, plotter_tilesets, toolbar
+from . import plotter_tools
 
 BAR = "plotter-menu"
 
 #: The strip, in Tiled's order.
-MENUS: tuple[str, ...] = ("Map", "Layer", "Tileset")
+#:
+#: **View is second**, which is where Tiled puts it, and it is the menu that
+#: closes the split this app had: the canvas aids were four toggles in the
+#: tools sidebar and a fifth row filed under *Layer*, so there was no one
+#: place to ask "what is the canvas showing". Both surfaces read
+#: ``plotter_tools.VIEW_TOGGLES`` now -- the popover on the bar and these rows.
+MENUS: tuple[str, ...] = ("Map", "View", "Layer", "Tileset")
 
 BUSY = "This map is being written; the rows come back when it lands."
 NO_TILESET = "This map has no tileset yet, so there is nothing to write."
@@ -53,6 +60,8 @@ def _row(label: str, key: str = "", *, enabled: bool = True, reason: str = "") -
 def _rows(ctx: Any, state: Any, tab: Any, name: str) -> None:
     if name == "Map":
         _map_rows(ctx, state, tab)
+    elif name == "View":
+        _view_rows(ctx, state, tab)
     elif name == "Layer":
         _layer_rows(ctx, state, tab)
     else:
@@ -109,6 +118,25 @@ def _map_rows(ctx: Any, state: Any, tab: Any) -> None:
         plotter_mode.close_tab(ctx, tab.uid)
 
 
+def _view_rows(ctx: Any, state: Any, tab: Any) -> None:
+    """The canvas aids, then the pane arrangement.
+
+    The five toggles are drawn by ``plotter_tools.view_rows`` rather than
+    restated here: they are also the toolbar's View popover, and a menu that
+    kept its own copy is a menu that would come to disagree with the button
+    three inches above it. "Highlight current layer" arrives with them, having
+    been the one row of the five that lived under *Layer*.
+
+    *Rearrange panes* is here because View is where a user looks for it and
+    because Shift+W is otherwise a chord with no on-screen door at all.
+    """
+
+    plotter_tools.view_rows(ctx, state)
+    controls.menu_separator()
+    if _row("Rearrange panes...", "Shift+W"):
+        layout_edit.toggle(ctx.state)
+
+
 def _layer_rows(ctx: Any, state: Any, tab: Any) -> None:
     doc = None if tab is None else tab.doc
     ready = tab is not None and not tab.busy
@@ -143,11 +171,6 @@ def _layer_rows(ctx: Any, state: Any, tab: Any) -> None:
         reason=BUSY,
     ):
         _shift(doc, active, -1)
-    controls.menu_separator()
-    if _row("Highlight current layer", "H", enabled=tab is not None, reason="Nothing is open."):
-        # Tiled's own View toggle, filed under Layer because that is what it is
-        # about. A canvas setting and nothing more -- see ``PlotterState``.
-        state.highlight = not state.highlight
 
 
 def _shift(doc: Any, uid: int, delta: int) -> None:

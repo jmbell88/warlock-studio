@@ -163,10 +163,21 @@ def test_ctrl_r_toggles_the_rulers(plotter_ctx):
     assert state.rulers is True
 
 
-def test_the_sidebar_offers_the_toggle_beside_the_grid():
+def test_both_view_surfaces_offer_the_toggle_beside_the_grid():
+    """The rulers used to be one ``widgets.toggle`` in the tools sidebar, and
+    that sidebar is a toolbar now. What replaces the source read is the table
+    the two surfaces share: the popover on the bar and the View menu both draw
+    ``VIEW_TOGGLES`` through ``view_rows``, so a row present here is a row
+    present in both -- which is more than the old assertion could say."""
     import inspect
 
-    from warlock.studio.panes import plotter_tools
+    from warlock.studio.panes import plotter_menu, plotter_tools
 
-    body = inspect.getsource(plotter_tools._body)
-    assert 'widgets.toggle("Rulers (Ctrl+R)", state.rulers)' in body
+    rows = {key: (label, chord) for key, label, chord in plotter_tools.VIEW_TOGGLES}
+    assert rows["rulers"] == ("Rulers", "Ctrl+R")
+    assert "grid" in rows, "the rulers sit beside the grid, which is the point"
+    # Both surfaces reach the table through the one function, rather than
+    # either keeping a copy that could come to disagree with the other.
+    assert "VIEW_TOGGLES" in inspect.getsource(plotter_tools.view_rows)
+    assert "plotter_tools.view_rows" in inspect.getsource(plotter_menu._view_rows)
+    assert "view_rows" in inspect.getsource(plotter_tools._view_popup)

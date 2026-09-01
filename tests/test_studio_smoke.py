@@ -3556,13 +3556,23 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     state = plotter_mode.ensure(app_ctx)
 
     def build() -> None:
-        # Three columns, as the app lays them out: stacked in one column the
-        # canvas child ends up below the tools pane, and imgui culls a child
-        # pushed past the visible area -- so a row added to the tools pane
-        # would silently stop the canvas drawing and its textures with it.
+        # Three columns, as the app lays them out -- Tiled's arrangement since
+        # the toolbar landed: Properties over the map file on the left, the
+        # layer stack over the tileset palette on the right. Stacked in one
+        # column the canvas child ends up below a sidebar, and imgui culls a
+        # child pushed past the visible area -- so a row added to a pane would
+        # silently stop the canvas drawing and its textures with it.
+        #
+        # **The tools pane is not drawn here.** It is the strip across the top
+        # of the centre column now, and ``plotter_canvas.draw`` draws it: a
+        # second call in a sidebar would put two bars carrying one set of imgui
+        # ids in one frame, which is a collision rather than a coverage win.
         if imgui.begin_child("##plot-left", (sp(300), 0)):
-            plotter_tools.draw(app_ctx)
-            plotter_tileset.draw(app_ctx)
+            # The Properties pane is a *separate* door in ``skeletons.py``, so
+            # a build that only called ``draw`` never entered the object form
+            # or the multi-selection summary at all.
+            plotter_layers.draw_properties(app_ctx)
+            plotter_bridge.draw(app_ctx)
         imgui.end_child()
         imgui.same_line()
         if imgui.begin_child("##plot-centre", (sp(560), 0)):
@@ -3571,11 +3581,7 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
         imgui.same_line()
         if imgui.begin_child("##plot-right", (sp(300), 0)):
             plotter_layers.draw(app_ctx)
-            # The Properties pane is a *separate* door in ``skeletons.py``, so
-            # a build that only called ``draw`` never entered the object form
-            # or the multi-selection summary at all.
-            plotter_layers.draw_properties(app_ctx)
-            plotter_bridge.draw(app_ctx)
+            plotter_tileset.draw(app_ctx)
         imgui.end_child()
 
     _frame(imgui_ctx, build)  # nothing open
@@ -5013,8 +5019,9 @@ def test_the_wand_row_renders_and_no_dead_generator_route_remains(app_ctx, imgui
     # By its id, not by the letter "W": that letter was being matched against
     # the tile-size field's *Width* box, which has since moved into the Map >
     # Resize dialog (W3.1) -- so the assertion passed for four months without
-    # ever looking at the Wand button.
-    assert any("##tool-wand" in label for label in labels), labels
+    # ever looking at the Wand button. The id changed shape with the pill:
+    # ``controls.segmented_choice`` keys its segments ``<control id>/<key>``.
+    assert any("##plotter-tool/wand" in label for label in labels), labels
     assert _index_of(labels, "Open the generator") == -1, labels
 
     root = _Path(__file__).resolve().parents[1] / "src"
@@ -5097,7 +5104,7 @@ def test_the_object_toolbox_draws_a_capsule_button(app_ctx, imgui_ctx):
     title = "##capsule-tool"
     _drawn_labels(imgui, lambda: plotter_tools.draw(app_ctx), title)
     labels = _drawn_labels(imgui, lambda: plotter_tools.draw(app_ctx), title)
-    assert any("##tool-object_capsule" in label for label in labels), labels
+    assert any("##plotter-tool/object_capsule" in label for label in labels), labels
 
 
 def test_the_undo_history_popover_lists_the_stack_and_jumps(app_ctx, imgui_ctx):

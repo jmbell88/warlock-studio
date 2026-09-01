@@ -389,12 +389,19 @@ def draw_properties(ctx: Any) -> None:
     editable = not tab.busy
     layer = doc.layer(doc.active_layer) if doc.active_layer is not None else None
     if layer is None:
-        widgets.muted_wrapped("Choose a layer above to see what it carries.")
+        widgets.muted_wrapped("Choose a layer to see what it carries.")
         return
     if not editable:
         widgets.muted_wrapped(_BUSY_WHY)
         return
 
+    # **What these fields are about**, said on screen rather than inferred from
+    # which of them happen to be drawn. The pane shows a layer, one object or a
+    # multi-selection, and until the toolbar moved it it sat directly under the
+    # layer list, where "the thing above" was answer enough. On the far side of
+    # the window from that list it is not: a user reading a Name field has to
+    # be told whose name it is.
+    widgets.muted(_subject(doc, state, layer))
     if len(state.selected_objects) > 1:
         _group_summary(ctx, doc, state)
         return
@@ -631,6 +638,27 @@ def _delete_layer(ctx: Any, doc: Any, layer: Any) -> None:
             on_confirm=lambda: doc.remove_layer(layer.uid),
         )
     )
+
+
+def _subject(doc: Any, state: Any, layer: Any) -> str:
+    """Whose fields these are, in one line. Pure, so it is asserted directly.
+
+    The three cases the pane already branches on, named rather than left to be
+    inferred: a layer, one object, or a set of them. The object line carries
+    its uid because two objects may share a name and the map addresses them by
+    number -- the same reason the layer line does not, since the pane can only
+    ever be showing the *active* one.
+    """
+
+    count = len(state.selected_objects)
+    if count > 1:
+        return f"{count} objects"
+    found = _selected_object(doc, state)
+    if found is not None:
+        _layer, obj = found
+        name = obj.name or "Object"
+        return f"Object: {name} (#{obj.uid})"
+    return f"Layer: {layer.name or 'Untitled'}"
 
 
 def _selected_object(doc: Any, state: Any) -> tuple[Any, MapObject] | None:

@@ -1,8 +1,36 @@
-"""Plotter's left-top pane: the tools and the map's own properties.
+"""Plotter's toolbar: the row across the top of the map, and the two dialogs.
 
-The tools are what a click on the canvas *means*; the tileset pane owns which
-tile it means, and the layers pane owns which layer it lands on. One control,
-one owner -- the rule the two generate panes already follow for ``platform``.
+Tiled puts the tools in a strip above the canvas and nothing else there. This
+pane used to be a 300 px sidebar holding four different subjects -- the tool
+grid, the tool's own options, the view aids and a read-only recital of the
+map's size -- stacked down the left of the window with the map beside them.
+Three of those four are settings you change *between* clicks on the canvas, and
+a sidebar puts them the width of the window away from the click.
+
+So the pane became the bar, and the layout it left behind is Tiled's:
+Properties on the left, Layers over Tilesets on the right, this strip across
+the top of the centre column. What was measured against the old arrangement
+holds here too -- see :mod:`~warlock.studio.toolbar` for why a row degrades
+rather than clips, and ``inker_context`` for the same move made a week earlier
+against Aseprite's context bar.
+
+**The pill is not part of the collapsing row.** Which tool is in your hand is
+the one thing on this strip that is never optional, so it is drawn first, as
+glyphs, and it never folds into an overflow menu. Everything after it -- the
+brush transforms, Random, the tool's own field, the view aids and the snap
+choice -- goes through :func:`toolbar.toolbar`, which gives up labels before it
+gives up controls.
+
+**Two surfaces read one table.** ``VIEW_TOGGLES`` is the grid, the rulers, the
+objects, the minimap and the layer highlight; :func:`view_rows` draws them, and
+both the ``View`` popover here and the ``View`` menu in ``plotter_menu`` call
+it. They used to be five loose ``widgets.toggle`` calls in this pane and one
+menu row in another, which is how "Highlight current layer" came to be filed
+under *Layer* while the other four sat under a heading called *View*.
+
+Everything below :data:`SETTINGS_POPUP` is unchanged: the two dialogs the Map
+menu opens are hosted by whichever window drew the menu, and that is still the
+canvas.
 """
 
 from __future__ import annotations
@@ -16,6 +44,7 @@ from .. import (
     plotter_mode,
     plotter_setup,
     plotter_state,
+    toolbar,
     widgets,
 )
 from ..manual import render as manual_render
@@ -23,19 +52,31 @@ from ..plotter import project
 from ..tokens import sp
 from . import plotter_layers
 
-# The tool letters, drawn on the buttons. From ``plotter_state.TOOLS`` rather
-# than restated, so a tool added there cannot get a button with no key or a key
-# with no button.
-# One glyph per tool, and **every** tool: Wand had no entry, so it fell through
-# to the ``icons.SQUARE`` default and drew the same picture as Shape two
-# buttons away -- while ``icons.WAND`` was on Terrain, which is the one tool in
-# the grid the word does not describe. Wand carries the wand (Inker's raster
-# wand already does, and two pictures for one idea is how a user comes to
-# believe they are two things); Terrain carries ``BLEND``, which is what
-# terrain painting does to the eight cells around what you touch.
-# ``test_every_plotter_tool_has_its_own_icon`` pins the completeness, because
-# the missing entry was invisible -- a wrong glyph, not a blank one.
+#: This bar's imgui id, and the prefix every one of its controls is keyed from.
+BAR = "plotter-context"
+
+#: The tool pill's id. Its segments are ``##plotter-tool/<key>``, which is what
+#: the smoke suite presses; the old grid keyed them ``##tool-<key>``.
+TOOL_PILL = "plotter-tool"
+
+# One glyph per tool, and **every** tool in **both** palettes. Wand had no entry
+# once, fell through to the ``icons.SQUARE`` default and drew the same picture
+# as Shape two buttons away -- while ``icons.WAND`` was on Terrain, which is the
+# one tool in the grid the word does not describe. A missing entry here is a
+# *wrong* picture, not a blank one.
+#
+# The object palette had no entries at all until the bar landed, because the old
+# grid drew it at 300 px wide where a wrong glyph beside a full label was
+# survivable. On a 28 px pill the glyph is the only thing on screen, so all
+# eight are named. ``icons.EGG`` for the capsule is the closest rounded oblong
+# the vendored subset carries; ``icons.py`` forbids guessing a codepoint, and a
+# stadium is not in lucide-static 0.525.0 under any name.
+#
+# ``test_every_plotter_tool_has_its_own_icon`` pins completeness against both
+# palettes and distinctness *within* each -- across the two it cannot hold,
+# because six letters already mean two things and ``object`` is in both lists.
 _ICONS = {
+    # The tile palette.
     "stamp": icons.BRUSH,
     "erase": icons.ERASER,
     "fill": icons.PAINT_BUCKET,
@@ -45,22 +86,176 @@ _ICONS = {
     "wand": icons.WAND,
     "pick": icons.PIPETTE,
     "object": icons.FLAG,
+    # The object palette. ``object`` above is its pointer and is shared.
+    "object_rect": icons.RECTANGLE,
+    "object_point": icons.CROSSHAIR,
+    "object_ellipse": icons.CIRCLE,
+    "object_polygon": icons.PENTAGON,
+    "object_polyline": icons.SPLINE,
+    "object_tile": icons.IMAGE,
+    "object_text": icons.TYPE,
+    "object_capsule": icons.EGG,
 }
 
+#: What the Shape tool can fill, in the order the buttons sit. A tuple rather
+#: than two literals so the pane and any future keyboard route read one list.
+SHAPES = (("rect", "Rectangle", icons.SQUARE), ("ellipse", "Ellipse", icons.CIRCLE))
 
-def _tool_grid(state: Any, layer: Any = None) -> None:
-    """The palette **the layer in hand hosts**, three across.
+#: Tiled's brush transforms as bar buttons: ``key``, label, glyph, the
+#: ``plotter_mode`` transform name, and whether it is the reversed one.
+#:
+#: **Two of the four are words rather than glyphs**, and deliberately:
+#: ``icons.py`` is a transcription of lucide-static 0.525.0's codepoint
+#: assignments and its docstring forbids guessing one. The vendored subset
+#: carries ``flip-horizontal-2`` and ``rotate-cw`` and neither of their mirrors,
+#: so "Flip V" and "Rotate back" are the honest rendering. ``toolbar._measure``
+#: hands an item with no glyph the same width at both tiers, which is what makes
+#: "this group drops to icons" mean "this group gets no narrower" for those two
+#: rather than "those two vanish".
+BRUSH_TRANSFORMS: tuple[tuple[str, str, str, str, bool, str], ...] = (
+    (
+        "flip_h",
+        "Flip H",
+        icons.FLIP_HORIZONTAL,
+        "x",
+        False,
+        "Mirror the brush left to right (X)",
+    ),
+    ("flip_v", "Flip V", "", "y", False, "Mirror the brush top to bottom (Y)"),
+    (
+        "rotate_cw",
+        "Rotate",
+        icons.ROTATE_CW,
+        "z",
+        False,
+        "Turn the brush a quarter clockwise (Z)",
+    ),
+    (
+        "rotate_ccw",
+        "Rotate back",
+        "",
+        "z",
+        True,
+        "Turn the brush a quarter anticlockwise (Shift+Z)",
+    ),
+)
+
+#: Said once, because four buttons and a test all want the same sentence.
+NO_BRUSH = "Pick a tile in the tileset first -- there is no brush to transform."
+
+RANDOM_TIP = "Each cell chooses from the non-empty tiles in the stamp."
+
+#: The canvas aids, as one table. **Two surfaces read it** -- the ``View``
+#: popover on this bar and the ``View`` menu in ``plotter_menu`` -- which is the
+#: whole reason it exists: the five were four ``widgets.toggle`` calls in this
+#: pane plus one menu row filed under *Layer*, and nothing made them one set.
+#:
+#: The attribute name on ``PlotterState`` is the key, so a toggle added there
+#: and listed here needs no third place to be taught about it.
+VIEW_TOGGLES: tuple[tuple[str, str, str], ...] = (
+    ("grid", "Grid", "Ctrl+G"),
+    ("rulers", "Rulers", "Ctrl+R"),
+    ("show_objects", "Show objects", ""),
+    ("minimap", "Minimap", ""),
+    ("highlight", "Highlight current layer", "H"),
+)
+
+VIEW_POPUP = "plotter-view"
+
+
+def view_rows(ctx: Any, state: Any) -> None:
+    """:data:`VIEW_TOGGLES` as checked menu rows. Drawn in both View surfaces.
+
+    Menu rows rather than ``widgets.toggle`` because the menu is the surface
+    that cannot use a switch, and one drawing that works in both beats two that
+    have to be kept saying the same thing. ``controls.menu_item`` renders
+    identically inside :func:`controls.menu_popup`, which is what the popover
+    on this bar is.
+    """
+
+    for key, label, chord in VIEW_TOGGLES:
+        hit = controls.menu_item(
+            f"{label}##plotter-view/{key}", chord, bool(getattr(state, key, False))
+        )
+        if bool(hit[0] if isinstance(hit, tuple) else hit):
+            setattr(state, key, not bool(getattr(state, key, False)))
+
+
+def _view_popup(ctx: Any, state: Any) -> None:
+    with controls.menu_popup(VIEW_POPUP) as opened:
+        if opened:
+            view_rows(ctx, state)
+
+
+def bar_items(state: Any, layer: Any) -> tuple[list[Any], list[str]]:
+    """What the row holds for this layer: its buttons, and which fields it wants.
+
+    **Pure** -- no imgui, no ctx, no document beyond the layer handed in -- so
+    every combination the bar can be in is a plain assertion rather than a
+    rendered frame. The fields come back as *names* rather than as
+    :class:`toolbar.Field`s for the same reason: a Field carries a draw
+    closure, and a closure is the one part of this that cannot be asserted
+    about.
+
+    An object layer gets neither the brush transforms nor Random: there is no
+    brush on an object layer, and a row of five buttons that are permanently
+    greyed is worse than a row that does not claim the width.
+    """
+
+    items: list[Any] = []
+    fields: list[str] = []
+    if plotter_state.layer_kind(layer) != "tile":
+        return items, fields
+    armed = getattr(state, "brush", None) is not None
+    for key, label, glyph, _name, _back, tip in BRUSH_TRANSFORMS:
+        items.append(
+            toolbar.Item(
+                key,
+                label,
+                glyph,
+                tooltip=tip,
+                enabled=armed,
+                reason=NO_BRUSH,
+                priority=1,
+            )
+        )
+    items.append(
+        toolbar.Item(
+            "random",
+            "Random",
+            icons.SHUFFLE,
+            tooltip=RANDOM_TIP,
+            selected=bool(getattr(state, "random_mode", False)),
+            priority=2,
+        )
+    )
+    # The tool's own setting, at priority 0: it is what the row is *for* while
+    # that tool is in hand, so it outlives the transforms in a narrow window.
+    if state.tool == "shape":
+        fields.append("shape")
+    if state.tool == "terrain":
+        fields.append("terrain")
+    return items, fields
+
+
+def _tool_pill(state: Any, layer: Any) -> None:
+    """The palette **the layer in hand hosts**, as one pill group of glyphs.
 
     Tiled's split, and the reason for it: half the toolbox does nothing on the
     layer you are standing on, and a toolbox that offers a Fill on an object
     layer is one that has to refuse the click afterwards.
 
-    A group or an image layer hosts no gesture at all, and the grid draws
+    A group or an image layer hosts no gesture at all, and the pill draws
     **disabled with a reason** rather than empty -- the house pattern. An empty
     toolbox reads as a broken pane; a greyed one with a sentence on the hover
     says what to select instead.
+
+    Through ``controls.segmented_choice`` rather than ``widgets.icon_button``,
+    which is load-bearing rather than tidy: ``icon_button`` draws through imgui
+    directly and is invisible to ``probe``, so a tool button that stopped
+    working could not be caught by a test that presses it. The old grid used
+    ``controls.button`` for the same reason and this keeps it.
     """
-    from imgui_bundle import imgui
 
     palette = plotter_state.tools_for(layer)
     reason = ""
@@ -73,56 +268,206 @@ def _tool_grid(state: Any, layer: Any = None) -> None:
             if layer is not None
             else "Nothing is open."
         )
-    # Width from the style rather than a literal gap: ``theme.apply`` sets
-    # item_spacing through ``sp()``, so a grid that subtracted a hard-coded 8
-    # was right at UI scale 1.0 and short by five pixels per gap at 1.5 --
-    # which is what dropped the raster editor's fifth toolbox column.
-    width = widgets.grid_width(3)
-    for index, (key, label, letter) in enumerate(palette):
-        if index % 3:
-            imgui.same_line()
-        active = not reason and state.tool == key
-        if reason:
-            imgui.begin_disabled()
-        clicked = controls.button(
-            f"{_ICONS.get(key, icons.SQUARE)}##tool-{key}", (width, 0), selected=active
-        )
-        if reason:
-            imgui.end_disabled()
-        if clicked and not reason:
-            state.tool = key
-            shape = plotter_state.OBJECT_SHAPES.get(key)
-            if shape:
-                state.object_shape = shape
-        if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
-            note = f"{label} ({letter})"
-            imgui.set_tooltip(f"{note}\n{reason}" if reason else note)
-    imgui.new_line()
+    options = [(key, _ICONS.get(key, icons.SQUARE)) for key, _label, _letter in palette]
+    tips = {
+        key: (f"{label} ({letter})\n{reason}" if reason else f"{label} ({letter})")
+        for key, label, letter in palette
+    }
+    changed, picked = controls.segmented_choice(
+        TOOL_PILL,
+        options,
+        "" if reason else state.tool,
+        enabled=not reason,
+        reason=reason,
+        tooltips=tips,
+        compact=True,
+    )
+    if changed and not reason:
+        state.tool = picked
+        shape = plotter_state.OBJECT_SHAPES.get(picked)
+        if shape:
+            state.object_shape = shape
 
 
-#: What the Shape tool can fill, in the order the buttons sit. A tuple rather
-#: than two literals so the pane and any future keyboard route read one list.
-SHAPES = (("rect", "Rectangle", icons.SQUARE), ("ellipse", "Ellipse", icons.CIRCLE))
+def _shape_field(state: Any) -> Any:
+    """Rectangle or ellipse -- Tiled's Shape Fill, as one tool with a mode."""
+
+    def draw_it(_compact: bool) -> None:
+        from imgui_bundle import imgui
+
+        for index, (key, label, glyph) in enumerate(SHAPES):
+            if index:
+                imgui.same_line(0.0, 0.0)
+            if controls.button(
+                f"{glyph}##{BAR}/shape/{key}",
+                role=controls.ButtonRole.GHOST,
+                control_size=controls.ControlSize.COMPACT,
+                selected=state.shape_mode == key,
+                tooltip=label,
+            ):
+                state.shape_mode = key
+
+    # Glyphs at both tiers: two pills are already the smallest this can be, and
+    # a field whose compact size equals its full one is what ``Field`` means by
+    # a control that gets no narrower.
+    return toolbar.Field("shape", "Shape", draw_it, width=64.0, compact=64.0)
 
 
-def _shape_picker(state: Any) -> None:
-    """Rectangle or ellipse -- Tiled's Shape Fill, as one tool with a mode.
+NO_TERRAIN = (
+    "This map has no terrain sets. Add a Tiled .tsx that carries Wang sets, or "
+    "a sheet holding all 47 blob cases, and Plotter will offer to turn it into "
+    "one."
+)
 
-    Drawn only while Shape is the tool in hand, the way the terrain swatches
-    are: a control for a tool you are not holding is a control that has to
-    explain itself.
+
+def _terrain_field(state: Any, tab: Any) -> Any:
+    """Which terrain the Terrain tool lays down.
+
+    A combo rather than the grid of coloured swatches this was in the sidebar,
+    and that is the one thing the move to a bar genuinely costs: a 38 px row has
+    no space for a colour per row. What it buys is that the choice sits beside
+    the tool it belongs to instead of a window's width away, and the *name* is
+    how a terrain is chosen -- the fill colour was only ever how it was
+    recognised once chosen, and the swatch is still drawn on the tileset
+    editor's Terrain tab off the same spec.
+
+    The empty branch is a *disabled* combo carrying the sentence rather than a
+    button that opens the importer, because a field is not a place to put a
+    verb: Tileset > Import a tileset is where a tileset is added, and the
+    reason says so.
     """
+
+    def draw_it(_compact: bool) -> None:
+        if tab is None:
+            controls.combo(
+                f"##{BAR}/terrain", "", [], enabled=False, reason="Nothing is open."
+            )
+            return
+        entries = terrains_of(tab.doc)
+        if not entries:
+            controls.combo(f"##{BAR}/terrain", "", [], enabled=False, reason=NO_TERRAIN)
+            return
+        if state.terrain is None:
+            state.terrain = first_terrain(entries)
+        options = [(f"{index}:{rank}", spec.name) for index, rank, spec in entries]
+        keys = {key for key, _label in options}
+        current = (
+            "" if state.terrain is None else f"{state.terrain[0]}:{state.terrain[1]}"
+        )
+        if current not in keys:
+            current = options[0][0]
+        changed, picked = controls.combo(
+            f"##{BAR}/terrain",
+            current,
+            options,
+            tooltip="Which terrain the Terrain tool lays down. Painting fits "
+            "the eight cells around what you touch.",
+        )
+        if changed:
+            index, rank = picked.split(":")
+            state.terrain = (int(index), int(rank))
+
+    return toolbar.Field("terrain", "Terrain", draw_it, width=140.0, compact=96.0)
+
+
+def _field(state: Any, tab: Any, key: str) -> Any:
+    return _shape_field(state) if key == "shape" else _terrain_field(state, tab)
+
+
+def _trailing(ctx: Any, state: Any) -> Any:
+    """``View``, the snap choice and the (?), at the **end** of the row.
+
+    A trailing block rather than three more items, for ``inker_context``'s
+    reason: ``toolbar`` draws its items before its fields, so as items these
+    would land between Random and the tool's own setting -- in the middle of the
+    tool's settings, which is the one place a session-wide setting must not be.
+    Trailing puts them past the fields, at the right-hand end.
+
+    The block collapses to ``View`` plus the (?), and the snap pills are what it
+    gives up. That is the ordering ``toolbar.Trailing`` states -- a label is
+    cheaper to lose than a control -- with one addition this bar can make and
+    Inker's could not: a control that exists in *two* places is cheaper still,
+    and every snap mode is also a row in the Map menu's Snap group.
+    """
+
     from imgui_bundle import imgui
 
-    width = widgets.grid_width(len(SHAPES))
-    for index, (key, label, glyph) in enumerate(SHAPES):
-        if index:
+    style = imgui.get_style()
+    gap = style.item_spacing.x
+    pad = style.frame_padding.x * 2.0
+    square = imgui.get_frame_height()
+    view_w = imgui.calc_text_size("View").x + pad
+    # ``ControlSize.COMPACT`` changes only the vertical padding, so a pill is
+    # exactly its text plus the frame padding and this measurement is not an
+    # estimate.
+    pills = sum(imgui.calc_text_size(label).x + pad for _key, label in SNAP_LABELS)
+    full = view_w + gap + pills + gap + square
+    compact = view_w + gap + square
+
+    def draw_it(tight: bool) -> None:
+        if controls.button(
+            f"View##{BAR}/view",
+            role=controls.ButtonRole.GHOST,
+            control_size=controls.ControlSize.COMPACT,
+            tooltip="What the canvas shows: the grid, the rulers, the objects, "
+            "the minimap and the layer highlight",
+        ):
+            imgui.open_popup(VIEW_POPUP)
+        _view_popup(ctx, state)
+        if not tight:
             imgui.same_line()
-        active = state.shape_mode == key
-        if controls.button(f"{glyph}##shape-{key}", (width, 0), selected=active):
-            state.shape_mode = key
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(label)
+            _snap_choice(state)
+        imgui.same_line()
+        manual_render.help_button_inline(ctx, "plotter-tools")
+
+    return toolbar.Trailing(full, compact, draw_it)
+
+
+def _hit(ctx: Any, state: Any, key: str) -> None:
+    """One click on the row. The transforms go through ``plotter_mode`` so the
+    button and the keystroke are one line rather than two that agree."""
+
+    if key == "random":
+        state.random_mode = not bool(getattr(state, "random_mode", False))
+        return
+    for item_key, _label, _glyph, name, back, _tip in BRUSH_TRANSFORMS:
+        if item_key == key:
+            plotter_mode.transform_brush(state, name, back=back)
+            return
+
+
+def draw(ctx: Any) -> None:
+    """The bar. Called by the canvas, between the tab bar and the map.
+
+    No ``section_blocks`` and no ``widgets.section``: this is not one of the
+    four narrow sidebars the tinted grouping was written for, it is a strip over
+    the canvas, and a heading on a toolbar is a heading on a toolbar.
+    ``tests/test_section_blocks.py`` lists the panes that must ask; this one
+    left that list when it left the sidebar.
+    """
+
+    from imgui_bundle import imgui
+
+    state = plotter_mode.ensure(ctx)
+    tab = state.active
+    layer = None if tab is None else tab.doc.active()
+    # Before the pill draws, so the frame that follows a layer switch already
+    # has a legal tool in hand: ``sync_tool`` is idempotent and is called from
+    # here, from the canvas and from the key handler, which are the places a
+    # gesture can start.
+    plotter_state.sync_tool(state, layer)
+    _tool_pill(state, layer)
+    items, fields = bar_items(state, layer)
+    imgui.same_line()
+    hit = toolbar.toolbar(
+        BAR,
+        items,
+        fields=[_field(state, tab, key) for key in fields],
+        trailing=_trailing(ctx, state),
+    )
+    if hit:
+        _hit(ctx, state, hit)
+    imgui.separator()
 
 
 def terrains_of(doc: Any) -> list[tuple[int, int, Any]]:
@@ -140,8 +485,8 @@ def terrains_of(doc: Any) -> list[tuple[int, int, Any]]:
         # same thing a terrain row is from the user's side: a thing the Terrain
         # tool lays down. The two paint by different machinery -- the preset by
         # its positional collapse, a Wang colour by constraint matching -- and
-        # the pane deliberately does not say which, because to the person
-        # holding the tool there is no difference.
+        # the bar deliberately does not say which, because to the person holding
+        # the tool there is no difference.
         for wangset in ref.tileset.wangsets:
             for colour_index, colour in enumerate(wangset.colours):
                 out.append((index, -1 - colour_index, _wang_swatch(wangset, colour)))
@@ -149,10 +494,10 @@ def terrains_of(doc: Any) -> list[tuple[int, int, Any]]:
 
 
 def first_terrain(entries: list[tuple[int, int, Any]]) -> tuple[int, int] | None:
-    """What the Terrain section arms when nothing is chosen yet.
+    """What the Terrain field arms when nothing is chosen yet.
 
-    A function rather than two lines inside the picker because **no click is
-    needed to reach a terrain**: merely opening the section arms one, so what it
+    A function rather than two lines inside the field because **no click is
+    needed to reach a terrain**: merely picking the tool arms one, so what it
     arms is a rule the canvas is tested against rather than a detail of a draw
     call nothing headless can run.
     """
@@ -163,7 +508,7 @@ def first_terrain(entries: list[tuple[int, int, Any]]) -> tuple[int, int] | None
 
 
 def _wang_swatch(wangset: Any, colour: Any) -> Any:
-    """A Wang colour dressed as a terrain spec, for the row that draws it.
+    """A Wang colour dressed as a terrain spec, for the row that names it.
 
     The outline is derived rather than carried, exactly as it is for a terrain
     read out of a ``.tsx``: the format does not store one and the swatch is the
@@ -182,10 +527,10 @@ def _wang_swatch(wangset: Any, colour: Any) -> Any:
 def hex_rgba(text: str) -> tuple[int, int, int, int]:
     """``#rrggbb`` or ``#aarrggbb`` as four channels; opaque white on nonsense.
 
-    Public since 2026-08-30, for one caller and one reason: the tileset
-    editor's Terrain tab draws the *same* swatch this picker does, and it has
-    to be the same colour by construction rather than by a second parser
-    beside it agreeing for a while.
+    Public since 2026-08-30, for one caller and one reason: the tileset editor's
+    Terrain tab draws a swatch off the same spec, and it has to be the same
+    colour by construction rather than by a second parser beside it agreeing for
+    a while.
 
     Tolerant rather than refusing, because this is a *swatch*: a colour nobody
     can parse is a row drawn in the wrong colour, and refusing the map over it
@@ -202,134 +547,6 @@ def hex_rgba(text: str) -> tuple[int, int, int, int]:
     except ValueError:
         pass
     return (255, 255, 255, 255)
-
-
-def _terrain_picker(ctx: Any, state: Any, tab: Any) -> None:
-    """Which terrain the Terrain tool lays down.
-
-    Here rather than in the tileset pane because this pane owns what a click
-    *means* and the other owns which tile it means -- and a terrain is not a
-    tile: it is a role that thirty-two cells of the atlas share, chosen by the
-    neighbours rather than by the user.
-    """
-    from imgui_bundle import imgui
-
-    entries = terrains_of(tab.doc)
-    widgets.section("Terrain")
-    if not entries:
-        # The old copy sent people to a generator that was deleted on
-        # 2026-08-18, through a section key nothing has registered since -- a
-        # route that was live and did nothing.
-        widgets.muted_wrapped(
-            "This map has no terrain sets. Add a Tiled .tsx that carries Wang "
-            "sets, or a sheet holding all 47 blob cases, and Plotter will offer "
-            "to turn it into one."
-        )
-        if controls.button("Add a tileset...", (-1, 0)):
-            plotter_mode.ask_add_tileset(ctx)
-        return
-    if state.terrain is None:
-        state.terrain = first_terrain(entries)
-    width = widgets.grid_width(2)
-    for slot, (tileset_index, rank, spec) in enumerate(entries):
-        if slot % 2:
-            imgui.same_line()
-        chosen = state.terrain == (tileset_index, rank)
-        colour = tuple(part / 255.0 for part in spec.fill)
-        imgui.push_style_color(imgui.Col_.button.value, imgui.get_color_u32(colour))
-        imgui.push_style_color(imgui.Col_.button_hovered.value, imgui.get_color_u32(colour))
-        # The swatch *is* the terrain, so the selected one is marked by the text
-        # colour rather than by a second colour fighting the fill.
-        imgui.push_style_color(
-            imgui.Col_.text.value,
-            imgui.get_color_u32((1.0, 1.0, 1.0, 1.0) if chosen else (0.0, 0.0, 0.0, 0.55)),
-        )
-        if controls.button(f"{spec.name}##terrain-{tileset_index}-{rank}", (width, 0)):
-            state.terrain = (tileset_index, rank)
-        imgui.pop_style_color(3)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                f"{spec.name} - in {tab.doc.tilesets[tileset_index].tileset.name}"
-            )
-    widgets.muted_wrapped("Painting fits the eight cells around what you touch.")
-
-
-def draw(ctx: Any) -> None:
-    """This pane's headings, on tinted blocks.
-
-    The blocks are opened *here* rather than in :func:`layout.pane`, which is
-    flat: a pane on a wide canvas wants no tint, and this is one of the four
-    narrow sidebars the grouping was written for (see
-    ``tests/test_section_blocks.py`` for the report it came from). Wrapping
-    ``_body`` rather than inlining the ``with`` keeps every early return inside
-    the scope, and the scope closes its last block on the way out.
-    """
-    with widgets.section_blocks():
-        _body(ctx)
-
-
-def _body(ctx: Any) -> None:
-    from imgui_bundle import imgui
-
-    state = plotter_mode.ensure(ctx)
-    tab = state.active
-    widgets.section("Tools")
-    manual_render.help_button(ctx, "plotter-tools")
-    layer = None if tab is None else tab.doc.active()
-    # Before the grid draws, so the frame that follows a layer switch already
-    # has a legal tool in hand: ``sync_tool`` is idempotent and is called from
-    # here and from the key handler, which are the two places a gesture can
-    # start.
-    plotter_state.sync_tool(state, layer)
-    _tool_grid(state, layer)
-    imgui.dummy((0, 6))
-
-    if tab is None:
-        # The heading and nothing else. One voice for one empty state:
-        # the canvas's ``nothing_open`` is it, and four panels each
-        # repeating it reads as four separate problems.
-        return
-
-    doc = tab.doc
-    if state.tool == "terrain":
-        _terrain_picker(ctx, state, tab)
-        imgui.dummy((0, 6))
-    if state.tool == "shape":
-        _shape_picker(state)
-        imgui.dummy((0, 6))
-    if state.tool == "stamp":
-        _, state.random_mode = widgets.toggle("Random mode", state.random_mode)
-        if state.random_mode:
-            widgets.muted_wrapped("Each cell chooses from the non-empty tiles in the stamp.")
-        imgui.dummy((0, 6))
-    if state.tool == "erase":
-        widgets.muted_wrapped("Drag to erase; Shift-drag clears a rectangle.")
-        imgui.dummy((0, 6))
-    # Headed, where they used to be three loose toggles under whatever the tool
-    # in hand had drawn. They are about what the *canvas* shows rather than what
-    # a click does, and with sections drawn as blocks the difference stopped
-    # being invisible and became wrong: with Terrain in hand, "Grid",
-    # "Show objects" and "Minimap" sat inside the Terrain block, which said they
-    # were terrain settings.
-    widgets.section("View")
-    _, state.grid = widgets.toggle("Grid (Ctrl+G)", state.grid)
-    _, state.rulers = widgets.toggle("Rulers (Ctrl+R)", state.rulers)
-    _, state.show_objects = widgets.toggle("Show objects", state.show_objects)
-    _, state.minimap = widgets.toggle("Minimap", state.minimap)
-    _, state.highlight = widgets.toggle(
-        "Highlight current layer", state.highlight
-    )
-    _snap_choice(state)
-
-    imgui.dummy((0, 6))
-    widgets.section("Map")
-    widgets.muted(f"{doc.width} x {doc.height} tiles, {doc.tile_w} x {doc.tile_h} px")
-    widgets.muted(f"{doc.pixel_width} x {doc.pixel_height} px overall")
-    widgets.muted(f"{doc.projection} projection")
-
-    if tab.busy:
-        widgets.muted("Saving...")
-        return
 
 
 #: The snap setting's three pills, and the sentence each one is worth.
@@ -351,7 +568,6 @@ def _snap_choice(state: Any) -> None:
     offers all three; the tooltips are where "and Ctrl inverts it" is said,
     because a modifier nobody documents is a modifier nobody finds.
     """
-    widgets.field_label("Snap objects to")
     changed, picked = controls.segmented_choice(
         "plotter-snap",
         list(SNAP_LABELS),

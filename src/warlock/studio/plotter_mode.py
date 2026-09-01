@@ -507,6 +507,28 @@ def _turned(brush: Any, shift: bool) -> Any:
 _BRUSH_TRANSFORMS: dict[str, Any] = {"x": _flipped_h, "y": _flipped_v, "z": _turned}
 
 
+def transform_brush(state: Any, name: str, *, back: bool = False) -> bool:
+    """Flip or turn the brush in hand. -> whether anything changed.
+
+    Public since the toolbar landed, and for the reason :func:`undo` is: the
+    bar draws the same four transforms the keyboard offers, and two call sites
+    reaching into ``_BRUSH_TRANSFORMS`` themselves are two places that can come
+    to disagree about what ``Shift`` means. ``back`` is the *reversed* sense --
+    Shift+Z's three clockwise turns -- named rather than passed as a bare
+    ``shift`` flag, because a button has no shift key and calling the argument
+    one would be a lie at half the call sites.
+
+    Deliberately outside every busy gate: the brush is view state, so
+    transforming it writes nothing to the document and pushes no step.
+    """
+
+    transform = _BRUSH_TRANSFORMS.get(name)
+    if transform is None or state.brush is None:
+        return False
+    state.brush = transform(state.brush, back)
+    return True
+
+
 # --- history ------------------------------------------------------------------
 #
 # One call per direction, rather than two lines under the key handler, because
@@ -653,10 +675,9 @@ def handle_key(ctx: Any, event: Any) -> bool:
             _delete(ctx, state, tab)
         return True
     if name in _BRUSH_TRANSFORMS and state.brush is not None:
-        # Tiled's X / Y / Z. Deliberately outside the busy gate: the brush is
-        # view state, so transforming it writes nothing to the document and
-        # pushes no step -- the same reason ``tool`` is unguarded.
-        state.brush = _BRUSH_TRANSFORMS[name](state.brush, shift)
+        # Tiled's X / Y / Z, through the same door the toolbar's four buttons
+        # press. See :func:`transform_brush` for why it is unguarded.
+        transform_brush(state, name, back=shift)
         return True
     # **The letters belong to the layer** (W3.2): six of them mean two things,
     # which is Tiled's arrangement -- ``R`` is the rectangular select on a tile

@@ -136,6 +136,12 @@ def draw(ctx: Any) -> None:
         _empty(ctx)
         return
 
+    # The toolbar, between the tabs and the map -- ``inker_canvas``' position
+    # for its context bar, and above all *before* the content region is read:
+    # the canvas sizes itself from what is left, so a strip drawn after the
+    # measurement is a strip drawn over the map's last rows.
+    tools_pane.draw(ctx)
+
     doc = tab.doc
     view = tab.view
     # A release can be missed -- focus lost, a tab switched, Esc, a save begun
@@ -2494,7 +2500,7 @@ def _object_menu(ctx: Any, state: Any, tab: Any, hovered: bool) -> None:
             if uid is None
             else "This map is being written."
         )
-        if controls.menu_item("Duplicate", "Ctrl+D", False, editable, reason=reason)[0]:
+        if controls.menu_item("Duplicate", "Ctrl+J", False, editable, reason=reason)[0]:
             plotter_mode._duplicate_object(ctx, state, tab)
         if controls.menu_item("Raise", "", False, editable, reason=reason)[0]:
             doc.reorder_object(layer.uid, uid, 1)

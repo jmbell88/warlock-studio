@@ -31,6 +31,14 @@ from . import plotter_layers, plotter_textures
 
 SHEET_POPUP = "plotter-sheet-import"
 
+#: What this pane refuses to shrink past, in design pixels. It had no floor at
+#: all while it sat under the tools pane and took whatever was left; it is the
+#: fill slot of a column now, and a fill slot's floor is what
+#: ``layout_skeleton.heights`` makes the share above it give way to. The number
+#: is a heading, the tileset tabs, one row of the zoom bar and enough atlas to
+#: recognise -- below that the picker is a scrollbar with a picture in it.
+TILESET_FLOOR = 220.0
+
 
 #: Every button in this pane that can grey out does so for this one cause, and
 #: hoisting it is the ``_VIEWPORT_WHY`` pattern: four dead controls explaining
