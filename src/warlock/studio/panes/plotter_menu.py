@@ -96,14 +96,14 @@ def _map_rows(ctx: Any, state: Any, tab: Any) -> None:
         state.goto_pending = True
     controls.menu_separator()
     if _row(
-        "Export .tmx",
+        "Export .tmx...",
         "Ctrl+Shift+E",
         enabled=ready and tilesets,
         reason=BUSY if not ready else NO_TILESET,
     ):
         plotter_mode.export_map(ctx, "tmx", tab)
     if _row(
-        "Export .tmj", enabled=ready and tilesets, reason=BUSY if not ready else NO_TILESET
+        "Export .tmj...", enabled=ready and tilesets, reason=BUSY if not ready else NO_TILESET
     ):
         plotter_mode.export_map(ctx, "tmj", tab)
     if _row(

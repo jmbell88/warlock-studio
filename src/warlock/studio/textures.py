@@ -297,3 +297,9 @@ class ThumbnailCache:
         self._by_key.clear()
         self._missing_by_key.clear()
         self._stats.clear()
+        # The byte count with them. It is the one field ``release`` left
+        # standing, so a cache used again after a release started at the old
+        # total with nothing in it and evicted on its first insert -- and went
+        # on evicting, because clearing an empty ``_entries`` cannot bring a
+        # stale total down.
+        self._bytes = 0

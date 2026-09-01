@@ -22,9 +22,14 @@ def test_saying_something_puts_it_under_the_canvas():
 
 
 def test_a_tip_stops_being_drawn_once_it_is_stale():
+    """Asserted a hair *past* the boundary rather than on it: ``at`` is a
+    ``monotonic`` reading, so ``(at + TIP_SECONDS) - at`` is not exactly
+    ``TIP_SECONDS`` -- at an uptime of 2044.5 s it comes back
+    5.999999999999773, and the test's verdict turned on how long the machine
+    had been up."""
     state = inker_state.InkerState()
     state.say("The layer is locked.")
-    assert not state.tip.alive(state.tip.at + inker_state.TIP_SECONDS)
+    assert not state.tip.alive(state.tip.at + inker_state.TIP_SECONDS + 1e-6)
     assert state.tip.alive(state.tip.at + inker_state.TIP_SECONDS - 0.5)
 
 

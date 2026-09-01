@@ -331,6 +331,26 @@ def test_the_head_is_advanced_by_the_write_and_not_by_the_submit(tmp_path, kind)
     assert (tmp_path / slot.journal_name).read_bytes() == b"a"
 
 
+def test_a_write_that_lands_inside_the_submit_keeps_its_head(tmp_path, kind):
+    """The debounce mark is set *after* ``submit`` returns, and ``submit`` may
+    have run the write to completion by then -- an inline runner always has, and
+    on a small document (a pose, a profile) so may a real task thread. Setting
+    it unconditionally lowered ``head`` back to the pre-write value, so the next
+    tick saw an unwritten document and an *idle* one re-encoded itself every
+    ``JOURNAL_SECONDS`` for the session."""
+    ctx = _Ctx(tmp_path)  # its runner is inline: a submit is a write
+    slot = _Slot()
+    kind.slots.append(slot)
+    journal.pump(ctx, now=9_000.0)
+    journal.pump(ctx, now=10_000.0)
+    assert slot.journal_head == slot.head, "the write landed and said so"
+
+    # And nothing is written again while the document has not moved.
+    journal.pump(ctx, now=20_000.0)
+    journal.pump(ctx, now=30_000.0)
+    assert len(ctx.submitted) == 1
+
+
 def test_a_disk_that_fills_between_the_halves_publishes_neither(tmp_path, monkeypatch):
     """The sibling of the mark bug, and the reason both stagings come first.
 

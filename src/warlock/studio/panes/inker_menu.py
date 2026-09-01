@@ -418,18 +418,33 @@ def header_controls(ctx: Any, doc: Any) -> None:
     widgets.muted("  Cels:")
     imgui.same_line()
     continuous = doc.anim is not None and doc.anim.tracks[doc.stack.active_index].continuous
-    imgui.begin_disabled(doc.anim is None)
+    # Greyed *and* explained. A bare ``begin_disabled`` leaves a control that
+    # does nothing and says nothing about why, which is the one reading of a
+    # dead button that is worse than hiding it -- and this button's whole
+    # subject is frames, on a document that has none.
     if _toggle_icon(
         f"{icons.COPY}##continuous",
         continuous,
         "Continuous: drawing on an empty frame of this layer starts from a "
         "copy of the last drawing on it rather than from nothing. A copy, not "
         "a link -- editing it does not change the frame it came from.",
+        enabled=doc.anim is not None,
+        reason="This drawing has no frames yet -- Animate it first.",
     ):
         doc.set_layer_props(continuous=not continuous)
-    imgui.end_disabled()
 
 
-def _toggle_icon(icon: str, engaged: bool, tooltip: str) -> bool:
-    """An icon button that shows its on state -- the shared selection idiom."""
-    return widgets.icon_button(icon, tooltip, selected=engaged)
+def _toggle_icon(
+    icon: str, engaged: bool, tooltip: str, *, enabled: bool = True, reason: str = ""
+) -> bool:
+    """An icon button that shows its on state -- the shared selection idiom.
+
+    ``reason`` joins the tooltip rather than replacing it, because a glyph
+    button's tooltip is its accessible name: a disabled one that showed only
+    the refusal would say why you cannot press it without ever saying what it
+    is. ``controls.menu_item_simple`` and ``controls.checkbox`` take the pair
+    as fields; ``icon_button`` has only ``enabled``, so the joining is here.
+    """
+    if not enabled and reason:
+        tooltip = tooltip + "\n\n" + reason
+    return widgets.icon_button(icon, tooltip, selected=engaged, enabled=enabled)

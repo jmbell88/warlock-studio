@@ -449,7 +449,17 @@ def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -
     # The debounce only -- ``head`` stays where it was until the write lands.
     # See the docstring: this is what makes a failed write retry instead of
     # reading as a copy that exists.
-    set_mark(slot, Mark(name=name, head=mark.head, at=stamp))
+    #
+    # **Under the same lock the task takes, and only if the task has not
+    # already been and gone.** ``submit`` may run ``run`` to completion before
+    # returning (a synchronous runner, and every test), and on a small document
+    # -- a pose, a profile -- so may a real task thread. This line then lowered
+    # ``head`` back to the pre-write value, the next tick saw the document as
+    # unwritten, and an *idle* document re-encoded itself every
+    # ``JOURNAL_SECONDS`` for the life of the session.
+    with _drop_lock:
+        if mark_of(slot).head == mark.head:
+            set_mark(slot, Mark(name=name, head=mark.head, at=stamp))
     return True
 
 

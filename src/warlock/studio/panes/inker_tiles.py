@@ -336,11 +336,19 @@ def _flips(state: Any, tileset: Any) -> None:
     imgui.same_line()
     if not square and state.tile_flip_d:
         state.tile_flip_d = False
-    imgui.begin_disabled(not square)
-    changed, value = controls.checkbox("D##tileflip", state.tile_flip_d)
+    # Greyed with the sentence, not just greyed: the help marker below explains
+    # the requirement, but a reader who has not opened it meets a dead tick box
+    # with nothing on it to say why. ``checkbox`` has taken ``reason`` since it
+    # was written.
+    changed, value = controls.checkbox(
+        "D##tileflip",
+        state.tile_flip_d,
+        enabled=square,
+        reason="D is a transpose, which needs square tiles: it would not land "
+        "on the grid otherwise.",
+    )
     if changed:
         state.tile_flip_d = value
-    imgui.end_disabled()
     widgets.help_marker(
         "How the tile is turned as it goes down. D is the diagonal -- a "
         "transpose -- and the three together give all eight orientations. The "

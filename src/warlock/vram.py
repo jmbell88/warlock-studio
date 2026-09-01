@@ -63,6 +63,8 @@ outlive the registry, and ``queue._generate`` already applies that tolerance.
 """
 
 CONTROLNET_GIB = 2.5
+"""A ControlNet attached for one call (text2image._conditioned)."""
+
 # An SDXL LoRA training step at 1024 px, batch 1, fp16 UNet with gradient
 # checkpointing and fp32 rank-16 adapter weights: ~14 GiB measured on the
 # reference configuration, declared with the same headroom every other figure
@@ -70,7 +72,6 @@ CONTROLNET_GIB = 2.5
 # image pipe before the trainer spawns -- so this is the whole card's budget
 # for the job, whatever the coexist policy says.
 LORA_TRAIN_GIB = 18.0
-"""A ControlNet attached for one call (text2image._conditioned)."""
 
 IP_ENCODER_GIB = 1.2
 """The CLIP-ViT-H image encoder an IP-Adapter needs (same place)."""

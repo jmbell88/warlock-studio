@@ -1020,6 +1020,13 @@ def handle_key(ctx: Any, event: Any) -> bool:
         clear_cell(ctx)
         return True
     if event.key == pygame.K_ESCAPE:
+        # Staged, and consumed only when it had something to drop -- Inker's and
+        # Plotter's rule. This cleared the anchor and returned True either way,
+        # so Esc with nothing selected was swallowed here rather than reaching
+        # whatever the app would otherwise do with it (closing an overlay, say),
+        # and a user pressing it twice got no answer to the second press.
+        if state.anchor is None:
+            return False
         state.anchor = None
         return True
     if name in ("=", "+", "-"):

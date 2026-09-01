@@ -540,13 +540,13 @@ def _transport(ctx: Any, tab: Any) -> None:
         "inker-timeline-out",
         [
             toolbar.Item(
-                "sheet", "Export sheet", icons.GRID,
+                "sheet", "Export sheet...", icons.GRID,
                 tooltip="Writes a packed PNG of every frame plus a JSON sidecar "
                 "naming the cells, their durations and any tags.",
                 enabled=not tab.busy,
             ),
             toolbar.Item(
-                "gif", "Export GIF", icons.FILM,
+                "gif", "Export GIF...", icons.FILM,
                 tooltip="Writes the whole timeline as an animated GIF, looping. A "
                 "GIF holds no partial transparency and times frames in hundredths "
                 "of a second, so soft edges become hard ones and a duration is "
@@ -554,7 +554,7 @@ def _transport(ctx: Any, tab: Any) -> None:
                 enabled=not tab.busy,
             ),
             toolbar.Item(
-                "pngs", "Export PNGs", icons.IMAGE,
+                "pngs", "Export PNGs...", icons.IMAGE,
                 tooltip="Writes one numbered PNG per frame beside the name you "
                 "pick -- name_0000.png, name_0001.png and so on.",
                 enabled=not tab.busy,
@@ -563,7 +563,7 @@ def _transport(ctx: Any, tab: Any) -> None:
             # it gives up the three exports it exists for -- where they come
             # back with their full labels rather than as two more glyphs.
             toolbar.Item(
-                "per-tag", "Export sheet per tag", icons.FLAG,
+                "per-tag", "Export sheet per tag...", icons.FLAG,
                 tooltip="Writes one sheet per tag, each exactly what exporting "
                 "that tag on its own would write -- name_walk.png, "
                 "name_idle.png, each with its own sidecar.",
@@ -572,7 +572,7 @@ def _transport(ctx: Any, tab: Any) -> None:
                 priority=1,
             ),
             toolbar.Item(
-                "per-layer", "Export sheet per layer", icons.LAYERS,
+                "per-layer", "Export sheet per layer...", icons.LAYERS,
                 tooltip="Writes one sheet per layer, or per group as the panel "
                 "shows it -- each holding only that layer's own pixels. Hidden "
                 "layers are left out.",
@@ -2067,78 +2067,102 @@ def _range_menu(ctx: Any, tab: Any) -> None:
     rect = tab.range_sel
     imgui.separator()
     widgets.muted("Range")
-    imgui.begin_disabled(rect is None)
     # With no range, the corner is where the user is: the active track and the
     # playhead. Only Paste can be reached in that state, and "put it here" is
     # what it should mean.
+    #
+    # Greyed through ``enabled``/``reason`` rather than wrapped in
+    # ``begin_disabled``: the wrapper leaves a row that does nothing and says
+    # nothing about why, and ``menu_item_simple`` has taken the pair since it
+    # was written. This menu's own rule two screens down -- "disabled, never
+    # hidden" -- is only half a rule without the sentence.
+    has_range = rect is not None
+    no_range = "Select a block of cels on the timeline first."
     here = (doc.stack.active_index, doc.stack.active_index, doc.anim.current, doc.anim.current)
     t0, t1, f0, f1 = rect or here
-    if controls.menu_item_simple("Copy cels"):
+    if controls.menu_item_simple("Copy cels", enabled=has_range, reason=no_range):
         state.cel_clip = doc.copy_cels(t0, t1, f0, f1)
-    imgui.end_disabled()
     # Paste is the one item whose gate is the *clipboard* rather than the
     # selection: it lands at the range's corner, and with no range at all the
     # playhead and active track are the corner.
-    imgui.begin_disabled(state.cel_clip is None)
-    if controls.menu_item_simple("Paste cels"):
+    if controls.menu_item_simple(
+        "Paste cels",
+        enabled=state.cel_clip is not None,
+        reason="Copy some cels first; there is nothing on the cel clipboard.",
+    ):
         doc.paste_cels(state.cel_clip, t0, f0)
-    imgui.end_disabled()
 
-    imgui.begin_disabled(rect is None)
     imgui.separator()
-    if controls.menu_item_simple("Clear cels"):
+    if controls.menu_item_simple("Clear cels", enabled=has_range, reason=no_range):
         doc.clear_range(t0, t1, f0, f1)
-    if controls.menu_item_simple("Link cels"):
+    if controls.menu_item_simple("Link cels", enabled=has_range, reason=no_range):
         doc.link_range(t0, t1, f0, f1)
-    if controls.menu_item_simple("Unlink cels"):
+    if controls.menu_item_simple("Unlink cels", enabled=has_range, reason=no_range):
         doc.unlink_range(t0, t1, f0, f1)
 
     imgui.separator()
     square = doc.size[0] == doc.size[1]
     for label, run, needs_square in RANGE_VERBS:
-        # Disabled, never hidden -- this menu's rule, stated at the top.
-        imgui.begin_disabled(needs_square and not square)
-        if controls.menu_item_simple(label):
+        # Disabled, never hidden -- this menu's rule, stated at the top -- and
+        # now with the sentence that makes the rule worth having. Two reasons,
+        # named apart, because "no range" and "not square" are two different
+        # things to do about it.
+        blocked = "" if has_range else no_range
+        if not blocked and needs_square and not square:
+            blocked = "This drawing is not square, so it cannot be turned."
+        if controls.menu_item_simple(label, enabled=not blocked, reason=blocked):
             _run_range_verb(ctx, doc, run, (t0, t1, f0, f1))
-        imgui.end_disabled()
-    if controls.menu_item_simple("Fill with foreground"):
+    if controls.menu_item_simple(
+        "Fill with foreground", enabled=has_range, reason=no_range
+    ):
         doc.fill_range(state.fg, t0, t1, f0, f1)
 
     imgui.separator()
-    if controls.menu_item_simple("Duplicate frames"):
+    if controls.menu_item_simple("Duplicate frames", enabled=has_range, reason=no_range):
         doc.duplicate_range(f0, f1)
-    if controls.menu_item_simple("Duplicate frames (linked)"):
+    if controls.menu_item_simple(
+        "Duplicate frames (linked)", enabled=has_range, reason=no_range
+    ):
         doc.duplicate_range(f0, f1, link=True)
-    if controls.menu_item_simple("Reverse frames"):
+    if controls.menu_item_simple("Reverse frames", enabled=has_range, reason=no_range):
         doc.reverse_range(f0, f1)
-    if controls.menu_item_simple("Delete frames"):
+    if controls.menu_item_simple("Delete frames", enabled=has_range, reason=no_range):
         doc.remove_range(f0, f1)
 
     imgui.separator()
     imgui.set_next_item_width(sp(90))
-    changed, value = controls.input_int("ms##rangems", state.range_ms, 10, 50)
+    changed, value = controls.input_int(
+        "ms##rangems", state.range_ms, 10, 50, enabled=has_range, reason=no_range
+    )
     if changed:
         state.range_ms = max(animation.MIN_DURATION_MS, int(value))
-    if controls.menu_item_simple("Set frame durations"):
+    if controls.menu_item_simple(
+        "Set frame durations", enabled=has_range, reason=no_range
+    ):
         doc.set_range_duration(f0, f1, state.range_ms)
-    _range_export_items(ctx, tab, f0, f1)
-    imgui.end_disabled()
+    _range_export_items(ctx, tab, f0, f1, enabled=has_range, reason=no_range)
 
 
-def _range_export_items(ctx: Any, tab: Any, f0: int, f1: int) -> None:
+def _range_export_items(
+    ctx: Any, tab: Any, f0: int, f1: int, *, enabled: bool = True, reason: str = ""
+) -> None:
     """Export just this span, as the same three files the whole clip offers.
 
     Frames only: the range's track bounds are about *cels*, and every export
     writes flattened frames -- a sheet of "tracks 2-3 of frames 4-9" is not a
     thing the sidecar can describe.
+
+    The gate is passed in rather than recomputed: these rows sat inside the
+    caller's ``begin_disabled`` and are greyed for exactly the caller's reason.
     """
     imgui.separator()
-    if controls.menu_item_simple("Export range → sheet"):
-        inker_mode.export_range(ctx, tab, "sheet", (f0, f1))
-    if controls.menu_item_simple("Export range → GIF"):
-        inker_mode.export_range(ctx, tab, "gif", (f0, f1))
-    if controls.menu_item_simple("Export range → PNG sequence"):
-        inker_mode.export_range(ctx, tab, "pngs", (f0, f1))
+    for label, kind in (
+        ("Export range → sheet...", "sheet"),
+        ("Export range → GIF...", "gif"),
+        ("Export range → PNG sequence...", "pngs"),
+    ):
+        if controls.menu_item_simple(label, enabled=enabled, reason=reason):
+            inker_mode.export_range(ctx, tab, kind, (f0, f1))
 
 
 def _tag_row(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
@@ -2319,9 +2343,9 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
     # The tag's own span, and its own looping: a tag is the one part of the
     # timeline that already says both which frames it covers and how many times
     # they play, so exporting one needs nothing typed.
-    if controls.menu_item_simple("Export tag → sheet"):
+    if controls.menu_item_simple("Export tag → sheet..."):
         inker_mode.export_tag(ctx, tab, "sheet", index)
-    if controls.menu_item_simple("Export tag → GIF"):
+    if controls.menu_item_simple("Export tag → GIF..."):
         inker_mode.export_tag(ctx, tab, "gif", index)
     imgui.separator()
     if controls.menu_item_simple("Delete tag"):

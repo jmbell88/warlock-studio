@@ -135,14 +135,17 @@ class Text2ImageClient:
         cancel_event: threading.Event | None = None,
         tile: bool = False,
         sheet: bool = False,
-        scene: bool = False,
         tilesheet: bool = False,
         size: tuple[int, int] | None = None,
     ) -> Path:
         """Generate a reference image and save it to ``output_path``.
 
         Signature-for-signature what ``Text2Image.generate`` takes, because
-        every caller of it is a caller of this. The image itself never crosses
+        every caller of it is a caller of this -- which is why ``scene`` is
+        gone: it was accepted here, put on the wire and dropped by
+        ``text2image_worker.op_generate``, and the in-process backend it claimed
+        to mirror would have raised ``TypeError`` on it. Nothing ever passed
+        one. The image itself never crosses
         the pipe: the child writes ``output_path`` exactly as the in-process
         pipeline did, which is why this substitution needed no change at any
         call site.
@@ -160,7 +163,6 @@ class Text2ImageClient:
             "conditioning": _conditioning_payload(conditioning),
             "tile": bool(tile),
             "sheet": bool(sheet),
-            "scene": bool(scene),
             "tilesheet": bool(tilesheet),
             "size": [int(size[0]), int(size[1])] if size is not None else None,
         }
@@ -344,7 +346,12 @@ class Text2ImageClient:
         winjob.untrack(proc.pid)
         for stream in (proc.stdin, proc.stdout):
             if stream is not None:
-                with contextlib.suppress(OSError):
+                # ``ValueError`` as well as ``OSError``: a reader may still be
+                # iterating ``stdout`` when this runs, and closing a file under
+                # an in-progress read raises "I/O operation on closed file",
+                # which is a ``ValueError``. It escaped into ``_thread_hook`` as
+                # a logged traceback for a child that was being killed anyway.
+                with contextlib.suppress(OSError, ValueError):
                     stream.close()
 
     def _request(
