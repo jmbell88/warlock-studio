@@ -327,6 +327,9 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         # handle: the column it shares with is the column it is drawn in.
         "plotter-objects",
         "plotter-properties",
+        # The numbered stamps, under Properties on the left and present only
+        # while a tile layer is selected -- a stamp is a block of tiles.
+        "plotter-stamps",
         "review-runs",
         "sirens-transport",
         # The right column stacks the instrument list over the envelope editor

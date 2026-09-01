@@ -5720,3 +5720,70 @@ def test_the_plotter_objects_dock_lists_and_filters(app_ctx, imgui_ctx):
     # And with nothing open at all.
     plotter_mode.close_tab(app_ctx, tab.uid)
     _frame(imgui_ctx, lambda: plotter_objects.draw(app_ctx))
+
+
+def test_the_plotter_stamps_pane_draws_full_and_empty_slots(app_ctx, imgui_ctx):
+    """Nine slots in each of their two states, and the thumbnail that resolves
+    a stored gid back through the map's own tileset texture.
+
+    The thumbnail is the part with no other route to a frame: it reaches for a
+    texture, decomposes the flip flags and draws a quad per cell, none of which
+    a pane that only ever showed empty slots would execute.
+    """
+    import numpy as np
+
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_stamps
+    from warlock.studio.tilegrid import gid
+
+    imgui, _renderer = imgui_ctx
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    state = plotter_mode.ensure(app_ctx)
+    ref = tab.doc.add_tileset(_tileset())
+
+    # Every slot empty: the Store branch, greyed because nothing is in hand.
+    labels = _drawn_labels(imgui, lambda: plotter_stamps.draw(app_ctx), "##stamps")
+    # One Store button per slot. They share a label and are told apart by the
+    # ``push_id`` around each row, so the count is what can be asserted --
+    # nine buttons under one id would be one button that works.
+    store = [label for label in labels if label.endswith(" Store")]
+    assert len(store) == len(plotter_stamps.SLOTS), labels
+
+    # One stored, with a flipped cell and a hole, so the thumbnail draws the
+    # flag path and skips the empty cell.
+    state.brush = np.array(
+        [
+            [gid.compose(ref.firstgid), 0],
+            [gid.compose(ref.firstgid + 1, flip_h=True, flip_d=True), gid.compose(999)],
+        ],
+        gid.DTYPE,
+    )
+    assert plotter_mode.store_stamp(app_ctx, state, tab, 1)
+    tab.doc.rename_stamp(1, "roof corner")
+    _frame(imgui_ctx, lambda: plotter_stamps.draw(app_ctx))
+
+    # A brush in hand, so an empty slot's Store button goes live.
+    _frame(imgui_ctx, lambda: plotter_stamps.draw(app_ctx))
+
+    # And while the map is saving, where every verb greys with a reason.
+    tab.saving = True
+    _frame(imgui_ctx, lambda: plotter_stamps.draw(app_ctx))
+    tab.saving = False
+
+    # With nothing open at all.
+    plotter_mode.close_tab(app_ctx, tab.uid)
+    _frame(imgui_ctx, lambda: plotter_stamps.draw(app_ctx))
+
+
+def test_the_stamps_pane_is_offered_only_on_a_tile_layer(app_ctx, imgui_ctx):
+    """A stamp is a block of tiles, so nine controls that cannot act is worse
+    than not claiming the height."""
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_stamps
+
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    assert plotter_stamps.on_tile_layer(app_ctx) is True
+
+    objects = tab.doc.add_object_layer()
+    tab.doc.set_active_layer(objects.uid)
+    assert plotter_stamps.on_tile_layer(app_ctx) is False

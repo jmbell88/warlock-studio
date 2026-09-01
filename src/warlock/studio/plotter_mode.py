@@ -1120,7 +1120,16 @@ def store_stamp(ctx: Any, state: PlotterState, tab: PlotterDoc, slot: int) -> bo
     if state.brush is None:
         ctx.toast("There is no stamp in hand to store.", "warn")
         return False
-    tab.stamps[int(slot)] = state.brush.copy()
+    if tab.busy:
+        # The one gate storing needs, and it is new with the move onto the
+        # document: this pushes an undo step now, where it used to write a dict
+        # on the tab.
+        ctx.toast("This map is being written; the stamp was not stored.", "warn")
+        return False
+    # ``name=None`` keeps whatever the slot was called: re-capturing a better
+    # block is not a rename, and asking the user to retype the name every time
+    # would make naming a slot not worth doing.
+    tab.doc.set_stamp(int(slot), state.brush)
     ctx.toast(f"Stored stamp {slot}.")
     return True
 
@@ -1131,11 +1140,13 @@ def recall_stamp(ctx: Any, state: PlotterState, tab: PlotterDoc, slot: int) -> b
     Switches to Stamp, which is the paste precedent: a brush loaded with no way
     to put it down is a gesture that stops halfway.
     """
-    block = tab.stamps.get(int(slot))
-    if block is None:
+    stamp = tab.doc.stamps.get(int(slot))
+    if stamp is None:
         ctx.toast(f"Stamp {slot} is empty -- Ctrl+Shift+{slot} stores one.", "warn")
         return False
-    state.brush = block.copy()
+    # Copied out, because the stored block is read-only and the brush is the
+    # thing X, Y and Z transform in place.
+    state.brush = stamp.cells.copy()
     state.tool = "stamp"
     return True
 

@@ -344,12 +344,6 @@ class PlotterDoc:
     # cannot open in the tool they came from.
     file_format: str = "wmap"
     uid: str = field(default_factory=lambda: f"pl{next(_uids)}")
-    #: Nine numbered stamps, by slot (1-9). **Per tab, and view state**: a
-    #: stamp is an array of gids, and gids are numbered against one map's
-    #: firstgids -- which is exactly why ``plotter_mode._paste`` refuses a
-    #: cross-document tile paste by name. Not undoable, not serialized,
-    #: dropped with the tab; ``.wmap`` persistence is a deliberate later step.
-    stamps: dict[int, Any] = field(default_factory=dict)
     #: The tileset palette's zoom, per tileset index, in screen pixels per
     #: source pixel. **Per tileset and per tab**, because the zoom that shows a
     #: 1024px terrain set whole is the zoom that shows one tile of a 64px
@@ -361,8 +355,10 @@ class PlotterDoc:
     #: that falls out is the one that was wanted anyway: the first sight of a
     #: tileset is the whole of it, with no button pressed.
     #:
-    #: View state, ``stamps``' own rule: not undoable, not serialized, dropped
-    #: with the tab. One known and harmless consequence: an undone tileset add
+    #: View state: not undoable, not serialized, dropped with the tab. (The
+    #: rule this used to cite belonged to ``stamps``, which is a document
+    #: field now -- see ``MapDoc.stamps``.) One known and harmless
+    #: consequence: an undone tileset add
     #: reuses an index, so a re-added tileset opens at the previous one's zoom.
     #: Keying on the epoch instead would reset the zoom whenever a tile's
     #: metadata changed, which is a worse trade for a view setting.
@@ -371,7 +367,7 @@ class PlotterDoc:
     #: uid. By uid rather than by index for the reason every edit in this app
     #: is: a reorder must not silently fold a different row.
     #:
-    #: View state, ``stamps``' rule again: not undoable, not serialized,
+    #: View state, ``palette_zoom``'s rule: not undoable, not serialized,
     #: dropped with the tab.
     collapsed_rows: set[int] = field(default_factory=set)
     view: PaintView = field(default_factory=PaintView)

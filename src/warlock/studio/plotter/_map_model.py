@@ -352,6 +352,32 @@ def shape_for_kind(kind: str, w: Any = 0.0, h: Any = 0.0) -> Shape:
     raise ValueError(f"an object is one of {list(OBJECT_KINDS)}, not {kind!r}")
 
 
+@dataclass(frozen=True)
+class Stamp:
+    """One numbered stamp: a block of gids and the name given to it.
+
+    **Stored on the map, not on the tab**, and that is the whole of what wave E
+    changed. A stamp is an array of *gids*, and a gid is numbered against one
+    map's firstgids -- which is exactly why ``plotter_mode._paste`` refuses a
+    cross-document tile paste by name. The map is therefore the only honest home
+    for one: on the tab it was lost on every close, and anywhere shared it would
+    have named tiles of a different atlas.
+
+    Frozen, and ``cells`` is copied and made read-only by the document that
+    holds it: an edit records the stamp before and after, and a "before" whose
+    array the caller goes on writing into restores nothing. That is
+    ``LayerPropsEdit``'s rule wearing different clothes.
+
+    The name is the addition a slot number could not make. Nine unnamed slots
+    are nine numbers to remember, and a stamp is stored once and recalled
+    hundreds of times -- so the recall gesture stays a bare digit and the name is
+    what the pane shows beside it.
+    """
+
+    name: str = ""
+    cells: Any = None
+
+
 @dataclass(init=False)
 class MapObject:
     """One named shape on an object layer.

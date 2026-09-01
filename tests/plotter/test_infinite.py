@@ -370,7 +370,10 @@ def test_wmap_stores_the_origin_and_gates_the_version():
     manifest = json.loads(wmap.manifest_json(doc))
     assert manifest["infinite"] is True
     assert manifest["origin"] == [-5, -6]
-    assert manifest["version"] == wmap.VERSION
+    # ``INFINITE_VERSION`` rather than ``VERSION``: 10 stopped being the
+    # ceiling when named stamps took 11, and a test that equated the two
+    # would start asserting that an infinite map carries a stamp.
+    assert manifest["version"] == wmap.INFINITE_VERSION
     back = wmap.read_wmap(wmap.wmap_bytes(doc))
     assert (back.origin_x, back.origin_y) == (-5, -6)
 

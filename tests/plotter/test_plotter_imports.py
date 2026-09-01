@@ -52,6 +52,10 @@ OUTWARD_IMPORTS = {
     ("_map_layers.py", "warlock.studio.tilegrid.tileset"),
     ("_map_model.py", "warlock.studio.tilegrid.tileset"),
     ("_map_paint.py", "warlock.studio.tilegrid"),
+    # ``MapDoc.set_stamp`` writes a block of gids and needs their dtype. The
+    # same leaf every painting module here already reaches for, for the same
+    # reason: a gid is what a cell *is*, and this package is the editor of them.
+    ("tilemap.py", "warlock.studio.tilegrid"),
     ("_map_tilesets.py", "warlock.studio.tilegrid"),
     ("_map_tilesets.py", "warlock.studio.tilegrid.tileset"),
     ("edits.py", "warlock.studio.undo"),

@@ -1317,3 +1317,100 @@ def test_a_tileset_with_no_foreign_wangset_keeps_its_old_version():
     doc = _doc()
     payload = json.loads(wmap.manifest_json(doc))
     assert payload["version"] < wmap.VERSION
+
+
+# --- named stamps (version 11) ------------------------------------------------
+
+
+def _plain() -> MapDoc:
+    """A map with a tileset and a layer and nothing version-lifting on it."""
+    doc = MapDoc(8, 8, 16, 16)
+    doc.add_tileset(Tileset(name="terrain", pixels=_pixels(), tile_w=16, tile_h=16))
+    doc.add_tile_layer("Ground")
+    return doc
+
+
+def _stamped() -> MapDoc:
+    doc = _plain()
+    doc.set_stamp(2, np.array([[1, 2], [3, 0]], gid.DTYPE), name="roof corner")
+    return doc
+
+
+def test_a_map_with_no_stamps_keeps_its_old_version():
+    """The gate's whole purpose: an existing document re-saves byte-stable and
+    does not start declaring a version an older build would refuse."""
+    manifest = json.loads(wmap.manifest_json(_plain()))
+
+    assert manifest["version"] < wmap.STAMPS_VERSION
+    assert manifest["stamps"] == [], "the key is written even when empty"
+
+
+def test_a_stamp_lifts_the_version_to_eleven():
+    """``stamps`` is written unconditionally, so a document carrying one while
+    declaring version 10 would hand an older reader a file it drops the stamps
+    out of in silence."""
+    manifest = json.loads(wmap.manifest_json(_stamped()))
+
+    assert manifest["version"] == wmap.STAMPS_VERSION == 11
+
+
+def test_a_stamp_round_trips_with_its_name_and_its_cells():
+    doc = _stamped()
+
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+
+    assert sorted(back.stamps) == [2]
+    assert back.stamps[2].name == "roof corner"
+    assert back.stamps[2].cells.tolist() == [[1, 2], [3, 0]]
+
+
+def test_a_reopened_stamp_is_read_only_and_the_document_reads_clean():
+    back = wmap.read_wmap(wmap.wmap_bytes(_stamped()))
+
+    assert not back.stamps[2].cells.flags.writeable
+    assert len(back.history) == 0, "a file that has just been opened is not unsaved"
+
+
+def test_two_saves_of_a_stamped_map_are_byte_identical():
+    doc = _stamped()
+    assert wmap.wmap_bytes(doc) == wmap.wmap_bytes(doc)
+    assert wmap.wmap_bytes(wmap.read_wmap(wmap.wmap_bytes(doc))) == wmap.wmap_bytes(doc)
+
+
+def test_the_slots_are_written_in_order_rather_than_sorted_as_strings():
+    """A list rather than a dict keyed by slot, because ``sort_keys`` would put
+    "10" before "2" and a reader taking them in order would get them wrong."""
+    doc = _plain()
+    for slot in (9, 2, 5):
+        doc.set_stamp(slot, np.array([[slot]], gid.DTYPE))
+
+    manifest = json.loads(wmap.manifest_json(doc))
+
+    assert [entry["slot"] for entry in manifest["stamps"]] == [2, 5, 9]
+
+
+def test_a_file_written_before_version_eleven_opens_with_no_stamps():
+    """Absence means "no stamps", which is what the default says without a
+    branch -- the tolerance this reader shows every field it defaults."""
+    back = wmap.read_wmap(wmap.wmap_bytes(_plain()))
+
+    assert back.stamps == {}
+
+
+def test_a_malformed_stamps_key_refuses_the_file():
+    """Tolerant of absence and strict about shape: a key that is there and is
+    not a list of slots is a manifest this reader would half-understand."""
+    def mangle(manifest):
+        manifest["stamps"] = "nonsense"
+
+    with pytest.raises(ValueError):
+        wmap.read_wmap(_rewrite(_stamped(), mangle))
+
+
+def test_a_slot_outside_one_to_nine_is_dropped_rather_than_refused():
+    """The nine are a property of the keyboard rather than of the format, so a
+    file that somehow named slot 12 is better opened without it."""
+    def mangle(manifest):
+        manifest["stamps"] = [dict(manifest["stamps"][0], slot=12)]
+
+    assert wmap.read_wmap(_rewrite(_stamped(), mangle)).stamps == {}

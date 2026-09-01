@@ -185,6 +185,7 @@ def plotter(ctx: Any) -> dict[str, Column]:
         plotter_bridge,
         plotter_layers,
         plotter_objects,
+        plotter_stamps,
         plotter_tileset,
     )
 
@@ -206,6 +207,21 @@ def plotter(ctx: Any) -> dict[str, Column]:
                 sizing=SHARE,
                 share_key="plotter-properties",
                 floor=plotter_layers.PROPERTIES_FLOOR,
+            ),
+            # Under the selected thing and over the file, and only on a tile
+            # layer: a stamp is a block of tiles, so the pane belongs where the
+            # tileset palette belongs. On an object layer it would be nine
+            # controls that cannot act.
+            Slot(
+                "plotter-stamps",
+                "Tile stamps",
+                plotter_stamps.draw,
+                role=_role("inspector"),
+                edge=_edge("right"),
+                sizing=SHARE,
+                share_key="plotter-stamps",
+                floor=plotter_stamps.STAMPS_FLOOR,
+                when=plotter_stamps.on_tile_layer,
             ),
             Slot(
                 "plotter-bridge",

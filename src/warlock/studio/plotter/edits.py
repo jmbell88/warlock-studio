@@ -398,6 +398,31 @@ class TilesetReplaceEdit(Edit):
 
 
 @dataclass
+class StampEdit(Edit):
+    """One numbered stamp slot, before and after.
+
+    **Slot-addressed rather than uid-addressed**, which is the one place this
+    package breaks its own rule and does so knowingly: a slot *is* the address.
+    There are nine of them, they are the digits on the keyboard, and nothing
+    reorders them -- so there is no position for a uid to protect against.
+
+    It dirties the document, and that is honest rather than unfortunate: the
+    stamps are written into the ``.wmap``, so a map with a stamp stored and not
+    saved really does have unsaved work in it.
+    """
+
+    slot: int
+    before: Any
+    after: Any
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_stamp(self.slot, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_stamp(self.slot, self.after)
+
+
+@dataclass
 class ObjectAddEdit(Edit):
     layer_uid: int
     obj: Any

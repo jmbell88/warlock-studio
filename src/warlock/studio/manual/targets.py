@@ -74,6 +74,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "inker-canvas-size": ("28-inker", "canvas-size"),
     "plotter-layers": ("31-plotter", "layers"),
     "plotter-objects": ("31-plotter", "objects"),
+    "plotter-stamps": ("31-plotter", "tile-stamps"),
     "plotter-properties": ("31-plotter", "layer-and-map-properties"),
     "plotter-bridge": ("31-plotter", "files"),
     "packwright-sources": ("32-packwright", "sources"),

@@ -531,6 +531,26 @@ one — a lock is not a reason to lose sight of your own work.
 Locks are saved in `.wmap`, and in `.tmx`/`.tmj` exports where Tiled understands them. A map written
 before this existed opens with everything unlocked.
 
+## Tile stamps
+
+Nine numbered slots hold a block of tiles each. `Ctrl`+`Shift`+*digit* stores the brush in hand into
+that slot, and a bare *digit* takes it back — the cheap gesture goes to the frequent job, because
+storing happens nine times in a session and recalling hundreds.
+
+The **Tile stamps** pane shows what is in them: a thumbnail of the block, and a name you can type
+beside it. Before it existed the slots were nine numbers with nothing on screen to tell them apart,
+so coming back to a map the next day meant pressing each one and looking at the brush.
+
+Stamps are **saved with the map**, and that is why they belong to it rather than to the app: a stamp
+is a block of *global tile ids*, and a global id means something only against the tilesets of the map
+it was captured on — the same reason pasting tiles between two maps is refused. Storing, renaming and
+clearing a slot are each one undo step, and each marks the map unsaved, because each really is a
+change to the file.
+
+The pane appears while a tile layer is selected. A map that carries a stamp is written as format
+version 11; one that carries none writes exactly the bytes it did before, so an existing map does not
+start declaring a version an older build would refuse.
+
 ## Objects
 
 Everything on the map's object layers, in one list: name, class and id, grouped by the layer that

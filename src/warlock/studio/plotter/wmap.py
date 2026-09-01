@@ -142,6 +142,7 @@ from .tilemap import (
     MapObject,
     ObjectLayer,
     Shape,
+    Stamp,
     TileLayer,
     TileShape,
     new_uid,
@@ -149,7 +150,11 @@ from .tilemap import (
     shape_kind,
 )
 
-VERSION = 10
+VERSION = 11
+#: Named stamps; written when the map carries one. The new ceiling.
+STAMPS_VERSION = 11
+#: Infinite maps; written when the map is one and it carries no stamp.
+INFINITE_VERSION = 10
 #: Image collections; written when a tileset is one and the map is finite.
 COLLECTION_VERSION = 9
 #: Foreign Wang sets; written when a tileset carries one and none is an
@@ -170,6 +175,8 @@ TILED_ERA_VERSION = 4
 BASE_VERSION = 3
 MANIFEST = "map.json"
 LAYER_DIR = "layers"
+#: Where a numbered stamp's block of gids lives, one member per stored slot.
+STAMP_DIR = "stamps"
 IMAGE_DIR = "images"
 TILESET_DIR = "tilesets"
 
@@ -607,12 +614,17 @@ def _document_version(doc: MapDoc) -> int:
     ``ObjectLayer.color`` was exactly that: the one decoration on the object
     arm below that nothing looked at.
     """
-    # An infinite map first: 10 is the ceiling, so nothing below can override
-    # it. The ``infinite``/``chunks`` keys were **reserved** from version 3 and
-    # written ``false`` precisely so this day would be an addition to the
-    # container rather than a rearrangement of it -- and this is that day.
+    # Stamps first: 11 is the ceiling, so nothing below can override it. Gated
+    # like every field here -- the ``stamps`` key is written unconditionally, so
+    # a document carrying one while declaring version 10 would hand an older
+    # reader a file it drops the stamps out of in silence.
+    if doc.stamps:
+        return STAMPS_VERSION
+    # Then an infinite map. The ``infinite``/``chunks`` keys were **reserved**
+    # from version 3 and written ``false`` precisely so that day would be an
+    # addition to the container rather than a rearrangement of it.
     if doc.infinite:
-        return VERSION
+        return INFINITE_VERSION
     # Then image collections. The least optional of the rest -- without the
     # record the atlas is just an image, and an old reader would slice it on the
     # grid size and hand every cell a different tile.
@@ -781,6 +793,21 @@ def manifest_json(doc: MapDoc) -> str:
         "next_layer_id": int(doc.next_layer_id),
         "next_object_id": int(doc.next_object_id),
         "properties": write_wmap_properties(doc.properties),
+        # The numbered stamps: a slot, a name, and the member holding the
+        # block. A *list* rather than a dict keyed by slot, for the reason the
+        # terrains list is one -- ``sort_keys`` below would order "10" before
+        # "2" and a reader taking them in order would get the slots wrong. It
+        # is written even when empty, so the manifest's shape never depends on
+        # the content; the version gate above is what keeps an old reader from
+        # seeing a non-empty one.
+        "stamps": [
+            {
+                "slot": int(slot),
+                "name": doc.stamps[slot].name,
+                "member": f"{STAMP_DIR}/{int(slot)}.npy",
+            }
+            for slot in sorted(doc.stamps)
+        ],
         "tilesets": tilesets,
         "layers": _layer_entries(doc.layers, itertools.count(), itertools.count()),
     }
@@ -812,6 +839,11 @@ def wmap_bytes(doc: MapDoc) -> bytes:
             zf.writestr(
                 zipfile.ZipInfo(f"{LAYER_DIR}/{index}.npy", _EPOCH),
                 _npy_bytes(layer.data),
+            )
+        for slot in sorted(doc.stamps):
+            zf.writestr(
+                zipfile.ZipInfo(f"{STAMP_DIR}/{int(slot)}.npy", _EPOCH),
+                _npy_bytes(doc.stamps[slot].cells),
             )
         for index, image in enumerate(_image_layers(doc)):
             # Stored, not deflated, for the tileset PNG's reason below.
@@ -849,6 +881,40 @@ def _member(zf: zipfile.ZipFile, name: str, what: str) -> bytes:
         return zf.read(name)
     except KeyError as exc:
         raise ValueError(f"this map names {what} the file does not carry ({name})") from exc
+
+
+def _stamps_from(zf: Any, entries: Any) -> dict[int, Stamp]:
+    """The numbered stamps out of the manifest. -> ``{slot: Stamp}``.
+
+    Tolerant of absence and strict about shape, which is this reader's rule
+    throughout: a file written before version 11 carries no key at all and that
+    means "no stamps", while a key that *is* there and is not a list of slots is
+    a manifest this reader would half-understand.
+
+    A slot outside 1-9 is dropped rather than refused. The nine are a property
+    of the keyboard rather than of the format, and a file that somehow named
+    slot 12 is better opened without it than not opened at all -- the same trade
+    ``read_wmap`` makes for every field it defaults.
+    """
+    if entries is None:
+        return {}
+    if not isinstance(entries, (list, tuple)):
+        _malformed("this map's stamps")
+    out: dict[int, Stamp] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            _malformed("this map's stamps")
+        slot = int(entry.get("slot", 0))
+        if not 1 <= slot <= 9:
+            continue
+        raw = _member(zf, str(entry.get("member", "")), "a stamp")
+        cells = npyguard.read_array(raw, f"stamp {slot}")
+        if cells.ndim != 2 or not cells.size:
+            raise ValueError(f"this map's stamp {slot} is not a block of cells")
+        block = cells.astype(gidlib.DTYPE, copy=False)
+        block.setflags(write=False)
+        out[slot] = Stamp(name=str(entry.get("name", "")), cells=block)
+    return out
 
 
 def _read_layer_array(raw: bytes, width: int, height: int, name: str) -> np.ndarray:
@@ -1203,6 +1269,11 @@ def read_wmap(data: bytes) -> MapDoc:
         doc.stagger_index = str(stagger[1])
         doc.hex_side = int(stagger[2])
         doc.properties = read_wmap_properties(manifest.get("properties"))
+        # Absent in every file before version 11, where the absence meant a map
+        # with no stamps -- which is what ``get(..., [])`` says without a
+        # branch. Read before the tilesets so a malformed entry refuses the
+        # file before megabytes of atlas have been decoded.
+        doc.stamps = _stamps_from(zf, manifest.get("stamps"))
 
         previous = 0
         for entry in manifest.get("tilesets", []):

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..tilegrid import gid as gidlib
 from ..tilegrid.tileset import TilesetRef, colour_text
 from ..undo import CompoundEdit, Edit, UndoStack
 from . import project
@@ -73,6 +74,7 @@ from ._map_model import (
     Polyline,
     Rect,
     Shape,
+    Stamp,
     Text,
     TileLayer,
     TileShape,
@@ -86,7 +88,7 @@ from ._map_objects import ObjectOps, object_bounds, objects_in_rect
 from ._map_paint import PaintOps
 from ._map_project import ProjectionOps
 from ._map_tilesets import TilesetOps
-from .edits import MapPropsEdit, MapSettingsEdit
+from .edits import MapPropsEdit, MapSettingsEdit, StampEdit
 
 # Re-exported, not merely imported. ``wmap``, ``tmx``, the panes and the tests
 # all say ``from .tilemap import TileLayer``, and this module is where a map's
@@ -117,6 +119,7 @@ __all__ = [
     "Polyline",
     "Rect",
     "Shape",
+    "Stamp",
     "Text",
     "TileLayer",
     "TileShape",
@@ -204,6 +207,11 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         self.next_layer_id = 1
         self.next_object_id = 1
         self.properties: dict[str, Any] = {}
+        # The nine numbered stamps, by slot. **Document state**, because a
+        # stamp is an array of gids and a gid is numbered against this map's
+        # firstgids -- see ``Stamp``. Undoable and serialized, unlike the view
+        # state further down: a stamp stored and not saved is unsaved work.
+        self.stamps: dict[int, Stamp] = {}
         # Tiled's map-level class and parallax reference point. They are file
         # semantics rather than view state: changing either changes how a game
         # interprets or positions the map, so both travel through every codec.
@@ -375,6 +383,71 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         self.end_group_edit()
         self.end_tile_meta_edit()
         return self.history.redo(self)
+
+    # -- stamps ----------------------------------------------------------------
+
+    def set_stamp(self, slot: int, cells: Any, *, name: str | None = None) -> bool:
+        """Put a block of gids into a numbered slot. -> whether anything changed.
+
+        ``name=None`` **keeps the name the slot already had**, which is the
+        behaviour storing wants: a user who has called slot 3 "roof corner" and
+        re-captures a better one has not renamed it, and asking them to retype
+        the name every time would make naming a slot not worth doing.
+
+        The array is copied and frozen here rather than trusted from the caller,
+        for the reason the props edits copy their dicts: the brush handed in is
+        the live one the canvas goes on transforming, and a slot sharing it
+        would change under the user when they pressed X.
+        """
+        import numpy as np
+
+        block = np.array(cells, dtype=gidlib.DTYPE, copy=True)
+        block.setflags(write=False)
+        before = self.stamps.get(int(slot))
+        after = Stamp(
+            name=(before.name if before is not None else "") if name is None else str(name),
+            cells=block,
+        )
+        if before is not None and before.name == after.name and np.array_equal(
+            before.cells, after.cells
+        ):
+            # ``TilePatchEdit``'s rule: a write that changes nothing pushes
+            # nothing, so re-storing an identical stamp does not dirty the map.
+            return False
+        self._push_stamp(int(slot), before, after)
+        return True
+
+    def rename_stamp(self, slot: int, name: str) -> bool:
+        """Give a stored slot a name. -> whether anything changed.
+
+        Refuses an empty slot rather than minting one: a name with no cells
+        behind it is a row in the pane that recalls nothing, and the user's
+        gesture was to type into a field they should not have been offered.
+        """
+        before = self.stamps.get(int(slot))
+        if before is None or before.name == str(name):
+            return False
+        self._push_stamp(int(slot), before, Stamp(name=str(name), cells=before.cells))
+        return True
+
+    def clear_stamp(self, slot: int) -> bool:
+        """Empty a slot. -> whether it held anything."""
+        before = self.stamps.get(int(slot))
+        if before is None:
+            return False
+        self._push_stamp(int(slot), before, None)
+        return True
+
+    def _push_stamp(self, slot: int, before: Any, after: Any) -> None:
+        self._apply_stamp(slot, after)
+        self.history.push(StampEdit(slot, before, after))
+
+    def _apply_stamp(self, slot: int, value: Any) -> None:
+        """Both directions of :class:`StampEdit`, and the only writer."""
+        if value is None:
+            self.stamps.pop(int(slot), None)
+        else:
+            self.stamps[int(slot)] = value
 
     def step_history(self, index: int) -> bool:
         """Jump to a position in the undo stack. -> whether anything moved.
