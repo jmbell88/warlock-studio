@@ -3838,35 +3838,34 @@ class App:
             target.release()
 
     def _clay_workspace(self) -> None:
-        """The same sidebar / centre / sidebar skeleton every other mode uses.
+        """The same sidebar / centre / sidebar skeleton every other mode uses:
 
-        Mirrors ``_inker_workspace`` line for line, including its share key
-        for the vertical split, so the two editors do not drift into looking
-        like different applications:
+            [ clay-tools ]  the header    [ clay-outliner ]
+            [            ]  the viewport  [ clay-props    ]
+            [            ]  the hint      [ clay-bridge   ]
 
-            [ clay_tools ]            [ clay_outliner ]
-            [ clay_props ]  viewport  [ clay_bridge   ]
+        Both sidebars are ``skeletons.clay``, which is where the argument for
+        that arrangement is written down. It was the last sidebar-shaped
+        workspace composed by hand here, which is to say the last one a saved
+        layout could not permute.
         """
         from imgui_bundle import imgui
 
-        from . import clay_mode, widgets
+        from . import clay_mode, skeletons, widgets
         from . import layout as layout_mod
-        from .panes import clay_bridge, clay_outliner, clay_props, clay_tools
 
         ctx = self.app_ctx
         lay = self.layout
         left_w = layout_mod.sidebar_width("left")
         right_w = layout_mod.sidebar_width("right")
+        columns = skeletons.for_mode(ctx, "clay")
 
-        _split_column(
+        layout_mod.column(
             ctx,
             lay,
-            split_id="clay-tools",
-            handle_length=left_w,
+            skeletons.ordered(ctx, self.layouts, "clay", columns["left"]),
             width=left_w,
-            edge=layout_mod.PaneEdge.RIGHT,
-            top=("clay-tools", layout_mod.PaneRole.SIDEBAR, clay_tools.draw),
-            bottom=("clay-props", layout_mod.PaneRole.SIDEBAR, clay_props.draw),
+            handle_length=left_w,
         )
 
         _column_boundary(self.layouts, "clay", "left")
@@ -3882,33 +3881,41 @@ class App:
                 self._clay_viewport(ctx, clay_mode, widgets)
 
         _column_boundary(self.layouts, "clay", "right")
-        _split_column(
+        layout_mod.column(
             ctx,
             lay,
-            split_id="clay-outliner",
-            handle_length=right_w,
+            skeletons.ordered(ctx, self.layouts, "clay", columns["right"]),
             width=right_w,
-            edge=layout_mod.PaneEdge.LEFT,
-            top=("clay-outliner", layout_mod.PaneRole.INSPECTOR, clay_outliner.draw),
-            bottom=("clay-bridge", layout_mod.PaneRole.INSPECTOR, clay_bridge.draw),
+            handle_length=right_w,
         )
 
     def _clay_viewport(self, ctx: Any, clay_mode: Any, widgets: Any) -> None:
         from imgui_bundle import imgui
 
-        from .panes import clay_menu
+        from . import tokens
+        from .panes import clay_header, clay_hud, clay_menu
 
         self._clay_tabs(ctx, clay_mode)
         tab = clay_mode.active(ctx)
         if tab is None:
             self._clay_empty(ctx, clay_mode)
             return
+        # The header, between the tabs and the image. Before the content region
+        # is read, exactly as Inker's context bar and Plotter's toolbar are: the
+        # viewport sizes itself from what is left, so a strip drawn after the
+        # measurement is a strip drawn over the render.
+        clay_header.draw(ctx, getattr(ctx, "clay_view", None))
         avail = imgui.get_content_region_avail()
+        # And the hint line's own row, reserved rather than drawn over: a line
+        # the viewport has already claimed the height for is a line clipped away
+        # at the bottom of the pane, which is where every status row in this app
+        # has gone wrong at least once.
+        hint_h = float(tokens.sp(clay_hud.HINT_H))
         rect = (
             imgui.get_cursor_screen_pos().x,
             imgui.get_cursor_screen_pos().y,
             max(avail.x, 1.0),
-            max(avail.y, 1.0),
+            max(avail.y - hint_h, 1.0),
         )
         state = clay_mode.ensure(ctx)
         if state.frame_pending:
@@ -3927,14 +3934,22 @@ class App:
             clay_mode.remember_camera(ctx, state.get(self._clay_camera_tab))
             clay_mode.apply_camera(ctx, tab)
             self._clay_camera_tab = tab.uid
-        view.wireframe = state.wireframe
+        view.wireframe = bool(state.overlays.get("wire", False))
         view.show_grid = state.grid
         texture = view.draw(tab.doc, rect, 1.0 / TARGET_FPS)
         imgui.image(widgets.texture_ref(texture), (rect[2], rect[3]), (0, 1), (1, 0))
         self._build_hovered = imgui.is_item_hovered()
         self._clay_marquee(imgui, view, rect)
         self._clay_drag_hud(imgui, widgets, view, rect)
+        # Over the render and inside the same clip: the widget is a control you
+        # reach for without looking away from what you are turning, which is the
+        # whole of why it is in the corner rather than in a pane.
+        clay_hud.axis_widget(ctx, view, rect)
         clay_menu.draw(ctx, view)
+        # Last, and under the image: read when you are stuck, and a line over
+        # the model covers the thing you are stuck on.
+        imgui.set_cursor_screen_pos((rect[0], rect[1] + rect[3]))
+        clay_hud.hint_line(ctx)
 
     def _clay_tabs(self, ctx: Any, clay_mode: Any) -> None:
         """Clay's open documents, which nothing has ever drawn.

@@ -32,6 +32,12 @@ NO_HELP_BUTTON = {
     "packwright_preview",  # the atlas itself; its controls are packwright-settings
     "packwright_textures",  # a texture cache, drawn by nobody
     "clay_menu",  # a menu bar
+    # The axis ball in the viewport's corner and the hint line under it. Chrome
+    # over and under the render rather than a panel: there is no heading to hang
+    # a (?) beside, and a help button inside a six-ball orientation widget would
+    # be a seventh thing to click by accident. Both are documented under the
+    # Clay chapter's viewport section, which the header's own (?) opens.
+    "clay_hud",
     "plotter_menu",  # a menu bar
     "inker_menu",  # a menu bar
     # The row of tool options above the canvas. Not a pane with a heading: it

@@ -298,8 +298,13 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
     # ``share_key``, so a declared key *is* a handle there too.
     keys = set(_share_literals()) | set(_skeleton_share_keys())
     assert keys == {
-        "clay-tools",
+        # Clay's right column stacks the outliner over the selected object's
+        # own settings over the document, so it carries two handles. The left
+        # column is one FILL pane since the viewport header took the tool grid,
+        # the mode row and the view aids -- and a column of one has nothing to
+        # share against, so ``clay-tools`` is no longer a key at all.
         "clay-outliner",
+        "clay-props",
         "create-inspector",
         "inker-colors",
         # Inker's right column stacks three shareable panes, and the strip

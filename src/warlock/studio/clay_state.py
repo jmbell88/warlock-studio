@@ -221,7 +221,16 @@ class ClayState:
     proportional: bool = False
     proportional_radius: float = 0.5
     grid: bool = True
-    wireframe: bool = False
+
+    # What the viewport draws *over* the model, by name. A dict rather than a
+    # field apiece because the header's popover is a loop over
+    # ``clay_header.OVERLAY_ROWS`` and a sixth overlay should be one line there
+    # rather than one line in four files.
+    #
+    # ``grid`` is deliberately **not** in it: it is wired straight to
+    # ``ClayView.show_grid`` and has been since the viewport existed, and a
+    # second home for one switch is two places that can disagree about it.
+    overlays: dict[str, bool] = field(default_factory=lambda: {"wire": False})
 
     # What the properties panel offers when the user adds something.
     generator: str = "box"

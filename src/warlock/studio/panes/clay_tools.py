@@ -24,7 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, clay_ops, clay_state, controls, icons, widgets
+from .. import clay_mode, clay_ops, controls, icons, widgets
 from ..clay import document as bd
 from ..clay import ops
 from ..clay import primitives as bp
@@ -83,12 +83,21 @@ def draw(ctx: Any) -> None:
 
 
 def _body(ctx: Any) -> None:
+    """What you can *add* and what you can *do*, and nothing else.
+
+    Half of what this pane held has gone to the viewport header: the tool grid,
+    the mode row, snapping, proportional editing and the view aids. Every one of
+    them is a setting changed between clicks in the viewport, and this sidebar
+    is on the far side of the window from it.
+
+    What is left is what a sidebar is right for -- two lists that want the
+    height, and that are read down rather than flicked between.
+    """
+
     state = clay_mode.ensure(ctx)
     tab = state.active
     widgets.section("Tools")
     manual_render.help_button(ctx, "clay-tools")
-    _tool_grid(state)
-    imgui.dummy((0, 6))
     if tab is None:
         widgets.muted("Open or start a document to build in.")
         return
@@ -96,8 +105,6 @@ def _body(ctx: Any) -> None:
     from . import clay_menu
 
     imgui.begin_disabled(tab.saving)
-    _mode_row(tab.doc)
-    imgui.dummy((0, 6))
     _add(ctx, state, tab.doc)
     imgui.dummy((0, 6))
     _actions(ctx, state, tab.doc)
@@ -107,47 +114,6 @@ def _body(ctx: Any) -> None:
     # is open leaves a modal the user cannot dismiss -- the exact trap
     # inker_bridge documents.
     clay_menu.params_popup(ctx, state, tab)
-    imgui.dummy((0, 6))
-    # Snapping and the display toggles change nothing about the document, so
-    # they stay live while a save runs.
-    _snapping(state)
-    imgui.dummy((0, 6))
-    _display(ctx, state)
-
-
-def _tool_grid(state: Any) -> None:
-    width = widgets.grid_width(COLUMNS)
-    for index, (key, label, shortcut) in enumerate(clay_state.TOOLS):
-        selected = state.tool == key
-        icon = TOOL_ICONS.get(key) or label[:1]
-        if controls.button(f"{icon}##buildtool{key}", (width, sp(30)), selected=selected):
-            state.tool = key
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(f"{label}  ({shortcut})")
-        if index % COLUMNS != COLUMNS - 1:
-            imgui.same_line()
-    imgui.new_line()
-
-
-def _mode_row(doc: Any) -> None:
-    """Object / Verts / Edges / Faces, highlighting the document's own mode.
-
-    The mode lives on the *document* rather than on ``ClayState``: it is the
-    interpretation key for a selection, and an app-level mode would reinterpret
-    every other tab's selection on a tab switch. So this reads ``doc`` and the
-    state is not involved at all.
-    """
-    widgets.field_label("mode")
-    width = widgets.grid_width(COLUMNS)
-    for index, (mode, label, key) in enumerate(MODE_BUTTONS):
-        selected = doc.element_mode == mode
-        if controls.button(f"{label}##claymode{mode}", (width, sp(26)), selected=selected):
-            doc.set_element_mode(mode)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(f"{label} mode  ({key})")
-        if index % COLUMNS != COLUMNS - 1:
-            imgui.same_line()
-    imgui.new_line()
 
 
 def _add(ctx: Any, state: Any, doc: Any) -> None:
@@ -251,102 +217,3 @@ def _invoke(ctx: Any, doc: Any, op: Any) -> None:
     state.pending_op = op.name
     state.op_params.setdefault(op.name, clay_ops.defaults_for(op))
     imgui.open_popup(clay_menu.PARAM_POPUP)
-
-
-def _axis_views(ctx: Any) -> None:
-    """Front / Right / Top, and the orthographic toggle beside them.
-
-    Buttons as well as keys because the keys are the part a user has to be
-    told about, and a viewport control nobody can find is a control that does
-    not exist. The camera lives on the view rather than on the state, so this
-    reads through ``ctx`` and does nothing at all before the viewport has been
-    built -- which is the first frame, and exactly when a pane must not raise.
-    """
-    view = getattr(ctx, "clay_view", None)
-    if view is None:
-        return
-    width = widgets.grid_width(4)
-    for label, name, key in (
-        ("F", "front", "Front  (Ctrl+1, Shift for back)"),
-        ("R", "right", "Right  (Ctrl+3, Shift for left)"),
-        ("T", "top", "Top  (Ctrl+7, Shift for bottom)"),
-    ):
-        if controls.button(f"{label}##axis{name}", (width, sp(24))):
-            view.camera.look_along(name)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(key)
-        imgui.same_line()
-    ortho = view.camera.orthographic
-    if controls.button("Ortho##axisortho", (width, sp(24)), selected=ortho):
-        view.camera.orthographic = not ortho
-    if imgui.is_item_hovered():
-        imgui.set_tooltip("Orthographic  (Ctrl+5)")
-    imgui.new_line()
-
-
-def _snapping(state: Any) -> None:
-    widgets.field_label("snap")
-    changed, value = widgets.toggle(f"{icons.MAGNET} Snap", state.snap)
-    if changed:
-        state.snap = value
-    imgui.begin_disabled(not state.snap)
-    # "%.4f", because the grid steps by 1/16 m and imgui's default "%.3f" drew
-    # that as 0.063 -- a field that disagrees with its own step button.
-    _, state.snap_translate = controls.input_float(
-        "grid (m)##snapt", state.snap_translate, 0.0625, 0.0, "%.4f"
-    )
-    _, state.snap_rotate = controls.input_float("angle (deg)##snapr", state.snap_rotate, 5.0, 0.0)
-    imgui.end_disabled()
-    # Outside the disable, because it is a *separate* switch rather than a mode
-    # of the grid: the two answer different questions -- "put it on round
-    # numbers" and "put it exactly there" -- and a user aligning two parts wants
-    # the second without giving up the first everywhere else.
-    changed, value = widgets.toggle(f"{icons.MAGNET} Snap to vertex", state.snap_vertex)
-    if changed:
-        state.snap_vertex = value
-    widgets.help_marker(
-        "While moving, a drag lands on the vertex under the cursor rather than "
-        "on the grid. The vertices being moved are never candidates, so a drag "
-        "cannot snap onto itself. Typing a value or locking an axis (X/Y/Z "
-        "during a drag) overrides it."
-    )
-    _proportional(state)
-
-
-def _proportional(state: Any) -> None:
-    widgets.field_label("proportional")
-    changed, value = widgets.toggle(f"{icons.CIRCLE} Soft falloff", state.proportional)
-    if changed:
-        state.proportional = value
-    widgets.help_marker(
-        "An element drag carries the geometry around the selection with it, "
-        "fading out over the radius, so the surface bends instead of tearing. "
-        "The radius is metres of world space, measured from the nearest "
-        "selected vertex."
-    )
-    imgui.begin_disabled(not state.proportional)
-    _, state.proportional_radius = controls.input_float(
-        "radius (m)##propr", state.proportional_radius, 0.05, 0.0, "%.3f"
-    )
-    imgui.end_disabled()
-    # Clamped rather than validated, the grid's rule: zero is the off switch the
-    # falloff already treats as a hard selection.
-    state.proportional_radius = max(0.0, float(state.proportional_radius))
-    # Clamped rather than validated: zero is the off switch every snap function
-    # already treats as the identity, and a negative grid is meaningless.
-    state.snap_translate = max(0.0, float(state.snap_translate))
-    state.snap_rotate = max(0.0, float(state.snap_rotate))
-
-
-def _display(ctx: Any, state: Any) -> None:
-    widgets.field_label("view")
-    _axis_views(ctx)
-    changed, value = widgets.toggle(f"{icons.GRID} Grid", state.grid)
-    if changed:
-        state.grid = value
-    changed, value = widgets.toggle("Wireframe", state.wireframe)
-    if changed:
-        state.wireframe = value
-        view = getattr(ctx, "clay_view", None)
-        if view is not None:
-            view.wireframe = value

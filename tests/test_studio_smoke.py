@@ -2180,18 +2180,36 @@ def _clay_tab(app_ctx, *, objects: int = 2):
 
 def test_the_clay_panes_build_with_nothing_open(app_ctx, imgui_ctx):
     """Every one of them has to survive the state the mode opens in."""
-    from warlock.studio.panes import clay_bridge, clay_outliner, clay_props, clay_tools
+    from warlock.studio.panes import (
+        clay_bridge,
+        clay_header,
+        clay_outliner,
+        clay_props,
+        clay_tools,
+    )
 
-    for pane in (clay_tools, clay_props, clay_outliner, clay_bridge):
+    # ``clay_header`` is the strip over the viewport rather than a sidebar
+    # pane, and it walks with them for the reason they walk: an unbalanced
+    # disable stack or a popup left open is the same defect wherever it is.
+    for pane in (clay_tools, clay_props, clay_outliner, clay_bridge, clay_header):
         _frame(imgui_ctx, lambda pane=pane: pane.draw(app_ctx))
 
 
 def test_the_clay_panes_build_with_a_document_and_a_selection(app_ctx, imgui_ctx):
-    from warlock.studio.panes import clay_bridge, clay_outliner, clay_props, clay_tools
+    from warlock.studio.panes import (
+        clay_bridge,
+        clay_header,
+        clay_outliner,
+        clay_props,
+        clay_tools,
+    )
 
     tab = _clay_tab(app_ctx)
     tab.doc.select([tab.doc.objects[0].uid])
-    for pane in (clay_tools, clay_props, clay_outliner, clay_bridge):
+    # ``clay_header`` is the strip over the viewport rather than a sidebar
+    # pane, and it walks with them for the reason they walk: an unbalanced
+    # disable stack or a popup left open is the same defect wherever it is.
+    for pane in (clay_tools, clay_props, clay_outliner, clay_bridge, clay_header):
         _frame(imgui_ctx, lambda pane=pane: pane.draw(app_ctx))
 
 
@@ -2199,12 +2217,21 @@ def test_the_clay_panes_build_while_a_save_is_in_flight(app_ctx, imgui_ctx):
     """``saving`` puts every mutating control inside ``begin_disabled``, and an
     unbalanced disable stack is exactly the class of mistake this file exists
     to catch."""
-    from warlock.studio.panes import clay_bridge, clay_outliner, clay_props, clay_tools
+    from warlock.studio.panes import (
+        clay_bridge,
+        clay_header,
+        clay_outliner,
+        clay_props,
+        clay_tools,
+    )
 
     tab = _clay_tab(app_ctx)
     tab.doc.select([tab.doc.objects[0].uid])
     tab.saving = True
-    for pane in (clay_tools, clay_props, clay_outliner, clay_bridge):
+    # ``clay_header`` is the strip over the viewport rather than a sidebar
+    # pane, and it walks with them for the reason they walk: an unbalanced
+    # disable stack or a popup left open is the same defect wherever it is.
+    for pane in (clay_tools, clay_props, clay_outliner, clay_bridge, clay_header):
         _frame(imgui_ctx, lambda pane=pane: pane.draw(app_ctx))
 
 
@@ -5473,3 +5500,107 @@ def test_the_plotter_stamp_ghost_draws_the_brush_under_the_pointer(app_ctx, imgu
         state.tool = tool
         _click(imgui_ctx, build, (400, 400))
     state.tool = "stamp"
+
+
+#: What Clay's centre column actually gets at the app's default 1600x950. Two
+#: 300 dp sidebars and a 70 dp mode rail leave about this -- the number
+#: ``inker_context`` measured for the same reason and wrote down.
+CLAY_CENTRE_AT_DEFAULT = 835.0
+
+
+def _clay_header_tiers(imgui, avail: float) -> list[str]:
+    """The tier ``toolbar`` would choose for each header entry at ``avail`` px."""
+    from warlock.studio import clay_state, toolbar
+    from warlock.studio.panes import clay_header
+
+    state = clay_state.ClayState()
+    items = clay_header._items(state)
+    fields = [clay_header._tool_field(state)]
+    style = imgui.get_style()
+    square = imgui.get_frame_height()
+    full = [
+        imgui.calc_text_size(item.label).x + style.frame_padding.x * 2.0
+        for item in items
+    ]
+    icon = [square for _item in items]
+    for field in fields:
+        wide, narrow = field.widths()
+        full.append(wide)
+        icon.append(narrow)
+    entries = [*items, *fields]
+    return toolbar.plan(
+        full,
+        icon,
+        [entry.priority for entry in entries],
+        [entry.pinned for entry in entries],
+        avail,
+        square,
+        gap=style.item_spacing.x,
+    )
+
+
+def test_the_clay_header_fits_at_the_default_window(app_ctx, imgui_ctx):
+    """Every label on, at 1600x950.
+
+    ``toolbar`` degrades rather than clips, so a header that does not fit does
+    not *look* broken -- it looks like a header whose every label is a hover
+    away, on the machine everybody uses. Measured here rather than in
+    ``tests/test_clay_header.py`` because measuring a font needs a live imgui
+    context and that file must not build a second one.
+    """
+    from warlock.studio import toolbar
+
+    imgui, _renderer = imgui_ctx
+    # ``_frame`` returns nothing, so the reading is carried out in a list.
+    out: list[list[str]] = []
+    _frame(
+        imgui_ctx,
+        lambda: out.append(_clay_header_tiers(imgui, CLAY_CENTRE_AT_DEFAULT)),
+    )
+    assert set(out[0]) == {toolbar.FULL}, out[0]
+
+
+def test_the_clay_header_gives_up_labels_before_controls(app_ctx, imgui_ctx):
+    """The ordering the module rests on: a label is cheaper to lose than a
+    control, so a genuinely narrow centre drops to glyphs rather than hiding a
+    button."""
+    from warlock.studio import toolbar
+
+    imgui, _renderer = imgui_ctx
+    out: list[list[str]] = []
+    _frame(imgui_ctx, lambda: out.append(_clay_header_tiers(imgui, 120.0)))
+    assert toolbar.ICON in out[0] or toolbar.MENU in out[0]
+
+
+def test_the_clay_hud_draws_its_widget_and_its_line(app_ctx, imgui_ctx):
+    """The axis ball and the hint line, neither of which the pane walk reaches:
+    the widget needs a live viewport to read a camera off."""
+    from types import SimpleNamespace
+
+    from warlock.studio import clay_mode
+    from warlock.studio.panes import clay_hud
+    from warlock.studio.viewer.camera import Camera
+
+    tab = _clay_tab(app_ctx)
+    view = SimpleNamespace(camera=Camera())
+    rect = (10.0, 10.0, 600.0, 400.0)
+
+    labels = _drawn_labels(
+        imgui_ctx[0],
+        lambda: clay_hud.axis_widget(app_ctx, view, rect),
+        "##clay-axis",
+    )
+    for name in ("front", "back", "right", "left", "top", "bottom"):
+        assert _index_of(labels, f"##clay-axis/{name}") >= 0, labels
+
+    # And with no viewport at all, which is the first frame.
+    _frame(imgui_ctx, lambda: clay_hud.axis_widget(app_ctx, None, rect))
+
+    # The line, in every mode and mid-drag.
+    state = clay_mode.ensure(app_ctx)
+    for mode in ("object", "vertex", "edge", "face"):
+        tab.doc.set_element_mode(mode)
+        _frame(imgui_ctx, lambda: clay_hud.hint_line(app_ctx))
+    state.drag_kind = "move"
+    _frame(imgui_ctx, lambda: clay_hud.hint_line(app_ctx))
+    state.drag_kind = ""

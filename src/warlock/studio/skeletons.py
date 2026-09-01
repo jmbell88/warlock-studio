@@ -239,6 +239,77 @@ def plotter(ctx: Any) -> dict[str, Column]:
     return {"left": left, "right": right}
 
 
+def clay(ctx: Any) -> dict[str, Column]:
+    """Clay's two sidebars: the verbs on the left, the document on the right.
+
+    The last workspace composed by hand in ``main``, and the change is not only
+    tidiness: a hand-composed workspace is one a saved layout cannot permute, so
+    Clay was the one editor whose panes a user could not rearrange.
+
+    **The left column is one pane now.** It was Tools over Properties, split by
+    a handle, and half of what the Tools pane held has gone to the viewport
+    header -- the mode row, the tool grid, snapping, proportional editing and
+    the view aids. What is left is what a *sidebar* is for: the primitives you
+    add and the operations you invoke, which is a list that wants the height.
+
+    Properties moves to the right, under the outliner, which is where the
+    thing-you-have-selected belongs and where Plotter and Tiled both put it:
+    what the scene *contains*, then what the selected part of it *is*, then the
+    file. ``clay-props`` is a new share key, and ``clay-tools`` stops being one
+    -- a column of one FILL slot has nothing to share against. An orphaned
+    ``shares["clay-tools"]`` in a user's settings is inert, exactly as
+    Plotter's is; see :func:`plotter` for why no migration is owed.
+    """
+
+    from .panes import clay_bridge, clay_outliner, clay_props, clay_tools
+
+    left = Column(
+        "left",
+        (
+            Slot(
+                "clay-tools",
+                "Tools",
+                clay_tools.draw,
+                role=_role("sidebar"),
+                edge=_edge("right"),
+                sizing=FILL,
+            ),
+        ),
+    )
+    right = Column(
+        "right",
+        (
+            Slot(
+                "clay-outliner",
+                "Outliner",
+                clay_outliner.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=SHARE,
+                share_key="clay-outliner",
+            ),
+            Slot(
+                "clay-props",
+                "Properties",
+                clay_props.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=SHARE,
+                share_key="clay-props",
+            ),
+            Slot(
+                "clay-bridge",
+                "Document",
+                clay_bridge.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=FILL,
+            ),
+        ),
+    )
+    return {"left": left, "right": right}
+
+
 def sirens(ctx: Any) -> dict[str, Column]:
     """Sirens' two sidebars: the transport over the order list, the instrument
     list and its envelopes over the song file.
@@ -333,8 +404,10 @@ def sirens(ctx: Any) -> dict[str, Column]:
 
 #: Which builder serves which workspace. A workspace with no entry keeps its
 #: hand-written composition, which is what the centre-heavy ones (Create,
-#: Review, Troupe, Poser) still have.
+#: Review, Troupe, Poser) still have -- and Packwright, which is the last of
+#: the sidebar-shaped ones left composing by hand.
 BUILDERS = {
+    "clay": clay,
     "inker": inker,
     "plotter": plotter,
     "sirens": sirens,

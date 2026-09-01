@@ -60,7 +60,8 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # ``tests/manual/test_coverage.py`` for having "no titled section" -- while
     # being the one thing on screen at every stage of Create and in Review.
     "overlay": ("24-the-3d-viewport", "the-toolbar"),
-    "clay-tools": ("30-clay", "transforming"),
+    "clay-header": ("30-clay", "the-viewport-header"),
+    "clay-tools": ("30-clay", "adding-a-primitive"),
     "clay-props": ("30-clay", "materials"),
     "clay-outliner": ("30-clay", "adding-a-primitive"),
     "clay-bridge": ("30-clay", "the-two-ways-out"),

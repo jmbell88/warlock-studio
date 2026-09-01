@@ -44,6 +44,41 @@ kept, so the properties panel offers those parameters — a cylinder's radius, h
 count — and changing one rebuilds the mesh. That is a single undo step, so `Ctrl+Z` takes the
 object back to the shape it had rather than to some intermediate state.
 
+## The viewport header
+
+The row across the top of the viewport is where everything you change *between* clicks lives: which
+element mode you are in, which transform tool you are holding, whether snapping is on, and what the
+viewport is drawing. All four used to be blocks down the tool panel, which is on the far side of the
+window from the model — a reach away from the thing every one of them is about.
+
+**Mode** and **tool** are the two pill groups. They never fold away, whatever the window is doing;
+everything else on the row gives up its label before it gives up its control, and if the window is
+narrow enough the rightmost group moves into a `…` menu with the full words back.
+
+**Snap** and **Falloff** are buttons that open the numbers behind them — a grid size and an angle, a
+falloff radius. The button stays lit while the setting is on, so a shut popover still says what is
+armed. Neither greys out while a document is saving: neither touches the document.
+
+**Overlays** is what the viewport draws over the model, and **View** is where the camera looks from
+and how it projects. Both are described below, under [Axis views](#axis-views) and
+[Snapping](#snapping).
+
+### The navigation widget
+
+The six balls in the top-right corner of the viewport are the world axes seen from where you are
+standing. The lettered ones are the positive ends — X, Y, Z — and their unlettered opposites sit
+behind them, which is how the widget tells you which way round you are looking without a label. Click
+any ball to look along that axis; it is the same jump `Ctrl+1`, `Ctrl+3` and `Ctrl+7` make, with the
+back views one click rather than a chord.
+
+### The hint line
+
+The line under the viewport says what the mouse and the keyboard do *right now*, and it changes with
+the mode, the tool and whether a drag is running. It is there because none of the selection verbs is
+a button: `Alt`-click for an edge loop, `L` for everything connected, `Ctrl`+`+` to grow the
+selection. Without the line the only way to find out edge mode can do something vertex mode cannot is
+to read this chapter.
+
 ## Element modes
 
 Every object starts as one thing you can move about. Press `1`, `2` or `3` and it becomes a mesh you
@@ -284,7 +319,8 @@ the geometry and reverses the faces, which is true under every reader.
 Blender puts them on, so the muscle memory carries over. Hold `Shift` for the opposite view, which
 is how three keys cover six. `Ctrl+5` toggles an **orthographic** projection, where parallel edges
 stay parallel and there is no perspective foreshortening; it is what you want for lining two things
-up. The buttons **F**, **R**, **T** and **Ortho** in the tool panel do the same.
+up. The **View** menu on the viewport header lists all six views and the orthographic toggle by
+name, and the navigation widget in the corner does the same with a click.
 
 An axis view changes the *angle* only. It keeps the distance and whatever you were looking at,
 because reframing would lose the part of the model you were about to line up. Switching to
