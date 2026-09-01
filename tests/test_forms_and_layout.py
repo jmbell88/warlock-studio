@@ -87,13 +87,25 @@ def test_the_swatch_grid_scales_with_the_display():
 # --- K92 / K98: measured rather than guessed ---------------------------------
 
 
-def test_the_2d_form_scrolls_under_a_fixed_submit():
-    """K92. The pane is twelve collapsible sections tall and the one control
-    every visit ends with sat at the bottom of all of them -- as did the
-    refusals saying why it could not be pressed."""
+def test_the_2d_form_scrolls_under_a_fixed_plan():
+    """K92, after the brief moved to the command bar.
+
+    Generate itself no longer sits below this column at all -- it is in
+    ``create_brief`` and never scrolls by construction. What stays pinned here
+    is the *statement*: the plan block lists every problem with one-click
+    repairs in it, and a paragraph explaining a disabled button is no use at
+    the bottom of a scrolled column either.
+    """
     source = inspect.getsource(settings_2d.draw)
     assert 'begin_child("2d-form"' in source
-    assert source.index("end_child") < source.index("_submit(ctx, form)")
+    assert source.index("end_child") < source.index("_plan_footer(ctx, form)")
+
+
+def test_generate_is_not_in_the_scrolling_column_at_all():
+    from warlock.studio import create_brief
+
+    assert "primary_button" not in inspect.getsource(settings_2d)
+    assert "primary_button" in inspect.getsource(create_brief)
 
 
 def test_the_library_footer_reservation_is_measured():

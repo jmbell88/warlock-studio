@@ -244,11 +244,11 @@ def test_a_restored_form_is_not_rewritten_merely_by_being_opened():
         (
             i
             for i in range(call - 1, max(call - 8, -1), -1)
-            if re.search(r'if form\["base_model"\] != before:', lines[i])
+            if re.search(r"if picked != before:", lines[i])
         ),
         None,
     )
-    assert guard is not None, "the call site is not under the base-model guard"
+    assert guard is not None, "the call site is not under the model-changed guard"
 
     def _indent(line: str) -> int:
         return len(line) - len(line.lstrip())

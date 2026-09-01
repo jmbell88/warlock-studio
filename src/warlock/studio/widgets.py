@@ -761,15 +761,25 @@ def input_text(label: str, value: str, *, max_length: int = 1000, hint: str = ""
     return out[:max_length] if changed else value
 
 
-def multiline(label: str, value: str, height: float, max_length: int) -> str:
+def multiline(
+    label: str, value: str, height: float, max_length: int, *, width: float = -1.0
+) -> str:
     """A wrapping text area.
 
     Wrapping is not imgui's default: without the flag a long prompt scrolls off
     to the right in a box three lines tall, which hides most of what was typed
     behind a horizontal scrollbar.
+
+    ``width`` defaults to -1, meaning *fill the row*, which is right in a
+    column and wrong on one: on a row it takes the width of every control after
+    it, and ``same_line`` past the pane edge draws a control nowhere. The
+    command bar passes a real width for that reason. It is a parameter here
+    rather than a second raw ``input_text_multiline`` at the call site because
+    a raw widget call is one the probe census cannot see (tests/test_probe.py),
+    and this one is already counted.
     """
     changed, out = imgui.input_text_multiline(
-        label, value, (-1, height), imgui.InputTextFlags_.word_wrap.value
+        label, value, (width, height), imgui.InputTextFlags_.word_wrap.value
     )
     note_ime_rect()
     return out[:max_length] if changed else value

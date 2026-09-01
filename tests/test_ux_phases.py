@@ -317,14 +317,31 @@ def test_the_service_still_names_the_controls_the_panes_ring():
 # --- the simple/advanced form ------------------------------------------------
 
 
-def test_the_2d_form_keeps_the_creation_decision_simple():
-    """Asset, prompt, model and LoRA stay visible; machinery is Advanced."""
+def test_the_creation_decision_is_split_between_the_bar_and_the_column():
+    """The brief is the bar; the recipe is the column; neither draws the
+    other's controls.
+
+    "Advanced controls" is gone rather than reorganised: one disclosure holding
+    six sections is a second navigation inside a sidebar, and the four controls
+    a common visit touches were the top and the bottom of it.
+    """
+    from warlock.studio import create_brief
+
+    bar = inspect.getsource(create_brief)
+    for call in ("_type", "_prompt", "_count", "_generate"):
+        assert f"{call}(ctx" in bar
+
     source = inspect.getsource(settings_2d.draw)
-    for call in ("_asset_type", "_prompt", "_model", "_lora"):
+    for call in ("_model", "_lora", "_seed_row", "_reset_row", "_references", "_negative"):
         assert call in source
-    assert 'collapsing_header("Advanced controls##create")' in source
-    for call in ("_reset_row", "_references", "_run_controls", "_negative"):
-        assert call in source
+    # The disclosure, and the controls that left, are gone from the column.
+    assert 'collapsing_header("Advanced controls##create")' not in source
+    for gone in ("_asset_type(ctx", "_quality(ctx", "_run_controls(", "_submit("):
+        assert gone not in source, gone
+    for retired in ("_asset_type", "_prompt", "_quality", "_run_controls", "_submit"):
+        assert not hasattr(settings_2d, retired), retired
+    # One disclosure survives, and it holds one thing.
+    assert "Conditioning" in source and "collapsing_header(" in source
     assert "section_blocks" in source
     for retired in ("_more", "_guidance", "_presets", "_vector_presets"):
         assert not hasattr(settings_2d, retired)
@@ -398,10 +415,13 @@ def test_tab_is_read_from_imgui_rather_than_from_the_event_loop():
 
 
 def test_both_generate_panes_carry_a_ring_that_ends_on_the_button():
+    from warlock.studio import create_brief
     from warlock.studio.panes import settings_3d
 
+    # Create's Generate moved to the command bar with the rest of the brief,
+    # so the ring that ends on it is the bar's ring now.
     assert 'focus.item(ctx.state, FOCUS_PANE, "generate")' in inspect.getsource(
-        settings_2d._submit
+        create_brief._generate
     )
     assert 'focus.item(ctx.state, FOCUS_PANE, "make3d")' in inspect.getsource(
         settings_3d._submit

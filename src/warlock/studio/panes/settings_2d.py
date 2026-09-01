@@ -35,7 +35,6 @@ from ...service.validation import (
     random_seed,
 )
 from .. import (
-    anchors,
     controls,
     create_assets,
     dialogs,
@@ -84,8 +83,9 @@ def draw(ctx: Any) -> None:
     # field_error(ctx.state, "style_lora")
     # field_error(ctx.state, "count")
     with forms.Form("create-2d", errors=ctx.state.field_errors) as form_ui:
-        # The form scrolls; Generate does not (K92): the one control every
-        # visit ends with must never sit at the bottom of a scrolled column.
+        # The plan block is pinned and does not scroll (K92): the statement of
+        # what a press will cost must not be at the bottom of a scrolled column
+        # when the press itself is in the bar above.
         focus.pump(state, FOCUS_PANE)
         focus.begin(state, FOCUS_PANE)
         if imgui.begin_child("2d-form", (0, -sp(_submit_px[0]))):
@@ -96,76 +96,62 @@ def draw(ctx: Any) -> None:
             # ``with`` closes before end_child -- an unbalanced splitter
             # corrupts the next frame (widgets.py, _BlockScope).
             with widgets.section_blocks():
-                # Keep the first screen to the decisions that compose the
-                # creative brief. The detailed run controls remain available
-                # below one disclosure instead of competing with the canvas.
-                widgets.section("Brief")
-                _asset_type(ctx, form)
-                widgets.section("Describe the outcome")
+                # **This column is "how"; the bar above is "what".** The type,
+                # the prompt, the count and Generate moved to
+                # ``create_brief``; what is left is the recipe, whatever the
+                # chosen type needs, and the conditioning -- and it is flat,
+                # because "Advanced controls" was one disclosure holding six
+                # sections, which is a second navigation inside a sidebar.
+                widgets.section("Recipe")
                 manual_render.help_button(ctx, "settings-2d")
-                _prompt(ctx, form, form_ui)
-                widgets.section("Reference")
-                _references(ctx, form)
+                intent = create_assets.selected(form).intent
+                if intent == "tileset":
+                    _locked_sheet_recipe(ctx, "Tile-set recipe", part="model")
+                    _locked_sheet_recipe(ctx, "Locked for coherent pixel tiles", part="lora")
+                else:
+                    _model(ctx, form, findings_doc)
+                    _lora(ctx, form, show_strength=False, findings_doc=findings_doc)
+                if intent == "sprite":
+                    _locked_sheet_recipe(ctx, "Final sheet recipe", sprite=True)
+                _seed_row(ctx, form, form_ui)
+                if form.get("style_lora") and intent != "tileset":
+                    widgets.section("Style strength")
+                    _lora_strength(ctx, form, findings_doc)
                 if _negative_supported(ctx, form):
                     widgets.section("Negative prompt / Avoid")
                     _negative(ctx, form)
                 _history(ctx, form)
+                # One contextual section, for the one type that needs it.
+                # Image and 3D Model draw none at all, which is the whole
+                # point: a control that cannot apply is not shown greyed, it
+                # is not shown.
                 if _is_tile_arm(form):
-                    # Above the model and not under Advanced: it decides what
-                    # the sheet is a sheet *of*, and in two of its three
-                    # layouts the words that are actually generated are typed
-                    # in this section rather than in the Prompt one above it.
-                    widgets.section("Tile layout")
+                    widgets.section("Tileset")
+                    manual_render.help_button(ctx, "settings-sheet")
                     _tile_layout(ctx, form, form_ui)
+                    _tile_size(ctx, form, form_ui)
+                    _target_cell(ctx, form, form_ui)
+                    _pixel_look(ctx, form, form_ui, sprite=False)
                 elif form.get("output") == "sheet":
-                    # The sprite arm's own layout, in the same place and for the
-                    # same reason: which action and how many directions is what
-                    # the sheet depicts, and it is also what decides whether the
-                    # press is one generation or sixteen.
-                    widgets.section("Sprite layout")
+                    widgets.section("Sprite sheet")
+                    manual_render.help_button(ctx, "settings-sheet")
                     _sprite_layout(ctx, form, form_ui)
-                # Recipe, style, dimensions and conditioning are deliberately
-                # one disclosure.  The brief stays short, while all the
-                # existing controls remain available without changing what a
-                # service receives.
-                imgui.set_next_item_open(
-                    bool(getattr(state, "create_advanced", False)),
-                    imgui.Cond_.always.value,
+                    _sprite_size(ctx, form, form_ui)
+                    _target_cell(ctx, form, form_ui)
+                    _pixel_look(ctx, form, form_ui, sprite=True)
+                # The one disclosure left, and it holds one thing. Collapsed by
+                # default because most runs attach no image at all; the tail
+                # says when one is attached, so a closed section never hides a
+                # setting that is doing something.
+                opened = controls.collapsing_header(
+                    f"Conditioning{_conditioning_tail(form)}##create"
                 )
-                opened = controls.collapsing_header("Advanced controls##create")
-                state.create_advanced = bool(opened)
                 if opened:
-                    widgets.section("Recipe")
-                    if create_assets.selected(form).intent == "tileset":
-                        _locked_sheet_recipe(ctx, "Tile-set recipe", part="model")
-                        _locked_sheet_recipe(ctx, "Locked for coherent pixel tiles", part="lora")
-                    else:
-                        _model(ctx, form, findings_doc)
-                        widgets.section("Style")
-                        _lora(ctx, form, show_strength=False, findings_doc=findings_doc)
-                    if create_assets.selected(form).intent == "sprite":
-                        _locked_sheet_recipe(ctx, "Final sheet recipe", sprite=True)
-                    widgets.section("Seed & count")
-                    _run_controls(ctx, form, form_ui)
-                    if form.get("output") == "sheet":
-                        widgets.section("Dimensions")
-                        manual_render.help_button(ctx, "settings-sheet")
-                        # The asset type fixes sheet kind/view/layout; this
-                        # section exposes only the resulting pixel dimensions.
-                        sprite_arm = form.get("sheet_type") == "sprite"
-                        if sprite_arm:
-                            _sprite_size(ctx, form, form_ui)
-                        else:
-                            _tile_size(ctx, form, form_ui)
-                        _target_cell(ctx, form, form_ui)
-                        _pixel_look(ctx, form, form_ui, sprite=sprite_arm)
-                    _reset_row(ctx)
-                    if form.get("style_lora") and create_assets.selected(form).intent != "tileset":
-                        widgets.section("Style strength")
-                        _lora_strength(ctx, form, findings_doc)
+                    _references(ctx, form)
+                _reset_row(ctx)
         imgui.end_child()
         top = imgui.get_cursor_pos_y()
-        _submit(ctx, form)
+        _plan_footer(ctx, form)
         height = imgui.get_cursor_pos_y() - top
         if height > 0:
             _submit_px[0] = height / max(tokens.SCALE, 0.01)
@@ -180,75 +166,6 @@ FIELD_LABELS: dict[str, str] = {}
 
 def field_label(field: str) -> str:
     return FIELD_LABELS.get(field, field.replace("_", " "))
-
-
-def _asset_type(ctx: Any, form: dict[str, Any]) -> None:
-    """The one top-level outcome choice; legacy service switches follow it."""
-    before = create_assets.selected(form).key
-    # One compact picker leaves the first screen for the words and reference
-    # that make the image. The descriptive line below retains the orientation
-    # the previous five-row selector supplied without taking over the brief.
-    picked = widgets.combo(
-        "##generation-type", before, list(create_assets.ASSET_TYPE_OPTIONS)
-    )
-    form["asset_type"] = picked if picked in create_assets.ASSET_TYPES else before
-    form["generation_type"] = form["asset_type"]
-    spec = create_assets.sync_legacy_fields(form)
-    if spec.key != before:
-        ctx.state.clear_field_error("asset_type")
-    widgets.muted_wrapped(
-        {
-            "image": "A standalone 2D image.",
-            "3d_model": "A reference image you can turn into a 3D model.",
-            "seamless_material": "A seamless surface texture.",
-            "tileset": "A coherent pixel-art tile sheet.",
-            "sprite_sheet": "A character reference followed by a sprite sheet.",
-        }[spec.key]
-    )
-
-
-#: Where the sentences explaining a *tier* change's clears are kept between
-#: frames -- :data:`CLEARED_KEY`'s sibling, and separate from it because the two
-#: are drawn under different combos and a change of one must not wipe the
-#: other's explanation.
-QUALITY_CLEARED_KEY = "quality_cleared"
-
-
-def _quality(ctx: Any, form: dict[str, Any]) -> None:
-    """Fast/Quality is a recipe choice, not a checkpoint choice."""
-    if create_assets.selected(form).intent == "tileset":
-        return
-    before = str(form.get("quality") or "quality")
-    picked = widgets.combo("##quality", before, [("fast", "Fast"), ("quality", "Quality")])
-    form["quality"] = picked if picked in generation.QUALITY_TIERS else before
-    widgets.field_error(ctx.state, "quality")
-    if form["quality"] != before:
-        ctx.state.clear_field_error("quality")
-        ctx.state.preview[QUALITY_CLEARED_KEY] = clear_for_tier(ctx, form)
-    for note in ctx.state.preview.get(QUALITY_CLEARED_KEY) or ():
-        widgets.muted_wrapped(note)
-    _recipe_note(ctx, form)
-
-
-def _recipe_note(ctx: Any, form: dict[str, Any]) -> None:
-    """What the chosen tier trades, under the combo that chose it.
-
-    Fast is genuinely worse -- four steps instead of thirty, no ControlNet, no
-    negative prompt -- and that is fine; a tier that is honestly worse and says
-    so is a choice the user can make. What is not fine is the silence this
-    replaces: until 2026-08-29 both tiers named ``sdxl_cfg`` and the control
-    changed nothing at all, and merely pointing it at a different checkpoint
-    without saying what changed would only move the silence one step.
-    """
-    if str(form.get("model_mode") or "auto") == "advanced":
-        # Advanced names its own checkpoint and prints that model's own
-        # description; a tier note there would describe a routing that is not
-        # happening.
-        return
-    resolved = _resolved_recipe(ctx, form)
-    if resolved is None or not resolved.recipe.note:
-        return
-    widgets.muted_wrapped(resolved.recipe.note)
 
 
 def _resolved_recipe(ctx: Any, form: dict[str, Any]) -> Any:
@@ -1310,27 +1227,17 @@ def _reset(ctx: Any) -> None:
     ctx.toast("The image settings are back to their defaults.")
 
 
-def _prompt(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
-    before = form["prompt"]
-    with focus.item(ctx.state, FOCUS_PANE, "prompt"):
-        _changed, form["prompt"] = form_ui.multiline_text(
-            "prompt",
-            "Description",
-            before,
-            height=90,
-            max_length=MAX_PROMPT,
-            help_text="Describe the subject and the result you want to generate.",
-            helper=f"{len(before)}/{MAX_PROMPT} characters",
-        )
-        anchors.mark("create/prompt")
-        ctx.state.clear_field_error("prompt")
-
-
 def _history(ctx: Any, form: dict[str, Any]) -> None:
+    """Reuse a prompt from this session.
+
+    No leading ``same_line``: it used to sit beside the prompt field, and with
+    that field in the command bar the continuation landed against whatever
+    happened to be drawn before it -- in practice the style-strength slider,
+    which is how a button ends up orphaned in the middle of another section.
+    """
     if not ctx.state.history:
         return
-    imgui.same_line()
-    if controls.button("Recent"):
+    if controls.button("Recent prompts..."):
         imgui.open_popup("prompt-history")
     if imgui.begin_popup("prompt-history"):
         widgets.popup_chrome(_imgui=imgui)
@@ -1339,6 +1246,24 @@ def _history(ctx: Any, form: dict[str, Any]) -> None:
             if controls.menu_item(f"{label}##{hash(entry)}", "", False)[0]:
                 form["prompt"] = entry
         imgui.end_popup()
+
+
+def _conditioning_tail(form: dict[str, Any]) -> str:
+    """" - 2 attached" and the like, on the collapsed Conditioning header.
+
+    A closed disclosure must never hide a setting that is doing something. The
+    header says how many of its controls are live, so a reference image left
+    attached from a previous run is visible without opening it.
+    """
+    live = sum(
+        1
+        for key in ("ref_path", "ip_adapter", "control")
+        if str(form.get(key) or "")
+    )
+    live += 1 if form.get("init_image") else 0
+    if not live:
+        return ""
+    return f"  ({live} on)"
 
 
 def _references(ctx: Any, form: dict[str, Any]) -> None:
@@ -1657,47 +1582,65 @@ def clear_unusable(ctx: Any, form: dict[str, Any]) -> list[str]:
     return cleared
 
 
+def model_options(ctx: Any) -> list[tuple[str, str]]:
+    """The Model combo's entries: Automatic, then every installed checkpoint.
+
+    **One control where there were three.** The pane used to draw a Fast/Quality
+    tier, an Automatic/Advanced switch and a checkpoint combo -- three controls
+    for one decision, of which the first two only ever chose *which checkpoint*.
+    Nothing is lost by folding them: the sole ``fast`` recipe resolves to the
+    ``sdxl`` checkpoint, which is in this list, so picking Fast and picking
+    ``sdxl`` were the same act said two ways.
+
+    ``""`` is Automatic, which is ``model_mode="auto"``; any other key is
+    ``model_mode="advanced"`` with that key as the override. The two form
+    fields are unchanged, because the door and the recipe registry read them.
+    """
+    return [("", "Automatic")] + list(ctx.base_models)
+
+
 def _model(ctx: Any, form: dict[str, Any], findings_doc: Any = _LOAD_FINDINGS) -> None:
-    widgets.field_label("Recipe")
-    _quality(ctx, form)
-    mode_before = str(form.get("model_mode") or "auto")
-    mode = widgets.combo(
-        "##model_mode", mode_before, [("auto", "Automatic"), ("advanced", "Advanced")]
-    )
-    form["model_mode"] = mode if mode in generation.MODEL_MODES else mode_before
-    if form["model_mode"] == "auto":
+    auto = str(form.get("model_mode") or "auto") == "auto"
+    before = "" if auto else str(form.get("base_model") or "")
+    picked = widgets.combo("##model", before, model_options(ctx))
+    if picked != before:
+        if picked:
+            form["model_mode"] = "advanced"
+            form["base_model"] = picked
+            form["model_override"] = picked
+            ctx.state.preview[CLEARED_KEY] = clear_unusable(ctx, form)
+        else:
+            form["model_mode"] = "auto"
+            form["model_override"] = ""
+        ctx.state.clear_field_error("base_model")
+    # The refusal this most often carries is ``check_weights``' -- a model that
+    # is selected and not downloaded, with the ``hf download`` line in it.
+    widgets.field_error(ctx.state, "base_model")
+    if form.get("model_mode") == "auto":
         request = generation.request_from_legacy(form)
         resolved = generation.resolve_recipe(request, ctx.svc.config)
         if resolved is None:
             widgets.muted_wrapped(
                 "No compatible installed recipe is available. "
-                "Install a model in Settings or open Advanced."
+                "Install a model in Settings, or pick one above."
             )
         else:
-            imgui.text_wrapped(f"{resolved.recipe.label} · {resolved.base_model}")
+            # What Automatic actually resolved to, every frame. A control whose
+            # value is "Automatic" and says nothing else is a control that
+            # refuses to tell you what it did.
+            widgets.muted_wrapped(f"{resolved.recipe.label} - {resolved.base_model}")
+            # What the resolved recipe trades, if it trades anything. This was
+            # ``_recipe_note`` under the retired Fast/Quality combo: a tier
+            # that is honestly worse and says so is a choice somebody can
+            # make, and the silence it replaced had both tiers naming
+            # ``sdxl_cfg`` while the control changed nothing at all.
+            if resolved.recipe.note:
+                widgets.muted_wrapped(resolved.recipe.note)
             if resolved.warning:
                 widgets.wrapped(theme.WARN, resolved.warning)
         return
-    # The section heading is the label; a labeled_combo here would say
-    # "Model" twice in two type styles.
-    before = form["base_model"]
-    form["base_model"] = widgets.combo("##base_model", form["base_model"], ctx.base_models)
-    # The refusal this most often carries is ``check_weights``' -- a model that
-    # is selected and not downloaded, with the ``hf download`` line in it -- and
-    # the control it names is three collapsed sections away from the button that
-    # was pressed. See ``widgets.field_error``.
-    widgets.field_error(ctx.state, "base_model")
-    if form["base_model"] != before:
-        form["model_override"] = form["base_model"]
-        ctx.state.preview[CLEARED_KEY] = clear_unusable(ctx, form)
-        ctx.state.clear_field_error("base_model")
-    # Under the Model combo rather than beside each control it emptied: this is
-    # about the change just made, and the structure control's own section is
-    # behind a header the user may never open.
     for note in ctx.state.preview.get(CLEARED_KEY) or ():
         widgets.muted_wrapped(note)
-    # On its own line, not same_line: the combo above takes the full width, so
-    # a continuation would start on the right edge and clip entirely.
     hint = _findings_hint(ctx, "base_model", form["base_model"], findings_doc)
     if hint is not None:
         widgets.hint_text(hint)
@@ -1846,69 +1789,17 @@ def _negative_supported(ctx: Any, form: dict[str, Any]) -> bool:
         return False
 
 
-def _run_controls(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
-    """Count and seed, beside the button that uses them.
+def _seed_row(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """The seed, and the two controls that act on it.
 
-    These lived under Advanced, which meant "roll again" and "how many"
-    required re-expanding a collapsed section every session while the submit
-    footer talked about the count as if it were visible.
+    One function since the count went to the bar: this used to be the tail of
+    ``_run_controls``, which existed to draw the count first and branch on the
+    sheet arm that has none. With the count gone there is one path.
     """
-    if form.get("output") == "sheet":
-        # Pinned to one, and the control is not drawn at all. Both doors refuse
-        # a batch and say why -- a tile sheet is one generation by construction,
-        # and N characters each spawning two more sheets is 3N passes from one
-        # button -- so a row of radios here would be four choices of which three
-        # are refusals. Written into the form as well as skipped, because the
-        # value is persisted and a 4 left over from the Object output would
-        # reach the door.
-        form["count"] = 1
-        with focus.item(ctx.state, FOCUS_PANE, "seed"):
-            changed, seed = form_ui.number("seed", "Seed", int(form["seed"]))
-        if changed:
-            form["seed"] = max(0, seed)
-        _seed_row(ctx, form, form_ui)
-        return
-    with focus.item(ctx.state, FOCUS_PANE, "count") as focused:
-        changed, picked = form_ui.segmented_choice(
-            "count",
-            # Not "References": the References *section* 150 dp above this
-            # one is the input images, and one word cannot be both the pictures
-            # going in and the count coming out.
-            "Tiles" if form.get("output") == "tile" else "How many",
-            str(form["count"]),
-            tuple((str(count), str(count)) for count in (1, 2, 4, 8)),
-            help_text="How many alternatives this run should create.",
-            compact=True,
-        )
-        if changed:
-            form["count"] = int(picked)
-            ctx.state.clear_field_error("count")
-        # Hand-answered, as the output switch is: a row of radios is one
-        # control to the keyboard even though it is four items to imgui.
-        if focused:
-            choices = (1, 2, 4, 8)
-            here = choices.index(form["count"]) if form["count"] in choices else 0
-            if imgui.is_key_pressed(imgui.Key.left_arrow):
-                form["count"] = choices[(here - 1) % len(choices)]
-            if imgui.is_key_pressed(imgui.Key.right_arrow):
-                form["count"] = choices[(here + 1) % len(choices)]
-    # After the whole row rather than inside it: the ring goes round the last
-    # item drawn, and what was refused is "how many", not the fourth radio.
     with focus.item(ctx.state, FOCUS_PANE, "seed"):
         changed, seed = form_ui.number("seed", "Seed", int(form["seed"]))
     if changed:
         form["seed"] = max(0, seed)
-    _seed_row(ctx, form, form_ui)
-
-
-def _seed_row(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
-    """Reroll and Lock, beside the seed field both paths draw.
-
-    Split out when the Sheet output stopped drawing the count: the two paths
-    share everything from here down, and a second copy of a wrap-aware row is
-    exactly the kind of duplicate that comes back as a control drawn nowhere at
-    1.5 scale.
-    """
     # No ring on the seed, deliberately: nothing in ``service`` raises a
     # refusal naming it (the range check is fieldless, and the widget already
     # clamps), and a call here would also have to sit after the Reroll and Lock
@@ -1932,30 +1823,21 @@ def _seed_row(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
         form["seed_locked"] = locked
 
 
-def _submit(ctx: Any, form: dict[str, Any]) -> None:
+def _plan_footer(ctx: Any, form: dict[str, Any]) -> None:
+    """What a press will cost, and what is stopping it. Pinned, never scrolled.
+
+    The button this used to carry is in ``create_brief`` now. The *statement*
+    stays here, because it is a paragraph with one-click repairs in it and a
+    one-row bar has no place to put either -- the bar's disabled Generate wears
+    the first problem as its tooltip and this is the list.
+    """
     imgui.dummy((0, sp(8)))
     imgui.separator()
     problems = validate(form)
     weight = weights_problem(ctx, form)
     if weight is not None:
         problems = [*problems, weight]
-    spec = create_assets.selected(form)
     _generation_plan(ctx, form, problems)
-    busy = ctx.busy("submit")
-    enabled = not problems and not busy
-    with focus.item(ctx.state, FOCUS_PANE, "generate") as focused:
-        pressed = widgets.primary_button(spec.create_label, (-1, sp(34)), enabled=enabled)
-        anchors.mark("create/generate")
-        # Enter on the last stop of the ring, which is what makes the whole
-        # form keyboard-only: everything above it is a stock imgui control that
-        # answers the keyboard once it has focus, and this is the one that
-        # cannot be "typed into". Ctrl+Enter still works from anywhere.
-        if focused and enabled and _enter_pressed():
-            pressed = True
-    if pressed:
-        generate(ctx, form)
-    if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
-        imgui.set_tooltip("Ctrl+Enter")
 
 
 def _generation_plan(ctx: Any, form: dict[str, Any], problems: list[widgets.Problem]) -> None:

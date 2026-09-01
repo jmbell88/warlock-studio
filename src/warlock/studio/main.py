@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import memlog, winjob
-from . import anchors, filetypes, guard, probe, resources
+from . import anchors, create_brief, filetypes, guard, probe, resources
 from . import fps as fps_mod
 
 log = logging.getLogger(__name__)
@@ -3503,6 +3503,20 @@ class App:
                     imgui.indent(pad)
                     self._stage_rail(ctx, max_width=rail_w)
                     imgui.unindent(pad)
+                    # The brief, across the full content width under the rail
+                    # and above the columns. Drawn only where it has something
+                    # true to say -- the four other stages start their columns
+                    # here instead, rather than reserving an inert strip.
+                    if create_brief.shows(ctx):
+                        with layout_mod.pane(
+                            "brief",
+                            (0, tokens.sp(create_brief.BAR_H)),
+                            layout_mod.PaneRole.CONTENT,
+                            edge=layout_mod.PaneEdge.BOTTOM,
+                            title="The brief bar",
+                        ) as visible:
+                            if visible:
+                                create_brief.draw(ctx)
                     with layout_mod.pane(
                         "settings",
                         (left_w, 0),
