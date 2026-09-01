@@ -110,10 +110,13 @@ def _resolve_source(base: Path, source: str) -> Path:
     by it. Enough ``..`` segments walk out of the project entirely, so a crafted
     ``.tmx`` can name any file this user can already read. What it cannot do is
     write anywhere, escape the user's own privileges, or send what it read
-    anywhere -- there is no network path in this build to exfiltrate over, which
-    is the property that makes this an accepted trade rather than a hole. If a
-    future build ever gains an outbound request, this refusal has to be revisited
-    before that lands, not after.
+    anywhere. That last clause used to read "there is no network path in this
+    build", and that is no longer true: ``fetch_worker`` goes online. It stays an
+    accepted trade because the two never meet -- the fetch child is a separate
+    process with its own environment, started only by the user asking for a
+    model, and it neither reads a ``.tmx`` nor is reachable from one. What was
+    promised when this was written still has to hold: if an outbound request ever
+    lands *in this process*, this refusal is revisited before it does.
 
     An absolute path is refused because it is not anchored at all --
     ``C:\\Windows\\...`` reads whatever it names -- and a UNC path is worse than

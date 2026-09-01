@@ -193,6 +193,45 @@ def test_an_ora_canvas_size_has_a_ceiling(tmp_path):
         ora.read_ora(path)
 
 
+def test_an_ora_layer_count_has_a_ceiling(tmp_path, monkeypatch):
+    """``pixelguard`` bounds one canvas and ``zipguard`` bounds the claimed
+    bytes; neither can see the *product*. Every ``<layer>`` is placed onto the
+    canvas, so a fifteen-kilobyte archive naming five hundred layers of one
+    tiny PNG asks for five hundred full canvases."""
+    from PIL import Image
+
+    from warlock.studio.inker import transform
+
+    tiny = io.BytesIO()
+    Image.new("RGBA", (1, 1), (0, 0, 0, 0)).save(tiny, "PNG")
+    count = 2000
+    layers = "".join(f'<layer name="L{i}" src="t.png" x="0" y="0"/>' for i in range(count))
+    path = tmp_path / "many.ora"
+    path.write_bytes(
+        _ora(
+            f'<image w="2048" h="2048"><stack>{layers}</stack></image>',
+            {"t.png": tiny.getvalue()},
+        )
+    )
+    assert path.stat().st_size < 1 << 20
+
+    # The refusal has to land *before* the allocations, not after: counting
+    # ``resize_canvas`` calls is what says so, since a bound that only checked
+    # the total at the end would already have spent the memory.
+    placed = 0
+    real = transform.resize_canvas
+
+    def counted(*args, **kwargs):
+        nonlocal placed
+        placed += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(transform, "resize_canvas", counted)
+    with pytest.raises(ValueError, match="layers"):
+        ora.read_ora(path)
+    assert placed < count
+
+
 def test_an_aseprite_canvas_size_has_a_ceiling():
     """Both fields are u16 and were checked only for ``< 1``; 65535 squared is
     17 GB on the first drawable row."""

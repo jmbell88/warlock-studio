@@ -156,6 +156,32 @@ _EPOCH = (1980, 1, 1, 0, 0, 0)
 # time for their reason too: a test lowers it rather than building a gigabyte.
 MAX_DECOMPRESSED_BYTES = 1 << 30
 
+#: The absolute ceiling on how many layers one drawing may hold. A hard number
+#: rather than only a pixel budget, so a 1x1 canvas naming ten thousand PNGs is
+#: still refused; the budget below is the one that usually binds.
+MAX_ORA_LAYERS = 1024
+
+
+def _layer_budget(width: int, height: int) -> int:
+    """How many layers a ``width`` x ``height`` drawing may hold.
+
+    The bound the other five container doors already carry and this one did
+    not. ``zipguard`` bounds the bytes an archive claims and ``pixelguard``
+    bounds one canvas, and neither can see the product: every ``<layer>``
+    element is placed onto the *canvas* by ``_place``/``resize_canvas``, so a
+    fifteen-kilobyte file naming five hundred layers of one 1x1 PNG asks for
+    five hundred full canvases -- 134 GB at the 8192-square ceiling, from an
+    archive that is honest about every byte it holds.
+
+    Expressed as a pixel budget rather than a layer count because that is what
+    is actually scarce: the same number of layers is fine at 64x64 and absurd
+    at 8192x8192. One whole canvas' worth of decode is the unit, and
+    :data:`pixelguard.MAX_DECODE_PIXELS` is already the size of the largest one
+    this build will open.
+    """
+    per_layer = max(1, int(width) * int(height))
+    return max(1, min(MAX_ORA_LAYERS, pixelguard.MAX_DECODE_PIXELS // per_layer))
+
 log = logging.getLogger(__name__)
 
 
@@ -1327,6 +1353,16 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
                 raise ValueError(f"cel at ({ti}, {fi}) is outside the grid")
             layer = planes.get(src)
             if layer is None:
+                # The flat read's bound, on the branch that allocates the same
+                # way: every distinct ``data`` path here is one ``_decode`` onto
+                # the full canvas, so the count that matters is the number of
+                # *distinct planes*, not the number of cels naming them.
+                allowed = _layer_budget(*size)
+                if len(planes) >= allowed:
+                    raise ValueError(
+                        f"this drawing holds more than the {allowed} layers of "
+                        f"{size[0]}x{size[1]} this build will open"
+                    )
                 track = tracks[ti]
                 # Read once and used twice: the RGBA decode and the index plane
                 # beside it are two readings of the same bytes, and reading the
@@ -2008,6 +2044,17 @@ def read_ora(path: Path, *, budget: int | None = None):
             planes_data.append(data)
             if not width or not height:
                 width, height = pixels.shape[1], pixels.shape[0]
+            # Counted here rather than before the decode: until the first PNG
+            # lands a headerless ``stack.xml`` has not said how big the canvas
+            # is, and the budget is a budget *in canvases*. One layer past the
+            # bound is the refusal, so the allocation the next ``_place`` would
+            # make never happens.
+            allowed = _layer_budget(width, height)
+            if len(layers) >= allowed:
+                raise ValueError(
+                    f"this drawing holds more than the {allowed} layers of "
+                    f"{width}x{height} this build will open"
+                )
             offset = (int(element.get("x") or 0), int(element.get("y") or 0))
             if offset != (0, 0) or (pixels.shape[1], pixels.shape[0]) != (width, height):
                 pixels = _place(pixels, (width, height), offset)

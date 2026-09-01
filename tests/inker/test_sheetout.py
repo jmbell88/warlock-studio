@@ -1455,9 +1455,26 @@ def test_tag_and_layer_are_sanitised_the_same_way_split_stems_always_did():
 
 
 def test_title_is_never_sanitised():
-    assert (
-        sheetout.filename_for("{title}", title="A/B*C? swing") == "A/B*C? swing"
-    )
+    """Passed through verbatim rather than rewritten the way a tag or a layer
+    is: a title is already a stem a save dialog handed back. Spelled with
+    characters ``sanitize_stem`` *would* rewrite but which are not separators,
+    since containment is a separate rule -- see the test below."""
+    assert sheetout.filename_for("{title}", title="A*B? swing") == "A*B? swing"
+
+
+def test_a_composed_name_that_is_really_a_path_is_refused():
+    """The literal text between a template's keys is never sanitised, and every
+    caller joins the result onto the folder the user picked. ``Path`` honours a
+    separator -- and an absolute name discards the folder outright -- so the
+    check is on what was composed, not on what was interpolated."""
+    for template, title in (
+        ("../{title}", "walk"),
+        ("sub/{title}_{frame}", "walk"),
+        ("C:/loot/{title}", "walk"),
+        ("{title}", "../loot"),
+    ):
+        with pytest.raises(ValueError, match="folder"):
+            sheetout.filename_for(template, title=title, frame=0)
 
 
 def test_a_tag_that_sanitises_to_nothing_is_refused_even_unused():

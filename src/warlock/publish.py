@@ -31,10 +31,13 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 #: Written into a staging tree by the child, read by the parent. Its presence is
 #: what distinguishes "this download finished and is waiting to be published"
@@ -192,6 +195,16 @@ def undo_into(staging: Path, dest: Path, names: list[str]) -> bool:
     complete = True
     failed: set[Path] = set()
     for name in names:
+        # ``names`` comes back off disk, out of ``.warlock-txn.json``, which a
+        # crashed run left behind and anything with local write access could
+        # have edited since. A member spelled ``../..`` or ``C:/Windows/x``
+        # would have this loop move a file the publish never touched. Skipped
+        # rather than raised: recovery runs at startup and one bad line in a
+        # stale journal may not stop the rest of it being undone.
+        if not _contained(dest, name) or not _contained(staging, name):
+            log.warning("skipping %r in a journal: not a name inside the tree", name)
+            complete = False
+            continue
         target = dest / name
         back = staging / name
         # A previous recovery attempt may already have moved this file back.
@@ -225,6 +238,19 @@ def undo_into(staging: Path, dest: Path, names: list[str]) -> bool:
             except OSError:
                 complete = False
     return complete
+
+
+def _contained(root: Path, name: str) -> bool:
+    """Whether ``root / name`` stays under ``root``.
+
+    The containment rule ``sirens_io._under`` and ``inker_mode._under`` state
+    for export paths, asked as a question rather than a refusal because the one
+    caller is crash recovery and wants to carry on past a bad line.
+    """
+    try:
+        return root.resolve() in (root / name).resolve().parents
+    except OSError:
+        return False
 
 
 def write_json(path: Path, payload: Any) -> None:

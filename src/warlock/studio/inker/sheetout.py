@@ -44,6 +44,7 @@ __all__ = [
     "FILENAME_KEYS",
     "build",
     "compose",
+    "containment_check",
     "filename_for",
     "flatten_one",
     "flatten_subset",
@@ -190,6 +191,7 @@ def filename_for(
     except (KeyError, IndexError, ValueError) as exc:
         raise ValueError(f"filename template {template!r} could not be filled in") from exc
     reserved_check(name)
+    containment_check(name)
     return name
 
 
@@ -228,6 +230,33 @@ def reserved_check(name: str) -> None:
         raise ValueError(
             f"{name!r} ends in a dot or a space, which Windows silently strips "
             "-- two exports would collide on one file"
+        )
+
+
+#: Everything that turns a composed name into a *path* rather than a filename:
+#: either separator, and the drive colon Windows accepts in ``C:name``.
+_PATH_CHARS = re.compile(r"[\\/:]")
+
+
+def containment_check(name: str) -> None:
+    """Refuse a composed filename that is really a path. Raises ``ValueError``.
+
+    :func:`sanitize_stem` cleans the *values* a template interpolates and says
+    nothing about the literal text between them -- and that text is the user's,
+    typed into the timeline's filename box and persisted with the document. A
+    template of ``../{title}_{frame}`` or ``C:/loot/{frame}`` composes a name
+    that every caller then joins onto the export folder, and ``Path.__truediv__``
+    honours an absolute right-hand side by discarding the left one: the frames
+    land somewhere the user never picked, silently, one file per frame.
+
+    Two of the three PNG runners are safe by accident -- ``Path.with_name``
+    raises on a separator -- and this is the rule stated once, at the point the
+    name is composed, so a fourth runner cannot be written without it.
+    """
+    if _PATH_CHARS.search(name) or name.strip() in {".", ".."}:
+        raise ValueError(
+            f"{name!r} names a folder, not a file; a filename template may not "
+            "contain / \\ or :"
         )
 
 

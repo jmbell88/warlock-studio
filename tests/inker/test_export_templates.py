@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 
 from warlock.studio import inker, inker_mode, inker_state
 from warlock.studio.inker_state import InkerDoc, InkerState
@@ -160,6 +161,44 @@ def test_a_plain_png_templates_missing_frame_key_collides_and_is_refused(
         raised = True
     assert raised
     assert not list(tmp_path.glob("*.png"))
+
+
+def test_a_template_that_climbs_out_of_the_export_folder_is_refused(
+    monkeypatch, tmp_path
+):
+    """The literal text between a template's keys is the user's, typed into the
+    timeline's filename box and persisted with the document -- and the PNG
+    sequence joins the composed name onto the chosen folder. ``../`` would put
+    every frame somewhere the save dialog never offered."""
+    ctx, state, tab = _open(_clip(2))
+    state.export_template = "../escaped_{frame}"
+    dest = tmp_path / "here"
+    dest.mkdir()
+    _saved(monkeypatch, dest / "walk.png")
+
+    inker_mode.export_pngs(ctx, tab)
+    with pytest.raises(ValueError, match="folder"):
+        _finish(ctx, state)
+    assert not list(tmp_path.glob("*.png"))
+    assert not list(dest.glob("*.png"))
+
+
+def test_an_absolute_template_cannot_discard_the_chosen_folder(monkeypatch, tmp_path):
+    """``Path.__truediv__`` honours an absolute right-hand side by throwing the
+    left one away, so this is the same escape spelled without a ``..``."""
+    ctx, state, tab = _open(_clip(2))
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    state.export_template = f"{other.as_posix()}/loot_{{frame}}"
+    dest = tmp_path / "here"
+    dest.mkdir()
+    _saved(monkeypatch, dest / "walk.png")
+
+    inker_mode.export_pngs(ctx, tab)
+    with pytest.raises(ValueError, match="folder"):
+        _finish(ctx, state)
+    assert not list(other.glob("*.png"))
+
 
 
 # --- the two split defaults, through the new machinery -------------------------

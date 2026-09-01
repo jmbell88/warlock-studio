@@ -103,6 +103,21 @@ NEW_PRESETS = ((512, 512), (1024, 1024), (2048, 2048))
 NEW_MAX = 8192
 
 
+def _under(root: Path, name: str) -> Path:
+    """``root / name``, refusing anything that escapes ``root``.
+
+    The same rule ``sirens_io._under`` states for its own exports, spelled
+    again here rather than reached across for: a sanitiser is one regex away
+    from letting a separator through, and the consequence is a file written
+    outside the folder the save dialog handed back. Checked rather than argued
+    from, at the one place a path is built out of a composed name.
+    """
+    path = root / name
+    if root.resolve() not in path.resolve().parents:
+        raise ValueError(f"{name!r} is not a name inside the export folder")
+    return path
+
+
 def clamp_canvas(width: Any, height: Any) -> tuple[int, int]:
     """A typed size, made safe. Clamped rather than refused, the snap rule:
     the fields are being *typed into*, and there is nothing useful for a
@@ -2288,7 +2303,13 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             ]
             sheetout.require_distinct_names(names)
             for name, plane in zip(names, load.frames, strict=True):
-                out = dest.parent / f"{name}.png"
+                # Checked where the path is *built*, not only where the name was
+                # composed: ``filename_for``'s ``containment_check`` decides what
+                # a name may be and this decides where the join actually lands,
+                # which are two different mistakes -- and this is the one runner
+                # that joins onto ``dest.parent`` rather than going through
+                # ``with_name``, which raises on a separator by itself.
+                out = _under(dest.parent, f"{name}.png")
                 atomic.save_image(
                     out, Image.fromarray(upscale(plane, scale), "RGBA"), "PNG"
                 )
