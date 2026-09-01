@@ -169,7 +169,7 @@ def test_every_rendered_command_carries_its_revision():
 #: names the right repository and the wrong commit, or no commit at all.
 PINNED_DOCS = (
     "docs/MODELS.md",
-    "docs/manual/39-installation.md",
+    "docs/manual/38-installation.md",
     "README.md",
 )
 
@@ -251,11 +251,11 @@ def test_the_installation_chapter_names_every_repository_too():
     pointer, and why its completeness is a claim of its own rather than one it
     can borrow from the two files above."""
     root = SRC.parents[1]
-    text = (root / "docs" / "manual" / "39-installation.md").read_text(encoding="utf-8")
+    text = (root / "docs" / "manual" / "38-installation.md").read_text(encoding="utf-8")
     repos = {one.repo_id for entry in fetch.entries() for one in entry.fetch}
     missing = sorted(repo for repo in repos if repo not in text)
     assert not missing, (
-        f"in models.py but not in docs/manual/39-installation.md: {missing}"
+        f"in models.py but not in docs/manual/38-installation.md: {missing}"
     )
 
 

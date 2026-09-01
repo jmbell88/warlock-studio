@@ -39,11 +39,11 @@ uv sync --extra studio --extra text2image --extra rig
 The three extras are separable and each buys a different capability — `studio` is the window and its
 renderer, `text2image` is text-to-3D, `rig` is rigging, posing and character sheets. A bare
 `uv sync` prunes all three, so pass them.
-[Python dependencies](39-installation.md#python-dependencies) explains what skipping each one costs.
+[Python dependencies](38-installation.md#python-dependencies) explains what skipping each one costs.
 
 One thing that is not a Python package: the reconstruction engine is a native binary that belongs in
 `vendor/trellis/`, and it is a manual download.
-[The trellis binary](39-installation.md#the-trellis-binary) has the link and the build this version
+[The trellis binary](38-installation.md#the-trellis-binary) has the link and the build this version
 was tested against. Without it the app starts normally and every 3D job fails, so do it before you
 go looking for a bug.
 
@@ -82,7 +82,7 @@ Download button spawns a *separate* process which goes online in its own environ
 repository into a staging directory beside its destination, moves the files in only if it succeeded,
 and exits. So a cancelled or failed fetch leaves no half-populated model directory, and the app
 never becomes online-capable — not even briefly. To run the downloads yourself instead,
-[Model weights](39-installation.md#model-weights) has the commands with their pinned revisions.
+[Model weights](38-installation.md#model-weights) has the commands with their pinned revisions.
 
 ## What works before the downloads finish
 
@@ -119,7 +119,7 @@ Everything Warlock generates goes under one directory, `~/.warlock`, and not ins
 That matters more than it sounds. Work surviving a `git clean`, a reinstall or a move to a new
 checkout is exactly what putting it outside the source tree buys. An older install that kept things
 inside the checkout has them moved here on the next start — copied first, verified, and only then
-deleted. [Data locations](40-configuration.md#data-locations) covers the environment variables that
+deleted. [Data locations](39-configuration.md#data-locations) covers the environment variables that
 move any of it somewhere else.
 
 ## When something is wrong
@@ -133,7 +133,7 @@ see — each with the exact command that fixes it.
 
 `uv run warlock doctor` asks the same questions from a terminal and prints the same answers, which
 is the more useful of the two when the window will not open at all.
-[Troubleshooting](42-troubleshooting.md) is organised by symptom.
+[Troubleshooting](41-troubleshooting.md) is organised by symptom.
 
 ## What to read next
 

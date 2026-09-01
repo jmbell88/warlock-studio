@@ -274,7 +274,6 @@ def test_the_six_lists_that_lacked_an_empty_state_have_one():
         # Open and the recent list on it. Two empty states for one fact, one
         # column apart, is what the single-voice rule removed. The pane's
         # filtered-empty case is still answered, by ``widgets.no_matches``.
-        "panes/profiles_panel.py",
         "panes/sheet_panel.py",
         "panes/pose_panel.py",
         "manual/render.py",

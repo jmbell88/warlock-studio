@@ -417,11 +417,13 @@ def test_every_row_destination_is_a_real_mode_or_deliberately_empty():
         assert mode == "" or mode in keys, f"{kind} -> {mode!r}"
 
 
-def test_the_one_self_navigating_kind_is_the_profile_draft():
-    """Pinned by name rather than by count: a second empty entry added without
-    a provider that navigates would silently make Recover do nothing visible."""
+def test_no_kind_navigates_itself():
+    """Pinned by name rather than by count. The profile draft was the one
+    self-navigating kind and it is gone with Profiles; an empty entry added
+    back without a provider that navigates would silently make Recover do
+    nothing visible."""
     empty = [kind for kind, mode in landing._KIND_MODES.items() if not mode]
-    assert empty == ["profile"]
+    assert empty == []
 
 
 def test_the_recovery_section_draws_nothing_with_an_empty_snapshot():

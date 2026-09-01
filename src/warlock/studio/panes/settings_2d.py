@@ -45,7 +45,6 @@ from .. import (
     focus,
     forms,
     generation_workspace,
-    profiles,
     theme,
     tokens,
     widgets,
@@ -167,8 +166,7 @@ def draw(ctx: Any) -> None:
                             _tile_size(ctx, form, form_ui)
                         _target_cell(ctx, form, form_ui)
                         _pixel_look(ctx, form, form_ui, sprite=sprite_arm)
-                    widgets.section("Profiles")
-                    _profiles(ctx, form)
+                    _reset_row(ctx)
                     widgets.section("Prompt enrichment")
                     _expand(ctx, form)
                     _preview(ctx)
@@ -1289,61 +1287,24 @@ def seamless_subject(form: dict[str, Any]) -> str | None:
         return None
 
 
-def _profiles(ctx: Any, form: dict[str, Any]) -> None:
-    """The saved-style picker, next to the shipped presets.
+def _reset_row(ctx: Any) -> None:
+    """*Reset...*, which used to sit in the deleted Profiles block.
 
-    Same "fills the fields, stays editable" contract a preset has -- the
-    difference is only who wrote it. Saving goes through the ordinary Prompt
-    modal rather than an inline text field so the name is asked for once,
-    rather than every frame the section is open.
+    Kept when Profiles went, because it never belonged to Profiles: it is the
+    way back from a session's accumulated overrides, and ``settings_3d`` grew
+    its counterpart precisely because this pane had one and that one did not.
+
+    Above the submit rather than below it: a destructive control under the
+    primary action is one the hand reaches by accident.
     """
-    saved = profiles.list_profiles(ctx.settings)
-    if saved:
-        # Shows the active profile while the form still matches it, and
-        # "Custom" once it has been edited past it.
-        active = profiles.get_active(ctx.settings)
-        current = (
-            active
-            if active in saved and all(form.get(k) == v for k, v in saved[active].items())
-            else ""
-        )
-        options = [("", "Custom")] + [(name, name) for name in sorted(saved)]
-        chosen = widgets.combo("##profile", current, options, width=-84)
-        if chosen and chosen != current and chosen in saved:
-            profiles.apply(form, saved[chosen])
-            profiles.set_active(ctx.settings, chosen)
-            ctx.state.preview_dirty_at = time.monotonic()
-        # Wrap-aware, all three: with the picker taking the row's width, the
-        # buttons continued past the pane edge at 1.5 scale and were clipped.
-        widgets.same_line_or_wrap(widgets.button_width("Save as..."))
-    if controls.button("Save as..."):
-        ctx.prompts.ask(
-            dialogs.Prompt(
-                title="Save profile",
-                label="Name",
-                value=profiles.get_active(ctx.settings) or "",
-                on_accept=lambda name: _save_profile(ctx, form, name),
-            )
-        )
-    widgets.same_line_or_wrap(widgets.button_width("Manage..."))
-    # The manager, from the picker it is about (the UI redesign, wave 3). It was a
-    # top-level mode, which put a shelf of saved settings in the navigation
-    # beside the six creative workspaces and made "manage my styles" somewhere
-    # you travel to rather than something you do to the form in front of you.
-    if widgets.ghost_button("Manage..."):
-        from . import profiles_panel
-
-        profiles_panel.open_sheet(ctx)
-    widgets.same_line_or_wrap(widgets.button_width("Reset..."))
-    if controls.button("Reset..."):
+    if controls.button("Reset...", role=controls.ButtonRole.GHOST):
         ctx.confirms.ask(
             dialogs.Confirm(
                 title="Reset the image settings?",
                 message=(
                     "The prompt, the negative prompt, the model, the LoRA, "
                     "the reference and the run controls go back to their "
-                    "defaults. Saved profiles are kept, and the 3D form is "
-                    "untouched."
+                    "defaults. The 3D form is untouched."
                 ),
                 confirm_label="Reset",
                 cancel_label="Cancel",
@@ -1366,12 +1327,6 @@ def _reset(ctx: Any) -> None:
     ctx.state.preview = {}
     ctx.state.preview_dirty_at = time.monotonic()
     ctx.toast("The image settings are back to their defaults.")
-
-
-def _save_profile(ctx: Any, form: dict[str, Any], name: str) -> None:
-    profiles.save_profile(ctx.settings, name, profiles.capture(form))
-    profiles.set_active(ctx.settings, name)
-    ctx.toast(f"Saved the profile {name}.")
 
 
 def _prompt(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
@@ -1575,15 +1530,6 @@ def _references(ctx: Any, form: dict[str, Any]) -> None:
 
 def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
     path = form["ref_path"]
-    if not path:
-        found = profiles.active_anchor(ctx.settings, ctx.svc.config)
-        if found is not None:
-            active = profiles.get_active(ctx.settings)
-            widgets.muted_wrapped(
-                f"The profile {active} has a style anchor; every generation "
-                "under it is conditioned on that image. Attaching one here "
-                "replaces it for this asset."
-            )
     if path:
         imgui.text_wrapped(Path(path).name)
         if controls.button("Clear##ref"):
@@ -2642,31 +2588,6 @@ def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> None:
     ctx.submit("submit", run)
 
 
-def anchor_kwargs(ctx: Any, form: dict[str, Any], kwargs: dict[str, Any]) -> str:
-    """Fold the active profile's style anchor into a submit, in place.
-
-    -> the path to read as the conditioning reference, or "" for none.
-
-    A manual attachment wins and this returns "" for it: the anchor is what a
-    whole set has in common, and the image the user just dropped is what this
-    one asset needs. The path is *returned* rather than read here because this
-    runs on the frame thread and generate() reads files in its task.
-    """
-    if form.get("ref_path"):
-        return ""
-    found = profiles.active_anchor(ctx.settings, ctx.svc.config)
-    if found is None:
-        return ""
-    path, scale = found
-    # setdefault, not assignment: a form that already names an adapter chose
-    # it, and the anchor only supplies one where there was none.
-    kwargs.setdefault("guidance_fields", {}).setdefault(
-        "ip_adapter", profiles.ANCHOR_ADAPTER
-    )
-    kwargs["ip_scale"] = float(scale)
-    return str(path)
-
-
 # Which registry row each model-shaped form field would need, and the name the
 # refusal puts the ring on. The service layer is the authority (``check_weights``
 # raises the real refusal at the door); this is the courtesy in front of it, and
@@ -2829,7 +2750,7 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         # The request document preserves the user's Avoid text, but an inert
         # negative branch must not be sent through to a distilled worker.
         kwargs["negative_prompt"] = generation.effective_negative_prompt(request, resolved) or None
-    ref_path = form.get("ref_path") or anchor_kwargs(ctx, form, kwargs)
+    ref_path = form.get("ref_path")
 
     # The form values are read here, on the frame thread, because they are UI
     # state; the *file* is read in the task, because a large one would freeze

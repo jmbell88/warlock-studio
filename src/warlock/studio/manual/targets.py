@@ -22,7 +22,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "retarget": ("23-generating-meshes", "triangle-budget"),
     "retexture": ("23-generating-meshes", "surface-texture"),
     "remesh": ("23-generating-meshes", "game-ready-remesh"),
-    "loras": ("41-app-settings", "your-style-loras"),
+    "loras": ("40-app-settings", "your-style-loras"),
     "pose": ("25-rigging-and-posing", "posing"),
     "poser-library": ("26-poser", "the-pose-library"),
     "poser-controls": ("26-poser", "posing-a-skeleton"),
@@ -104,9 +104,8 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "troupe-preview": ("33-troupe", "watching-it"),
     "troupe-sheets": ("33-troupe", "the-sheet-panel"),
     "troupe-bridge": ("33-troupe", "taking-it-somewhere"),
-    "profiles": ("36-profiles", None),
-    "review": ("37-review", None),
-    "app-settings": ("41-app-settings", None),
+    "review": ("36-review", None),
+    "app-settings": ("40-app-settings", None),
     # The chooser the app opens on (F56/O118): the one pane a first run
     # certainly sees, and the only one that had no way into the manual at all.
     "home": ("21-home", None),
@@ -121,4 +120,4 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
 # are a red banner, a popup and a Home row, none of which is a pane with a (?).
 # Named once rather than spelled at each of the three, so a chapter that moved
 # does not have to be found in three places (F57).
-TROUBLESHOOTING: tuple[str, str | None] = ("42-troubleshooting", None)
+TROUBLESHOOTING: tuple[str, str | None] = ("41-troubleshooting", None)

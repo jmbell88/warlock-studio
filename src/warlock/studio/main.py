@@ -107,9 +107,9 @@ IDLE_FPS = 12
 # categories partition ``modes.KEYS`` exactly, and the partition is the guard
 # on ``_build_ui``'s dispatch.
 #
-# The Manual and the profile manager both left this tuple when they stopped
-# being modes (the UI redesign, wave 3): each is drawn from ``_overlays`` now, so
-# neither has a dispatch branch to be reached by.
+# The Manual left this tuple when it stopped being a mode (the UI redesign,
+# wave 3): it is drawn from ``_overlays`` now, so it has no dispatch branch
+# to be reached by.
 _SINGLE_PANE_MODES = ("home", "settings", "library")
 
 
@@ -284,7 +284,7 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             (
                 "Esc",
                 "Close the topmost thing: the manual, then a running tour, "
-                "then the profile sheet, then a mode you passed through",
+                "then a mode you passed through",
             ),
             ("F10", "Toggle the frame-rate readout"),
         ],
@@ -1849,13 +1849,6 @@ class App:
 
             settings_3d.upload(ctx, Path(done.result))
             return
-        if key == "anchor-pick":
-            # The picker and the file read happened on the task thread; the
-            # settings write and the toast are frame-thread work.
-            from .panes import profiles_panel
-
-            profiles_panel.adopt_anchor(ctx, done.result)
-            return
         if key == "ref-upload" and done.result is not None:
             # Only the path is kept here; the bytes are read in the submit
             # task, so picking a 20 MB image never touches the frame thread.
@@ -2782,19 +2775,6 @@ class App:
 
             tour_pane.stop(ctx)
             return
-        # Then the profile sheet, for the same reason and in this order: the
-        # Manual can be raised *over* the manager (its (?) does exactly that),
-        # so the topmost surface is the one an Esc is about. This one goes
-        # through the panel's own guard, so a half-typed profile still asks.
-        if (
-            event.type == pygame.KEYDOWN
-            and event.key == pygame.K_ESCAPE
-            and ctx.state.profiles_open
-        ):
-            from .panes import profiles_panel
-
-            profiles_panel.close_sheet(ctx)
-            return
         # Above the landing and Inker returns below: the frame rate is a
         # property of the loop, not of whichever pane happens to be on screen,
         # and the chooser is exactly where a slow startup would show.
@@ -3249,7 +3229,7 @@ class App:
         dismiss, after the user has already said they are not quitting.
         """
         from . import clay_mode, inker_mode, packwright_mode, plotter_mode, poser_mode, sirens_mode
-        from .panes import pose_panel, profiles_panel
+        from .panes import pose_panel
 
         ctx = self.app_ctx
         # The two pose guards are mutually exclusive by construction: the
@@ -3263,10 +3243,6 @@ class App:
             sirens_mode.guard,
             pose_panel.guard,
             poser_mode.guard,
-            # A profile draft is a document too -- nine fields and an anchor
-            # image -- and it was the only one this chain did not know about
-            # (UX-17).
-            profiles_panel.guard,
         )
 
         def step(index: int) -> None:
@@ -5388,12 +5364,7 @@ class App:
         # palette on purpose: Ctrl+K is how you leave anywhere, this included,
         # so it has to float above the reference rather than under it.
         from .manual import render as manual_render
-        from .panes import profiles_panel
 
-        # Under the Manual, because the (?) inside the manager opens the
-        # manual *about* it: the reference has to land on top of the sheet it
-        # was asked from, not behind it.
-        over("overlay/profiles", profiles_panel.draw_sheet, ctx, title="The profiles sheet")
         over("overlay/manual", manual_render.draw_overlay, ctx, title="The manual")
         # Above the confirms it can raise (Delete asks): the palette closes
         # itself in the same frame it runs a command, so the question it asks
@@ -5640,8 +5611,7 @@ class App:
     def _viewport_pane(self) -> None:
         from imgui_bundle import imgui
 
-        from . import create_stages
-        from . import generation_workspace
+        from . import create_stages, generation_workspace
         from . import layout as layout_mod
         from .panes import overlay
         from .tokens import sp
@@ -5668,7 +5638,8 @@ class App:
                 # next variation stay in the same creative loop.
                 tray = reference_stage and generation_workspace.should_draw(ctx)
                 tray_height = min(sp(280), max(sp(180), height * 0.36)) if tray else 0.0
-                canvas_height = max(height - tray_height - (imgui.get_style().item_spacing.y if tray else 0), sp(64))
+                gap = imgui.get_style().item_spacing.y if tray else 0
+                canvas_height = max(height - tray_height - gap, sp(64))
                 if tray:
                     # ``placeholder`` centres itself by consuming the available
                     # height, so it needs its own top child; otherwise it would

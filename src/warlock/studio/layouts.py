@@ -7,7 +7,7 @@ divided.  The rail, UI scale and theme remain application preferences: a
 workspace switch that collapsed navigation would still be a surprise.
 
 **Top-level settings keys**, ``workspace_layouts`` and ``active_layout``,
-following ``profiles.py``'s pattern rather than living inside
+rather than living inside
 ``settings["layout"]`` -- ``Settings.set`` replaces a whole dict and
 ``test_a_save_writes_no_width_key_at_all`` asserts that dict's exact key set,
 so a fifth key in it would be a test failure and a silently dropped preference

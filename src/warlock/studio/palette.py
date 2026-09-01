@@ -472,17 +472,6 @@ def commands(ctx: Any) -> list[Command]:
 
         return run
 
-    def profiles(ctx: Any) -> None:
-        # Replaces the derived ``go:profiles``: the manager is a sheet over
-        # the Reference stage's pane now rather than a mode, and it is *about*
-        # that pane's form, so opening it from anywhere else means going there
-        # first.
-        from . import create_stages
-        from .panes import profiles_panel
-
-        create_stages.go(ctx, "reference")
-        profiles_panel.open_sheet(ctx)
-
     def workspace_layout(ctx: Any) -> None:
         # The switcher, through the same one-shot: the rail's footer has no
         # room for a tenth item (its own test catches the one that pushes the
@@ -644,12 +633,6 @@ def commands(ctx: Any) -> list[Command]:
             )
             for one in tour_scripts.TOURS
         ],
-        Command(
-            key="profiles",
-            label="Manage style profiles",
-            group="Application",
-            run=profiles,
-        ),
         Command(
             key="shortcuts",
             label="Keyboard shortcuts",

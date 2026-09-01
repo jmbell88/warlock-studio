@@ -151,17 +151,16 @@ def digest(app) -> tuple:
         len(state.toasts),
         bool(getattr(tab, "dirty", False)) if tab is not None else False,
         # The overlays, which are the whole point of half the palette: the
-        # Manual, the tour, the shortcut list, the palette itself and the
-        # profile sheet are none of them modes, so without this every command
-        # that raises one came out ``inert`` -- the driver reporting its own
-        # blind spot as fourteen dead controls.
+        # Manual, the tour, the shortcut list and the palette itself are none
+        # of them modes, so without this every command that raises one came
+        # out ``inert`` -- the driver reporting its own blind spot as
+        # fourteen dead controls.
         (
             state.manual.open,
             state.manual.chapter if state.manual.open else "",
             state.tour.key,
             state.shortcuts_requested,
             state.palette_open,
-            state.profiles_open,
         ),
     )
 
@@ -432,7 +431,6 @@ def close_overlays(app) -> None:
     palette_pane.close(ctx)
     tour_pane.stop(ctx)
     ctx.state.shortcuts_requested = False
-    ctx.state.profiles_open = False
 
 
 def restore(app, baseline: tuple, mode: str, stage: str) -> str:

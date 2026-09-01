@@ -47,7 +47,6 @@ _COMMAND_PATHS: dict[str, tuple[str, ...]] = {
     "clear-viewport": ("View",),
     "fps": ("View",),
     "workspace-layout": ("Window",),
-    "profiles": ("Window",),
     "show-trash": ("Window",),
     "empty-trash": ("Window",),
     "manual": ("Help",),

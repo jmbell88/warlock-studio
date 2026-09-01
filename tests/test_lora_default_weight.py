@@ -48,14 +48,11 @@ def test_the_reseed_writes_the_tuned_weight_only_when_the_selection_changed():
 
 def test_every_form_that_edits_a_lora_seeds_its_weight():
     """The seeds live in draw paths, so this reads the source rather than a GL
-    frame. **Both** forms, listed together: the generate pane was fixed on its
-    own and the profile editor -- which stores ``lora_weight`` verbatim and
-    overlays it onto every later submission -- went on shipping 0.9 against an
-    adapter whose band is 0.02-0.08, silently, with no error.
+    frame. One form now that the profile editor is gone -- but still written as
+    a list, because the defect it guards was a *second* form shipping 0.9
+    against an adapter whose band is 0.02-0.08, silently, with no error.
     """
     import inspect
 
-    from warlock.studio.panes import profiles_panel
-
-    for func in (settings_2d._lora, profiles_panel._editor_form):
+    for func in (settings_2d._lora,):
         assert "reseed_lora_weight" in inspect.getsource(func), func.__name__

@@ -105,8 +105,8 @@ def clean_jobs(svc: WarlockService) -> dict[str, Any]:
     afterwards. Do not "fix" this back into a retention check -- that is
     :func:`prune_jobs`, which is still there and still guards them.
 
-    What survives is everything that is not a job: the global pose library, the
-    style-anchor profiles, Inker's autosaves, the settings, the logs, and
+    What survives is everything that is not a job: the global pose library,
+    Inker's autosaves, the settings, the logs, and
     ``jobs.sqlite`` itself -- dropping the database would take the verdicts
     corpus with it, and the corpus is the one thing here that cannot be
     regenerated at any price.
@@ -162,7 +162,8 @@ def clean_jobs(svc: WarlockService) -> dict[str, Any]:
     # or an interrupted delete leaves behind, and they are invisible to every
     # other path in this file -- which is why a library can measure larger than
     # the sum of the jobs in it. Job-shaped names only (12 hex characters), so
-    # ``poser/``, ``profiles/`` and ``autosave/`` cannot be caught by it.
+    # ``poser/`` and ``autosave/`` cannot be caught by it -- nor ``profiles/``,
+    # which no longer gets written but may survive from an older install.
     orphans = 0
     try:
         entries = list(svc.config.data_dir.iterdir())

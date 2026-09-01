@@ -153,5 +153,5 @@ With a GPU and weights:
 
 ## What to read next
 
-[Tuning what you get](12-tuning-what-you-get.md) — profiles, seeds, LoRAs and the other controls that
+[Tuning what you get](12-tuning-what-you-get.md) — seeds, LoRAs and the other controls that
 change what the generators produce.

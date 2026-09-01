@@ -232,7 +232,7 @@ def test_the_2d_pane_builds_both_arms_of_the_sheet_output(app_ctx, imgui_ctx):
     # entry without somebody remembering to edit it, which is exactly how a new
     # view gets shipped having never been drawn in a frame.
     arms = [("tile", view) for view in svc_tilesheets.VIEWS]
-    # ...plus the old spelling a stored profile can still carry, and the sprite
+    # ...plus the old spelling a stored job can still carry, and the sprite
     # arm, whose controls are the ones a stale tile-arm value reaches.
     arms += [("tile", "orthogonal"), ("sprite", "top_down")]
     for sheet_type, view in arms:
@@ -544,7 +544,6 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
         inspector,
         library,
         pose_panel,
-        profiles_panel,
         retarget_panel,
         settings_2d,
         settings_3d,
@@ -620,7 +619,6 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
         ("retarget", lambda: retarget_panel.draw(app_ctx, job)),
         ("pose", lambda: pose_panel.draw(app_ctx, job)),
         ("sheet", lambda: sheet_panel.draw(app_ctx, job)),
-        ("profiles", lambda: profiles_panel.draw(app_ctx)),
         ("clay-tools", lambda: clay_tools.draw(app_ctx)),
         ("clay-props", lambda: clay_props.draw(app_ctx)),
         ("clay-outliner", lambda: clay_outliner.draw(app_ctx)),
@@ -1034,7 +1032,7 @@ def test_the_landing_screen_builds_with_unsaved_work_to_offer(app_ctx, imgui_ctx
 
     app_ctx.state.recovery = [
         journal.Recovered(path=Path("sketch-pd9.ora"), kind="inker", title="sketch", at=1.0),
-        journal.Recovered(path=Path("draft.profile.json"), kind="profile", title="draft", at=2.0),
+        journal.Recovered(path=Path("scene.wmap"), kind="plotter", title="scene", at=2.0),
         journal.Recovered(
             path=Path("mystery.bin"), kind="from-the-future", title="mystery", at=3.0
         ),
@@ -1047,7 +1045,7 @@ def test_the_landing_screen_builds_with_unsaved_work_to_offer(app_ctx, imgui_ctx
     # build-it-and-see test silently, which is the whole failure mode here.
     labels = _drawn_labels(imgui, lambda: landing.draw(app_ctx), "##home-recovery")
     assert _index_of(labels, "Recover##sketch-pd9.ora") >= 0
-    assert _index_of(labels, "Recover##draft.profile.json") >= 0
+    assert _index_of(labels, "Recover##scene.wmap") >= 0
     assert _index_of(labels, "Discard all") >= 0
     assert _index_of(labels, "Recover##mystery.bin") == -1, "no provider, no button"
 
@@ -1060,40 +1058,6 @@ def test_the_library_builds_as_its_own_mode(app_ctx, imgui_ctx):
     _seeded(app_ctx)
     app_ctx.state.mode = "library"
     _frame(imgui_ctx, lambda: library.draw(app_ctx))
-
-
-def test_the_profile_sheet_builds_over_a_mode(app_ctx, imgui_ctx):
-    """Profiles stopped being a mode in the UI redesign, wave 3: it is a window of
-    its own over the 2D pane, so like the Manual overlay it is drawn outside
-    the host and cannot be smoked by the pane pass.
-
-    Both branches, and the editor as well as the list -- the draft is what the
-    close guard is about.
-    """
-    from warlock.studio.panes import profiles_panel
-
-    imgui, renderer = imgui_ctx
-    _seeded(app_ctx)
-
-    def frame() -> None:
-        imgui.new_frame()
-        imgui.set_next_window_size((1200, 900))
-        imgui.begin("##host")
-        imgui.text("behind")
-        imgui.end()
-        profiles_panel.draw_sheet(app_ctx)
-        imgui.render()
-        renderer.render(imgui.get_draw_data())
-
-    app_ctx.state.mode = "create"
-    app_ctx.state.create_stage = "reference"
-    frame()
-    profiles_panel.open_sheet(app_ctx)
-    frame()
-    frame()
-    app_ctx.state.profile_draft = {"art_style": "painterly"}
-    app_ctx.state.profile_draft_name = "Painterly"
-    frame()
 
 
 def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
@@ -1502,45 +1466,6 @@ def test_the_bulk_deletes_left_the_library_footer_for_settings(app_ctx, imgui_ct
     app_ctx.state.preview[app_settings.CATEGORY_SLOT] = "storage"
     _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
     _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
-
-
-def test_the_profile_manager_builds_listing_and_editing(app_ctx, imgui_ctx):
-    from warlock.studio import profiles
-    from warlock.studio.panes import profiles_panel
-
-    _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))  # nothing saved yet
-    profiles.save_profile(app_ctx.settings, "props", {"base_model": "turbo", "genre": "fantasy"})
-    profiles.set_active(app_ctx.settings, "props")
-    _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))
-    app_ctx.state.profile_draft = profiles.capture(app_ctx.state.form_2d)
-    app_ctx.state.profile_draft["style_lora"] = "render3d"
-    app_ctx.state.profile_draft_name = "props"
-    _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))
-
-
-def test_the_profile_editor_draws_the_palette_it_now_carries(
-    app_ctx, imgui_ctx, tmp_path
-):
-    """A profile field the manager cannot edit would be a value only the Create
-    form could reach -- and the whole point of the palette being on a profile is
-    that a *set* of sheets shares one. The combo draws only when a palette is
-    installed, so the directory is populated here rather than left empty, which
-    is the branch an ordinary smoke run never enters."""
-    from warlock.studio import profiles
-    from warlock.studio.panes import inspector, profiles_panel
-
-    directory = tmp_path / "editor-palettes"
-    directory.mkdir(exist_ok=True)
-    (directory / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n", encoding="utf-8")
-    app_ctx.svc.config.palette_dir = directory
-    app_ctx.state.palettes = None
-    assert inspector.palette_names(app_ctx) == ["duo"]
-    app_ctx.state.form_2d["palette"] = "duo"
-    app_ctx.state.profile_draft = profiles.capture(app_ctx.state.form_2d)
-    app_ctx.state.profile_draft_name = "props"
-    assert app_ctx.state.profile_draft["palette"] == "duo"
-    _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))
-    assert app_ctx.state.profile_draft["palette"] == "duo"
 
 
 def test_the_2d_pane_builds_with_a_reference_chosen(app_ctx, imgui_ctx):

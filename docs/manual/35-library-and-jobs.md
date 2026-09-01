@@ -177,17 +177,14 @@ settings back into the 2D form so you can change one thing and generate. Reroll 
 was; this is the other half. It fills in the guidance fields, the model, the LoRA and the
 conditioning strengths, which prompt history alone never did.
 
-## Profiles
-
-A **profile** is a saved house style — the *look* half of the 2D form, stored under a name, with an
-optional anchor image every generation under it is conditioned on. It has a chapter of its own:
-[Style profiles](36-profiles.md).
+Every finished job records the recipe that made it, so this is also how a look is carried from one
+asset to the next: there is no separate store of saved styles to keep in step.
 
 ## Storage and pruning
 
 Every job owns a directory under `~/.warlock/assets/`, named for its job id, and the SQLite job
 store lives at `~/.warlock/assets/jobs.sqlite`. That home directory is outside the source tree on
-purpose; see [Data locations](40-configuration.md#data-locations). A job directory holds:
+purpose; see [Data locations](39-configuration.md#data-locations). A job directory holds:
 
 - `input.png` — the reference image the mesh was made from.
 - `source.glb` — the raw reconstruction, kept forever.
@@ -205,7 +202,7 @@ foot of the library shows a **storage meter**: how many job directories exist an
 they occupy. It is measured on a background thread, so it never stalls the window.
 
 The two ways to make that number smaller live in
-[Settings → Storage](41-app-settings.md#storage), not here: a button under a scrolling list of assets
+[Settings → Storage](40-app-settings.md#storage), not here: a button under a scrolling list of assets
 reads as an action on the assets you can see, and neither of these is.
 
 **Prune...** deletes everything but the newest N jobs, after a confirm — the confirm
@@ -219,7 +216,7 @@ or not, plus any job directory left behind with no row pointing at it. It is the
 that keeps nothing — prune and **Empty trash...** both spare anything you accepted or labelled,
 because those files are what the quality judge and the triangle-tier checks are measured against,
 and this is the button for which that is not true. The verdict rows survive; the pixels behind them
-do not. Your pose library, style profiles, Inker autosaves and settings are all kept, as is the job
+do not. Your pose library, Inker autosaves and settings are all kept, as is the job
 store itself. It refuses outright while anything is queued or running — "delete everything" that
 quietly left three jobs behind would have failed at the only thing it claims to do — so cancel the
 queue first.

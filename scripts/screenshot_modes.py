@@ -342,11 +342,11 @@ def main() -> int:
         "--overlays",
         action="store_true",
         help=(
-            "also capture the two surfaces that stopped being modes in "
-            "the UI redesign, wave 3 -- the manual and the profile sheet -- plus the "
-            "expanded navigation rail. The mode pass is derived from "
-            "modes.KEYS, so none of the three is reachable by it: a screen that "
-            "is not a mode is a screen nobody would look at."
+            "also capture the surfaces the mode pass cannot reach -- the "
+            "first-run question and the manual -- plus the expanded "
+            "navigation rail. The mode pass is derived from modes.KEYS, so "
+            "none of them is reachable by it: a screen that is not a mode "
+            "is a screen nobody would look at."
         ),
     )
     ap.add_argument(
@@ -484,7 +484,7 @@ def main() -> int:
                 state.mode = "home"
             if args.overlays:
                 from warlock.studio.manual import render as manual_render
-                from warlock.studio.panes import first_run, profiles_panel
+                from warlock.studio.panes import first_run
 
                 state = app.app_ctx.state
                 # The setup question, which is the first screen a new install
@@ -504,9 +504,6 @@ def main() -> int:
                 _capture(app, args.out / f"{name}-manual.png")
                 manual_render.close(app.app_ctx)
                 state.create_stage = "reference"
-                profiles_panel.open_sheet(app.app_ctx)
-                _capture(app, args.out / f"{name}-profiles.png")
-                state.profiles_open = False
                 # The rail with its labels, which is a preference rather than a
                 # mode -- so the whole mode pass above draws the collapsed one.
                 app.layout.set_rail("labels")

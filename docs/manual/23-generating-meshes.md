@@ -75,7 +75,7 @@ Nothing is ever deleted on your behalf, and declining leaves you with ordinary a
 hidden ones.
 
 Verdicts work on a candidate like any other mesh, so judging the group feeds the same findings pool.
-See [Review](37-review.md).
+See [Review](36-review.md).
 
 The count applies to **Make 3D** only. An upload queues one mesh job, as it always has.
 
@@ -156,7 +156,7 @@ header. It appears only on jobs that have a `source.glb` — older jobs and rig 
 Five tiers exist in the code: Raw (full density), Draft (20k), Standard (50k), Detailed (100k) and
 Custom. `gltfpack` — the binary every decimating tier runs through — is a one-time manual drop into
 `vendor/gltfpack/` like the reconstruction engine, not something the checkout brings with it; see
-[Installation](39-installation.md#gltfpack). When it is there this panel offers the whole list, and
+[Installation](38-installation.md#gltfpack). When it is there this panel offers the whole list, and
 Custom gains a triangle-count field with its own valid range. When it is not, `warlock doctor` says
 so and every tier ships the raw reconstruction instead of failing.
 **The generate form still offers Raw alone**, because none of the decimating tiers has been

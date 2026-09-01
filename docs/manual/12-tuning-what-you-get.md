@@ -3,8 +3,8 @@
 [Your first asset](02-your-first-asset.md) used defaults for everything. This chapter is about the
 controls under **Advanced**, what each is for, and which of them are worth your attention.
 
-The short version: prompt and seed do most of the work, style profiles save you retyping, and the
-conditioning controls are the ones that reward learning properly.
+The short version: prompt and seed do most of the work, and the conditioning controls are the ones
+that reward learning properly.
 
 ## Seeds
 
@@ -24,18 +24,6 @@ because you see the spread rather than a sequence.
 The mesh stage has its own separate seed, and its own **Candidates** control offering up to three
 reconstruction attempts to pick the best from. Mesh geometry varies a great deal between seeds — more
 than most people expect — so this is often the more valuable of the two.
-
-## Style profiles
-
-A profile saves the *look* half of the form: base model, style LoRA and its weight, negative prompt,
-the authored palette a sheet is mapped to, and optionally a style anchor image and its strength. It
-does not save your prompt, because the prompt is the subject and the profile is the style.
-
-Save one from the current form, set it active, and every new job starts from it. It is the answer to
-"how do I keep forty props looking like they belong together".
-
-The profile manager opens as a sheet over whatever you are doing, from Create's reference settings or
-from the command palette.
 
 ## Models and LoRAs
 
@@ -79,21 +67,6 @@ Worth stating plainly: **the negative prompt does nothing unless the base model 
 1.0.** On a distilled, guidance-zero recipe it is inert. The pane says so beside the field. If you
 have carefully tuned a negative prompt and it seems to have no effect, check which base you are on
 before concluding anything about the words.
-
-## Prompt enrichment
-
-The expander appends aesthetic vocabulary to your prompt using a small local language model —
-CPU-only, and constrained to a fixed token whitelist so it can only add descriptive words and can
-never rewrite your subject.
-
-Three settings: off, *3D asset* (keeps single-subject framing, right for references), and
-*General 2D* (drops it, for pictures that are not going to be reconstructed).
-
-Tiles and tile grids are never expanded, whatever this is set to — the composition rules for a
-lattice are not the ones the expander knows.
-
-There is a preview of the prompt actually sent, with its token count, which is the fastest way to see
-what the expander did and whether you are near a length limit.
 
 ## Mesh-side settings
 

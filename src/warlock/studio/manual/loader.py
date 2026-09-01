@@ -79,9 +79,9 @@ from . import parser
 # Architecture, which is written for the reader changing its code.
 PARTS: tuple[tuple[str, range], ...] = (
     ("Tutorials", range(1, 20)),
-    ("Using Warlock Studio", range(20, 39)),
-    ("Setup & operations", range(39, 43)),
-    ("Architecture", range(43, 46)),
+    ("Using Warlock Studio", range(20, 38)),
+    ("Setup & operations", range(38, 42)),
+    ("Architecture", range(42, 45)),
 )
 
 _H1 = re.compile(r"^# +(.+)$", re.MULTILINE)

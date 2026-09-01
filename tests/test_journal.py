@@ -744,7 +744,7 @@ def test_every_real_provider_is_registered_by_ensure():
     as a side effect of importing a mode is not enough on its own."""
     journal.ensure_providers()
     kinds = {p.kind for p in journal.providers()}
-    assert kinds >= {"inker", "clay", "plotter", "packwright", "pose", "profile"}
+    assert kinds >= {"inker", "clay", "plotter", "packwright", "pose"}
 
 
 @pytest.mark.parametrize(

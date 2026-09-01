@@ -37,7 +37,6 @@ from .. import (
     fonts,
     icons,
     modes,
-    profiles,
     recents,
     theme,
     tokens,
@@ -593,7 +592,6 @@ _KIND_MODES = {
     "packwright": "packwright",
     "sirens": "sirens",
     "pose": "poser",
-    "profile": "",
 }
 
 #: How wide a recovery row's button is, in design pixels. Fixed rather than
@@ -1001,12 +999,12 @@ def _resume_cell(
 
 
 def start_2d(ctx: Any) -> None:
-    """A clean prompt form at the Reference stage, wearing the active profile.
+    """A clean prompt form at the Reference stage.
 
     ``default_form_2d`` rolls its own seed, so this is genuinely a fresh start
     rather than last session's form with the prompt cleared.
     """
-    ctx.state.form_2d = profiles.apply(default_form_2d(), profiles.active_fields(ctx.settings))
+    ctx.state.form_2d = default_form_2d()
     ctx.state.select(None)
     create_stages.go(ctx, "reference")
 

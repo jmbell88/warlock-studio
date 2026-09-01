@@ -65,7 +65,7 @@ def default_form_2d() -> dict[str, Any]:
         # create_assets.sync_legacy_fields.
         "asset_type": DEFAULT_ASSET_TYPE,
         # New normalized vocabulary. ``asset_type`` remains in the form as a
-        # compatibility alias for profiles and old service adapters.
+        # compatibility alias for old service adapters.
         "generation_type": DEFAULT_ASSET_TYPE,
         "quality": "quality",
         "model_mode": "auto",
@@ -120,10 +120,6 @@ def default_form_2d() -> dict[str, Any]:
         # come from one directory. Named for the service fields they become
         # (``palette``, ``dither``, ``outline``) so a refusal's ``field=`` rings
         # the control it is about.
-        #
-        # ``palette`` is also a *profile* field (``studio.profiles._FIXED``):
-        # two sheets of one character matching is what a profile is for, and a
-        # palette was the only piece of that it did not already carry.
         "palette": "",
         # Not gated on the palette, and that is measured rather than assumed:
         # ``tilesheet.quantize_tiles`` branches on ``not entries and not
@@ -139,7 +135,7 @@ def default_form_2d() -> dict[str, Any]:
         "outline": DEFAULT_SPRITE_OUTLINE,
         # top_down | three_quarter | isometric -- the *view*, meaning where
         # the camera is. The key is still ``projection`` because it is a
-        # persisted form field and a stored profile carries it; a value of
+        # persisted form field and a stored job carries it; a value of
         # "orthogonal" from before the vocabulary widened reads as "top_down"
         # (``service.tilesheets.LEGACY_VIEWS``).
         #
@@ -1005,26 +1001,6 @@ class AppState:
     # was a coloured dot. Keeping these makes Dismiss "put it away" rather than
     # "forget it" for the session log and support tooling.
     dismissed_errors: list[str] = field(default_factory=list)
-    # Whether the style-profile manager is up (the UI redesign, wave 3). It was a
-    # mode, which put a shelf of saved settings in the top-level navigation
-    # beside the six creative workspaces -- and made "manage my styles" a place
-    # you travel to rather than something you do to the form in front of you.
-    # It is a sheet over the 2D pane now, opened from the profile picker it is
-    # about. Not persisted, for the reason no mode is: reopening the app into a
-    # manager nobody asked for is a setting nobody chose.
-    profiles_open: bool = False
-    profile_draft: dict[str, Any] | None = None
-    profile_draft_name: str = ""
-    # The name the draft was opened under, so renaming one in the editor moves
-    # it rather than leaving the old name behind as a duplicate.
-    profile_draft_origin: str = ""
-    # The journal's three marks for the open draft (UX-05). Here rather than on
-    # the draft dict because that dict is replaced wholesale every time a
-    # different profile is opened, and a mark travelling with it would mint a
-    # new crash-copy filename per open.
-    profile_journal_name: str = ""
-    profile_journal_head: Any = None
-    profile_journal_at: float = 0.0
     # Inker mode's open documents and tool settings, built on first use.
     # Typed Any so state.py keeps no import of the editor or of Pillow, and
     # lazy so a session that never draws pays nothing for it.

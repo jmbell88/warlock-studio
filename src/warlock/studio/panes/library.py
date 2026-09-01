@@ -96,7 +96,7 @@ def draw(ctx: Any) -> None:
     # ``render.help_button`` right-aligns with an unconditional ``same_line``,
     # so where it lands is a property of the row above it and belongs with the
     # code that lays that row out. Chapter 08's body has no other way in from
-    # here: the Profiles panel's marker anchors at #profiles.
+    # here.
     _filters(ctx, jobs)
     imgui.separator()
     _read_error(ctx)

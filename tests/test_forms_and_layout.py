@@ -26,7 +26,6 @@ PANES = Path(inspect.getfile(library)).resolve().parent
 # that stays put while the monitor's scale grows around it.
 SP_SWEPT = (
     "../dialogs.py",
-    "profiles_panel.py",
     "inker_canvas.py",
     "inker_bridge.py",
     "settings_2d.py",
@@ -354,7 +353,6 @@ DENSE_PANES = (
     "inspector.py",
     "landing.py",
     "app_settings.py",
-    "profiles_panel.py",
     "pose_panel.py",
     "retarget_panel.py",
     "texture_panel.py",

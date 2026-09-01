@@ -99,7 +99,7 @@ def test_both_resets_are_behind_a_confirm_dialog():
     seed is rerolled, so even retyping the prompt does not get you back), so
     neither button may act on the click that draws it.
     """
-    for source in (_row_source(settings_3d._reset_row), _row_source(settings_2d._profiles)):
+    for source in (_row_source(settings_3d._reset_row), _row_source(settings_2d._reset_row)):
         assert "dialogs.Confirm(" in source
         assert "on_confirm=" in source
         assert "_reset(ctx)" in source

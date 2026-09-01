@@ -66,7 +66,7 @@ out. The difference is not cosmetic and it shows up two steps later, at the rig.
 rig template is itself an A-pose, so an A-posed mesh is fitted straight to it. A T-posed mesh is not
 — fitting that template to one runs the arm chain down through the ribcage — so its joints are
 *measured* off the mesh instead, which needs the pose model
-[Installation](39-installation.md) covers.
+[Installation](38-installation.md) covers.
 T-pose separates the limbs further, which is the one thing a single view has the most trouble with,
 so it is the one to reach for if the arms come back fused to the body.
 

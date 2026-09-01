@@ -379,7 +379,7 @@ def _passes(key_name: str, mods: int, monkeypatch) -> bool:
 
 def test_a_modifier_chord_reaches_the_shortcuts_while_typing(monkeypatch):
     """Ctrl+K is documented as the one binding that works in every mode
-    (``docs/manual/38-shortcuts.md``, ``panes/settings_2d.py``) and it was
+    (``docs/manual/37-shortcuts.md``, ``panes/settings_2d.py``) and it was
     dead in the 2D prompt box -- which is exactly where you are when you want
     to jump somewhere else."""
     import pygame

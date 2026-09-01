@@ -986,7 +986,7 @@ def _prompt_lines(value: Any) -> tuple[str, ...]:
     """A material list from whatever the form is holding.
 
     A multi-line text control gives one string with newlines in it and a list
-    control gives a list, and both spellings reach here from persisted profiles
+    control gives a list, and both spellings reach here from persisted forms
     of different ages. Blank lines are dropped rather than kept as empty
     materials -- a trailing newline is what a text box has, not a material
     somebody asked for and forgot to describe.

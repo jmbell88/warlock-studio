@@ -85,8 +85,8 @@ a layout section belonging to the asset type — **Tile layout** for a tileset, 
 a sprite sheet, and nothing at all for the other three — then **Image model** and **Style LoRA**.
 
 Below them is one **Advanced** disclosure holding **References & conditioning**, **Seed & count**,
-**Dimensions** (only on a sheet), **Profiles**, **Prompt enrichment** and, once a LoRA is chosen,
-**Style strength**. The Generate button is pinned below the whole column and never scrolls with it:
+**Dimensions** (only on a sheet) and, once a LoRA is chosen, **Style strength**. The Generate button is pinned below the
+whole column and never scrolls with it:
 the one control every visit ends with must not be at the bottom of a scrolled list.
 
 **Asset type** is the top-level choice and it decides what everything under it means. Five entries:
@@ -98,11 +98,9 @@ rest) behind a "More options" reveal. It was retired on 2026-08-17: no taxonomy 
 a quality win, and your prompt is the brief. Assets generated under it are unaffected — rerolling
 or promoting one simply composes without the retired fragments.
 
-In the **Profiles** section under Advanced, beside **Save as...**, is **Reset...**, which puts the
-whole 2D form back to its first-launch defaults after a confirm — the prompt, the negative prompt,
-the model and LoRA,
-the reference and the run controls, with a freshly rolled seed. It touches nothing outside this
-pane: saved profiles are kept, and the 3D form is left alone.
+**Reset...**, under Advanced, puts the whole 2D form back to its first-launch defaults after a
+confirm — the prompt, the negative prompt, the model and LoRA, the reference and the run controls,
+with a freshly rolled seed. It touches nothing outside this pane: the 3D form is left alone.
 
 ## Models and style LoRAs
 
@@ -244,15 +242,15 @@ leaves the score exactly what it would have been without it:
 - **Composition** — the framing report the reference stage takes anyway. It leads, because it is the
   one term that predicts whether the mesh stage can succeed at all: a subject cropped at the edge of
   the frame reconstructs badly however handsome it is.
-- **Style anchor** — how close the image looks to the active profile's anchor, when it has one. See
-  [The style anchor](36-profiles.md#the-style-anchor).
+- **Style anchor** — how close the image looks to the reference image attached under *Conditioning*,
+  when there is one.
 - **Human preference** — how likely a person is to pick this image for this prompt, from PickScore.
   Optional; see [Optional measuring and helper
-  models](39-installation.md#optional-measuring-and-helper-models).
+  models](38-installation.md#optional-measuring-and-helper-models).
 
 **Nothing here rejects anything.** The score sorts, and that is all it does — a low-scoring
 candidate is still generated, still kept, and still promotable to a mesh. Turn the whole thing off
-with `WARLOCK_RANK=off` (see [Configuration](40-configuration.md#environment-variables)) and the
+with `WARLOCK_RANK=off` (see [Configuration](39-configuration.md#environment-variables)) and the
 gallery falls back to submission order.
 
 ## Conditioning on an image
@@ -346,7 +344,7 @@ supplied, and **Dither** (offered only with one) mixes two nearby entries where 
 pick one.
 
 A palette is a file you drop into the palette directory (`~/.warlock/palettes/` by default — see
-[Configuration](40-configuration.md)), in any of the four formats palette sites and editors publish:
+[Configuration](39-configuration.md)), in any of the four formats palette sites and editors publish:
 Lospec's `.hex`, one `rrggbb` per line, GIMP's `.gpl`, Paint Shop Pro's `.pal` or Paint.NET's
 `.txt`. Nothing ships with the app, because a palette is
 art direction rather than a default. Colours are matched perceptually (in Oklab) rather than by raw
@@ -578,10 +576,9 @@ colours this particular render happened to contain. It is the single highest-lev
 the program: a derived table is the average of whatever came back, which is where "muddy" comes
 from, while a designed ramp is a decision. The picker appears once you have palette files
 installed — `.hex`, `.gpl`, `.pal` or `.txt` in the palette folder (see
-[Configuration](40-configuration.md)) — and also when the form or an applied profile names a palette
-that is no longer there, listed and marked rather than silently reverting to *Derived from the
-render*. A palette you name here can be saved onto a
-[style profile](36-profiles.md), which is how a set of sheets is kept on one set of colours.
+[Configuration](39-configuration.md)) — and also when the form names a palette that is no longer
+there, listed and marked rather than silently reverting to *Derived from the render*. Naming the
+same palette on each run is how a set of sheets is kept on one set of colours.
 
 **Dither** adds an ordered 4×4 offset before each pixel picks its colour, so a gradient reads as a
 texture rather than as a band. It works with or without a named palette: with none, the sheet still

@@ -14,10 +14,9 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import generation
 from ..service import jobs as svc_jobs
 from . import candidates as candidates_mod
-from . import controls, create_assets, theme, widgets
+from . import controls, create_assets, widgets
 from .panes import thumbs
 from .tokens import sp
 
@@ -36,7 +35,7 @@ class Plan:
     def count_line(self) -> str:
         noun = "candidate" if self.candidates == 1 else "candidates"
         return f"{self.candidates} {noun} · {self.generations} image generation"
-        
+
 
 def plan_for(form: dict[str, Any], resolved: Any = None) -> Plan:
     """Describe the actual work using the same form values the door receives.
@@ -102,7 +101,9 @@ def draw(ctx: Any, height: float = 0.0) -> None:
         if jobs:
             _result_grid(ctx, jobs)
         elif active is None:
-            widgets.muted("Your completed generations will appear here for comparison and variation.")
+            widgets.muted(
+            "Your completed generations will appear here for comparison and variation."
+        )
     if height > 0:
         imgui.end_child()
 
@@ -163,7 +164,8 @@ def _result_card(ctx: Any, job: dict[str, Any], group: Any = None) -> None:
     seed = params.get("seed", params.get("mesh_seed"))
     if seed is not None:
         widgets.muted(f"seed {seed}")
-    score = (params.get("rank") or {}).get("score") if isinstance(params.get("rank"), dict) else None
+    rank = params.get("rank")
+    score = rank.get("score") if isinstance(rank, dict) else None
     if score is not None:
         widgets.muted(f"score {float(score) * 100:.0f}%")
     imgui.end_group()
@@ -175,17 +177,30 @@ def _result_card(ctx: Any, job: dict[str, Any], group: Any = None) -> None:
         ready = group.finished and done
         if widgets.disabled_button(
             f"Keep##result-keep-{job_id}", ready, (-1, 0),
-            reason="Wait for every candidate to finish." if not group.finished else "This result did not finish.",
+            reason=(
+                "Wait for every candidate to finish."
+                if not group.finished
+                else "This result did not finish."
+            ),
         ):
             from .panes import candidates_panel
 
             candidates_panel.keep(ctx, group, job_id)
-    if widgets.disabled_button(f"Vary##result-vary-{job_id}", done, (-1, 0), reason="This result is not ready yet."):
+    if widgets.disabled_button(
+        f"Vary##result-vary-{job_id}", done, (-1, 0), reason="This result is not ready yet."
+    ):
         _vary(ctx, job)
-    if widgets.disabled_button(f"Rerun##result-rerun-{job_id}", done, (-1, 0), reason="This result is not ready yet."):
+    if widgets.disabled_button(
+        f"Rerun##result-rerun-{job_id}", done, (-1, 0), reason="This result is not ready yet."
+    ):
         ctx.submit(f"rerun:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="reroll")
     is_reference = job.get("stage") == "reference" and "input.png" in (job.get("files") or [])
-    if widgets.disabled_button(f"Make 3D##result-3d-{job_id}", done and is_reference, (-1, 0), reason="A finished reference image is required."):
+    if widgets.disabled_button(
+        f"Make 3D##result-3d-{job_id}",
+        done and is_reference,
+        (-1, 0),
+        reason="A finished reference image is required.",
+    ):
         from .panes import settings_3d
 
         ctx.state.source_job = job_id

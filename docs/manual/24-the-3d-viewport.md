@@ -72,6 +72,6 @@ shortcut that would make one. That placeholder is the only place in the app wher
 ## Performance
 
 The viewport draws every frame the app draws, so it is the first thing to feel a slow machine.
-[Troubleshooting](42-troubleshooting.md#the-window-feels-sluggish) covers what to do about a stuttering
+[Troubleshooting](41-troubleshooting.md#the-window-feels-sluggish) covers what to do about a stuttering
 turntable; the short version is that the frame loop never waits for a job, so a stutter is the
 renderer and not the queue.

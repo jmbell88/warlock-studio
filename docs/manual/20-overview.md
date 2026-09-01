@@ -45,7 +45,7 @@ If you already have a picture, you can skip the first stage entirely and upload 
 A rail down the left edge of the window chooses between twelve modes, and that rail is the single
 thing that decides what the panes show. It is drawn in every mode, so there is no screen you cannot
 leave. There is no per-mode keyboard shortcut — the command palette (`Ctrl+K`) is the keyboard
-route, see [Keyboard shortcuts](38-shortcuts.md).
+route, see [Keyboard shortcuts](37-shortcuts.md).
 
 The rail shows glyphs by default and expands to show the labels beside them; **Window → Navigation
 labels** toggles that, and the choice is remembered. In icon-only form every item names itself in a tooltip.
@@ -101,18 +101,17 @@ Then the six workspaces:
 And in the footer:
 
 - **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
-  works" findings the verdicts add up to. Covered in [Review](37-review.md).
+  works" findings the verdicts add up to. Covered in [Review](36-review.md).
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
   list of models it loaded, from which a missing one can be downloaded. See
-  [In-app settings](40-configuration.md#in-app-settings).
+  [In-app settings](39-configuration.md#in-app-settings).
 
-Two things that used to be modes are not, and both moved for the same reason: they are *about* the
-screen you are on rather than places to go. This documentation opens over the window (`F1`, or any
-pane's (?) button) instead of replacing it, so the control you were asking about is still there when
-you have the answer; and the style-profile manager opens as a sheet from the profile picker at the
-Reference stage — see [Profiles](36-profiles.md).
+This documentation used to be a mode and is not, for the reason nothing here is: it is *about* the
+screen you are on rather than a place to go. It opens over the window (`F1`, or any pane's (?)
+button) instead of replacing it, so the control you were asking about is still there when you have
+the answer.
 
-The **guided tour** is a third overlay, for the same reason: it points at the controls of whatever
+The **guided tour** is a second overlay, for the same reason: it points at the controls of whatever
 mode you are in, so taking that mode away to run it would leave nothing to point at. It never
 clicks anything for you. Home offers it on a fresh install and the palette carries it thereafter —
 see [New here?](21-home.md#new-here).
@@ -182,8 +181,8 @@ There is no green "all well" state, because a healthy install has nothing to rep
 
 When the window is too narrow to hold all of it, items drop from the *right* end, so the answer to
 "where am I" is the last thing to go. The one item anchored to the right instead is the optional
-system-resource meter — see [App settings](41-app-settings.md#appearance) — which is
+system-resource meter — see [App settings](40-app-settings.md#appearance) — which is
 reserved before the rest is trimmed, because it is read while a generation is being decided on.
 
 The keyboard shortcut list is `Ctrl+/`, **Help → Keyboard shortcuts**, or **Keyboard shortcuts** in
-the command palette, and it is reproduced in [Keyboard shortcuts](38-shortcuts.md).
+the command palette, and it is reproduced in [Keyboard shortcuts](37-shortcuts.md).

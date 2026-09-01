@@ -412,32 +412,6 @@ def test_the_composed_prompt_preview_retries_when_its_request_was_refused():
 # --- caps and messages that disagreed with the service ------------------------
 
 
-def test_the_profile_editor_uses_the_service_cap():
-    from warlock.service import validation
-    from warlock.studio.panes import profiles_panel
-
-    # The cap argument must be the service's constant, not a literal that can
-    # drift away from it. Asserted on the call rather than as "2000 does not
-    # appear", which fails on any unrelated number in the function.
-    tree = ast.parse(inspect.getsource(profiles_panel).lstrip())
-    caps = [
-        call.args[-1]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_editor"
-        for call in ast.walk(node)
-        if isinstance(call, ast.Call)
-        and isinstance(call.func, ast.Attribute)
-        and call.func.attr == "multiline"
-    ]
-    assert caps, "no multiline prompt field found in the profile editor"
-    for cap in caps:
-        assert isinstance(cap, ast.Attribute) and cap.attr == "MAX_PROMPT", (
-            "a literal cap here means the refusal arrives at submit time, "
-            "against a profile the user had already saved"
-        )
-    assert validation.MAX_PROMPT == 1000
-
-
 def test_the_pose_panel_does_not_ask_for_a_rig_that_cannot_be_made():
     from warlock.studio.panes import pose_panel
 

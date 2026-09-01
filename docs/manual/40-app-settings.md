@@ -107,8 +107,8 @@ one repository and exits, into a staging folder beside the destination that is o
 if the fetch succeeded — so a download interrupted halfway leaves nothing behind rather than a model
 directory that looks finished. Free disk is checked against the whole selection first, and the whole
 selection is refused if it will not fit. Everything is still equally installable by hand — see
-[Model weights](39-installation.md#model-weights) and
-[Adding an image model](45-extending.md#adding-an-image-model).
+[Model weights](38-installation.md#model-weights) and
+[Adding an image model](44-extending.md#adding-an-image-model).
 
 ### Your style LoRAs
 
@@ -150,7 +150,7 @@ touched, and neither is anything you accepted or labelled.
 
 **Clean library...** is the other end of the same scale: every asset, trashed or not, including the
 accepted ones and the labelled images the quality judge and the tier checks are measured against.
-The verdict rows survive; the pixels behind them do not. Your pose library, style profiles, Inker
+The verdict rows survive; the pixels behind them do not. Your pose library, Inker
 autosaves and settings are kept, and it refuses outright while anything is queued or running.
 
 Both used to sit at the foot of the library, under the list of assets, which is the one place where
@@ -173,7 +173,7 @@ missing so rigging is unavailable, is otherwise a count and a tooltip.
 to paste into a bug report. **Run checks again** re-runs every probe including the slow ones the
 startup path defers — worth pressing after installing something a row complained about, because the
 static checks are otherwise only recomputed at launch. **Troubleshooting** opens
-[chapter 12](42-troubleshooting.md), which is where a check that keeps failing after its remedy is
+[chapter 12](41-troubleshooting.md), which is where a check that keeps failing after its remedy is
 covered.
 
 **Dismissed** appears only when you have dismissed something from the error banner. The banner's
@@ -213,7 +213,7 @@ back on the next launch, and asks whether to open the folder your log is in. Ans
 nothing — the log is written either way, and the recovery offer does not depend on it.
 
 Not everything the app remembers has a control in this pane. `studio_settings.json` also holds your
-saved profiles, the sidebar's internal split, and the pixel-art export
+the sidebar's internal split, and the pixel-art export
 preferences — the
 size and palette set in an asset's [Pixel art](22-generating-references.md#pixel-art) section, which
 are the app's preferences rather than any one job's and so apply to whichever asset you look at

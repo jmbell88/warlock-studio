@@ -25,14 +25,14 @@ from . import icons
 # is the flattening of it (a test asserts exactly that), so the two cannot
 # drift while remaining two spellings of one fact.
 #
-# Two modes left this list in wave 3 and neither is coming back as one:
-# ``manual`` (help is consulted *about* a screen, so taking that screen away to
-# show it answered the question by removing it -- it is
-# ``manual.render.draw_overlay`` now, raised by F1 and by every
-# ``help_button``) and ``profiles`` (a shelf of saved settings in the top-level
-# navigation beside seven creative workspaces said that "manage my styles" is a
-# place you travel to -- it is ``profiles_panel.draw_sheet`` over the Reference
-# stage's pane).
+# Two modes left this list in wave 3. ``manual`` is still here in spirit: help
+# is consulted *about* a screen, so taking that screen away to show it answered
+# the question by removing it -- it is ``manual.render.draw_overlay`` now,
+# raised by F1 and by every ``help_button``. ``profiles`` was a shelf of saved
+# settings in the top-level navigation beside seven creative workspaces, which
+# said that "manage my styles" is a place you travel to; it became a sheet over
+# the Reference stage and was then deleted outright -- a recipe is copied off a
+# finished result, not curated in a second store.
 MODES: list[tuple[str, str, str]] = [
     ("home", "Home", icons.HOUSE),
     # A real mode rather than a sub-view of Home. The Library and Review were

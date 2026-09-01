@@ -367,6 +367,6 @@ export.
 **Export is greyed out.** The document has neither an order list nor a sound effect, so an export
 would be a folder of empty WAVs.
 
-See [Keyboard shortcuts](38-shortcuts.md#sirens) for every binding, and
+See [Keyboard shortcuts](37-shortcuts.md#sirens) for every binding, and
 [Making a soundtrack](14-making-a-soundtrack.md) for one path through the mode from an empty document
 to an exported WAV.
