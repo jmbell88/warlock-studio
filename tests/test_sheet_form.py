@@ -1131,6 +1131,49 @@ def test_a_structured_request_no_longer_collapses_every_action_onto_walk(
     assert block["sheet_type"] == "idle8"
 
 
+def test_provenance_is_on_the_row_before_the_row_exists(svc, tmp_path, monkeypatch):
+    """It used to be merged on *after* ``create_job`` returned, which lost two
+    races: the worker's ``next_queued`` poll can claim the row in the gap, and
+    ``_q_generate`` writes its claim-time snapshot of ``params`` back whole --
+    deleting every key merged in since. So the check is not "the row ends up
+    with it" but "the row was never without it"."""
+    from PIL import Image
+
+    from warlock import generation as gen
+
+    ref = tmp_path / "ref.png"
+    Image.new("RGB", (8, 8), (30, 30, 30)).save(ref)
+
+    seen: list[dict] = []
+    real = svc.store.create
+
+    def spy(kind, prompt, params, job_id, **kw):
+        # What the insert was *handed*, and what was on disk at that moment.
+        seen.append(
+            {
+                "params": dict(params),
+                "files": sorted(p.name for p in svc.config.job_dir(job_id).glob("*")),
+            }
+        )
+        return real(kind, prompt, params, job_id, **kw)
+
+    monkeypatch.setattr(svc.store, "create", spy)
+    request = gen.GenerationRequest(
+        generation_type="image", prompt="a hooded ranger", references=[str(ref)]
+    )
+    svc_jobs.create_generation_request(svc, request)
+
+    assert len(seen) == 1
+    at_insert = seen[0]["params"]
+    assert at_insert["generation_request"]["prompt"] == "a hooded ranger"
+    assert at_insert["resolved_recipe"]["version"] == gen.RECIPE_REGISTRY_VERSION
+    named = at_insert["native_reference_files"]
+    assert named == ["native_reference_0.png"]
+    # Named *and* already written: an empty list and a list naming a file that
+    # is not there yet are the same bug one step apart.
+    assert set(named) <= set(seen[0]["files"])
+
+
 def test_a_structured_request_can_still_name_the_two_legacy_atlases(
     svc, sprite_weights
 ):

@@ -5577,7 +5577,6 @@ def test_the_clay_hud_draws_its_widget_and_its_line(app_ctx, imgui_ctx):
     the widget needs a live viewport to read a camera off."""
     from types import SimpleNamespace
 
-    from warlock.studio import clay_mode
     from warlock.studio.panes import clay_hud
     from warlock.studio.viewer.camera import Camera
 
@@ -5596,14 +5595,27 @@ def test_the_clay_hud_draws_its_widget_and_its_line(app_ctx, imgui_ctx):
     # And with no viewport at all, which is the first frame.
     _frame(imgui_ctx, lambda: clay_hud.axis_widget(app_ctx, None, rect))
 
+    # The return value is what stops a click on a ball from *also* reaching the
+    # mesh: the viewport records ``is_item_hovered()`` off the render image,
+    # which is drawn before this widget, so it cannot know a control has since
+    # been drawn over it -- and ``_clay_event`` routes the pygame press on that
+    # flag alone, so pressing a ball turned the camera *and* picked behind it.
+    got: list[object] = []
+    _frame(imgui_ctx, lambda: got.append(clay_hud.axis_widget(app_ctx, view, rect)))
+    assert got == [False], "no pointer, so nothing hovered -- and never None"
+
     # The line, in every mode and mid-drag.
-    state = clay_mode.ensure(app_ctx)
     for mode in ("object", "vertex", "edge", "face"):
         tab.doc.set_element_mode(mode)
         _frame(imgui_ctx, lambda: clay_hud.hint_line(app_ctx))
-    state.drag_kind = "move"
-    _frame(imgui_ctx, lambda: clay_hud.hint_line(app_ctx))
-    state.drag_kind = ""
+    # Mid-drag, through the view rather than by poking a state field: the field
+    # this used to set was one nothing in the app ever wrote, so this branch was
+    # green while the line it covers could not appear on screen.
+    view = getattr(app_ctx, "clay_view", None)
+    if view is not None:
+        view._grab, view._key_kind = "keydrag", "move"
+        _frame(imgui_ctx, lambda: clay_hud.hint_line(app_ctx))
+        view._grab, view._key_kind = "", ""
 
 
 def test_the_plotter_properties_table_draws_every_branch(app_ctx, imgui_ctx):

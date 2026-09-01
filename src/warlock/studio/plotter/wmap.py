@@ -1408,3 +1408,22 @@ def _validate(doc: MapDoc) -> None:
                     f"object {obj.name!r} uses tile {tile_id}, which none of this "
                     "map's tilesets accounts for"
                 )
+    # The stamps, in the same pass and for the same reason: they are document
+    # state written into this file, they hold gids in the same encoding, and a
+    # stamp whose tileset has gone recalls a block of tiles that mean something
+    # else now. Refused at the door with the layers, rather than on recall,
+    # where the user's gesture was to press a number key and there is nothing
+    # useful to say.
+    for slot in sorted(doc.stamps):
+        cells = np.asarray(doc.stamps[slot].cells)
+        if bool((cells & _HEX_ROTATE).any()):
+            raise ValueError(
+                f"stamp {slot} uses hexagonal 120-degree tile rotation, "
+                "which Plotter does not support"
+            )
+        for tile_id in np.unique(gidlib.tile_ids(cells)).tolist():
+            if tile_id and doc.ref_for(tile_id) is None:
+                raise ValueError(
+                    f"stamp {slot} uses tile {tile_id}, which none of this "
+                    "map's tilesets accounts for"
+                )

@@ -59,6 +59,7 @@ from ..asset_workflows import (
     MAX_COLLECTION_VARIANTS,
     collection_cells,
 )
+from ._jobs_create import _plain_name
 from .core import WarlockService
 from .errors import Invalid, TooLarge
 from .files import ImageTooLarge, to_png
@@ -483,6 +484,8 @@ def create_tile_sheet(
     dither: bool = False,
     outline: str | None = None,
     allow_grid: bool = False,
+    extra_params: dict[str, Any] | None = None,
+    extra_files: dict[str, bytes] | None = None,
 ) -> dict[str, Any]:
     """Queue a sheet of generated tiles. Three shapes -- see the module docstring.
 
@@ -924,13 +927,24 @@ def create_tile_sheet(
     # write raises: ``next_queued`` can otherwise claim the job in the gap and
     # find no ``ref.png`` on disk. ``_jobs_create``'s invariant, and the reason
     # that module keeps its three doors together.
+    # Provenance onto the params *before* the row, never merged onto it after:
+    # the worker claims on ``next_queued`` and writes its own snapshot back with
+    # ``set_params``, which deletes anything merged in since. ``_jobs_create``'s
+    # ``extra_params`` contract, second door.
+    if extra_params:
+        params = {**extra_params, **params}
     new_id = uuid.uuid4().hex[:12]
     job_dir: Path | None = None
     try:
-        if normalized_ref is not None:
+        if normalized_ref is not None or extra_files:
             job_dir = svc.config.job_dir(new_id)
             job_dir.mkdir(parents=True, exist_ok=True)
-            (job_dir / "ref.png").write_bytes(normalized_ref)
+            if normalized_ref is not None:
+                (job_dir / "ref.png").write_bytes(normalized_ref)
+            for name, payload in (extra_files or {}).items():
+                if not _plain_name(name):
+                    raise Invalid(f"{name!r} is not a filename", field="extra_files")
+                (job_dir / name).write_bytes(payload)
         svc.store.create("tile_sheet", text, params, new_id, stage="tilesheet")
     except Exception:
         if job_dir is not None:

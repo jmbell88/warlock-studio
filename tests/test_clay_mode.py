@@ -241,6 +241,95 @@ def test_delete_removes_the_selection_when_not_saving(svc) -> None:
     assert tab.doc.objects == []
 
 
+class _FakeDrag:
+    """A live drag that knows only Blender's own mid-drag keys.
+
+    Which is the whole point: the bug was in what happened to the keys a drag
+    does *not* claim.
+    """
+
+    def __init__(self) -> None:
+        self.dragging = True
+        self.cancelled = 0
+        self.released = 0
+        self.keys: list[str] = []
+        self._key_kind = "move"
+
+    def drag_key(self, doc: Any, name: str) -> bool:
+        self.keys.append(name)
+        return name in {"g", "r", "s", "x", "y", "z"}
+
+    def cancel_drag(self, doc: Any) -> None:
+        self.cancelled += 1
+        self.dragging = False
+
+    def _release_drag(self, doc: Any) -> None:
+        self.released += 1
+        self.dragging = False
+
+
+def test_a_bare_key_a_live_drag_does_not_want_is_still_eaten_by_it(svc) -> None:
+    """It fell through to the op registry, so ``E`` typed during a ``G`` drag
+    ran Extrude against the mesh the drag was still moving -- and the drag's
+    commit then measured from its pre-drag baseline and reverted it. The rule
+    the code already stated ("a live gizmo drag owns the bare keys") is only a
+    rule if it holds for the keys the drag has no use for."""
+    import pygame
+
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx)
+    obj = tab.doc.objects[0]
+    tab.doc.set_element_mode("face")
+    tab.doc.set_element_sel(obj.uid, el.ElementSel(faces=[0]))
+    depth = len(tab.doc.history)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_e, mod=0)
+
+    # First without a drag, so the assertion below is about the drag and not
+    # about ``E`` being inert here for some other reason.
+    assert clay_mode.handle_key(ctx, event) is True
+    assert len(tab.doc.history) > depth, "E is Extrude in face mode"
+
+    tab.doc.set_element_sel(obj.uid, el.ElementSel(faces=[0]))
+    ctx.clay_view = _FakeDrag()
+    depth = len(tab.doc.history)
+    assert clay_mode.handle_key(ctx, event) is True
+    assert ctx.clay_view.keys == ["e"], "the drag is still asked first"
+    assert len(tab.doc.history) == depth
+
+
+def test_esc_and_enter_still_end_a_live_drag(svc) -> None:
+    """The two keys the drag block existed for, kept honest by the change that
+    made every other key stop there too."""
+    import pygame
+
+    ctx = FakeCtx(svc)
+    _tab(ctx)
+    for key, field in ((pygame.K_ESCAPE, "cancelled"), (pygame.K_RETURN, "released")):
+        ctx.clay_view = _FakeDrag()
+        event = pygame.event.Event(pygame.KEYDOWN, key=key, mod=0)
+        assert clay_mode.handle_key(ctx, event) is True
+        assert getattr(ctx.clay_view, field) == 1
+
+
+def test_ctrl_chords_still_reach_their_ops_during_a_drag(svc) -> None:
+    """Only the *bare* keys are the drag's. A Ctrl chord is not a transform
+    input and never was -- the guard reads ``not ctrl`` for that reason."""
+    import pygame
+
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx)
+    tab.doc.select([tab.doc.objects[0].uid])
+    ctx.clay_view = _FakeDrag()
+    depth = len(tab.doc.history)
+
+    event = pygame.event.Event(
+        pygame.KEYDOWN, key=pygame.K_d, mod=pygame.KMOD_LCTRL
+    )
+    assert clay_mode.handle_key(ctx, event) is True
+    assert ctx.clay_view.keys == [], "the drag was never asked"
+    assert len(tab.doc.history) > depth
+
+
 # --- the guard ---------------------------------------------------------------
 
 

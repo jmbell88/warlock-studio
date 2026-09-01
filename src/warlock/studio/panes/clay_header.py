@@ -272,6 +272,14 @@ OVERLAY_ROWS: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
+#: What each row is when nothing has been changed, so the Overlays button can
+#: say "something in here is not the default" without a second hand-written
+#: list. It had one -- ``(("grid", True), ("wire", False))`` -- which left
+#: ``stats`` out, so turning Statistics on and nothing else drew the button
+#: unselected: the one overlay with no other sign it is on was the one the
+#: button would not report.
+OVERLAY_DEFAULTS: dict[str, bool] = {"grid": True, "wire": False, "stats": False}
+
 
 def overlay_value(state: Any, key: str) -> bool:
     return bool(state.grid if key == "grid" else state.overlays.get(key, False))
@@ -419,8 +427,8 @@ def _trailing(ctx: Any, state: Any, view: Any) -> Any:
             role=controls.ButtonRole.GHOST,
             control_size=controls.ControlSize.COMPACT,
             selected=any(
-                overlay_value(state, key) != default
-                for key, default in (("grid", True), ("wire", False))
+                overlay_value(state, key) != OVERLAY_DEFAULTS[key]
+                for key, _label, _tip in OVERLAY_ROWS
             ),
             tooltip="What the viewport draws over the model",
         ):

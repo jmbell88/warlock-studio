@@ -3959,7 +3959,12 @@ class App:
         # Over the render and inside the same clip: the widget is a control you
         # reach for without looking away from what you are turning, which is the
         # whole of why it is in the corner rather than in a pane.
-        clay_hud.axis_widget(ctx, view, rect)
+        # Clears ``_build_hovered``: the flag was recorded off the render image
+        # above, which cannot know a control has since been drawn over it, and
+        # ``_clay_event`` routes the pygame press on it -- so a click on a ball
+        # turned the camera and picked the mesh behind it in one gesture.
+        if clay_hud.axis_widget(ctx, view, rect):
+            self._build_hovered = False
         # Opposite corner from the widget: two readouts in one corner is one of
         # them unreadable.
         clay_hud.stats_overlay(ctx, rect)

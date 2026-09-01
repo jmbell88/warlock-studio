@@ -2457,6 +2457,18 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         # The request document preserves the user's Avoid text, but an inert
         # negative branch must not be sent through to a distilled worker.
         kwargs["negative_prompt"] = generation.effective_negative_prompt(request, resolved) or None
+        # Handed to the door rather than merged onto the row afterwards. The
+        # merge lost a race with the worker twice over -- ``next_queued`` can
+        # claim the row first, and ``_q_generate`` writes its claim-time
+        # snapshot of ``params`` back whole, deleting anything added since.
+        # See ``_jobs_create.create_job``'s ``extra_params``.
+        kwargs["extra_params"] = {
+            "generation_request": request.to_dict(),
+            "resolved_recipe": {
+                "version": generation.RECIPE_REGISTRY_VERSION,
+                **resolved.to_dict(),
+            },
+        }
     ref_path = form.get("ref_path")
 
     # The form values are read here, on the frame thread, because they are UI
@@ -2476,14 +2488,6 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
                 raise Invalid(
                     f"could not read {Path(ref_path).name}: {exc}", field="ref_path"
                 ) from exc
-        result = svc_jobs.create_job(ctx.svc, **kwargs)
-        if resolved is not None:
-            payload = {"version": generation.RECIPE_REGISTRY_VERSION, **resolved.to_dict()}
-            for job_id in result.get("ids", [result["id"]]):
-                ctx.svc.store.merge_params(
-                    job_id,
-                    {"generation_request": request.to_dict(), "resolved_recipe": payload},
-                )
-        return result
+        return svc_jobs.create_job(ctx.svc, **kwargs)
 
     ctx.submit("submit", run)

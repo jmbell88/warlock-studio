@@ -83,6 +83,14 @@ class TilesetOps:
         Pure, and the whole of the refusal's evidence: a removal that silently
         blanked forty-two cells is the failure this exists to stop, and a count
         with no layer name is a refusal the user cannot act on.
+
+        **The stamps count too.** They are document state -- stored in the map,
+        written to ``.wmap`` since VERSION 11 -- and they hold gids exactly as a
+        layer does. Counting only the layers let a tileset that nothing had
+        painted yet but a stamp still named be removed: ``next_firstgid`` then
+        reuses the range, and recalling that stamp paints the *new* tileset's
+        tiles with no sign anything happened. A stamp is named as its own place
+        rather than as a layer, because it is not on one.
         """
         import numpy as np
 
@@ -102,6 +110,14 @@ class TilesetOps:
             total += held
             if held > worst_count:
                 worst_count, worst_name = held, layer.name
+        for slot in sorted(self.stamps):
+            stamp = self.stamps[slot]
+            ids = gidlib.tile_ids(np.asarray(stamp.cells))
+            held = int(np.count_nonzero((ids >= low) & (ids <= high)))
+            total += held
+            if held > worst_count:
+                worst_count = held
+                worst_name = f"stamp {slot}" + (f" ({stamp.name})" if stamp.name else "")
         return (total, worst_name)
 
     def remove_tileset(self: MapDoc, index: int) -> None:

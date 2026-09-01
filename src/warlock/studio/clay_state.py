@@ -259,7 +259,10 @@ class ClayState:
     # measured against the press rather than against the previous frame --
     # which is also what feeds ``set_transform``'s ``was`` argument, and the
     # reason the gizmo itself has to remember nothing about the object.
-    drag_kind: str = ""  # "" | move | rotate | scale | orbit | pan
+    # No ``drag_kind`` here: a live drag is the *view*'s (``ClayView._grab`` and
+    # ``_key_kind``), and the field that used to sit here was written by nothing
+    # but ``clear_drag`` -- read once, by the hint line, which therefore never
+    # showed a drag.
     drag_axis: str = ""
     ref: dict[str, Any] = field(default_factory=dict)
 
@@ -362,7 +365,6 @@ class ClayState:
     # -- drag ---------------------------------------------------------------
 
     def clear_drag(self) -> None:
-        self.drag_kind = ""
         self.drag_axis = ""
         self.ref = {}
 

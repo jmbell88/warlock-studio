@@ -49,6 +49,17 @@ from .validation import (
 log = logging.getLogger(__name__)
 
 
+def _plain_name(name: str) -> bool:
+    """Whether ``name`` is a filename rather than a path.
+
+    ``extra_files``'s keys are composed by a caller and become members of a job
+    directory the row then points at, so they are checked where they are used
+    rather than argued about at each call site -- the ``sheetout``/``sirens_io``
+    containment rule, spelled for a flat directory.
+    """
+    return bool(name) and Path(name).name == name and name not in {".", ".."}
+
+
 def _normalize_guidance(svc: WarlockService, raw: dict[str, Any]) -> dict[str, Any]:
     """``guidance.normalize`` with this host's matte gate applied and its
     ValueError translated. Takes the service purely for the gate: guidance is
@@ -230,11 +241,29 @@ def create_job(
     asset_intent: str | None = None,
     sweep_id: str | None = None,
     sweep_unit: str = "",
+    extra_params: dict[str, Any] | None = None,
+    extra_files: dict[str, bytes] | None = None,
 ) -> dict[str, Any]:
     """Queue one job, or ``count`` reference candidates of one.
 
     ``image`` is the raw upload; the caller may hand over at most
     MAX_UPLOAD_BYTES + 1 bytes, which is all that is needed to know it is over.
+
+    ``extra_params`` and ``extra_files`` are the caller's own provenance, put
+    on the row and in the job directory **before either exists**. Both used to
+    be written afterwards -- ``merge_params`` plus a ``write_bytes`` once
+    ``create_job`` had returned -- and both lost the race twice over. The
+    worker's ``next_queued`` poll can claim the row in that gap and start a
+    FLUX.2 job whose ``native_reference_files`` list is still empty; and
+    whichever order those land in, ``_q_generate`` snapshots ``job["params"]``
+    at claim time and writes the whole blob back with ``set_params``, which
+    deletes every key merged in after the snapshot. This is the same rule the
+    ``input.png`` write above states for the same reason, and it is why
+    ``optimize_job`` refuses a queued or running row outright.
+
+    They deliberately skip ``guidance.normalize``, which rejects unknown fields:
+    that door is about the *settings* a worker reads, and this is provenance a
+    worker only records.
     """
     config = svc.config
     if kind not in ("text", "image"):
@@ -564,6 +593,12 @@ def create_job(
     # (``JobsCache.tick`` -> ``list_jobs`` -> ``JobStore.list``), so a
     # submission with an uploaded image froze the window for the length of the
     # write. Only the row inserts need the savepoint's atomicity.
+    # Merged after every check and normalization, and before the first row is
+    # built -- see the docstring. Not ``params.update``: the request's own keys
+    # win over provenance, so a caller cannot quietly redefine what the door
+    # just validated.
+    if extra_params:
+        params = {**extra_params, **params}
     ids: list[str] = []
     made_dirs: list[Path] = []
     candidates: list[tuple[str, dict]] = []
@@ -584,7 +619,7 @@ def create_job(
                 candidate["seed"] = candidate["reference_seed"]
                 candidate["mesh_seed"] = candidate["reference_seed"]
             job_id = uuid.uuid4().hex[:12]
-            if normalized is not None or normalized_ref is not None:
+            if normalized is not None or normalized_ref is not None or extra_files:
                 job_dir = config.job_dir(job_id)
                 job_dir.mkdir(parents=True, exist_ok=True)
                 # Recorded before the payload writes, not after: a write
@@ -599,6 +634,13 @@ def create_job(
                     (job_dir / "ref.png").write_bytes(normalized_ref)
                     if normalized_mask is not None:
                         (job_dir / "mask.png").write_bytes(normalized_mask)
+                for name, payload in (extra_files or {}).items():
+                    # Named by the caller, so checked here: a name that is a
+                    # path would write outside the job directory, and these
+                    # names are the ones the row will go on to point at.
+                    if not _plain_name(name):
+                        raise Invalid(f"{name!r} is not a filename", field="extra_files")
+                    (job_dir / name).write_bytes(payload)
             candidates.append((job_id, candidate))
         with svc.store.transaction():
             for job_id, candidate in candidates:

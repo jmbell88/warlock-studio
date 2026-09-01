@@ -36,8 +36,18 @@ INSET = 8.0
 HINT_H = 20.0
 
 
-def axis_widget(ctx: Any, view: Any, rect: tuple[float, float, float, float]) -> None:
-    """The six axis ends, in the viewport's top-right corner.
+def axis_widget(ctx: Any, view: Any, rect: tuple[float, float, float, float]) -> bool:
+    """The six axis ends, in the viewport's top-right corner. -> hovered.
+
+    The return value is what keeps a click on a ball from *also* reaching the
+    mesh behind it. The viewport records ``is_item_hovered()`` off the render
+    image, which is drawn before this widget is, so the flag says "the pointer
+    is over the render" and cannot know a control was put on top of it since --
+    and ``_clay_event`` routes the pygame press on that flag alone. Pressing an
+    axis ball therefore turned the camera *and* picked, cleared a selection or
+    started an orbit. Answered here rather than by a bounds test at the caller,
+    because these balls are ``controls.button``s and their geometry is this
+    function's business.
 
     Each ball is a real button rather than a hit test against the draw list, and
     zero-alpha rather than invisible: ``controls.button`` is the chokepoint
@@ -48,7 +58,7 @@ def axis_widget(ctx: Any, view: Any, rect: tuple[float, float, float, float]) ->
     """
 
     if view is None:
-        return
+        return False
     size = sp(WIDGET)
     inset = sp(INSET)
     x0 = rect[0] + rect[2] - size - inset
@@ -56,6 +66,7 @@ def axis_widget(ctx: Any, view: Any, rect: tuple[float, float, float, float]) ->
     draw_list = imgui.get_window_draw_list()
     balls = clay_hints.axis_layout(view.camera.view(), size)
     radius = sp(9.0)
+    hovered = False
 
     # The spokes first, so every ball sits over its own line rather than under
     # the next one's.
@@ -96,8 +107,13 @@ def axis_widget(ctx: Any, view: Any, rect: tuple[float, float, float, float]) ->
             tooltip=f"Look along {ball.view}",
         )
         imgui.pop_style_color(3)
+        # Asked of every ball, not only the one that was hit: hovering is what
+        # the caller needs to know, and a press that lands on a ball is a hover
+        # on the same frame.
+        hovered = imgui.is_item_hovered() or hovered
         if hit:
             view.camera.look_along(ball.view)
+    return hovered
 
 
 def stats_overlay(ctx: Any, rect: tuple[float, float, float, float]) -> None:
@@ -140,11 +156,18 @@ def hint_line(ctx: Any) -> None:
     tab = state.active
     if tab is None:
         return
+    # Off the *view*, which is where a live drag actually lives. This read
+    # ``state.drag_kind``, a field nothing but a reset ever wrote, so the drag
+    # half of this line -- the axis locks, Enter, Esc, G/R/S -- could not render
+    # at all: the one thing on screen that says how to finish a drag only
+    # appeared in the test that set the field by hand.
+    view = getattr(ctx, "clay_view", None)
+    dragging = bool(view is not None and getattr(view, "dragging", False))
     widgets.muted(
         clay_hints.hint(
             tab.doc.element_mode,
             state.tool,
-            dragging=bool(state.drag_kind),
-            drag_kind=state.drag_kind,
+            dragging=dragging,
+            drag_kind=(getattr(view, "_key_kind", "") or "") if dragging else "",
         )
     )

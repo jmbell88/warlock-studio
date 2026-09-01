@@ -740,8 +740,14 @@ def handle_key(ctx: Any, event: Any) -> bool:
         if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
             view._release_drag(doc)
             return True
-        if view.drag_key(doc, name):
-            return True
+        view.drag_key(doc, name)
+        # Consumed whether or not the drag wanted it. Falling through here put
+        # every unclaimed bare key into the op registry below, so ``E`` typed
+        # mid-``G`` ran Extrude against the mesh the drag was still moving --
+        # and the drag's own commit then measured from ``_drag_start``, the
+        # pre-drag baseline, and reverted it. The rule the comment above states
+        # is only a rule if it holds for the keys the drag does *not* know.
+        return True
 
     if ctrl:
         return _ctrl_key(ctx, state, tab, doc, name, shift=shift)

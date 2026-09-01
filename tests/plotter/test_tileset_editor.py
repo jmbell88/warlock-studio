@@ -79,6 +79,42 @@ def test_usage_counts_across_every_layer():
     assert used == 2 and where in {"Ground", "Detail"}
 
 
+def test_a_tileset_held_only_by_a_stamp_is_still_in_use():
+    """The stamps are document state -- stored in the map, written to ``.wmap``
+    since VERSION 11 -- and they hold gids exactly as a layer does. Counting
+    only the layers let a tileset that nothing had painted yet but a stamp still
+    named be removed; ``next_firstgid`` then reuses the range, and recalling the
+    stamp paints the *new* tileset's tiles with no sign anything happened."""
+    doc = _doc()
+    ref = doc.add_tileset(_tileset())
+    doc.set_stamp(1, np.full((1, 2), ref.firstgid, dtype=np.uint32), name="roof")
+
+    used, where = doc.tileset_usage(0)
+    assert used == 2
+    assert "stamp 1" in where and "roof" in where
+    with pytest.raises(ValueError, match="Overworld"):
+        doc.remove_tileset(0)
+    assert len(doc.tilesets) == 1
+
+
+def test_reading_a_wmap_refuses_a_stamp_whose_tileset_is_gone():
+    """``_validate`` checked the layers and the tile objects and not the stamps,
+    so a map carrying a stamp nothing accounts for opened without complaint and
+    only went wrong on recall -- where the user's gesture was a number key and
+    there is nothing useful to say."""
+    from warlock.studio.plotter import wmap
+
+    doc = _doc()
+    ref = doc.add_tileset(_tileset())
+    doc.set_stamp(2, np.full((1, 1), ref.firstgid, dtype=np.uint32))
+    assert wmap.read_wmap(wmap.wmap_bytes(doc)).stamps[2] is not None
+
+    # Past the end of every tileset this map has.
+    doc.set_stamp(2, np.full((1, 1), ref.last_gid + 9, dtype=np.uint32))
+    with pytest.raises(ValueError, match="stamp 2"):
+        wmap.read_wmap(wmap.wmap_bytes(doc))
+
+
 def test_the_sheet_is_off_until_a_tileset_is_chosen():
     from warlock.studio.panes import plotter_tileset_editor
 

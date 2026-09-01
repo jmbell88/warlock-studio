@@ -161,6 +161,38 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
     guidance_fields = {"base_model": resolved.base_model}
     if resolved.style_lora:
         guidance_fields["style_lora"] = resolved.style_lora
+    # Provenance handed to the door rather than merged onto the row afterwards.
+    # It used to be the latter, and lost two races at once: the worker's
+    # ``next_queued`` poll can claim the row before the merge lands -- a FLUX.2
+    # job then runs with an empty ``native_reference_files`` and no reference at
+    # all -- and ``_q_generate`` snapshots ``job["params"]`` at claim time and
+    # writes the whole blob back with ``set_params``, deleting whatever was
+    # merged in since. ``guidance.normalize`` rejects unknown fields, which is
+    # why these ride beside it rather than through it.
+    extra_params: dict[str, Any] = {
+        "generation_request": request.to_dict(),
+        "resolved_recipe": {
+            "version": generation.RECIPE_REGISTRY_VERSION,
+            **resolved.to_dict(),
+        },
+        # These copies make the new contract inspectable by old result views
+        # and by rerun tools without requiring them to deserialize the entire
+        # request first.
+        "quality": request.quality,
+        "model_mode": request.model_mode,
+        "target_cell_px": (
+            request.tile.target_cell_px
+            if request.generation_type == "tileset"
+            else request.sprite.target_cell_px
+            if request.generation_type == "sprite_sheet"
+            else None
+        ),
+    }
+    extra_files: dict[str, bytes] = {}
+    if request.references:
+        for index, data in enumerate(native_payloads):
+            extra_files[f"native_reference_{index}.png"] = data
+        extra_params["native_reference_files"] = list(extra_files)
     # Keep the two historical follow-up doors intact while making the new
     # request document authoritative.  A sprite starts as an approved
     # reference and then queues its sheet; a tileset uses the dedicated sheet
@@ -226,6 +258,8 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
             terrain_layout=tile.terrain_layout,
             style_lock=tile.style_lock,
             seam_erase=tile.seam_erase,
+            extra_params=extra_params,
+            extra_files=extra_files,
             # The two the request document could not name until now. The door
             # has taken both since it grew them, so a tileset submitted through
             # here was refused nothing -- it simply could not ask, while the
@@ -295,33 +329,7 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
                 )
             ),
             sprite_sheet=sprite_block,
+            extra_params=extra_params,
+            extra_files=extra_files,
         )
-    # ``guidance.normalize`` intentionally rejects unknown fields, so recipe
-    # provenance is merged after the legacy door has normalized its settings.
-    recipe_payload = {"version": generation.RECIPE_REGISTRY_VERSION, **resolved.to_dict()}
-    for job_id in result.get("ids", [result["id"]]):
-        extra = {
-            "generation_request": request.to_dict(),
-            "resolved_recipe": recipe_payload,
-            # These copies make the new contract inspectable by old result
-            # views and by rerun tools without requiring them to deserialize
-            # the entire request first.
-            "quality": request.quality,
-            "model_mode": request.model_mode,
-            "target_cell_px": (
-                request.tile.target_cell_px
-                if request.generation_type == "tileset"
-                else request.sprite.target_cell_px
-                if request.generation_type == "sprite_sheet"
-                else None
-            ),
-        }
-        if request.references:
-            native_files = []
-            for index, data in enumerate(native_payloads):
-                native_name = f"native_reference_{index}.png"
-                Path(svc.config.job_dir(job_id), native_name).write_bytes(data)
-                native_files.append(native_name)
-            extra["native_reference_files"] = native_files
-        svc.store.merge_params(job_id, extra)
     return result
