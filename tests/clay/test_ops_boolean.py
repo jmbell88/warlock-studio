@@ -230,3 +230,95 @@ def test_the_op_freezes_the_generator_and_undoes_in_one_press():
     assert [obj.uid for obj in doc.objects] == [first, second]
     assert bm.face_count(doc.by_uid(first).mesh) == before
     assert doc.by_uid(first).generator == "box"
+
+
+# --- difference and intersection (Clay W5 groundwork) -------------------------
+
+
+def test_a_difference_keeps_only_the_first_object():
+    """The one boolean whose **order matters**: "the block minus the hole" and
+    "the hole minus the block" are different shapes, and only one of them is
+    ever what was meant."""
+    first = bd.Obj(uid=bd.new_uid(), name="a", mesh=bp.box())
+    second = bd.Obj(
+        uid=bd.new_uid(), name="b", mesh=bp.box(), translation=np.array([0.5, 0.0, 0.0])
+    )
+
+    mesh = ops_boolean.difference([first, second])
+    xs = np.asarray(mesh.positions, dtype="f8")[:, 0]
+
+    # The half of the first cube the second does not overlap.
+    assert xs.min() == pytest.approx(-0.5, abs=1e-6)
+    assert xs.max() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_a_difference_is_not_symmetric():
+    first = bd.Obj(uid=bd.new_uid(), name="a", mesh=bp.box())
+    second = bd.Obj(
+        uid=bd.new_uid(), name="b", mesh=bp.box(), translation=np.array([0.5, 0.0, 0.0])
+    )
+
+    one = np.asarray(ops_boolean.difference([first, second]).positions)[:, 0]
+    other = np.asarray(ops_boolean.difference([second, first]).positions)[:, 0]
+
+    assert one.max() != pytest.approx(other.max())
+
+
+def test_an_intersection_keeps_only_the_overlap():
+    first = bd.Obj(uid=bd.new_uid(), name="a", mesh=bp.box())
+    second = bd.Obj(
+        uid=bd.new_uid(), name="b", mesh=bp.box(), translation=np.array([0.5, 0.0, 0.0])
+    )
+
+    xs = np.asarray(ops_boolean.intersection([first, second]).positions)[:, 0]
+
+    assert xs.min() == pytest.approx(0.0, abs=1e-6)
+    assert xs.max() == pytest.approx(0.5, abs=1e-6)
+
+
+def test_an_intersection_of_disjoint_solids_is_refused_by_name():
+    """An empty result is *correct* and is also an object with nothing in it,
+    which on screen is indistinguishable from the operation having failed. So
+    it is named rather than applied -- and the sentence says which of the three
+    operations produced it, which the union-only wording could not."""
+    first = bd.Obj(uid=bd.new_uid(), name="a", mesh=bp.box())
+    far = bd.Obj(
+        uid=bd.new_uid(), name="b", mesh=bp.box(), translation=np.array([9.0, 0.0, 0.0])
+    )
+
+    with pytest.raises(OpError, match="intersection came out empty"):
+        ops_boolean.intersection([first, far])
+
+
+def test_union_still_means_what_it_did():
+    """The generalisation is backward compatible: the old entry point is the
+    new one with a default."""
+    first = bd.Obj(uid=bd.new_uid(), name="a", mesh=bp.box())
+    second = bd.Obj(
+        uid=bd.new_uid(), name="b", mesh=bp.box(), translation=np.array([0.5, 0.0, 0.0])
+    )
+
+    direct = ops_boolean.union([first, second])
+    by_kind = ops_boolean.boolean([first, second], "union")
+
+    assert len(direct.positions) == len(by_kind.positions)
+
+
+def test_an_unknown_kind_is_refused_by_name():
+    from warlock.studio.clay.elements import OpError
+
+    first = bd.Obj(uid=bd.new_uid(), name="a", mesh=bp.box())
+    second = bd.Obj(uid=bd.new_uid(), name="b", mesh=bp.box())
+
+    with pytest.raises(OpError, match="not one of"):
+        ops_boolean.boolean([first, second], "nonsense")
+
+
+@pytest.mark.parametrize("kind", list(ops_boolean.KINDS))
+def test_every_kind_refuses_a_single_object_with_its_own_verb(kind):
+    from warlock.studio.clay.elements import OpError
+
+    only = bd.Obj(uid=bd.new_uid(), name="a", mesh=bp.box())
+
+    with pytest.raises(OpError, match="at least two"):
+        ops_boolean.boolean([only], kind)
