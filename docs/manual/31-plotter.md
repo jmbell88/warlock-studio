@@ -22,7 +22,7 @@ any of the panes.
 
 With nothing open, the middle column offers **New map...** and **Open a file...**, and lists the maps
 you had open recently — clicking one reopens it, and hovering it shows the full path. The map panel
-on the right offers the same two buttons. Once a map is open, `Ctrl+N` and `Ctrl+O` do the same two
+on the left offers the same two buttons. Once a map is open, `Ctrl+N` and `Ctrl+O` do the same two
 things from the keyboard.
 
 **New map** asks what the map is before making it. Five presets start you off — 16 px tiles, 32 px
@@ -161,9 +161,10 @@ eight. A corner set is the usual choice and the one Tiled defaults to. **The kin
 set is made** — changing it later would either leave values in slots that no longer count, which
 still travel out to a `.tsx`, or throw them away without asking. Make a second set instead.
 
-Then **Add a colour** for each terrain, and name it: the name is what appears on the swatch in the
-Terrain section of the toolbox, so *grass* and *cliff* beat *Terrain 1* and *Terrain 2*. The swatch
-colour is only a label — it never reaches the map. **Probability** is a tie-break: when two tiles
+Then **Add a colour** for each terrain, and name it: the name is what the Terrain tool's picker on the
+toolbar lists, so *grass* and *cliff* beat *Terrain 1* and *Terrain 2*. The swatch colour is only a
+label — it never reaches the map, and it is shown on this tab rather than on the toolbar, where a
+38 px row has no space for a colour per row. **Probability** is a tie-break: when two tiles
 match a cell equally well, the heavier one is chosen more often.
 
 Now mark up the tiles. The strip shows every tile in the set — this tab has its own, because
@@ -241,6 +242,22 @@ conversion is applied in both directions, so a spawn point exported to `.tmx` op
 you left it.
 
 ## Tools
+
+The tools are a strip across the top of the map, where Tiled puts them. Which tool is in your hand is
+the pill of glyphs on the left; it never folds away, whatever the window is doing. To its right sit
+the things that belong to the tool or to the sitting — the brush transforms, Random, the tool's own
+setting, the view aids and the snap choice — and those give up their labels before they give up their
+controls, folding into a `…` menu with the full words back if the window gets narrow enough.
+
+**Flip H**, **Flip V**, **Rotate** and **Rotate back** are Tiled's `X`, `Y`, `Z` and `Shift`+`Z`,
+drawn as buttons because a transform nobody can find is a transform that does not exist. They are
+greyed until there is a brush to transform, and say so. **Random** makes the stamp a palette: each
+cell you paint takes one of the non-empty tiles in it, so a scatter of grass tufts is one drag rather
+than nine.
+
+**View** holds the grid, the rulers, the objects, the minimap and the layer highlight — the same five
+rows the **View** menu has, drawn from one table, so the button and the menu cannot come to disagree.
+**Off / Grid / Pixel** is what an object drag snaps to; each says on hover that `Ctrl` inverts it.
 
 | Key | Tool | What it does |
 | --- | --- | --- |
@@ -419,7 +436,18 @@ says which map the copy came from.
 
 ## Layers
 
-Two kinds, and they are genuinely different.
+The stack sits on the right, with the active layer's **opacity** over it and a row of verbs under it:
+add, duplicate, raise, lower, lock, delete, and the layer highlight. The list scrolls between them, so
+a map with thirty layers cannot push Delete off the bottom of the pane. **Double-click a name to
+rename it in place** — the name is committed when you leave the field, because a rename is an undo
+step and typing "Ground" should not push six of them.
+
+What a layer *carries* is the **Properties** pane, which is on the left of the map. It shows whatever
+you have selected — a layer, one object, several objects, or the map itself when nothing is selected —
+and says which at the top, because on the far side of the map from the list it can no longer be
+inferred from what is above it.
+
+Two kinds of layer, and they are genuinely different.
 
 A **tile layer** is a rectangle of cells the tools paint into. A map usually has several: a floor, a
 wall layer above it, decoration above that. Each carries its own opacity and visibility, and they
@@ -429,11 +457,12 @@ does it.
 An **object layer** holds named rectangles and points. Nothing on one is drawn in an export; they
 are metadata an engine reads. With an **insert** tool active — `R` for a rectangle, say — click empty
 space and drag to draw one, or click without dragging to drop a point. Click an existing object to
-select it, and its form appears in the **Properties** pane below the list. With the **Objects**
+select it, and its form appears in the **Properties** pane on the left of the map — or find it by
+name in the **Objects** pane on the right. With the **Objects**
 pointer (`S`) in hand, that same empty-space drag sweeps a selection band instead of drawing
 anything; see *Selecting several objects* below.
 
-Standing on an object layer changes the whole toolbox: the letters become *insert* tools, one per
+Standing on an object layer changes the whole tool pill: the letters become *insert* tools, one per
 shape — `R` rectangle, `I` point, `E` ellipse, `C` capsule, `P` polygon, `L` polyline, `T` tile,
 `X` text, and `S` back to the pointer. The **capsule** is Warlock's own shape and no Tiled release
 reads it; see the dialect list further down.

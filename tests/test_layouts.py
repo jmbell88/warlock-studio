@@ -527,3 +527,93 @@ def test_a_plotter_layout_that_hid_a_moved_pane_still_hides_it():
     assert "plotter-tileset" in again.order(
         "plotter", "right", ["plotter-layers", "plotter-tileset"]
     )
+
+
+def test_a_shares_default_is_an_even_division_rather_than_a_flat_half():
+    """The defect a screenshot caught, and its root cause.
+
+    A share defaulted to 0.5 whatever the column held. That is exactly right
+    for the one shape it was written against -- one share over one fill -- and
+    wrong for every other: two shares at 0.5 each leave the fill *zero* pixels.
+    """
+    one = [_slot("a", skeleton.SHARE, share="a"), _slot("fill", skeleton.FILL)]
+    assert skeleton.heights(one, 900.0, {}) == [450.0, 450.0], "unchanged"
+
+    two = [
+        _slot("a", skeleton.SHARE, share="a"),
+        _slot("b", skeleton.SHARE, share="b"),
+        _slot("fill", skeleton.FILL),
+    ]
+    assert skeleton.heights(two, 900.0, {}) == [300.0, 300.0, 300.0]
+
+    three = [*two[:2], _slot("c", skeleton.SHARE, share="c"), two[2]]
+    assert skeleton.heights(three, 900.0, {}) == [225.0, 225.0, 225.0, 225.0]
+
+
+def test_a_saved_drag_still_wins_over_the_even_division():
+    """The default is only what a column does before anybody has dragged
+    anything; a recorded proportion is a decision and outranks it."""
+    slots = [
+        _slot("a", skeleton.SHARE, share="a"),
+        _slot("b", skeleton.SHARE, share="b"),
+        _slot("fill", skeleton.FILL),
+    ]
+    got = skeleton.heights(slots, 900.0, {"a": 0.5})
+    assert got[0] == 450.0
+    assert sum(got) == 900.0
+
+
+@pytest.mark.parametrize("workspace", ["clay", "inker", "plotter", "sirens"])
+def test_no_pane_of_any_workspace_is_allocated_nothing(workspace):
+    """The property the flat default broke, asserted where it can be seen.
+
+    Three panes were being drawn at zero height before 2026-09-01 -- Plotter's
+    Map file, Clay's Document, and Sirens' Sound effects and Song file, the last
+    two for far longer. Every one of them still ran, still passed every test
+    that called its ``draw``, and was simply given no room by its column. Only a
+    screenshot could show it, which is why this now asks the arithmetic
+    directly.
+
+    900 px is about what a sidebar column gets at the app's default 1600x950
+    once the menu strip and the status row are taken off.
+    """
+    from types import SimpleNamespace
+
+    from warlock.studio import skeletons
+
+    ctx = SimpleNamespace(
+        state=SimpleNamespace(clay=None, inker=None, plotter=None, sirens=None)
+    )
+    for column in skeletons.BUILDERS[workspace](ctx).values():
+        slots = list(column.slots)
+        if not slots:
+            continue
+        got = skeleton.heights(slots, 900.0, {})
+        empty = [
+            slot.id
+            for slot, height in zip(slots, got, strict=True)
+            if slot.sizing != skeleton.FIXED and height < 1.0
+        ]
+        assert not empty, f"{workspace}/{column.id}: {empty} drawn at no height"
+        assert sum(got) == pytest.approx(900.0)
+
+
+def test_a_fill_floor_reserves_room_out_of_the_shares_above_it():
+    """The second half of the fix, and it does a different job from the even
+    division: the division is what a column does with nobody's drag recorded,
+    and the floor is what protects the fill once somebody has dragged a share
+    wide. Both were added on 2026-09-01 and neither makes the other redundant.
+    """
+    slots = [
+        _slot("a", skeleton.SHARE, share="a", floor=160.0),
+        _slot("b", skeleton.SHARE, share="b", floor=120.0),
+        _slot("fill", skeleton.FILL, floor=150.0),
+    ]
+    # 0.95 rather than 0.8: at 0.8 the share asks for 720 and the headroom is
+    # 750, so nothing is clamped and the test would pass without the floor
+    # doing anything. The clamp is what is being asserted.
+    got = skeleton.heights(slots, 900.0, {"a": 0.95})
+
+    assert sum(got) == 900.0
+    assert got[0] == 750.0, "the share gave way to what is under it"
+    assert got[0] < 900.0 * 0.95

@@ -20,6 +20,18 @@ panel states.
 
 from __future__ import annotations
 
+#: What this pane refuses to shrink past, in design pixels: the path line, the
+#: undo pair, the step count and the two ways out.
+#:
+#: It had none while the right column was a hand-composed pair. The declarative
+#: layout stacks the outliner and the properties above it, and
+#: ``layout_skeleton.heights`` gives each share its proportion of the room
+#: before the fill sees any -- so two at the default 0.5 leave this pane exactly
+#: zero pixels and the Document panel is not on screen at all. Plotter's map
+#: file panel went the same way on the same day and for the same reason.
+BRIDGE_FLOOR = 170.0
+
+
 from typing import Any
 
 from imgui_bundle import imgui

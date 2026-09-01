@@ -116,6 +116,22 @@ def heights(
     # share slot's own floor first when the two cannot both be met: the
     # alternative is a pane with a heading and nothing under it.
     fill_floors = sum(sp(slot.floor, scale) for slot in fills)
+    # **A share's default is an even division of the column, not a flat half.**
+    # It was 0.5 whatever the column held, which is exactly right for the one
+    # shape it was written against -- one share over one fill -- and wrong for
+    # every other: two shares at 0.5 each leave the fill *zero* pixels, and
+    # three leave the third share zero as well. Both were real. Plotter's Map
+    # file panel and Clay's Document panel vanished the day a second share
+    # landed above them, and Sirens has been drawing its Sound effects and Song
+    # file panes at zero height for longer than that -- panes that still ran,
+    # still passed every test that called their ``draw``, and were simply
+    # allocated no room by the column.
+    #
+    # A saved drag still wins: this is only what a column does before anybody
+    # has dragged anything. And it is unchanged for the one-share case, where
+    # ``1 / 2`` is the half it always was.
+    portions = len([slot for slot in slots if slot.sizing in (SHARE, FILL)])
+    default = 1.0 / portions if portions else 0.5
     out: list[float] = []
     taken = 0.0
     for slot in slots:
@@ -123,7 +139,7 @@ def heights(
             out.append(sp(slot.height, scale))
             continue
         if slot.sizing == SHARE:
-            want = room * float(shares.get(slot.share_key, 0.5))
+            want = room * float(shares.get(slot.share_key, default))
             headroom = max(0.0, room - taken - fill_floors)
             want = max(sp(slot.floor, scale), min(want, headroom))
             taken += want

@@ -230,6 +230,7 @@ def plotter(ctx: Any) -> dict[str, Column]:
                 role=_role("inspector"),
                 edge=_edge("right"),
                 sizing=FILL,
+                floor=plotter_bridge.BRIDGE_FLOOR,
             ),
         ),
     )
@@ -341,6 +342,7 @@ def clay(ctx: Any) -> dict[str, Column]:
                 role=_role("inspector"),
                 edge=_edge("left"),
                 sizing=FILL,
+                floor=clay_bridge.BRIDGE_FLOOR,
             ),
         ),
     )

@@ -198,19 +198,61 @@ def seed(app) -> None:
     answer "Open or start a map first" with nothing open -- so the sentence-case
     sweep over their eleven headings, the tool grids, the layer tree and the
     packing controls had never appeared in a capture at any scale. Both
-    ``new_document`` calls are synchronous; sprites and tilesets are not,
-    because they land through ``ctx.submit`` on a task thread, and a seeder
-    that races the capture is worse than one that stops short of it.
+    ``new_document`` calls are synchronous; sprites are not, because they land
+    through ``ctx.submit`` on a task thread, and a seeder that races the capture
+    is worse than one that stops short of it.
+
+    **The map gets a tileset and a few painted cells** (2026-09-01), and that is
+    a third instance of the same defect rather than a nicety. A map with no
+    tileset draws the palette's "add one first" branch and nothing else -- so
+    the tile picker, the tileset bar, the brush transforms on the toolbar and the
+    whole Tile stamps pane had never appeared in a capture at any scale, at
+    exactly the moment those four were rewritten. The tileset is built in
+    process rather than imported: ``add_tileset`` is synchronous where every
+    file door goes through the task thread.
     """
+    import numpy as np
+
     from warlock.studio import clay_mode, inker_mode, packwright_mode, plotter_mode
+    from warlock.studio.tilegrid import gid
+    from warlock.studio.tilegrid.tileset import Tileset
 
     inker_mode.new_document(app.app_ctx, 1024, 1024)
     state = inker_mode.ensure(app.app_ctx)
     if state.active is not None:
         inker_mode.animate(app.app_ctx, state.active)
     clay_mode.new_document(app.app_ctx)
-    plotter_mode.new_document(app.app_ctx)
     packwright_mode.new_document(app.app_ctx)
+
+    tab = plotter_mode.new_document(app.app_ctx)
+    doc = tab.doc
+    # A four-by-four atlas of flat colours: enough tiles for the picker to be a
+    # picker, and deterministic, which is what a screenshot corpus needs.
+    tile = 32
+    pixels = np.zeros((tile * 4, tile * 4, 4), dtype=np.uint8)
+    pixels[..., 3] = 255
+    for row in range(4):
+        for column in range(4):
+            shade = 40 + 24 * (row * 4 + column) % 200
+            block = pixels[
+                row * tile : (row + 1) * tile, column * tile : (column + 1) * tile
+            ]
+            block[..., 0] = shade
+            block[..., 1] = 90 + (row * 30) % 140
+            block[..., 2] = 200 - (column * 40) % 160
+    ref = doc.add_tileset(Tileset(name="terrain", pixels=pixels, tile_w=tile, tile_h=tile))
+    layer = doc.tile_layers()[0]
+    cells = np.zeros((doc.height, doc.width), gid.DTYPE)
+    for row in range(min(6, doc.height)):
+        for column in range(min(10, doc.width)):
+            cells[row, column] = gid.compose(ref.firstgid + (row + column) % 4)
+    doc.write_region(layer.uid, 0, 0, cells)
+    # A brush in hand and a stamp in a slot, so the toolbar's transforms are
+    # live and the stamps pane has something to draw rather than nine empties.
+    plotter_state = plotter_mode.ensure(app.app_ctx)
+    plotter_state.brush = cells[0:2, 0:2].copy()
+    doc.set_stamp(1, plotter_state.brush, name="Grass corner")
+    doc.mark_saved()
 
 
 def seed_tile(app, png: Path) -> None:

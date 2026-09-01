@@ -22,6 +22,23 @@ from ..manual import render as manual_render
 #: begun in this pane, which is what an imgui popup requires.
 HISTORY_POPUP = "plotter-undo-history"
 
+#: What this pane refuses to shrink past, in design pixels: the path line, the
+#: unsaved marker, the undo pair and the step count.
+#:
+#: It had none until 2026-09-01 and did not need one, because it was the *only*
+#: fill slot under a single share. Adding the Tile stamps pane put two shares
+#: above it, and ``layout_skeleton.heights`` gives each share its proportion of
+#: the room before the fill sees any -- so two at the default 0.5 left this pane
+#: exactly zero pixels and the Map file panel simply was not on screen. The
+#: floor is what ``heights`` reserves out of the shares' headroom, and the rule
+#: it enforces ("a share gives way to what the fill under it needs") only has
+#: something to enforce once the fill says what it needs.
+#:
+#: Found by a screenshot, which is the only thing that could have found it: the
+#: pane still drew, still passed every test that calls its ``draw``, and was
+#: simply allocated no height by the column.
+BRIDGE_FLOOR = 150.0
+
 
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
