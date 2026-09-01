@@ -5672,3 +5672,51 @@ def test_the_plotter_properties_table_draws_every_branch(app_ctx, imgui_ctx):
         state.select_object(obj.uid)
         _frame(imgui_ctx, lambda: plotter_layers.draw_properties(app_ctx))
     state.select_object(None)
+
+
+def test_the_plotter_objects_dock_lists_and_filters(app_ctx, imgui_ctx):
+    """The dock, in each of the states it can be in: empty, listing, filtered
+    to nothing, and with a selection its right-click menu can act on."""
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_layers, plotter_objects
+
+    imgui, _renderer = imgui_ctx
+    tab = plotter_mode.new_document(app_ctx, (16, 16, 16, 16))
+    state = plotter_mode.ensure(app_ctx)
+    doc = tab.doc
+    title = "##objects-dock"
+
+    # Nothing to list: the sentence that tells you how to make one.
+    layer = doc.add_object_layer()
+    doc.set_layer_props(layer.uid, name="Triggers")
+    _frame(imgui_ctx, lambda: plotter_objects.draw(app_ctx))
+
+    # Ten objects, which is past ``list_filter``'s self-hiding threshold, so
+    # the search box draws for the first time.
+    for index in range(10):
+        obj = plotter_layers.add_object(
+            doc, doc.layer(layer.uid), "rect", float(index * 8), 0.0, 8.0, 8.0
+        )
+        doc.set_object(
+            layer.uid, obj.uid, name=f"door_{index}", obj_class="trigger"
+        )
+    labels = _drawn_labels(imgui, lambda: plotter_objects.draw(app_ctx), title)
+    assert _index_of(labels, f"##find-{plotter_objects.FILTER_TAG}") >= 0, labels
+
+    # A query that matches nothing, which must say so rather than looking like
+    # a pane that has lost its contents.
+    app_ctx.state.list_filters[plotter_objects.FILTER_TAG] = "zzzz"
+    _frame(imgui_ctx, lambda: plotter_objects.draw(app_ctx))
+    app_ctx.state.list_filters[plotter_objects.FILTER_TAG] = "door_3"
+    _frame(imgui_ctx, lambda: plotter_objects.draw(app_ctx))
+    app_ctx.state.list_filters.pop(plotter_objects.FILTER_TAG, None)
+
+    # A selection, so the row draws its accent branch and the menu has a target.
+    first = doc.layer(layer.uid).objects[0]
+    state.select_object(first.uid)
+    doc.set_active_layer(layer.uid)
+    _frame(imgui_ctx, lambda: plotter_objects.draw(app_ctx))
+
+    # And with nothing open at all.
+    plotter_mode.close_tab(app_ctx, tab.uid)
+    _frame(imgui_ctx, lambda: plotter_objects.draw(app_ctx))

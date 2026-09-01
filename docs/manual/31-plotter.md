@@ -13,8 +13,10 @@ It is a mode, not a takeover. Switching away leaves every open map exactly where
 reconstruction started before you switched keeps running with its progress card floating over the
 canvas. Only quitting the app and closing a tab can lose unsaved work, and both ask first.
 
-The layout follows the rest of the app: tools and the tileset palette on the left, the map in the
-middle, the layer stack and the file panel on the right. Several maps stay open at once.
+The layout follows Tiled's: the tools are a strip across the top of the map, the selected layer's
+properties and the map file are on the left, and the layer stack, the objects and the tileset palette
+are on the right. Several maps stay open at once, and **View ▸ Rearrange panes** (`Shift`+`W`) moves
+any of the panes.
 
 ## Starting a map
 
@@ -52,7 +54,7 @@ once anything is on it. On an empty map the sheet simply brings its lattice with
 3/4 sheets are both square, so neither ever asks about the other.
 
 Every new map arrives with one tile layer called *Ground* already on it. Both sizes can be changed
-later, under **Resize** in the tools pane. The grid fields grow or crop the map and move every object
+later, under **Map ▸ Resize**. The grid fields grow or crop the map and move every object
 with the content, so a trigger volume drawn around a doorway stays around that doorway; the
 **Offset** fields decide where the old content lands, which is how you add rows at the *top* rather
 than the bottom. On an infinite map that section is called **Size** instead and has no width and
@@ -529,11 +531,39 @@ one — a lock is not a reason to lose sight of your own work.
 Locks are saved in `.wmap`, and in `.tmx`/`.tmj` exports where Tiled understands them. A map written
 before this existed opens with everything unlocked.
 
+## Objects
+
+Everything on the map's object layers, in one list: name, class and id, grouped by the layer that
+holds them, with a search box once there are enough to search. The pane appears only on a map that
+has an object layer, because on a tile-only map it would be a heading over nothing.
+
+Objects used to be rows *inside* the layer list, indented under their layer. That is Tiled's
+arrangement for layers and not for objects, and it cost what a folded list always costs: a map with
+sixty triggers put the layer stack sixty rows further down the pane, and the only way to find one
+object was to know which layer it was on and unfold that layer. The two panes answer different
+questions now — "what is this map made of" is a stack you read, "where is the door I named" is a list
+you search.
+
+Clicking a row selects the object **and activates its layer**, because a selection on a layer no tool
+can reach is a selection you cannot edit. `Shift`-click extends the selection, the same gesture the
+canvas marquee makes. Double-click centres the map on the object. Right-click gives the same four
+verbs the canvas does — Duplicate, Raise, Lower, Delete — because they are the same four verbs, drawn
+from one place.
+
+The search box matches the name, the class, the kind **and the id**. The id is there deliberately: an
+`object`-typed property in another object holds one, so pasting that number into the box is how you
+ask what a reference points at.
+
 ### Layer and map properties
 
-Layers and the map itself carry typed custom properties, the same kind objects do. A layer's live
-under a collapsed **Properties** header at the bottom of the **Properties** pane; the map's under
-one in the tools pane, below the size readout.
+Layers and the map itself carry typed custom properties, the same kind objects do. Both are drawn as
+a two-column table — the name on the left, the value on the right — with a `+` and a `-` under it
+rather than a remove button on every row: a third control per line is the value column gone in a
+300 px pane. The `-` acts on the row you have selected and says so when you have not selected one.
+
+A layer's properties live under a collapsed **Properties** header at the bottom of the **Properties**
+pane. The map's are what that pane shows when no layer is selected, and are also under
+**Map ▸ Map properties**.
 
 Both have been part of the file format — and survived every Tiled round trip — since Plotter
 shipped. What was missing was any way to set one without opening the file in a text editor. Both are
@@ -549,10 +579,16 @@ they are how a map says "this door needs the brass key" to code that has never h
 A **file** property is a path Plotter carries verbatim and never resolves; an **object** property is
 a Tiled object id, where 0 means none; and a **class** property holds a block of properties of its
 own, under a type name declared in a Tiled project. All three arrive from Tiled and survive the trip
-back. The new-property row offers the seven you can fill in on one line, and a class or a list opens
-an **Edit** disclosure holding an editor of its own — nested classes and lists included, each member
-edited by its stored type. One editor serves the map's properties, a layer's and an object's, because
-all three are the same model.
+back. The new-property row offers the seven you can fill in on one line, and a class or a list folds
+open with a chevron into the same table, its members indented one level — nested classes and lists
+included, each member edited by its stored type. One editor serves the map's properties, a layer's
+and an object's, because all three are the same model.
+
+An `object` property draws a small arrow beside its value. Live, it jumps to the object the id names
+— selecting it, activating its layer and centring the map on it. Greyed, it says the id is not on
+this map any more: object ids are never reused, so a property goes on naming its object after the
+object is deleted, and until the arrow existed a reference field showed a bare number with no way to
+tell those two apart.
 
 ## Files
 

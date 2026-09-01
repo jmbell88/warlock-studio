@@ -322,6 +322,10 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         # strip is not a slot. An orphaned share under the old key in a user's
         # settings file is inert; see ``skeletons.plotter``.
         "plotter-layers",
+        # The Objects dock, between the stack and the palette and present only
+        # on a map that has an object layer. A ``when`` slot still carries a
+        # handle: the column it shares with is the column it is drawn in.
+        "plotter-objects",
         "plotter-properties",
         "review-runs",
         "sirens-transport",

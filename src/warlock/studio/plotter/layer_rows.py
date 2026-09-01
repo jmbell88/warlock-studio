@@ -57,16 +57,21 @@ def visible_rows(
 
 
 def can_fold(layer: Any) -> bool:
-    """Whether this row has anything to fold open.
+    """Whether this row has anything to fold open. **Groups only.**
 
-    Groups and object layers both do, and they are given the *same* chevron on
-    purpose: an object layer used to be an imgui tree node while every other
+    Object layers folded too until 2026-09-01, and were given the *same*
+    chevron on purpose: one used to be an imgui tree node while every other
     kind was a selectable, so one list carried two row shapes and the eye
     landed in a different place depending on the kind. One shape, one fold.
+
+    That argument is answered rather than abandoned: there is still one row
+    shape, and an object layer is now a row with nothing under it -- like a tile
+    layer, which is what it is from the stack's point of view. The objects moved
+    to their own dock, because folding sixty triggers into the layer list put
+    the stack sixty rows down the pane and left "where is the door I named"
+    answerable only by knowing which layer it was on.
     """
-    return bool(getattr(layer, "children", None)) or bool(
-        getattr(layer, "objects", None)
-    )
+    return bool(getattr(layer, "children", None))
 
 
 def drop_target(doc: Any, source_uid: int, target_uid: int) -> tuple[Any, int] | None:

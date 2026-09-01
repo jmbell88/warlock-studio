@@ -442,8 +442,11 @@ def _row(
         # nesting them would make the same layer's controls answer to a
         # different string depending on how deep it happens to sit, and imgui
         # keys open popups and active items on exactly that.
-        if getattr(layer, "objects", None):
-            _object_rows(ctx, doc, state, layer, editable, depth + 1)
+        #
+        # **Layers only.** An object layer's contents used to be indented here,
+        # which put the stack sixty rows down the pane on a map with sixty
+        # triggers. They are ``plotter_objects`` now -- a list you search rather
+        # than a tree you unfold.
         for child in reversed(getattr(layer, "children", ()) or ()):
             _row(ctx, doc, state, tab, child, editable, depth + 1)
 
@@ -912,66 +915,6 @@ def _layer_table(ctx: Any, doc: Any, layer: Any, editable: bool) -> None:
                     repeat_x=repeat_x if changed_x else layer.repeat_x,
                     repeat_y=repeat_y if changed_y else layer.repeat_y,
                 )
-
-
-def _object_rows(
-    ctx: Any, doc: Any, state: Any, layer: Any, editable: bool, depth: int = 0
-) -> None:
-    """One row per object: the same selectable-and-eye shape a layer row has.
-
-    **No per-object lock.** ``MapObject`` has none, adding one is a document
-    field plus a ``warlock-dialect`` row in ``COMPAT.md``, and the layer's own
-    padlock already gates every object edit -- so the control would be a second
-    switch for a state the first one already decides.
-
-    Bottom-up like the canvas draws them: the last object in the list is the
-    one on top, so it reads down the page the way it stacks on screen.
-    """
-    from imgui_bundle import imgui
-
-    indent = sp(GROUP_INDENT) * depth
-    for obj in reversed(layer.objects):
-        imgui.push_id(str(obj.uid))
-        picked = obj.uid in state.selected_objects
-        with widgets.list_row(
-            f"plotter-object/{obj.uid}", selected=picked, indent=indent
-        ) as clicked:
-            if clicked:
-                doc.set_active_layer(layer.uid)
-                state.select_object(obj.uid)
-            # No chevron: an object has nothing under it. The gap keeps its
-            # eye in the same column as every layer's, so the list still reads
-            # as one column of switches rather than two.
-            imgui.dummy((imgui.get_text_line_height(), 0))
-            imgui.same_line()
-            imgui.begin_disabled(not editable)
-            if widgets.small_icon_button(
-                icons.EYE if obj.visible else icons.EYE_OFF,
-                "Show / hide this object",
-                borderless=True,
-            ):
-                doc.set_object(layer.uid, obj.uid, visible=not obj.visible)
-            imgui.end_disabled()
-            imgui.same_line()
-            label = obj.name or f"({obj.kind})"
-            if obj.visible:
-                imgui.text(label)
-            else:
-                widgets.muted(label)
-        if imgui.begin_popup_context_item(f"obj-menu-{obj.uid}"):
-            widgets.popup_chrome(_imgui=imgui)
-            imgui.begin_disabled(not editable)
-            if controls.menu_item_simple("Raise"):
-                doc.reorder_object(layer.uid, obj.uid, 1)
-            if controls.menu_item_simple("Lower"):
-                doc.reorder_object(layer.uid, obj.uid, -1)
-            imgui.separator()
-            if controls.menu_item_simple("Delete"):
-                doc.remove_object(layer.uid, obj.uid)
-                state.selected_objects.discard(obj.uid)
-            imgui.end_disabled()
-            imgui.end_popup()
-        imgui.pop_id()
 
 
 def _delete_layer(ctx: Any, doc: Any, layer: Any) -> None:
@@ -1450,7 +1393,7 @@ def _prop_rows(
             form["selected"] = here
         if toggled:
             folded.discard(here) if is_folded else folded.add(here)
-        value = _value_editor(prop, object_options=object_options)
+        value = _value_editor(prop, object_options=object_options, ctx=ctx)
         if value is not None and value != prop.value:
             replacement = dict(props)
             # ``propertytype`` travels with the value: it names a class or an
@@ -1527,7 +1470,7 @@ def _prop_children(
             "",
             indent=sp(GROUP_INDENT) * (depth + 1),
         )
-        value = _value_editor(item, object_options=object_options)
+        value = _value_editor(item, object_options=object_options, ctx=ctx)
         if value is not None and value != item.value:
             items = list(prop.value)
             items[index] = Prop(
@@ -1618,6 +1561,30 @@ def _blank_value(kind: str) -> Any:
     }.get(kind, "")
 
 
+
+def _goto_arrow(ctx: Any, value: Any) -> None:
+    """The arrow beside an object reference. Drawn only where it can act.
+
+    ``ctx`` is optional because ``_value_editor`` is also reached from the
+    tileset editor's own property table, which has no Plotter tab behind it.
+    Without one the arrow is not drawn at all, which is right: an arrow that
+    cannot jump is worse than no arrow.
+
+    The tab is resolved here rather than threaded through three call sites,
+    because there is only ever one answer -- every editor that draws an object
+    reference is drawing it against the map that is open.
+    """
+
+    if ctx is None:
+        return
+    from . import plotter_objects
+
+    tab = plotter_mode.ensure(ctx).active
+    if tab is None:
+        return
+    plotter_objects.go_to_arrow(ctx, tab, int(value or 0))
+
+
 def _summary(prop: Prop) -> str:
     """A container property on one line, for the read-only row.
 
@@ -1633,18 +1600,30 @@ def _summary(prop: Prop) -> str:
 
 
 def _value_editor(
-    prop: Prop, *, object_options: list[tuple[str, str]] | None = None
+    prop: Prop,
+    *,
+    object_options: list[tuple[str, str]] | None = None,
+    ctx: Any = None,
 ) -> Any:
     from imgui_bundle import imgui
 
-    imgui.set_next_item_width(sp(110))
     if prop.type == "bool":
         changed, value = controls.checkbox("##v", bool(prop.value))
         return value if changed else None
     if prop.type == "object" and object_options:
+        # Narrowed to leave room for the arrow beside it. ``-1`` would take the
+        # whole cell and ``same_line`` past the content edge draws a control
+        # nowhere, which is the trap ``same_line_or_wrap`` exists for.
+        imgui.set_next_item_width(-sp(26))
         value = widgets.combo("##v", str(int(prop.value or 0)), object_options)
+        _goto_arrow(ctx, prop.value)
         return int(value) if value != str(int(prop.value or 0)) else None
-    if prop.type in ("int", "object"):
+    if prop.type == "object":
+        imgui.set_next_item_width(-sp(26))
+        changed, value = controls.input_int("##v", int(prop.value or 0))
+        _goto_arrow(ctx, prop.value)
+        return value if changed else None
+    if prop.type == "int":
         changed, value = controls.input_int("##v", int(prop.value or 0))
         return value if changed else None
     if prop.type == "float":

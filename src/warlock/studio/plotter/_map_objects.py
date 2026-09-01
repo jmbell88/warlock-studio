@@ -75,6 +75,37 @@ def objects_in_rect(
 class ObjectOps:
     """Object placement and metadata, mixed into :class:`~.tilemap.MapDoc`."""
 
+    def find_object(self: MapDoc, id: int) -> tuple[int, int] | None:
+        """``(layer_uid, obj_uid)`` for the object with this persistent id.
+
+        The one translation from Tiled's numbering to the editor's. An
+        ``object``-typed custom property holds an ``id`` -- the number written
+        into the file, which survives a round trip -- while every handle in this
+        package is a ``uid``, which does not leave the process. Nothing else
+        crosses between the two, so this is where the crossing lives.
+
+        ``None`` rather than a refusal, twice over. **An id no object has** is
+        the ordinary case, not a caller's mistake: the ids are monotone and
+        never reused, so a property goes on naming its object after the object
+        is deleted -- and a reader that raised there would turn a dangling
+        reference into a crash on the frame that drew it. **Zero** is Tiled's
+        spelling of an unset reference, so it answers nothing here rather than
+        being looked for, which also means an object that somehow carried id 0
+        could not become what every unset property points at.
+
+        Through ``all_layers`` and so through the whole tree: a group is not a
+        place objects stop existing, and a reference into one is the ordinary
+        case on any map organised into folders.
+        """
+        wanted = int(id)
+        if not wanted:
+            return None
+        for layer in self.all_layers():
+            for obj in getattr(layer, "objects", ()):
+                if obj.id == wanted:
+                    return (int(layer.uid), int(obj.uid))
+        return None
+
     def add_object(
         self: MapDoc, layer_uid: int, obj: MapObject, *, index: int | None = None
     ) -> MapObject:

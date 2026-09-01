@@ -580,6 +580,47 @@ def go_to_cell(ctx: Any, tab: Any, column: int, row: int) -> tuple[int, int]:
     return cell
 
 
+def go_to_object(ctx: Any, tab: Any, layer_uid: int, obj_uid: int) -> bool:
+    """Show an object: activate its layer, select it, and centre on it.
+
+    -> whether anything was found. All three together, because "go to" means
+    all three: a jump that centred the view without selecting would leave the
+    Properties pane showing something else, and one that selected without
+    activating the layer would put a selection on a layer no tool can reach.
+
+    The centring is a *request* rather than a pan (``state.centre_on``): the
+    canvas is the only thing that knows how big the pane is, which is the same
+    reason ``goto_cell`` is a flag.
+    """
+
+    state = ensure(ctx)
+    layer = tab.doc.layer(layer_uid)
+    if layer is None:
+        return False
+    obj = next(
+        (item for item in getattr(layer, "objects", ()) if item.uid == obj_uid), None
+    )
+    if obj is None:
+        return False
+    tab.doc.set_active_layer(layer_uid)
+    state.select_object(obj.uid)
+    state.centre_on = (float(obj.x), float(obj.y))
+    return True
+
+
+def go_to_object_id(ctx: Any, tab: Any, id: int) -> bool:
+    """:func:`go_to_object` by Tiled's persistent id. -> whether it was found.
+
+    What an ``object``-typed custom property holds. ``False`` rather than a
+    toast on a dangling reference: the ids are monotone and never reused, so a
+    property goes on naming its object after the object is deleted, and the
+    caller is a small arrow beside a field -- it greys out instead.
+    """
+
+    found = tab.doc.find_object(int(id))
+    return False if found is None else go_to_object(ctx, tab, found[0], found[1])
+
+
 def shift_layer(doc: Any, uid: int, delta: int) -> bool:
     """Move a layer one place **within its own parent**, clamped at the ends.
 

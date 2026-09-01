@@ -575,6 +575,19 @@ class PlotterState:
     # every frame and never persisted; ``None`` when the pointer is elsewhere.
     hover_cell: tuple[int, int] | None = None
 
+    #: Where the canvas should centre next, in **map pixels**, or None.
+    #:
+    #: Pixels rather than cells, which is what separates it from
+    #: :attr:`goto_cell`: an object sits wherever it was placed, routinely off
+    #: the grid on purpose, and rounding it to a cell to reuse that field would
+    #: put the view somewhere the object is not. **Not shifted by the layer's
+    #: own offset or parallax**: those move what is *drawn*, and what a jump
+    #: means is "show me the coordinate this object records".
+    #:
+    #: Consumed by the canvas, which is the only thing that knows how big the
+    #: pane is -- ``goto_cell``'s pattern and its reason.
+    centre_on: tuple[float, float] | None = None
+
     #: The layer whose name is being typed in the list, by uid, or 0.
     #:
     #: A uid rather than an index, for the reason every address in this package
@@ -750,6 +763,8 @@ class PlotterState:
         self.sheet_import_open = False
         # Names a cell in the document being left, ``last_paint``'s own reason.
         self.goto_cell = None
+        # Likewise a pixel of it.
+        self.centre_on = None
         # Names a layer of the document being left. Carried across, the new
         # map's first layer would open with a text field on it.
         self.renaming_layer = 0

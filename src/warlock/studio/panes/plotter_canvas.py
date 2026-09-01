@@ -181,6 +181,15 @@ def draw(ctx: Any) -> None:
         view.pan = plotter_state.centre_pan(
             region, doc.cell_centre(column, row), view.zoom
         )
+    if state.centre_on is not None:
+        # **After the cell jump**, so a *Go to coordinate* typed on the same
+        # frame an object was picked wins: the coordinate is the more specific
+        # request, being one the user typed. Pixels straight through -- an
+        # object sits wherever it was placed, routinely off the grid, and
+        # rounding to a cell would centre on somewhere it is not.
+        point = state.centre_on
+        state.centre_on = None
+        view.pan = plotter_state.centre_pan(region, point, view.zoom)
 
     origin = imgui.get_cursor_screen_pos()
     imgui.invisible_button("plotter-canvas", region)
@@ -2674,30 +2683,47 @@ def _object_menu(ctx: Any, state: Any, tab: Any, hovered: bool) -> None:
     if hovered and imgui.is_mouse_clicked(1) and state.selected_object is not None:
         imgui.open_popup(OBJECT_MENU)
     with controls.menu_popup(OBJECT_MENU) as opened:
-        if not opened:
-            return
-        uid = state.selected_object
-        editable = uid is not None and not tab.busy and not layer.locked
-        reason = (
-            "This layer is locked."
-            if layer.locked
-            else "Select an object first."
-            if uid is None
-            else "This map is being written."
-        )
-        if controls.menu_item("Duplicate", "Ctrl+J", False, editable, reason=reason)[0]:
-            plotter_mode._duplicate_object(ctx, state, tab)
-        if controls.menu_item("Raise", "", False, editable, reason=reason)[0]:
-            doc.reorder_object(layer.uid, uid, 1)
-        if controls.menu_item("Lower", "", False, editable, reason=reason)[0]:
-            doc.reorder_object(layer.uid, uid, -1)
-        controls.menu_separator()
-        if controls.menu_item("Delete", "Delete", False, editable, reason=reason)[0]:
-            # Every selected object, in one step -- the menu row sits on the
-            # same verb the Delete key runs, and a menu that removed one of five
-            # would need a different label.
-            doc.remove_objects(layer.uid, state.selected_objects)
-            state.select_object(None)
+        if opened:
+            object_menu_rows(ctx, state, tab, layer)
+
+
+def object_menu_rows(ctx: Any, state: Any, tab: Any, layer: Any) -> None:
+    """The four verbs Tiled puts on an object's right-click menu.
+
+    Public and extracted since the Objects dock landed, because there are two
+    surfaces onto them now -- this canvas and that list -- and one of the four
+    is a shortcut label. A second copy is how the canvas came to say Ctrl+D for
+    a Duplicate bound to Ctrl+J: the label and the binding were in different
+    files and nothing compared them.
+
+    ``layer`` is handed in rather than read off the document, because the dock
+    can right-click an object on a layer that is not the active one; the rows
+    act on the layer the object is actually on.
+    """
+
+    doc = tab.doc
+    uid = state.selected_object
+    editable = uid is not None and not tab.busy and not layer.locked
+    reason = (
+        "This layer is locked."
+        if layer.locked
+        else "Select an object first."
+        if uid is None
+        else "This map is being written."
+    )
+    if controls.menu_item("Duplicate", "Ctrl+J", False, editable, reason=reason)[0]:
+        plotter_mode._duplicate_object(ctx, state, tab)
+    if controls.menu_item("Raise", "", False, editable, reason=reason)[0]:
+        doc.reorder_object(layer.uid, uid, 1)
+    if controls.menu_item("Lower", "", False, editable, reason=reason)[0]:
+        doc.reorder_object(layer.uid, uid, -1)
+    controls.menu_separator()
+    if controls.menu_item("Delete", "Delete", False, editable, reason=reason)[0]:
+        # Every selected object, in one step -- the row sits on the same verb
+        # the Delete key runs, and a menu that removed one of five would need a
+        # different label.
+        doc.remove_objects(layer.uid, state.selected_objects)
+        state.select_object(None)
 
 
 def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:

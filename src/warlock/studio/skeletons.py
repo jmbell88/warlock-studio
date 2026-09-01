@@ -181,7 +181,12 @@ def plotter(ctx: Any) -> dict[str, Column]:
     entry naming a moved slot are inert rather than wrong.
     """
 
-    from .panes import plotter_bridge, plotter_layers, plotter_tileset
+    from .panes import (
+        plotter_bridge,
+        plotter_layers,
+        plotter_objects,
+        plotter_tileset,
+    )
 
     left = Column(
         "left",
@@ -224,6 +229,22 @@ def plotter(ctx: Any) -> dict[str, Column]:
                 sizing=SHARE,
                 share_key="plotter-layers",
                 floor=plotter_layers.LAYERS_FLOOR,
+            ),
+            # **Between the stack and the palette, and only when there is
+            # something to list.** Objects were rows inside the layer list,
+            # which put the stack sixty rows down the pane on a map with sixty
+            # triggers -- and left "where is the door I named" answerable only
+            # by knowing which layer it was on.
+            Slot(
+                "plotter-objects",
+                "Objects",
+                plotter_objects.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=SHARE,
+                share_key="plotter-objects",
+                floor=plotter_objects.OBJECTS_FLOOR,
+                when=plotter_objects.has_object_layer,
             ),
             Slot(
                 "plotter-tileset",
