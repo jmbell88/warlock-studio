@@ -766,7 +766,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
         elif state.selected_objects:
             state.select_object(None)
         else:
-            state.select = None
+            state.set_selection(None)
         return True
     if event.key == pygame.K_DELETE:
         # Guarded inline rather than through ``_MUTATING_CTRL``, which only
@@ -876,6 +876,20 @@ def _selected_tiles(ctx: Any, state: PlotterState, tab: PlotterDoc, *, writing: 
     return layer, rect
 
 
+def _selected_weight(state: PlotterState, tab: PlotterDoc, rect: tuple[int, int, int, int]):
+    """The wand mask cropped to ``rect``, or ``None`` for a plain rectangle.
+
+    Delete, Cut and Copy read the bounding rect; a wand selection is a mask
+    inside it, and an op that ignored the mask cleared or copied cells the
+    user had not picked.
+    """
+    mask = state.selection_mask_in(tab.doc)
+    if mask is None:
+        return None
+    x0, y0, x1, y1 = rect
+    return mask[y0 : y1 + 1, x0 : x1 + 1]
+
+
 def _copy(ctx: Any, state: PlotterState, tab: PlotterDoc, *, cut: bool) -> None:
     """Take the selected cells, optionally clearing them in one step."""
     import numpy as np
@@ -896,11 +910,19 @@ def _copy(ctx: Any, state: PlotterState, tab: PlotterDoc, *, cut: bool) -> None:
     # clipboard that tracked it would paste whatever the map looks like now.
     state.clipboard = np.array(layer.data[y0 : y1 + 1, x0 : x1 + 1], dtype=gidlib.DTYPE)
     state.clipboard_doc = tab.uid
+    weight = _selected_weight(state, tab, rect)
+    if weight is not None:
+        # Cells outside the wand mask are empty in the clipboard and stay put
+        # on a cut.
+        state.clipboard[~weight] = 0
     if cut:
         # One write for the whole rectangle, so a cut is one undo step.
-        tab.doc.write_region(
-            layer.uid, x0, y0, np.zeros_like(state.clipboard, dtype=gidlib.DTYPE)
-        )
+        cleared = np.array(layer.data[y0 : y1 + 1, x0 : x1 + 1], dtype=gidlib.DTYPE)
+        if weight is None:
+            cleared[:] = 0
+        else:
+            cleared[weight] = 0
+        tab.doc.write_region(layer.uid, x0, y0, cleared)
 
 
 def _paste(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
@@ -1088,9 +1110,13 @@ def _delete(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
         return
     x0, y0, x1, y1 = rect
     # One write, so a delete is one undo step whatever it covers.
-    tab.doc.write_region(
-        layer.uid, x0, y0, np.zeros((y1 - y0 + 1, x1 - x0 + 1), dtype=gidlib.DTYPE)
-    )
+    weight = _selected_weight(state, tab, rect)
+    cleared = np.array(layer.data[y0 : y1 + 1, x0 : x1 + 1], dtype=gidlib.DTYPE)
+    if weight is None:
+        cleared[:] = 0
+    else:
+        cleared[weight] = 0
+    tab.doc.write_region(layer.uid, x0, y0, cleared)
 
 
 #: The zoom ladder the keyboard steps through, as scales. Whole numbers above
@@ -1277,14 +1303,16 @@ def _ctrl_key(
         # Ctrl+Shift+A deselects, which is Inker's spelling; Ctrl+D is Tiled's.
         # Both, because this editor is reached from both, and neither is taken.
         # View state, so outside the busy gate: a marquee writes nothing.
-        state.select = None if shift else (0, 0, tab.doc.width - 1, tab.doc.height - 1)
+        # Through ``set_selection`` so a wand mask does not outlive the
+        # rect it was cut for.
+        state.set_selection(None if shift else (0, 0, tab.doc.width - 1, tab.doc.height - 1))
         return True
     if name == "d":
         # **Ctrl+D stays deselect here**, a kept divergence from Tiled, where it
         # duplicates. Every other editor in this app deselects on it and the
         # duplicate moves to Ctrl+J instead -- which is where the raster editor
         # already puts "copy this to its own layer".
-        state.select = None
+        state.set_selection(None)
         return True
     if name == "j":
         _duplicate_object(ctx, state, tab)

@@ -186,16 +186,24 @@ def open_row(ctx: Any, row: Row) -> None:
         recents.forget(ctx.settings, row.kind, row.key)
         ctx.toast(f"{path.name} is no longer there.", "warn")
         return
-    opener = {
-        "inker": lambda: _open_with("inker_mode", ctx, path),
-        "clay": lambda: _open_with("clay_mode", ctx, path),
-        "plotter": lambda: _open_with("plotter_mode", ctx, path),
-        "packwright": lambda: _open_with("packwright_mode", ctx, path),
-    }.get(row.kind)
-    if opener is None:
+    module = KIND_OPENERS.get(row.kind)
+    if module is None:
+        ctx.toast(f"Nothing here can open a {row.kind} document.", "warn")
         return
-    set_mode(ctx.state, row.kind)
-    opener()
+    set_mode(ctx.state, _KIND_MODES.get(row.kind, row.kind))
+    _open_with(module, ctx, path)
+
+
+#: Which module's ``open_path`` opens each recent-document kind. One table
+#: beside ``_KIND_MODES`` rather than a dict literal inside ``open_row``: the
+#: two drifted, and a ``.wsng`` row did nothing on click with no toast.
+KIND_OPENERS = {
+    "inker": "inker_mode",
+    "clay": "clay_mode",
+    "plotter": "plotter_mode",
+    "packwright": "packwright_mode",
+    "sirens": "sirens_io",
+}
 
 
 def _open_with(module: str, ctx: Any, path: Path) -> None:

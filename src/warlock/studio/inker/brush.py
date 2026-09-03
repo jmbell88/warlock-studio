@@ -309,7 +309,14 @@ def _stamp(diameter: int, hardness: float, nib: str, angle: float = 0.0) -> np.n
         # ``<=`` rather than ``<``: at diameter 1 the single sample sits exactly
         # on the radius, and a strict test would make the one-pixel pencil --
         # the whole reason this nib exists -- stamp nothing at all.
-        return (distance <= radius).astype(np.float32)
+        #
+        # Diameter 3 is the one size where that rule and Aseprite disagree:
+        # the diagonal sample sits at 1.41 inside a radius of 1.5, which is a
+        # 3x3 square, and Aseprite's 3 is a plus. Every other size already
+        # matches (4 drops its corners, 5 is 3-5-5-5-3), so the plus is
+        # stated as the exception it is rather than a new rule.
+        limit = 1.0 if diameter == 3 else radius
+        return (distance <= limit).astype(np.float32)
 
     # Where the falloff starts. At hardness 1 that is half a pixel in from the
     # rim, which is exactly the AA band.

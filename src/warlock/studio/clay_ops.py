@@ -212,18 +212,21 @@ def run(ctx: Any, doc: Any, op: Op, **params: Any) -> bool:
         values[param.name] = int(value) if param.integer else value
     depth = len(doc.history)
     head = doc.history.head
+    mark = doc.history.mark()
     before = _op_context(doc)
     try:
         result = op.run(ctx, doc, **values)
     except OpError as error:
         toast(ctx, str(error))
+        doc.history.collapse_since(mark)
         return False
     # An op that refuses *per object* -- ``run_mesh_op`` toasts and carries on
     # to the next one -- says so by returning False rather than by raising, so
     # a caller still learns that nothing happened.
     if result is False:
+        doc.history.collapse_since(mark)
         return False
-    _one_step(doc, op, depth, head)
+    _one_step(doc, op, mark, head)
     _remember(ctx, doc, op, values, depth, before)
     return True
 
@@ -243,7 +246,7 @@ def _op_context(doc: Any) -> tuple[str, dict, set]:
     )
 
 
-def _one_step(doc: Any, op: Op, depth: int, head: int) -> None:
+def _one_step(doc: Any, op: Op, mark: int, head: int) -> None:
     """Fold everything the op pushed into a single, named step.
 
     **One press, one Ctrl+Z.** An op is free to push whatever steps it needs and
@@ -271,7 +274,7 @@ def _one_step(doc: Any, op: Op, depth: int, head: int) -> None:
     history = getattr(doc, "history", None)
     if history is None:  # pragma: no cover - every document has one
         return
-    history.collapse_since(depth)
+    history.collapse_since(mark)
     top = history.top
     # Only when the op actually pushed something: a select-all or a frame
     # changes no document, and labelling the *previous* step with this op's

@@ -516,6 +516,48 @@ class FramePaletteEdit(Edit):
         self._apply(doc, self.after)
 
 
+@dataclass
+class SheetBaseEdit(Edit):
+    """The recorded render and its conflict flags, before and after.
+
+    **Why a merge has to move this at all.** After a merge the base advances to
+    the *incoming* render's digests -- for every cell, including the ones that
+    kept a hand edit -- because that is now what the renderer last gave us, and
+    it is what makes the next merge classify correctly. So the base is part of
+    what a merge changed, and a merge undone without it would leave the
+    document's pixels back where they were while its idea of "what the renderer
+    gave us" stayed in the future. The very next merge would then read every
+    restored edit as untouched and take the render over it, which is the one
+    outcome the whole feature exists to prevent.
+
+    It therefore rides in the same ``_push_range`` list as the pixel edits: one
+    Ctrl+Z puts back both halves, because they are one change.
+
+    Snapshots at both ends, ``FramePaletteEdit``'s rule -- the live object is
+    the document's own, and a later merge would otherwise edit the history's
+    idea of what came before. The cost is bookkeeping: 16 bytes of digest per
+    cell is a few kilobytes beside the atlas it describes.
+    """
+
+    before: Any | None
+    after: Any | None
+
+    def __post_init__(self) -> None:
+        self.before = None if self.before is None else self.before.copy()
+        self.after = None if self.after is None else self.after.copy()
+        self.cost = 32 * sum(
+            len(base.digests) for base in (self.before, self.after) if base is not None
+        )
+
+    def _apply(self, doc: Any, base: Any | None) -> None:
+        doc.sheet_base = None if base is None else base.copy()
+
+    def undo(self, doc: Any) -> None:
+        self._apply(doc, self.before)
+
+    def redo(self, doc: Any) -> None:
+        self._apply(doc, self.after)
+
 def _copy_table(table: list[Any] | None) -> list[Any] | None:
     return None if table is None else [tuple(colour) for colour in table]
 

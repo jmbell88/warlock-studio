@@ -51,6 +51,7 @@ from .props import (
     PROPERTY_TYPES,
     Prop,
     TiledUnsupported,
+    json_number,
     read_json_properties,
     read_properties,
     write_properties,
@@ -495,7 +496,7 @@ def read_wang_model_json(entries: Any) -> tuple[WangSet, ...]:
             WangColour(
                 name=str(colour.get("name") or ""),
                 colour=str(colour.get("color") or "#ffffff"),
-                probability=float(colour.get("probability", 1.0) or 1.0),
+                probability=json_number(colour, "probability", 1.0),
             )
             for colour in (wangset.get("colors") or ())
             if isinstance(colour, dict)
@@ -894,11 +895,11 @@ def read_tile_meta_json(entry: dict[str, Any]) -> dict[int, TileMeta]:
         meta = TileMeta(
             class_name=tile.get("class") or tile.get("type") or "",
             properties=read_json_properties(tile.get("properties")),
-            probability=float(tile.get("probability", 1.0) or 1.0),
+            probability=json_number(tile, "probability", 1.0),
             animation=tuple(
                 TileFrame(
-                    local_id=int(frame.get("tileid", 0) or 0),
-                    duration_ms=int(frame.get("duration", 100) or 100),
+                    local_id=int(json_number(frame, "tileid", 0)),
+                    duration_ms=int(json_number(frame, "duration", 100)),
                 )
                 for frame in (tile.get("animation") or ())
             ),

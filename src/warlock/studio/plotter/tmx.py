@@ -45,7 +45,7 @@ import re
 import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Callable
-from pathlib import PurePosixPath
+from pathlib import PureWindowsPath
 from typing import Any
 
 import numpy as np
@@ -56,6 +56,7 @@ from . import project
 from .pngio import png_bytes
 from .props import (
     TiledUnsupported,
+    json_number,
     read_json_properties,
     read_properties,
     write_json_properties,
@@ -559,15 +560,15 @@ def _json_layer_common(entry: dict[str, Any]) -> dict[str, Any]:
         "id": int(entry.get("id", 0) or 0),
         "name": str(entry.get("name", "")),
         "visible": bool(entry.get("visible", True)),
-        "opacity": float(entry.get("opacity", 1) or 1),
+        "opacity": json_number(entry, "opacity", 1),
         "locked": bool(entry.get("locked", False)),
         "class_name": str(entry.get("class", "")),
         "blend_mode": str(entry.get("mode", "normal")),
         "tint": _tiled_colour(entry.get("tintcolor"), "a layer tint"),
-        "offset_x": float(entry.get("offsetx", 0) or 0),
-        "offset_y": float(entry.get("offsety", 0) or 0),
-        "parallax_x": float(entry.get("parallaxx", 1) or 1),
-        "parallax_y": float(entry.get("parallaxy", 1) or 1),
+        "offset_x": json_number(entry, "offsetx", 0),
+        "offset_y": json_number(entry, "offsety", 0),
+        "parallax_x": json_number(entry, "parallaxx", 1),
+        "parallax_y": json_number(entry, "parallaxy", 1),
         "properties": read_json_properties(entry.get("properties")),
     }
 
@@ -1046,10 +1047,10 @@ def _json_object(entry: dict[str, Any]) -> MapObject:
         id=int(entry.get("id", 0) or 0),
         name=str(entry.get("name", "")),
         shape=shape,
-        x=float(entry.get("x", 0) or 0),
-        y=float(entry.get("y", 0) or 0),
-        rotation=float(entry.get("rotation", 0) or 0),
-        opacity=float(entry.get("opacity", 1) or 1),
+        x=json_number(entry, "x", 0),
+        y=json_number(entry, "y", 0),
+        rotation=json_number(entry, "rotation", 0),
+        opacity=json_number(entry, "opacity", 1),
         obj_class=str(entry.get("class") or entry.get("type") or ""),
         visible=bool(entry.get("visible", True)),
         properties=read_json_properties(entry.get("properties")),
@@ -1546,7 +1547,17 @@ def _export_ids(
 
 
 def _image_layer_files(doc: MapDoc, files: dict[str, bytes]) -> dict[int, str]:
-    """Add image-layer PNGs and return each layer uid's safe relative path."""
+    """Add image-layer PNGs and return each layer uid's safe relative path.
+
+    A source that is a plain relative path -- what a ``.tmx`` names and what
+    ``_resolve_source`` accepts on the way in -- is kept, so a map round-trips
+    through this writer with the reference it arrived with. **Anything else
+    is written under ``images/NN-stem.png``**, and the absolute test is
+    ``PureWindowsPath``'s, as ``_resolve_source``'s is: under ``PurePosixPath``
+    ``D:/pics/bg.jpg`` read as relative, ``plotter_io._write`` anchored it
+    beside the map, and the export **overwrote the user's original** with PNG
+    bytes while embedding a path the reader refuses.
+    """
     paths: dict[int, str] = {}
     for index, layer in enumerate(
         entry for entry in doc.all_layers() if isinstance(entry, ImageLayer)
@@ -1555,8 +1566,14 @@ def _image_layer_files(doc: MapDoc, files: dict[str, bytes]) -> dict[int, str]:
             continue
         raw = png_bytes(layer.pixels)
         source = str(layer.source).replace("\\", "/")
-        candidate = PurePosixPath(source)
-        safe = bool(source) and not candidate.is_absolute() and ".." not in candidate.parts
+        candidate = PureWindowsPath(source)
+        safe = (
+            bool(source)
+            and not candidate.is_absolute()
+            and not candidate.drive
+            and not source.startswith("/")
+            and ".." not in candidate.parts
+        )
         stem = _SAFE.sub("-", layer.name).strip("-") or "image"
         path = source if safe else f"images/{index:02d}-{stem}.png"
         if path in files and files[path] != raw:

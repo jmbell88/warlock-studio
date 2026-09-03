@@ -133,7 +133,9 @@ def test_object_mode_offers_neither_the_element_verbs_nor_edit_mode_twice():
 
 def test_each_transform_tool_names_its_own_key():
     assert "G move" in clay_hints.hint("object", "move")
-    assert "R rotate" in clay_hints.hint("object", "rotate")
+    # E, not R: ``clay_mode.TOOL_KEYS`` binds R to Scale and ``DRAG_KEYS`` has
+    # no rotate key at all, so "R rotate" named a key that scaled.
+    assert "E rotate" in clay_hints.hint("object", "rotate")
     assert "S scale" in clay_hints.hint("object", "scale")
     assert clay_hints.hint("object", "select") == clay_hints.hint("object", "select")
 

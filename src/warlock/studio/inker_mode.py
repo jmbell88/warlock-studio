@@ -955,7 +955,13 @@ def _load_rendered_sheet(
         # the tags. ``document_from_grid`` stays as the fallback for the sheets
         # that have no ``animation`` block: every one written before
         # ``charsheet.animation_block`` existed.
-        doc = sheetin.document_from_sheet(atlas, cells, animation)
+        # ``source`` is what lets the document remember which sheet these
+        # pixels came from, so a re-render of the same character can be found
+        # and merged later. Only on this branch: the fallback below has no
+        # ``animation`` block and therefore no run vocabulary to re-render in.
+        doc = sheetin.document_from_sheet(
+            atlas, cells, animation, source={"job": job_id, "sheet": sheet_id}
+        )
     else:
         doc = sheetin.document_from_grid(atlas, cell, count=count)
     name = str(record.get("name") or sheet_id)
@@ -965,6 +971,64 @@ def _load_rendered_sheet(
         "format": "ora",
         "title": f"{name} (pixel)" if pixel else name,
     }
+
+
+def newest_sheet_after(svc: Any, job_id: str, sheet_id: str) -> str:
+    """The most recent character sheet of one job newer than ``sheet_id``.
+
+    What "the re-render" means without asking: a re-render publishes a new
+    sheet in the same job's directory, so the newest one that is not the
+    document's own base is the one to merge. Returns "" when there is none.
+
+    Older sheets are deliberately not offered. Merging one would run the
+    three-way comparison backwards -- the "incoming" render would be the older
+    picture -- and every cell the user has since had re-rendered would read as
+    a conflict.
+    """
+    from .. import rigging
+
+    try:
+        records = rigging.list_sheets(svc.job_dir(job_id))
+    except OSError:
+        return ""
+    current = next((r for r in records if str(r.get("id") or "") == sheet_id), None)
+    since = float((current or {}).get("created") or 0.0)
+    newer = [
+        record
+        for record in records
+        if (record.get("animation") or {}).get("tags")
+        and str(record.get("id") or "") != sheet_id
+        and float(record.get("created") or 0.0) > since
+    ]
+    newer.sort(key=lambda r: float(r.get("created") or 0.0), reverse=True)
+    return str(newer[0].get("id") or "") if newer else ""
+
+
+def load_sheet_cells(svc: Any, job_id: str, sheet_id: str) -> list[Any]:
+    """One re-rendered sheet's cells, in frame order. Blocking; task thread only.
+
+    ``_load_rendered_sheet``'s first half, for the merge -- which wants the
+    pixels and not a document. Refused here rather than inside the funnel when
+    the geometry disagrees, so the sentence names the *sheet* the user picked
+    instead of surfacing from three layers down.
+    """
+    from ..service import sheets as svc_sheets
+    from . import pixelguard
+
+    record = svc_sheets.get_sheet(svc, job_id, sheet_id)
+    png = svc_sheets.sheet_png(svc, job_id, sheet_id)
+    atlas = pixelguard.decode_rgba(png, png.name)
+    cells = record.get("cells") or []
+    if not cells:
+        raise ValueError("that sheet's sidecar lists no cells")
+    out = []
+    for cell in cells:
+        x, y = int(cell.get("x", 0)), int(cell.get("y", 0))
+        w, h = int(cell.get("w", 0)), int(cell.get("h", 0))
+        if w <= 0 or h <= 0 or y + h > atlas.shape[0] or x + w > atlas.shape[1]:
+            raise ValueError("that sheet's cells do not fit its own atlas")
+        out.append(atlas[y : y + h, x : x + w].copy())
+    return out
 
 
 # --- the job bridge ---------------------------------------------------------
@@ -1889,10 +1953,13 @@ def pump_export(ctx: Any) -> None:
             # correct, just not slot-stable.
             leg.planes.append(None)
         leg.frames.append(plane)
-    except (ValueError, IndexError, KeyError):
+    except Exception as exc:  # noqa: BLE001 - the lock must clear whatever failed
+        # Any failure, not a list of three: a ``MemoryError`` on a big flatten
+        # left ``tab.saving`` set and ``state.export`` armed forever, and every
+        # later export on every tab silently returned at the top of this pump.
         state.export = None
         tab.saving = False
-        ctx.toast("Export failed: a frame could not be flattened.", "warn")
+        ctx.toast(f"Export failed: a frame could not be flattened ({exc}).", "warn")
         return
     if not leg.done:
         return

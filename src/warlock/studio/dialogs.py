@@ -383,9 +383,10 @@ class ConfirmQueue:
             imgui.set_item_default_focus()
             confirm._focused = True
         # Esc cancels, Enter takes the safe way out. Both are read here rather
-        # than left to imgui's own nav activation because keyboard nav is not
-        # enabled: with it off, a focused button is drawn as focused and does
-        # nothing.
+        # than left to imgui's own nav activation: ``setup_window`` sets
+        # ``nav_enable_keyboard`` (for the focus drawing), but the app's
+        # keyboard focus is ``focus.py``'s ring and not imgui's, so which
+        # widget nav thinks is focused must not decide a modal's answer.
         if _escape_pressed() or _enter_pressed():
             cancelled = True
         if confirmed:

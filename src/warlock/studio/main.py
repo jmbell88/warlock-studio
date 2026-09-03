@@ -522,6 +522,9 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             # the binding does two things and a sheet that named one of them
             # would be describing a different control.
             ("Left / Right", "Step one frame, and pause"),
+            ("Up / Down", "Turn the character one direction, holding the frame"),
+            ("PageUp / PageDown", "Previous / next animation"),
+            ("Home / End", "First / last frame of the run, and pause"),
         ],
     )
     table(
@@ -544,6 +547,7 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Shift+1 / Shift+2", "Transpose the selection down / up a semitone"),
             ("Page Up / Page Down", "Move sixteen rows -- four beats"),
             ("Delete", "Clear the column under the caret, or the whole selection"),
+            ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste a block at the caret"),
             ("Esc", "Drop the selection"),
             ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
             ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
@@ -1142,6 +1146,16 @@ class App:
         # fail (or, worse, be served by the orphan) until it is stopped. That
         # is worth the same banner a fatal check gets, so it joins them here
         # rather than being promoted to fatal in doctor.
+        self._report_failed_checks()
+
+    def _report_failed_checks(self) -> None:
+        """Every failing fatal row (and the trellis port) onto the banner.
+
+        Also after each health poll: ``note_error`` deduplicates, so a row
+        still failing costs nothing, and a row that turned fatal once torch
+        imported -- no CUDA -- used to show only as a Home chip.
+        """
+        ctx = self.app_ctx
         failed = [
             c for c in self.runtime.checks if not c.ok and (c.fatal or c.name == "trellis port")
         ]
@@ -1767,6 +1781,14 @@ class App:
             # list wholesale is atomic enough for all of them.
             if isinstance(done.result, list):
                 self.runtime.checks = done.result
+                # The rows that were "still checking" at startup have their
+                # answer now: a newly fatal one (no CUDA) joins the banner, and
+                # the first-run panel's verdicts are retaken from the same list.
+                self._report_failed_checks()
+                if getattr(ctx, "first_run", False):
+                    from .panes import first_run
+
+                    ctx.first_run_info = first_run.snapshot(ctx)
                 # The first poll is also what pays for the deferred bpy probe
                 # (C30). If it says rigging works and the ctx does not yet,
                 # re-ask for the templates -- the probe's answer is cached, so
@@ -5675,7 +5697,7 @@ class App:
             # thing you deleted.
             from .state import set_mode
 
-            set_mode(ctx, "settings")
+            set_mode(ctx.state, "settings")
         imgui.end_popup()
 
     def _viewport_pane(self) -> None:

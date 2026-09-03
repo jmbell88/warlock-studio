@@ -156,7 +156,10 @@ class PickOps:
             return None
         if hit is None:
             hit = self.pick_face(doc, local)
-        depth = None if hit is None else hit.t
+        # X-ray is see-through for the pick as well as the draw: with no
+        # surface depth the nearest element wins wherever it sits, which is
+        # what ``clay_state.xray`` and the Clay chapter say it does.
+        depth = None if hit is None or getattr(self, "xray", False) else hit.t
 
         best: tuple[float, int, int] | None = None
         for obj in doc.objects:

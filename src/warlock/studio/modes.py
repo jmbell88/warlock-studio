@@ -199,7 +199,7 @@ PURPOSE: dict[str, str] = {
     "inker": "Pixel-art and image editor: layers, animation, tilesets.",
     "clay": "Assemble and edit meshes from primitives and booleans.",
     "poser": "Rig a mesh to a skeleton and author animation clips.",
-    "troupe": "Render a 3D character to a 256-cell sprite sheet.",
+    "troupe": "Render a 3D character to an animated sprite sheet.",
     "plotter": "Paint tile maps and export them to Tiled.",
     "packwright": "Pack loose sprites into an atlas with a manifest.",
     "sirens": "Write chiptune music and sound effects in a tracker grid.",
@@ -212,6 +212,11 @@ PURPOSE: dict[str, str] = {
 #: **Troupe is code-complete and a user really can get a rendered sheet**, but
 #: three of its own phases are unstarted, its 22 keyframes are provisional, and
 #: its palette claim rests on a textured base mesh that does not exist.
+#:
+#: The note said reconstruction quality was "untested" until 2026-09-03. It had
+#: been tested -- on 2026-08-30, with a negative answer -- so the chip was
+#: hedging about a question that had been settled, and pointing the reader at a
+#: manual chapter that already stated the result. It now says the result.
 #: ``docs/manual/11`` and ``33`` are candid about every bit of that -- and the
 #: app was not, which is the gap this closes: the manual is read by people who
 #: already know to be careful, and the rail is read by everyone.
@@ -219,42 +224,28 @@ PURPOSE: dict[str, str] = {
 #: The wording is the manual's own ("provisional", "untested"), deliberately,
 #: so a user who follows the tooltip into the chapter finds the same words
 #: rather than a second, differently-hedged account.
-# **Sirens' chip was narrowed at every landing and it has not come off yet.** It
-# went on because the mode shipped in halves and the note was rewritten each
-# time a gap closed, because a chip whose sentence names what is already there
-# teaches the reader to ignore the chip. The two absences it named at phase 5 --
-# no manual chapter, no guided tour -- are gone (``docs/manual/14`` and ``34``,
-# and the ``sirens-basics`` tour), and so is the larger one writing the chapter
-# found: **four of a cell's five columns could not be typed into**, which was
-# closed on 2026-08-27. ``handle_key`` now dispatches on ``state.column``, every
-# write goes through ``write_cell``, and a multi-digit column's sub-position is
-# ``SirensState.digit``; ``tests/test_sirens_keys.py`` is what asserts a
-# keystroke reaches the synthesiser. What is left is one thing, and it is the
-# one ``MATURITY_NOTE`` below states: a block selection can be transposed and
-# cleared but not copied, cut or pasted, so a repeated bar is retyped. The two
-# have to be read together, and this paragraph used to contradict the sentence
-# seventeen lines under it.
+# **Sirens' chip came off on 2026-09-02.** It went on because the mode shipped
+# in halves, and the note was narrowed at every landing rather than left
+# standing, because a chip whose sentence names what is already there teaches
+# the reader to ignore the chip. The absences it named in turn -- no manual
+# chapter, no guided tour, four of a cell's five columns taking no keyboard
+# (closed 2026-08-27, ``tests/test_sirens_keys.py``), and finally a block
+# selection that could be transposed and cleared but not copied, cut or pasted
+# -- are all closed; the last by ``sirens_mode.copy_selection`` / ``cut_selection``
+# / ``paste`` on Ctrl+C/X/V, through the document's one ``set_cells`` door. A
+# mode joins this dict when there is a sentence to put under it, and leaves it
+# when there is not.
 MATURITY: dict[str, str] = {
     "troupe": "Experimental",
-    "sirens": "Experimental",
 }
 
 #: What the chip's own tooltip adds, past the word.
 MATURITY_NOTE: dict[str, str] = {
     "troupe": (
         "The chain runs end to end, but the shipped animation keyframes are"
-        " provisional and humanoid reconstruction quality is untested."
+        " provisional, and generating a character from a prompt is measured"
+        " not to work yet -- start from a mesh you already have."
         " See the manual (Troupe)."
-    ),
-    # Narrowed rather than removed at every landing, and narrowest here. The
-    # sound-effect pane, the WAV export, the manual chapter, the tour and -- as
-    # of the sixth landing -- a keyboard for all five columns exist now. What
-    # is left is one thing and it is nameable in a sentence, which is the bar
-    # this note has been held to since the second landing.
-    "sirens": (
-        "Every column can be typed into and every effect played, but a block"
-        " selection can only be transposed or cleared: there is no copy and no"
-        " paste, so a repeated bar is retyped. See the manual (Sirens)."
     ),
 }
 

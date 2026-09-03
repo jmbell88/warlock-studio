@@ -1506,6 +1506,23 @@ AXIS_HELP: dict[str, str] = {
         "What to steer away from. Only reaches models that take a real CFG "
         "scale; commas separate the values, so avoid them inside one prompt."
     ),
+    # The three trellis-server launch flags exposed on 2026-09-02. The exe does
+    # not print its defaults, so the help says how to get them rather than
+    # what they are: leave the value out.
+    "trellis_gss": (
+        "Guidance strength for the 3D engine's sparse-structure stage. A "
+        "positive number; an empty value runs the engine's own default. "
+        "Restarts the engine per value."
+    ),
+    "trellis_gsh": (
+        "Guidance strength for the 3D engine's structured-latent stage. A "
+        "positive number; an empty value runs the engine's own default. "
+        "Restarts the engine per value."
+    ),
+    "trellis_max_tokens": (
+        "The 3D engine's high-resolution token budget (it ships at 49152). "
+        "A whole number; an empty value runs the engine's own default."
+    ),
 }
 
 

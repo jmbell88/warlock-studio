@@ -638,6 +638,10 @@ AXIS_VIEW_KEYS = {"1": "front", "3": "right", "7": "top"}
 # on a task thread, so anything that restructures it or moves the history head
 # the save captured waits for the save, exactly as a gizmo drag does.
 _MUTATING_CTRL = frozenset({"z", "y", "a", "i", "j", "m"})
+#: The chords a live drag swallows -- history and the tab; see ``_ctrl_key``.
+#: Deliberately *not* the whole of ``_MUTATING_CTRL``: Ctrl+J under a drag is a
+#: pinned behaviour (``test_ctrl_chords_still_reach_their_ops_during_a_drag``).
+_DRAG_BLOCKED_CTRL = frozenset({"z", "y", "n", "o", "tab", "w", "s"})
 
 
 # --- history ------------------------------------------------------------------
@@ -879,6 +883,15 @@ def _ctrl_key(
     ctx: Any, state: ClayState, tab: ClayTab, doc: Any, name: str, *, shift: bool
 ) -> bool:
     if tab.saving and name in _MUTATING_CTRL:
+        return True
+    view = getattr(ctx, "clay_view", None)
+    if getattr(view, "dragging", False) and name in _DRAG_BLOCKED_CTRL:
+        # A live gizmo drag mutates the geometry in place and commits on
+        # release. Ctrl+Z under it undid a step the release then re-applied;
+        # Ctrl+N/Tab/O/W swapped the tab out from under the grab and left the
+        # moved vertices with no edit and ``dirty`` false. The chords that
+        # change history or the tab wait for the release; the view chords and
+        # the object ops go on working.
         return True
     if name in AXIS_VIEW_KEYS:
         # Shift is the opposite view, as Blender's numpad does it -- Ctrl+1 is

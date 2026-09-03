@@ -121,7 +121,7 @@ _PICK = {
 _TOOL = {
     "select": "",
     "move": "G move . drag an arrow",
-    "rotate": "R rotate . drag a ring",
+    "rotate": "E rotate . drag a ring",
     "scale": "S scale . drag a handle",
 }
 

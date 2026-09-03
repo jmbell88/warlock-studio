@@ -50,7 +50,7 @@ FIRST_HOUR = Tour(
             title="The rail",
             body=(
                 "Everything lives behind these. The top group is the pipeline that turns "
-                "an idea into a finished asset; the group under it is the six workspaces "
+                "an idea into a finished asset; the group under it is the seven workspaces "
                 "you edit in. Settings sits at the bottom."
             ),
             anchor="rail/home",

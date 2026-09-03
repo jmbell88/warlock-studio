@@ -34,6 +34,21 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import Document
 
 
+def _composite_onto(layer: Any, base: np.ndarray, crop: np.ndarray) -> np.ndarray:
+    """``crop`` over ``base``, as uint8, honouring the layer's alpha lock.
+
+    The one compositing rule for a landing -- ``commit_floating`` and the
+    range replay both come through here, and both used to spell the ``over``
+    out and forget the lock: a paste onto an alpha-locked layer wrote alpha.
+    "Preserve transparency" is exactly *the alpha does not change*, which is
+    ``masked_apply``'s rule, so the channel is put back after the blend.
+    """
+    merged = cp.to_uint8(cp.over(cp.to_float(base), cp.to_float(crop)))
+    if getattr(layer, "alpha_lock", False):
+        merged[..., 3] = base[..., 3]
+    return merged
+
+
 def _masked_alpha(pixels: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """A copy of ``pixels`` with a selection mask folded into its alpha.
 
@@ -316,8 +331,7 @@ class SelectionOps:
         x0, y0, x1, y1 = box
         before = layer.pixels[y0:y1, x0:x1].copy()
         crop = floating.pixels[y0 - oy : y1 - oy, x0 - ox : x1 - ox]
-        merged = cp.over(cp.to_float(before), cp.to_float(crop))
-        layer.pixels[y0:y1, x0:x1] = cp.to_uint8(merged)
+        layer.pixels[y0:y1, x0:x1] = _composite_onto(layer, before, crop)
         self._commit_patch(layer, box, before)
         return True
 
@@ -510,9 +524,7 @@ class SelectionOps:
                 ly0 - dest[1] : ly1 - dest[1], lx0 - dest[0] : lx1 - dest[0]
             ]
             base = layer.pixels[ly0:ly1, lx0:lx1]
-            layer.pixels[ly0:ly1, lx0:lx1] = cp.to_uint8(
-                cp.over(cp.to_float(base), cp.to_float(crop))
-            )
+            layer.pixels[ly0:ly1, lx0:lx1] = _composite_onto(layer, base, crop)
         return self._patch_edit_for(layer, box, before)
 
     def cancel_floating(self: Document) -> bool:

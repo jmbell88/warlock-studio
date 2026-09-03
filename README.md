@@ -81,8 +81,7 @@ are looking at.
    `.tsx` for grid packs. Re-export of an unchanged document is byte-identical.
 10. **Sirens** — a chiptune tracker: the synthesis engine, a five-column pattern
    grid, an envelope editor, sample import and sound effects, with WAV, stems
-   and sfx export. Marked Experimental: a block selection can be transposed and
-   cleared, but not yet copied, cut or pasted.
+   and sfx export.
 
 **The footer** carries no caption, and holds the two destinations where you are
 not making something — entered rarely and left again:
@@ -91,6 +90,11 @@ not making something — entered rarely and left again:
     tags), parameter sweeps over arbitrary setting axes, an advisory DINOv2-probe
     quality judge taught by in-app labelling, and the "What works" findings the
     verdicts add up to — which surface as hints beside the generate controls.
+    The one number the product has been judged on so far comes from here: at
+    the shipped defaults, a blind grading pass on 2026-09-02 found **11 of 22**
+    prop meshes usable on a representative corpus and 10 of 20 on a second
+    (`docs/measurements/2026-09-02-trellis-060-props.md` and
+    `docs/measurements/2026-09-02-fantasy-v1.md`). Single-view humanoids grade poorly on both.
 12. **Settings** — the app's own preferences: theme, UI scale, layout, and the
     model list, from which a missing one can be downloaded.
 
@@ -134,7 +138,7 @@ uv sync --extra studio --extra text2image --extra rig
 
 # 2. trellis.cpp CUDA server binary -> vendor/trellis/
 #    https://github.com/pwilkin/trellis.cpp/releases (trellis-cuda-windows-x64.zip)
-#    vendored build: v0.5.4 (2026-07-27)
+#    vendored build: v0.6.0 (2026-08-19)
 ```
 
 Then start the app. **It will offer you the ~23 GB of model weights on first

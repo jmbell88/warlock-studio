@@ -525,7 +525,7 @@ def test_the_rail_groups_are_the_modes_in_order():
     assert all(modes.RAIL_GROUPS), "an empty group would draw as a stray gap"
     # The last group is the footer: the end matter, the destinations where you
     # are not making something. Review joined Settings there rather than
-    # sitting among the six workspaces, because judging what came out is not
+    # sitting among the seven workspaces, because judging what came out is not
     # one of the six things you make.
     assert modes.RAIL_GROUPS[-1] == ("review", "settings")
     # Whatever else the footer grows, Settings is last -- it is the one entry

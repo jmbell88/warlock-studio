@@ -1,10 +1,13 @@
 """A keyboard focus ring, scoped to the panes that declare one (UX.md Phase 3).
 
-**Not imgui's nav**, which is recorded broken here: ``dialogs`` turned it off
-because with it on a focused button drew as focused and did nothing. What this
-is instead is the Home-tiles pattern generalised -- a pane states an order over
-its own controls, one of them is the cursor, Tab and Shift-Tab move it, and
-:func:`widgets.ring` is the one focus visual the whole app uses.
+**Not imgui's nav.** ``setup_window`` leaves ``nav_enable_keyboard`` set so a
+focused control *draws* as focused, but nothing here relies on nav to move or
+activate anything: with it as the only mechanism a focused button drew as
+focused and did nothing, and ``dialogs`` reads Esc and Enter itself for the
+same reason. What this is instead is the Home-tiles pattern generalised -- a
+pane states an order over its own controls, one of them is the cursor, Tab and
+Shift-Tab move it, and :func:`widgets.ring` is the one focus visual the whole
+app uses.
 
 The order is **the order the controls are drawn in**, recorded as the frame
 builds them rather than written out beside the pane: a hand-kept list over a

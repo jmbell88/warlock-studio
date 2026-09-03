@@ -637,15 +637,29 @@ class FakeTrellisServer:
         # never run on the event loop.
         self.tex_res = 512
         self.band: int | None = None
+        self.gss: float | None = None
+        self.gsh: float | None = None
+        self.max_tokens: int | None = None
         self.config_calls: list[tuple[int, int | None]] = []
+        self.launch_calls: list[tuple[object, ...]] = []
         self.config_threads: list[int] = []
         self.restarts = 0
 
-    def ensure_config(self, *, tex_res: int, band: int | None) -> bool:
+    def ensure_config(
+        self,
+        *,
+        tex_res: int,
+        band: int | None,
+        gss: float | None = None,
+        gsh: float | None = None,
+        max_tokens: int | None = None,
+    ) -> bool:
         self.config_calls.append((tex_res, band))
+        self.launch_calls.append((tex_res, band, gss, gsh, max_tokens))
         self.config_threads.append(threading.get_ident())
-        changed = (self.tex_res, self.band) != (tex_res, band)
-        self.tex_res, self.band = tex_res, band
+        wanted = (tex_res, band, gss, gsh, max_tokens)
+        changed = (self.tex_res, self.band, self.gss, self.gsh, self.max_tokens) != wanted
+        self.tex_res, self.band, self.gss, self.gsh, self.max_tokens = wanted
         if changed and self.running:
             self.restarts += 1
             self.stop()

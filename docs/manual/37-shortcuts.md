@@ -399,6 +399,12 @@ Packing is automatic — `R` is only there for when you want it now rather than 
 | --- | --- |
 | Space | Play / pause the preview |
 | Left / Right | Step one frame, and pause |
+| Up / Down | Turn the character one direction, holding the frame |
+| PageUp / PageDown | Previous / next animation |
+| Home / End | First / last frame of the run, and pause |
+
+Turning holds the frame on purpose, so you can see the same moment of a stride from another side.
+Changing animation starts the new one from its first frame.
 
 There is nothing else. Troupe holds no document — the sheet it plays was published by a job and
 lives in that job's directory — so there is no save, no undo and no tab to close.
@@ -422,6 +428,8 @@ lives in that job's directory — so there is no save, no undo and no tab to clo
 | Page Up / Page Down | Move sixteen rows — four beats |
 | Shift+1 / Shift+2 | Transpose the selection down / up a semitone |
 | Delete / Backspace | Clear the column under the caret, or the whole selection |
+| Ctrl+C / Ctrl+X | Copy / cut the selection (or the caret's cell) as a block |
+| Ctrl+V | Paste the block at the caret |
 | Esc | Drop the selection |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
 | Ctrl+Shift+Z | Redo as well |

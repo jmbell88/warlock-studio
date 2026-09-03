@@ -19,10 +19,15 @@ from warlock.progress import (
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "trellis_1024.log"
+# One cold res-1024 run per vendored exe version: v0.5.4 (2026-07-27) and
+# v0.6.0 (captured 2026-09-02). The parser's RE_* are verified against the
+# exe's format strings, so a version bump adds a fixture here rather than
+# trusting that the strings did not move.
+FIXTURES = (FIXTURE, Path(__file__).parent / "fixtures" / "trellis_1024_v060.log")
 
 
-def read_fixture() -> list[str]:
-    raw = FIXTURE.read_bytes()
+def read_fixture(path: Path = FIXTURE) -> list[str]:
+    raw = path.read_bytes()
     text = raw.decode("utf-8").replace("\r\n", "\n")
     return [ln for ln in text.split("\n") if ln]
 
@@ -82,15 +87,17 @@ def test_substep_fractions_are_ordered():
 # --- fixture replay ---
 
 
-def test_replay_is_monotonic_and_completes():
-    pcts = replay(read_fixture())
+@pytest.mark.parametrize("fixture", FIXTURES, ids=("v054", "v060"))
+def test_replay_is_monotonic_and_completes(fixture):
+    pcts = replay(read_fixture(fixture))
     assert pcts == sorted(pcts), "progress went backwards"
     assert pcts[-1] == pytest.approx(100.0)
 
 
-def test_denominator_switch_does_not_regress():
+@pytest.mark.parametrize("fixture", FIXTURES, ids=("v054", "v060"))
+def test_denominator_switch_does_not_regress(fixture):
     """Stage headers go [1/6]..[3/6] then [4/7]..[7/7]; the bar must not jump back."""
-    lines = read_fixture()
+    lines = read_fixture(fixture)
     pcts = replay(lines)
     at = {}
     for ln, p in zip(lines, pcts, strict=True):
@@ -99,9 +106,10 @@ def test_denominator_switch_does_not_regress():
     assert at["[3/6]"] < at["[4/7]"] < at["[5/7]"] < at["[6/7]"] < at["[7/7]"]
 
 
-def test_cascade_stage_has_two_flow_runs_without_rewinding():
+@pytest.mark.parametrize("fixture", FIXTURES, ids=("v054", "v060"))
+def test_cascade_stage_has_two_flow_runs_without_rewinding(fixture):
     """[4/7] with 'cascade' contains an LR and an HR flow run, both 0..12."""
-    lines = read_fixture()
+    lines = read_fixture(fixture)
     pcts = replay(lines)
     start = next(i for i, ln in enumerate(lines) if ln.startswith("[4/7]"))
     end = next(i for i, ln in enumerate(lines) if ln.startswith("[5/7]"))
@@ -130,10 +138,11 @@ def test_single_run_stage_four_completes_without_cascade():
     assert one[-1] > two[-1]
 
 
-def test_stage_seven_advances_in_many_increments():
+@pytest.mark.parametrize("fixture", FIXTURES, ids=("v054", "v060"))
+def test_stage_seven_advances_in_many_increments(fixture):
     """Guards the anti-freeze property: stage 7 is ~64% of wall time and would
     otherwise be a single frozen step."""
-    lines = read_fixture()
+    lines = read_fixture(fixture)
     pcts = replay(lines)
     start = next(i for i, ln in enumerate(lines) if ln.startswith("[7/7]"))
     distinct = sorted({round(p, 3) for p in pcts[start:]})
@@ -218,11 +227,12 @@ def test_silence_after_a_flow_run_still_creeps(monkeypatch):
     assert bus.snapshot("j")["percent"] > before
 
 
-def test_second_job_on_a_warm_server_starts_over():
+@pytest.mark.parametrize("fixture", FIXTURES, ids=("v054", "v060"))
+def test_second_job_on_a_warm_server_starts_over(fixture):
     """A warm server serves many jobs from one stdout stream. Each job calls
     begin(), which is what resets the bar -- the parser only resets its own
     stage bookkeeping on the 'generate:' header."""
-    lines = read_fixture()
+    lines = read_fixture(fixture)
     bus = ProgressBus()
     current = {"id": "job1"}
     parser = TrellisProgressParser(
@@ -316,8 +326,9 @@ def test_eta_and_step_are_reported():
 # --- text jobs ---
 
 
-def test_text_job_hands_off_to_trellis_at_twenty_percent():
-    lines = read_fixture()
+@pytest.mark.parametrize("fixture", FIXTURES, ids=("v054", "v060"))
+def test_text_job_hands_off_to_trellis_at_twenty_percent(fixture):
+    lines = read_fixture(fixture)
     pcts = replay(lines, kind="text")
     assert pcts[-1] == pytest.approx(100.0)
     # Trellis owns 0.20..1.00 for text jobs, so its first real update is at ~20.

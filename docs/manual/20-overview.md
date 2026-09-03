@@ -73,7 +73,7 @@ where you are not making something.
   [Generating meshes](23-generating-meshes.md) and
   [Rigging and posing](25-rigging-and-posing.md).
 
-Then the six workspaces:
+Then the seven workspaces:
 
 - **Inker.** A layered raster editor, wired into the pipeline in both directions. Covered in
   [Inker](28-inker.md), with the timeline in [Inker: animation](29-inker-animation.md).
@@ -89,14 +89,16 @@ Then the six workspaces:
 - **Plotter.** A tile-map editor: a grid, a layer stack, one or more tilesets, and the objects an
   engine reads as spawn points and trigger volumes — where a sheet of tiles becomes a level. It
   speaks Tiled's formats in both directions. Covered in [Plotter](31-plotter.md).
+- **Sirens.** A chiptune tracker: a pattern grid over five NES-shaped voices, envelopes,
+  sample import and sound effects, with WAV, stems and effect exports. Covered in
+  [Sirens](34-sirens.md).
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
   where everything landed. Covered in [Packwright](32-packwright.md).
 - **Sirens.** A chiptune tracker: NES-era pulse, triangle, noise and sample voices written into a
   pattern grid, stitched into a song by an order list, and saved as a `.wsng`. Instruments carry
   four envelope sequences you drag into shape, a `.wav` dropped on the window becomes a sample, and
-  the whole thing exports as a mix, one WAV per channel and one per sound effect. Experimental —
-  all five grid columns take keys, but a block selection can be transposed and cleared and not
-  copied, cut or pasted. Covered in [Sirens](34-sirens.md).
+  the whole thing exports as a mix, one WAV per channel and one per sound effect. Covered in
+  [Sirens](34-sirens.md).
 
 And in the footer:
 

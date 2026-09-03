@@ -39,6 +39,11 @@ def _check(checks: Any, name: str) -> Any:
     return next((row for row in checks or () if row.name == name), None)
 
 
+def _settled(check: Any) -> bool:
+    """``ok``, and not the provisional "still checking" answer."""
+    return bool(check and check.ok and "still checking" not in str(check.detail))
+
+
 def snapshot(ctx: Any) -> dict[str, Any]:
     """Everything the overlay draws, computed once at startup."""
     checks = getattr(ctx.runtime, "checks", None) or ()
@@ -47,7 +52,11 @@ def snapshot(ctx: Any) -> dict[str, Any]:
     plan = getattr(ctx.svc, "vram_plan", None)
     default = models.BASE_MODELS[models.DEFAULT_BASE_MODEL]
     image_fit = vram.fits(plan, default) if plan is not None else vram.FIT_OK
-    three_d_ready = bool(cuda and cuda.ok and budget and budget.ok)
+    # A row that is still checking (``doctor._cuda_check`` before torch has
+    # imported) reports ``ok=True`` so the banner stays quiet; here it is
+    # *not* ready, or the panel says "No CUDA GPU detected" and "Ready" on one
+    # screen. The snapshot is retaken when the health poll lands.
+    three_d_ready = bool(_settled(cuda) and _settled(budget))
 
     entries = [fetch.find(key) for key in REQUIRED_ROWS]
     chosen = [entry for entry in entries if entry is not None]

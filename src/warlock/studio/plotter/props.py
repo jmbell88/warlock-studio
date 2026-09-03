@@ -371,6 +371,19 @@ def _json_member(name: str, raw: Any) -> Prop:
     raise ValueError(f"class member {name!r} has a value this reader cannot type")
 
 
+def json_number(entry: Any, key: str, default: float) -> float:
+    """One numeric member of a Tiled JSON record, or ``default`` when absent.
+
+    Written out because every reader spelled it ``float(entry.get(k, d) or d)``,
+    and ``or`` treats a stored ``0`` as missing: ``"probability": 0`` became
+    ``1.0`` and the entry vanished from the picker, ``"opacity": 0`` drew a
+    layer the file said was invisible, and an object at ``x: 0`` moved. Only
+    ``None`` -- the member absent, or JSON ``null`` -- means the default.
+    """
+    value = entry.get(key) if isinstance(entry, dict) else None
+    return float(default) if value is None else float(value)
+
+
 def read_json_properties(entries: Any) -> dict[str, Prop]:
     """Tiled's ``properties`` array as a mapping.
 

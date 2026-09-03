@@ -737,6 +737,13 @@ class RangeOps:
         seen: set[int] = set()
         cels: list[tuple[Any, Any]] = []
         for track, frame in self._slots_in(rect):
+            # The lock is a track property and the range ops are writes, so
+            # a locked, reference or group-locked track drops out here -- at
+            # the one door every range op comes through -- rather than at
+            # each of six ops. A range that is *only* locked tracks is empty
+            # and the op reports that it did nothing.
+            if self.write_locked(track):
+                continue
             cel = anim.cels.get((track.uid, frame.uid))
             if cel is None or id(cel) in seen:
                 continue

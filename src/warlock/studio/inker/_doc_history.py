@@ -37,7 +37,7 @@ class HistoryOps:
         half-applied gesture is still one gesture: leaving its steps loose would
         make the user walk back through the middle of it.
         """
-        depth = len(self.history)
+        depth = self.history.mark()
         try:
             yield
         finally:

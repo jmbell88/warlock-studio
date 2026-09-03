@@ -153,6 +153,9 @@ class UndoStack:
         self.trimmed = 0
         self._done: list[Edit] = []
         self._undone: list[Edit] = []
+        # Gestures open via ``mark()`` and not yet folded by ``collapse_since``.
+        # While one is open the budget does not evict: see ``mark``.
+        self._open_gestures = 0
 
     def __len__(self) -> int:
         return len(self._done)
@@ -223,26 +226,63 @@ class UndoStack:
         """
         return self._done[-1].serial if self._done else 0
 
-    def collapse_since(self, depth: int) -> bool:
-        """Fold every step pushed since ``depth`` into a single one.
+    def mark(self) -> int:
+        """Open a gesture. -> the token ``collapse_since`` folds back to.
+
+        The token is the **head serial**, never a length. The stack evicts from
+        the *front* while a caller pushes onto the back, so a recorded
+        ``len(stack)`` drifts as soon as the byte budget or the depth cap fires
+        mid-gesture -- and an Inker gesture over a big canvas or a Sirens
+        envelope drag across sixty-four frames does exactly that. Sliced by
+        that stale length the fold took the wrong steps, evicted earlier work
+        and left strays of its own. Serials only ever grow, so "everything
+        pushed after this serial" is exact whatever was evicted meanwhile.
+
+        **Eviction is deferred while a gesture is open.** The budget exists to
+        bound the stack between gestures; applying it in the middle of one
+        would throw away the user's earlier work to make room for the
+        intermediate steps of a drag that is about to fold into one. The
+        pending eviction runs at ``collapse_since``, against the folded stack.
+        """
+        self._open_gestures += 1
+        return self.head
+
+    def collapse_since(self, mark: int) -> bool:
+        """Fold every step pushed since ``mark`` into a single one.
 
         The alternative to threading a list of edits through half a dozen ops
-        that each already know how to push their own. A caller records
-        ``len(stack)``, does whatever it does, and asks for the run to become
-        one gesture -- which is the rule the rest of this package follows and
-        could not follow for a *composed* op like "delete these eight rows".
+        that each already know how to push their own. A caller takes
+        ``mark()``, does whatever it does, and asks for the run to become one
+        gesture -- which is the rule the rest of this package follows and could
+        not follow for a *composed* op like "delete these eight rows".
 
         Nothing to fold (an empty run, or a single step) is ``False`` and no
         change: a lone ``CompoundEdit`` around one edit would read as
         "compound" in the history panel where the edit reads as what it did,
         which is ``one_step``'s argument one level up.
+
+        Whatever it folds, it closes the gesture ``mark`` opened and lets the
+        deferred eviction run -- also on an early ``False``, so a gesture that
+        did nothing does not leave the budget switched off.
         """
-        if depth < 0 or len(self._done) - depth < 2:
-            return False
-        tail = self._done[depth:]
-        del self._done[depth:]
-        self.push(CompoundEdit(tail))
-        return True
+        self._open_gestures = max(0, self._open_gestures - 1)
+        try:
+            if mark < 0:
+                return False
+            start = len(self._done)
+            for index, edit in enumerate(self._done):
+                if edit.serial > mark:
+                    start = index
+                    break
+            if len(self._done) - start < 2:
+                return False
+            tail = self._done[start:]
+            del self._done[start:]
+            self.push(CompoundEdit(tail))
+            return True
+        finally:
+            if not self._open_gestures:
+                self._evict()
 
     def push(self, edit: Edit) -> None:
         edit.serial = next(_serials)
@@ -250,7 +290,8 @@ class UndoStack:
         # No history tree: a redo onto a branch the user did not take is worse
         # than no redo at all.
         self._undone.clear()
-        self._evict()
+        if not self._open_gestures:
+            self._evict()
 
     def _evict(self) -> None:
         while len(self._done) > UNDO_MAX_DEPTH:

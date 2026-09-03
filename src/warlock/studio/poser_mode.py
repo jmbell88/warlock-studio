@@ -28,6 +28,7 @@ it through ``viewer_of``.
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -112,6 +113,10 @@ class PoserState:
     #: in this app: never at submit, because a failed write has to leave the
     #: guard standing.
     clips_unsaved: bool = False
+    #: Bumped by every mutation; ``save_clips`` records it so a landing save
+    #: can tell whether edits arrived while it was writing.
+    clips_touch_serial: int = 0
+    clips_save_serial: int = 0
     clips_error: str = ""
     #: Whether the neighbouring keys are ghosted in the viewport. Session
     #: state, not a document fact: it is how the user is *looking* at the
@@ -623,6 +628,15 @@ def on_task_done(ctx: Any, done: Any) -> None:
         # write leaves the editor holding the edits that were refused.
         state.clips_loading = False
         if isinstance(done.result, dict) and done.result.get("template") == state.template:
+            if (
+                done.key == CLIPS_SAVE_KEY
+                and state.clips_unsaved
+                and state.clips_touch_serial != state.clips_save_serial
+            ):
+                # Edited while the save was in flight: what landed is behind
+                # the working copy, so the working copy stays and stays
+                # unsaved. The next Save writes it.
+                return
             adopt_clips(ctx, done.result)
         return
 
@@ -785,11 +799,15 @@ def select_clip(ctx: Any, name: str) -> None:
     state = ensure(ctx)
     if state.clip == name:
         return
-    state.clip = str(name)
-    state.key_index = 0
-    state.frame = -1
-    rebuild_frames(ctx)
-    apply_key(ctx)
+
+    def proceed() -> None:
+        state.clip = str(name)
+        state.key_index = 0
+        state.frame = -1
+        rebuild_frames(ctx)
+        apply_key(ctx)
+
+    guard(ctx, "open another clip", proceed)
 
 
 def _viewer_editor(ctx: Any) -> Any:
@@ -876,13 +894,26 @@ def apply_key(ctx: Any) -> None:
     root = pose.get("root_translation")
     if root:
         editor.set_root_translation([float(v) for v in root])
+    # Loading a key is not an unsaved edit: the pose it put on the armature is
+    # the clip's own, stored in the working copy. ``apply_preset`` marks the
+    # editor dirty because in the pose library that is what it means; here
+    # the flag has to mean "the armature differs from the selected key", or
+    # every guarded door below would ask after every key click.
+    editor.dirty = False
+    editor.moved.clear()
     sync_onion(ctx)
 
 
 def select_key(ctx: Any, index: int) -> None:
+    """Behind the guard: ``apply_key`` overwrites the armature, and a pose
+    the user has been editing on it is not saved anywhere else."""
     state = ensure(ctx)
-    state.key_index = max(0, int(index))
-    apply_key(ctx)
+
+    def proceed() -> None:
+        state.key_index = max(0, int(index))
+        apply_key(ctx)
+
+    guard(ctx, "select another key", proceed)
 
 
 def scrub(ctx: Any, frame: int) -> None:
@@ -897,6 +928,14 @@ def scrub(ctx: Any, frame: int) -> None:
     state = ensure(ctx)
     editor = _viewer_editor(ctx)
     if editor is None or not state.frames:
+        return
+    if state.frame < 0 and editor.has_unsaved_edits():
+        # The first tick of a scrub replaces the armature's pose, which is the
+        # user's unsaved key edit. A confirm per slider tick is unusable, so
+        # this refuses in words instead: capture or reset the edit, then
+        # scrub. Once a scrub is under way the armature holds nothing unsaved
+        # (every frame lands with ``dirty=False``), so later ticks pass.
+        ctx.toast("Capture or reset the pose before scrubbing.", "info")
         return
     index = max(0, min(int(frame), len(state.frames) - 1))
     state.frame = index
@@ -1007,6 +1046,7 @@ def _touch(ctx: Any) -> None:
     here, so neither half can be forgotten at one call site."""
     state = ensure(ctx)
     state.clips_unsaved = True
+    state.clips_touch_serial += 1
     rebuild_frames(ctx)
 
 
@@ -1068,23 +1108,26 @@ def move_key(ctx: Any, index: int, delta: int) -> None:
     would reorder the poses and leave the timing where it was -- which reads as
     the reorder having corrupted the clip.
     """
-    state = ensure(ctx)
-    record = state.open_clip()
-    if record is None:
-        return
-    keys = list(record.get("keys") or ())
-    segments = list(record.get("segments") or ())
-    target = index + int(delta)
-    if not (0 <= index < len(keys) and 0 <= target < len(keys)):
-        return
-    keys[index], keys[target] = keys[target], keys[index]
-    if index < len(segments) and target < len(segments):
-        segments[index], segments[target] = segments[target], segments[index]
-    record["keys"] = keys
-    record["segments"] = segments
-    state.key_index = target
-    _touch(ctx)
-    apply_key(ctx)
+    def proceed() -> None:
+        state = ensure(ctx)
+        record = state.open_clip()
+        if record is None:
+            return
+        keys = list(record.get("keys") or ())
+        segments = list(record.get("segments") or ())
+        target = index + int(delta)
+        if not (0 <= index < len(keys) and 0 <= target < len(keys)):
+            return
+        keys[index], keys[target] = keys[target], keys[index]
+        if index < len(segments) and target < len(segments):
+            segments[index], segments[target] = segments[target], segments[index]
+        record["keys"] = keys
+        record["segments"] = segments
+        state.key_index = target
+        _touch(ctx)
+        apply_key(ctx)
+
+    guard(ctx, "reorder keys", proceed)
 
 
 def insert_key(ctx: Any, name: str) -> None:
@@ -1094,6 +1137,10 @@ def insert_key(ctx: Any, name: str) -> None:
     keys by name, so "add a key" is either "use one of these" or "author a new
     pose first", and :func:`new_key` is the second.
     """
+    guard(ctx, "insert a key", lambda: _insert_key(ctx, name))
+
+
+def _insert_key(ctx: Any, name: str) -> None:
     state = ensure(ctx)
     record = state.open_clip()
     if record is None or state.key_pose(name) is None:
@@ -1104,7 +1151,8 @@ def insert_key(ctx: Any, name: str) -> None:
     keys.insert(at, str(name))
     # One more step exists now, wherever the loop stands: a closed clip gains a
     # segment at the same index, an open one gains the step out of the new key.
-    segments.insert(min(at, len(segments)), segments[min(at, len(segments)) - 1] if segments else 1)
+    slot = min(at, len(segments))
+    segments.insert(slot, segments[slot - 1] if segments else 1)
     record["keys"] = keys
     record["segments"] = segments
     state.key_index = at
@@ -1140,7 +1188,8 @@ def new_key(ctx: Any, name: str) -> None:
         record["root_translation"] = [float(v) for v in root]
     poses.append(record)
     state.clips["poses"] = poses
-    insert_key(ctx, label)
+    # Unguarded on purpose: the armature's edit *is* what was just captured.
+    _insert_key(ctx, label)
 
 
 def remove_key(ctx: Any, index: int) -> None:
@@ -1150,32 +1199,35 @@ def remove_key(ctx: Any, index: int) -> None:
     that silently reached into the shared pose list would be a delete with a
     blast radius the button does not describe.
     """
-    from ..service import clips as svc_clips
+    def proceed() -> None:
+        from ..service import clips as svc_clips
 
-    state = ensure(ctx)
-    record = state.open_clip()
-    if record is None:
-        return
-    keys = list(record.get("keys") or ())
-    segments = list(record.get("segments") or ())
-    if not 0 <= index < len(keys):
-        return
-    if len(keys) <= svc_clips.MIN_KEYS:
-        ctx.toast(
-            f"a clip needs at least {svc_clips.MIN_KEYS} keys; one key is a pose",
-            "warn",
-        )
-        return
-    del keys[index]
-    if index < len(segments):
-        del segments[index]
-    elif segments:
-        del segments[-1]
-    record["keys"] = keys
-    record["segments"] = segments
-    state.key_index = max(0, min(state.key_index, len(keys) - 1))
-    _touch(ctx)
-    apply_key(ctx)
+        state = ensure(ctx)
+        record = state.open_clip()
+        if record is None:
+            return
+        keys = list(record.get("keys") or ())
+        segments = list(record.get("segments") or ())
+        if not 0 <= index < len(keys):
+            return
+        if len(keys) <= svc_clips.MIN_KEYS:
+            ctx.toast(
+                f"a clip needs at least {svc_clips.MIN_KEYS} keys; one key is a pose",
+                "warn",
+            )
+            return
+        del keys[index]
+        if index < len(segments):
+            del segments[index]
+        elif segments:
+            del segments[-1]
+        record["keys"] = keys
+        record["segments"] = segments
+        state.key_index = max(0, min(state.key_index, len(keys) - 1))
+        _touch(ctx)
+        apply_key(ctx)
+
+    guard(ctx, "remove a key", proceed)
 
 
 def save_clips(ctx: Any) -> None:
@@ -1189,11 +1241,18 @@ def save_clips(ctx: Any) -> None:
     state = ensure(ctx)
     if not state.template or not state.clips:
         return
-    payload = {
-        "space": state.clips.get("space") or "node",
-        "poses": state.clips.get("poses") or [],
-        "clips": state.clips.get("clips") or [],
-    }
+    # A deep copy: the task thread reads the payload while the frame thread
+    # goes on editing the working lists, and ``adopt_clips`` afterwards
+    # replaced them with what hit disk -- discarding every edit made during
+    # the write. The serial says whether any were.
+    payload = copy.deepcopy(
+        {
+            "space": state.clips.get("space") or "node",
+            "poses": state.clips.get("poses") or [],
+            "clips": state.clips.get("clips") or [],
+        }
+    )
+    state.clips_save_serial = state.clips_touch_serial
     if not ctx.submit(CLIPS_SAVE_KEY, svc_clips.save, ctx.svc, state.template, payload):
         ctx.toast("Still saving the previous clip change.", "info")
 

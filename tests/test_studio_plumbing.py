@@ -63,6 +63,9 @@ class FakeApp:
     def _refresh_rig_side_data(self) -> None:
         self.calls.append("_refresh_rig_side_data")
 
+    def _report_failed_checks(self) -> None:
+        self.calls.append("_report_failed_checks")
+
     def _reload_viewer(self) -> None:
         self.calls.append("_reload_viewer")
 
@@ -86,6 +89,9 @@ def test_a_health_poll_replaces_the_startup_checks():
     fresh = [SimpleNamespace(name="disk space", ok=False, fatal=False)]
     app.dispatch("health", fresh)
     assert app.runtime.checks == fresh
+    # And the banner is re-derived from the fresh list: a row that turned
+    # fatal once torch imported (no CUDA) used to show only as a Home chip.
+    assert "_report_failed_checks" in app.calls
 
 
 def test_the_health_ticker_polls_on_the_ttl_and_not_every_frame():

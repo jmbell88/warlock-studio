@@ -354,19 +354,24 @@ def test_troupe_is_the_mode_marked_experimental():
     three of its own phases are unstarted and its keyframes are provisional.
     ``docs/manual/11`` is candid about that and the app was not.
 
-    **Sirens stayed on the list**, and the reason has been narrowed at every
-    landing rather than left standing. What kept it there through phase 5 --
-    four of a cell's five columns drawn and taking no keyboard input -- was
-    closed on 2026-08-27 (``tests/test_sirens_keys.py``). What is left is the
-    block clipboard: a selection can be transposed and cleared, and there is no
-    copy, no cut and no paste, so a bar that repeats is retyped. Asserting the
-    exact dict rather than membership is the point -- a mode joining or leaving
-    this list is a claim about the app that should have to be written down
-    twice.
+    **The note was narrowed on 2026-09-03**, Sirens' rule applied to the chip
+    that is still up: it claimed humanoid reconstruction quality was
+    "untested" when it had been measured on 2026-08-30 and the answer was no.
+    A chip that hedges about a settled question teaches the reader to discount
+    it, so it now states the result and names the route that does work. The
+    dict itself is unchanged, which is the assertion below.
+
+    **Sirens left the list on 2026-09-02.** Its reason was narrowed at every
+    landing rather than left standing: the columns that took no keys closed on
+    2026-08-27 (``tests/test_sirens_keys.py``) and the block clipboard -- copy,
+    cut and paste on Ctrl+C/X/V -- closed last (``tests/test_sirens_clipboard.py``).
+    Asserting the exact dict rather than membership is the point -- a mode
+    joining or leaving this list is a claim about the app that should have to
+    be written down twice.
     """
     from warlock.studio import modes
 
-    assert modes.MATURITY == {"troupe": "Experimental", "sirens": "Experimental"}
+    assert modes.MATURITY == {"troupe": "Experimental"}
     assert set(modes.MATURITY_NOTE) == set(modes.MATURITY)
     assert set(modes.MATURITY) <= set(modes.KEYS)
 

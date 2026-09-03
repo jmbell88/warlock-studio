@@ -199,6 +199,15 @@ class Document(
     #: :mod:`.groups`.
     groups: dict[int, Any] = field(default_factory=dict)
     group_of: dict[int, int] = field(default_factory=dict)
+    #: What the renderer last gave this document, per cell, when it came in
+    #: from a Troupe character sheet -- plus the cells a merge flagged as
+    #: conflicts. ``None`` on every document that did not arrive that way,
+    #: which is what keeps the whole feature out of the ordinary paths and out
+    #: of an ordinary ``animation.json``. Typed ``Any`` for ``groups``' reason:
+    #: it keeps :mod:`.sheetmerge`'s import out of this module. See
+    #: :mod:`.sheetmerge` for what a digest is over and why the merge needs a
+    #: third picture at all.
+    sheet_base: Any | None = None
     #: Every tileset this document owns, in insertion order. Document-level
     #: rather than per-track because tilesets are shared -- two tracks may
     #: bind the same slot -- and ``Track.tileset_uid`` is what names one of

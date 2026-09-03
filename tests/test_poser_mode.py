@@ -623,6 +623,10 @@ def test_selecting_a_key_puts_its_pose_on_the_armature():
     editor = ctx.poser_viewer.editor
     editor.apply({"head": _turned()}, dirty=True)
     poser_mode.select_key(ctx, 0)
+    # The armature holds an unsaved edit, so the door asks first (the
+    # 2026-09-02 review's finding 6); the click lands once it is answered.
+    assert len(ctx.confirms.asked) == 1
+    ctx.confirms.asked[0].on_confirm()
     assert state.key_index == 0
     assert state.frame == -1
     assert editor.pose()["head"] == pytest.approx([0.0, 0.0, 0.0, 1.0])

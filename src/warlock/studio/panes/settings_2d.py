@@ -1900,7 +1900,21 @@ def _preflight_fix(ctx: Any, form: dict[str, Any], problem: widgets.Problem) -> 
     ):
         from ..state import set_mode
 
-        set_mode(ctx, "settings")
+        set_mode(ctx.state, "settings")
+
+
+def submit_job(ctx: Any, run: Any) -> bool:
+    """Queue ``run`` under the shared ``"submit"`` key. -> whether it was taken.
+
+    ``TaskRunner.submit`` refuses a key that is already in flight and says so
+    only by its return, and four callers ignored it: a second Ctrl+Enter while
+    the first was still at the door queued nothing and said nothing.
+    ``submit_promotion`` had the check; this is it, once, for every door.
+    """
+    if ctx.submit("submit", run):
+        return True
+    ctx.toast("Still submitting the last one - try again in a moment.")
+    return False
 
 
 def _enter_pressed() -> bool:
@@ -2274,7 +2288,7 @@ def tile_sheet_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
-def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> None:
+def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> bool:
     """Submit the tile set, on the shared ``submit`` key.
 
     The same key every other output uses, deliberately: it is one form and one
@@ -2304,7 +2318,7 @@ def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> None:
                 ) from exc
         return svc_tilesheets.create_tile_sheet(ctx.svc, reference=reference, **kwargs)
 
-    ctx.submit("submit", run)
+    return submit_job(ctx, run)
 
 
 # Which registry row each model-shaped form field would need, and the name the
@@ -2428,17 +2442,24 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
     # request that no longer exists, and leaving them up would have the app
     # pointing at a control while it works on the value in it.
     ctx.state.clear_field_errors()
+    # The seed rolls and the prompt joins history only once the submit is
+    # *accepted*: ``ctx.submit`` refuses a key still in flight, and a refused
+    # Ctrl+Enter used to reroll the seed and grow the history while queuing
+    # nothing and saying nothing.
+    seed_before = form["seed"]
     if not form["seed_locked"]:
         # Generation is deterministic in the seed, so an unchanged form would
         # otherwise produce the identical image twice and read as a no-op.
         form["seed"] = random_seed()
-    ctx.state.remember_prompt(form["prompt"])
     if _is_tile_arm(form):
         # The one output that does not go through ``create_job``: a tile set is
         # its own job kind, with its own door and its own admission. The sprite
         # arm deliberately *does* go through it -- see ``submit_kwargs`` -- so
         # this is the only branch here.
-        _generate_tile_sheet(ctx, form)
+        if _generate_tile_sheet(ctx, form):
+            ctx.state.remember_prompt(form["prompt"])
+        else:
+            form["seed"] = seed_before
         return
     resolved = None
     if create_assets.selected(form).key in {"image", "3d_model", "seamless_material"}:
@@ -2490,4 +2511,7 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
                 ) from exc
         return svc_jobs.create_job(ctx.svc, **kwargs)
 
-    ctx.submit("submit", run)
+    if submit_job(ctx, run):
+        ctx.state.remember_prompt(form["prompt"])
+    else:
+        form["seed"] = seed_before
