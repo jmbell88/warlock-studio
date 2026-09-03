@@ -523,6 +523,59 @@ def slider_int(*args: Any, **kwargs: Any) -> Any:
     return _field_call("slider_int", *args, **kwargs)
 
 
+# --- one gesture, one undo step ------------------------------------------------
+
+#: The gesture a slider drag has open: ``(history, mark)``. One slot rather
+#: than one per door because imgui has one active item at a time, so a second
+#: drag cannot begin before the first has let go.
+_gesture: tuple[Any, int] | None = None
+
+
+def fold_undo(history: Any) -> None:
+    """Fold a drag on the field just drawn into one undo step.
+
+    Call it **immediately after** the field and **before** acting on its
+    result. A slider reports a change on every frame the pointer moves, and a
+    door that pushes a step per report turns one second of dragging into sixty
+    steps -- past ``UNDO_MAX_DEPTH`` that evicts every earlier edit in the
+    document. ``UndoStack.mark`` and ``collapse_since`` are the mechanism; this
+    is the item-state plumbing around them, so a door reads as three lines:
+    draw, fold, act.
+
+    Before the act and not after: on the frame a drag begins imgui reports the
+    activation *and* the first change together, and a mark taken after that
+    first push would leave the first step outside the fold. Deactivation is
+    the frame *after* the last active one, where nothing changes, so the order
+    does not matter there.
+
+    ``history`` may be ``None`` for a field whose value is session state and
+    pushes nothing; the call is then a no-op, which lets a pane draw one kind
+    of slider for a palette slot and a free colour alike. The only drag this
+    cannot fold is one that ends in a *different* item's scope -- a popup
+    colour picker's own sliders, say, which are their own items in their own
+    window; those fold per component, not per drag.
+    """
+    global _gesture
+    if imgui.is_item_activated():
+        # A previous gesture still open means its item vanished mid-drag (a
+        # pane closed, a tab switched); close it so the deferred eviction runs.
+        close_gesture()
+        if history is not None:
+            _gesture = (history, history.mark())
+    elif _gesture is not None and imgui.is_item_deactivated():
+        close_gesture()
+
+
+def close_gesture() -> None:
+    """Close whatever ``fold_undo`` has open. Safe when nothing is."""
+    global _gesture
+    if _gesture is None:
+        return
+    history, mark = _gesture
+    _gesture = None
+    history.collapse_since(mark)
+
+
 def slider_float(*args: Any, **kwargs: Any) -> Any:
     return _field_call("slider_float", *args, **kwargs)
 

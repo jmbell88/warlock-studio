@@ -299,6 +299,7 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
 
     slot = state.palette_slot
     changed, value = controls.color_edit4("Slot", _vec(palette[slot]), FLAGS)
+    controls.fold_undo(doc.history)
     if changed and doc.recolour_slot(slot, _to_rgba(value)):
         state.palette_usage = None
     if controls.button("+ from colour") and doc.add_slot(state.fg):

@@ -73,12 +73,14 @@ def draw(ctx: Any) -> None:
     changed, value = controls.slider_int(
         "Tempo", doc.tempo, D.MIN_TEMPO, D.MAX_TEMPO, enabled=editable
     )
+    controls.fold_undo(doc.history)
     if changed and doc.set_song(tempo=int(value)):
         sirens_mode.request_rerender(ctx, tab)
     imgui.set_next_item_width(-1)
     changed, value = controls.slider_int(
         "Speed", doc.speed, D.MIN_SPEED, D.MAX_SPEED, enabled=editable
     )
+    controls.fold_undo(doc.history)
     if changed and doc.set_song(speed=int(value)):
         sirens_mode.request_rerender(ctx, tab)
     # Ticks per row and beats per minute do not combine into anything a

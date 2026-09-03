@@ -120,6 +120,7 @@ def _patterns(ctx: Any, state: Any, tab: Any, editable: bool) -> None:
         changed, value = controls.slider_int(
             "Rows", pattern.rows, 1, 256, enabled=editable
         )
+        controls.fold_undo(doc.history)
         if changed and doc.resize_pattern(pattern.uid, int(value)):
             sirens_mode.request_rerender(ctx, tab)
             sirens_mode.clamp_caret(ctx, tab)

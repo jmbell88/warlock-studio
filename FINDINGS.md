@@ -28,15 +28,10 @@ regression for each. What remains below is everything else.
 
 These recur in more than one mode and are cheaper to fix once.
 
-**T1. Slider and drag doors push one undo step per frame.** Sirens tempo/speed/rows
-(`panes/sirens_transport.py:73-83`, `sirens_orders.py:120-125`, `sirens_effects.py:201-211`),
-Sirens envelope drags (`sirens_envelopes.py:498-506`), Sirens name fields, Inker
-`recolour_slot`, `set_cel_opacity`, `set_cel_z`, `set_group_props`
-(`inker_colors.py:301`, `inker_picker.py:142`, `inker_timeline.py:1976-2004, 1566`).
-With `UNDO_MAX_DEPTH = 64`, one second of dragging evicts every earlier edit in
-the document. `controls.slider_int(commit=True)` and the `was=` +
-`is_item_deactivated_after_edit` idiom in `inker_menu.header_controls` already exist.
-Make "one gesture, one step" a rule with a test per door.
+**T1. ~~Slider and drag doors push one undo step per frame.~~** Built 2026-09-03:
+`controls.fold_undo` (draw, fold, act) at the eight Sirens and Inker slider doors,
+`commit=True` on the two Sirens name fields, the rule in `docs/INVARIANTS.md` and a
+test per door in `tests/test_undo_gesture_doors.py`.
 
 **T2. Blocking work on the frame thread.** Review's `create_sweep` (20–40 `create_job`
 calls with NVML reads, `review_mode.py:1455-1493`); Review mesh loads
@@ -279,7 +274,7 @@ refused `"submit"` is reported. Nothing pins where the reference PNG decode happ
   (`inker_ops.py:1101-1134`) and can write while `write_ora` walks the stack.
 - **[Medium]** Save As `.aseprite` marks clean and drops the journal though the write is
   lossy (`inker_mode.py:1232, 2766`).
-- **[Medium]** Four sliders push a step per frame (T1). **[Medium]** Cursor readout and
+- ~~**[Medium]** Four sliders push a step per frame (T1).~~ **[Medium]** Cursor readout and
   shape commit truncate where the press floors (`inker_canvas.py:713, 2450`).
   **[Medium]** `toggle_play` lacks `step_frame`'s open-gesture guard
   (`inker_mode.py:3290`). **[Medium]** `_settle` mutates before a save that may be
@@ -455,7 +450,7 @@ asserted; no Tiled-authored fixture despite the 2026-08-29 manual verification.
 ## 8. Sirens
 
 ### Correctness
-- **[High]** Tempo/Speed/Rows sliders and name fields push a step per frame (T1).
+- ~~**[High]** Tempo/Speed/Rows sliders and name fields push a step per frame (T1).~~
 - **[High] The playhead is a row index into an imaginary single-pattern timeline**
   (`playhead_row:858`): seconds ÷ seconds-per-row at the document tempo, ignoring the
   order list, pattern lengths, `Fxx` and `Bxx`. With two patterns the highlight is off
@@ -506,8 +501,7 @@ wider than the remaining channels. None of the six Sirens panes has a test.
 
 ## 9. Suggested order of work
 
-1. The "one gesture, one step" sweep (T1), now that `UndoStack.mark()` folds a run
-   exactly. This is the single change that most improves how the editors feel.
+1. ~~The "one gesture, one step" sweep (T1).~~ Done 2026-09-03.
 2. The frame-thread sweep (T2) with a perf-lane guard, then the task-thread writes (T3).
 3. The three doc/code contradictions left in T5: each is a one-line decision.
 4. Plotter interop: embedded tileset reader, JSON zero coercion, `_tileset_facts`

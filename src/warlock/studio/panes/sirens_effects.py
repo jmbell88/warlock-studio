@@ -193,7 +193,9 @@ def _fields(state: Any, tab: Any, selected: Any, editable: bool) -> None:
 
     doc = tab.doc
     imgui.set_next_item_width(-1)
-    name = widgets.input_text("Name", selected.name, max_length=inst.MAX_NAME_LEN)
+    name = widgets.input_text(
+        "Name", selected.name, max_length=inst.MAX_NAME_LEN, commit=True
+    )
     if name != selected.name:
         doc.update_oneshot(selected.uid, name=name)
 
@@ -201,12 +203,14 @@ def _fields(state: Any, tab: Any, selected: Any, editable: bool) -> None:
     changed, value = controls.slider_int(
         "Tempo", selected.tempo, D.MIN_TEMPO, D.MAX_TEMPO, enabled=editable
     )
+    controls.fold_undo(doc.history)
     if changed:
         doc.update_oneshot(selected.uid, tempo=int(value))
     imgui.set_next_item_width(-1)
     changed, value = controls.slider_int(
         "Speed", selected.speed, D.MIN_SPEED, D.MAX_SPEED, enabled=editable
     )
+    controls.fold_undo(doc.history)
     if changed:
         doc.update_oneshot(selected.uid, speed=int(value))
 

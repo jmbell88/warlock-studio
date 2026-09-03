@@ -1566,6 +1566,7 @@ def _group_menu(ctx: Any, tab: Any, doc: Any, group_uid: int) -> None:
     changed, opacity = controls.slider_float(
         "Opacity##group", float(node.opacity), 0.0, 1.0, "%.2f"
     )
+    controls.fold_undo(doc.history)
     if changed:
         doc.set_group_props(group_uid, opacity=float(opacity))
     # Blend and Isolate sit together because they are one idea: a mode needs a
@@ -1980,6 +1981,7 @@ def _cell_menu(
             1.0,
             "%.2f",
         )
+        controls.fold_undo(doc.history)
         if changed:
             doc.set_cel_opacity(float(alpha), track_index=ti, frame_index=fi)
         # Per-cel z-index, beside the per-cel opacity and keyed the same way:
@@ -2000,6 +2002,7 @@ def _cell_menu(
             -reach,
             reach,
         )
+        controls.fold_undo(doc.history)
         if changed:
             doc.set_cel_z(int(zed), track_index=ti, frame_index=fi)
         # Per-slot user data, beside the per-slot opacity and keyed the same

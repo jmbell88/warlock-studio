@@ -83,7 +83,9 @@ def draw(ctx: Any) -> None:
         return
     imgui.dummy((0, 8))
     imgui.set_next_item_width(-1)
-    name = widgets.input_text("Name", selected.name, max_length=inst.MAX_NAME_LEN)
+    name = widgets.input_text(
+        "Name", selected.name, max_length=inst.MAX_NAME_LEN, commit=True
+    )
     if name != selected.name and doc.update_instrument(selected.uid, name=name):
         sirens_mode.request_rerender(ctx, tab)
     # ``controls.combo`` takes (key, label) pairs and answers with a key, so a

@@ -746,17 +746,33 @@ def note_ime_rect() -> None:
     imgui_backend.set_ime_rect((lo.x, lo.y), (hi.x - lo.x, hi.y - lo.y))
 
 
-def input_text(label: str, value: str, *, max_length: int = 1000, hint: str = "") -> str:
+def input_text(
+    label: str,
+    value: str,
+    *,
+    max_length: int = 1000,
+    hint: str = "",
+    commit: bool = False,
+) -> str:
     """A single-line field, clamped after the fact.
 
     imgui's Python binding grows its own buffer, so the cap is applied to what
     comes back rather than to what can be typed -- which also means a paste
     over the cap keeps its first N characters instead of being refused.
+
+    ``commit`` is ``controls._field_call``'s flag with the same meaning: the
+    new text is reported only on the frame the field is left after an edit.
+    For a field whose write is an undo step -- an instrument's name -- the
+    default reports every keystroke, and typing "lead" pushed four steps where
+    Ctrl+Z is expected to take back the rename. imgui keeps its own buffer
+    while the field is active, so the typing still shows.
     """
     if hint:
         changed, out = imgui.input_text_with_hint(label, hint, value)
     else:
         changed, out = imgui.input_text(label, value)
+    if commit:
+        changed = imgui.is_item_deactivated_after_edit()
     note_ime_rect()
     return out[:max_length] if changed else value
 

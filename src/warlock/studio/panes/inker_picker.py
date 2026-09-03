@@ -149,10 +149,23 @@ def write(ctx: Any, state: Any, tab: Any, slot: int | None, colour: Any) -> None
         state.bg = value
 
 
+def _slider(label: str, value: int, high: int, tab: Any, slot: int | None) -> tuple[bool, int]:
+    """One of this pane's channel sliders, folded to one undo step per drag.
+
+    Only a palette slot writes history (``write`` above); a free colour is
+    session state and folds nothing, which ``fold_undo`` takes as ``None``.
+    """
+
+    changed, out = widgets.labeled_slider_int(label, value, 0, high)
+    history = getattr(tab.doc, "history", None) if slot is not None else None
+    controls.fold_undo(history)
+    return changed, out
+
+
 def _alpha(ctx: Any, state: Any, tab: Any, slot: int | None, colour: tuple) -> None:
     """The one channel every space shares, so it is drawn once."""
 
-    changed, alpha = widgets.labeled_slider_int("Alpha", int(colour[3]), 0, 255)
+    changed, alpha = _slider("Alpha", int(colour[3]), 255, tab, slot)
     if changed:
         write(ctx, state, tab, slot, (colour[0], colour[1], colour[2], alpha))
 
@@ -161,7 +174,7 @@ def _rgb(ctx: Any, state: Any, tab: Any, slot: int | None, colour: tuple) -> Non
     out = list(colour)
     touched = False
     for index, label in enumerate(("Red", "Green", "Blue")):
-        changed, value = widgets.labeled_slider_int(label, int(colour[index]), 0, 255)
+        changed, value = _slider(label, int(colour[index]), 255, tab, slot)
         if changed:
             out[index] = value
             touched = True
@@ -194,7 +207,7 @@ def _wheel(
     out = list(values)
     touched = False
     for index, label in enumerate(labels):
-        changed, value = widgets.labeled_slider_int(label, values[index], 0, highs[index])
+        changed, value = _slider(label, values[index], highs[index], tab, slot)
         if changed:
             out[index] = value
             touched = True
@@ -243,7 +256,7 @@ def _hsl(ctx: Any, state: Any, tab: Any, slot: int | None, colour: tuple) -> Non
 
 def _gray(ctx: Any, state: Any, tab: Any, slot: int | None, colour: tuple) -> None:
     level = sum(weight * channel for weight, channel in zip(LUMA, colour[:3], strict=True))
-    changed, value = widgets.labeled_slider_int("Gray", clamp8(level), 0, 255)
+    changed, value = _slider("Gray", clamp8(level), 255, tab, slot)
     if changed:
         write(ctx, state, tab, slot, (value, value, value, colour[3]))
     _alpha(ctx, state, tab, slot, colour)
