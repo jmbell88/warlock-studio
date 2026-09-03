@@ -69,6 +69,7 @@ MENUS: tuple[str, ...] = (
     "Sprite",
     "Layer",
     "Frame",
+    "Sheet",
     "Select",
     "View",
 )
@@ -2270,6 +2271,133 @@ register(
     )
 )
 
+
+
+# --- sheet corrections ------------------------------------------------------
+#
+# The Troupe phase-6 verbs. Every predicate and every sentence is
+# ``inker_sheet``'s, so the strip under the transport, this menu and the probe
+# census answer "why is this grey" with one voice. The strip is where these
+# are pressed; the menu is where they are *found*.
+
+
+def _sheet(verb: str) -> Callable[..., Any]:
+    def _run(ctx: Any, tab: Any, **_: Any) -> Any:
+        from . import inker_sheet
+
+        return getattr(inker_sheet, verb)(ctx, tab)
+
+    return _run
+
+
+def _sheet_tab(verb: str) -> Callable[..., Any]:
+    """A sheet verb of the tab alone -- no ctx, no toast."""
+
+    def _run(ctx: Any, tab: Any, **_: Any) -> Any:
+        from . import inker_sheet
+
+        return getattr(inker_sheet, verb)(tab)
+
+    return _run
+
+
+def _sheet_pred(name: str) -> Callable[[Any, Any], bool]:
+    def _enabled(state: Any, tab: Any) -> bool:
+        from . import inker_sheet
+
+        return bool(getattr(inker_sheet, name)(state, tab))
+
+    return _enabled
+
+
+def _sheet_reason(name: str) -> Callable[[Any, Any], str]:
+    def _reason(state: Any, tab: Any) -> str:
+        from . import inker_sheet
+
+        return str(getattr(inker_sheet, name)(state, tab))
+
+    return _reason
+
+
+register(
+    Op(
+        "sheet_propagate",
+        "Propagate correction",
+        _sheet("propagate"),
+        menu="Sheet",
+        enabled=_sheet_pred("can_propagate"),
+        reason=_sheet_reason("propagate_reason"),
+        hint=(
+            "Copies what changed on this cell since it was marked onto every "
+            "cell the scope names -- the same frame in every direction, say. "
+            "One undo step for all of them."
+        ),
+    )
+)
+register(
+    Op(
+        "sheet_remark",
+        "Mark this cell",
+        _sheet_tab("remark"),
+        menu="Sheet",
+        enabled=_sheet_pred("is_sheet_tab"),
+        reason=_sheet_reason("no_sheet_reason"),
+        hint="Takes the cell as it is now as the point a correction is measured from.",
+    )
+)
+register(
+    Op(
+        "sheet_replace",
+        "Replace colour across scope",
+        _sheet("replace_colour"),
+        menu="Sheet",
+        enabled=_sheet_pred("can_scope"),
+        reason=_sheet_reason("scope_reason"),
+        separator_before=True,
+        hint="The strip's recolour pair, applied to this cell and every cell the scope names.",
+    )
+)
+register(
+    Op(
+        "sheet_shift",
+        "Shift selection across scope",
+        _sheet("shift"),
+        menu="Sheet",
+        enabled=_sheet_pred("can_shift"),
+        reason=_sheet_reason("shift_reason"),
+        hint=(
+            "Moves the selected pixels by the strip's offset on this cell and "
+            "every cell the scope names."
+        ),
+    )
+)
+register(
+    Op(
+        "sheet_mirror",
+        "Apply mirror to opposite direction",
+        _sheet("mirror_to"),
+        menu="Sheet",
+        enabled=_sheet_pred("can_mirror"),
+        reason=_sheet_reason("mirror_reason"),
+        separator_before=True,
+        hint=(
+            "Writes this cell, flipped, onto the same frame of the mirror "
+            "direction -- everything but the face, which is drawn on its own "
+            "side."
+        ),
+    )
+)
+register(
+    Op(
+        "sheet_mirror_run",
+        "Apply mirror to whole run",
+        _sheet("mirror_run"),
+        menu="Sheet",
+        enabled=_sheet_pred("can_mirror"),
+        reason=_sheet_reason("mirror_reason"),
+        hint="Every frame of this direction mirrored onto its counterpart, as one undo step.",
+    )
+)
 
 # --- input registry ---------------------------------------------------------
 #

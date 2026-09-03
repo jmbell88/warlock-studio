@@ -254,6 +254,37 @@ an empty cel stays empty rather than becoming a filtered blank, and the selectio
 honoured as a weight exactly as it is for a single layer — so a feathered selection fades the filter
 in on every frame at once.
 
+### Sheet corrections
+
+A character sheet from Troupe opens with one tag per animation and direction, named
+`walk_left`, `idle_back` and so on, and every frame is one cell of the same size. That is enough
+for the timeline to know what the sheet *is*, and on such a document a strip appears between the
+transport and the grid -- on an ordinary animation there is nothing there.
+
+The strip's first row is **where a correction goes**: this frame in every direction, every frame of
+this direction, every cell of this animation, the whole sheet, or the range you have selected. The
+count beside it says how many cells that reaches. Three verbs send one:
+
+- **Propagate patch** copies what you changed on this cell since it was *marked* onto every cell in
+  the scope. A cell is marked the moment the playhead lands on it, so the usual case is: step to a
+  frame, paint the fix, press the button. If you want to start measuring from now, **Re-mark**. A
+  selection narrows what is sent; it is never required.
+- **Replace across scope** recolours a colour pair, with a tolerance, on this cell and every cell in
+  the scope -- the filter panel's replace, sent to cells that are not on screen.
+- **Shift selection across scope** moves the selected pixels by whole pixels on every cell, clearing
+  where they were and clipping at the edge rather than wrapping.
+
+The second row is the **mirror**. Every direction but front and back has an opposite, and a fix
+drawn on the west view can be offered to the east one flipped. Switch on **Preview diff** and the
+canvas shows which pixels the other side would take; the count beside it says how many, and how many
+the **face** box is holding back. The face is excluded because a face is not symmetric -- measured on
+the reference sheets, mirroring left onto right differs only there -- and the slider decides how much
+of the sprite, from the top, counts as face. **Apply to right** writes one cell; **Apply whole run**
+writes every frame of the direction onto its counterpart.
+
+Every one of these is a single `Ctrl+Z` however many cells it touched, a linked cel is written once,
+an empty cell stays empty, and a press that would change nothing pushes nothing.
+
 ### A palette per frame
 
 On an **indexed** drawing each frame can carry a colour table of its own, which is how palette

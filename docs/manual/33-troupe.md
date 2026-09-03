@@ -130,6 +130,14 @@ cycle is obvious in half a second of playback and invisible in a contact sheet â
 anyone does with a new sheet is look at a *frame*: a hand, a silhouette, which way the feet point.
 A clip already moving when you arrive is one you have to stop before you can look at anything.
 
+**The heatmap** sits above the sprite: one square per cell of the selected animation, directions
+down and frames across. Amber means the frame's silhouette, position or colours jump from the one
+before it, a cycle's last frame does not meet its first, or that direction has drifted in size from
+the rest; red with a cross means well past that, or an empty cell. Hover for the numbers, click to
+land the preview on that cell. It is computed once when you pick a sheet -- "scoring..." while it
+runs -- and it ranks cells for you to look at. Nothing downstream reads it; a red square refuses
+nothing.
+
 The row above the sprite carries the transport and the two selectors:
 
 - The **stop/play** button pauses and resumes. So does `Space`.

@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from . import icons
@@ -492,6 +494,7 @@ def select(ctx: Any, job_id: str, sheet_id: str = "") -> None:
     state.frame = 0
     _reconcile_preview(ctx)
     release_texture(ctx)
+    release_scores(ctx)
 
 
 def active_sheet(ctx: Any) -> dict[str, Any] | None:
@@ -674,6 +677,102 @@ def step(ctx: Any, delta: int) -> None:
     state.playing = False
     frames = int((preview_movement(ctx) or {}).get("frames") or 1)
     state.frame = (state.frame + delta) % frames
+    state.clock = 0.0
+
+
+# --- the scores -------------------------------------------------------------
+#
+# ``troupe/qa.py`` over the selected sheet, run through the task runner when
+# the selection changes and read back by the preview's scorecard. The same
+# arrangement as ``matte_preview.pump``: a key compare per frame, a cache hit
+# when the answer is already in, one submit otherwise, and a failed stamp so a
+# sheet that cannot be scored is asked once. **Never in the frame loop** --
+# a 256-cell atlas is a few hundred milliseconds of numpy, which is a stall in
+# the one pane whose whole point is smooth playback. The scores rank; nothing
+# reads them to refuse anything.
+
+
+def cell_geometry(record: Mapping[str, Any] | None) -> tuple[int, int, int] | None:
+    """``(columns, frame_w, frame_h)`` of a sidecar, or None if it does not say.
+
+    ``_sprite``'s reading of the record, lifted so the pane and the scorer
+    agree on it: a non-square plan writes ``frame_size: 0`` and puts the truth
+    in ``frame_w``/``frame_h``, so the size is read in that order rather than
+    divided by.
+    """
+    if not record:
+        return None
+    columns = int(record.get("columns") or 8)
+    size = int(record.get("frame_size") or 0)
+    width = size if size > 0 else int(record.get("frame_w") or 0)
+    height = size if size > 0 else int(record.get("frame_h") or width)
+    if columns < 1 or width < 1 or height < 1:
+        return None
+    return columns, width, height
+
+
+def scores_key(job_id: str, sheet_id: str) -> str:
+    return f"troupe-qa:{job_id}:{sheet_id}"
+
+
+def _score_task(path: Path, layout: dict[str, Any], geometry: tuple[int, int, int]) -> Any:
+    """The task-thread half: read the PNG, score it. No GL, no state."""
+    import numpy as np
+    from PIL import Image
+
+    from .troupe import qa
+
+    with Image.open(path) as opened:
+        opened.load()
+        atlas = np.asarray(opened.convert("RGBA"))
+    columns, frame_w, frame_h = geometry
+    return qa.score_sheet(atlas, layout, columns=columns, frame_w=frame_w, frame_h=frame_h)
+
+
+def release_scores(ctx: Any) -> None:
+    for name in ("troupe_scores", "troupe_scores:key", "troupe_scores:failed"):
+        ctx.state.preview.pop(name, None)
+
+
+def scores(ctx: Any) -> Any:
+    """The selected sheet's :class:`~.troupe.qa.SheetScore`, or None while it
+    is being computed, absent or unscorable. Frame thread; cheap."""
+    from .. import rigging
+
+    state = ensure(ctx)
+    if not (state.job_id and state.sheet_id):
+        return None
+    key = (state.job_id, state.sheet_id)
+    preview = ctx.state.preview
+    if preview.get("troupe_scores:key") == key:
+        return preview.get("troupe_scores")
+    if preview.get("troupe_scores:failed") == key:
+        return None
+    record = active_sheet(ctx)
+    geometry = cell_geometry(record)
+    path = rigging.sheet_png_path(ctx.job_dir(state.job_id), state.sheet_id)
+    if geometry is None or not path.exists():
+        preview["troupe_scores:failed"] = key
+        return None
+    task_key = scores_key(*key)
+    if ctx.busy(task_key):
+        return None
+    ctx.submit(task_key, _score_task, path, dict(preview_layout(ctx)), geometry)
+    return None
+
+
+def scores_failed(ctx: Any) -> bool:
+    state = ensure(ctx)
+    return ctx.state.preview.get("troupe_scores:failed") == (state.job_id, state.sheet_id)
+
+
+def goto(ctx: Any, direction: str, frame: int) -> None:
+    """Point the preview at one cell and stop -- a click on the heatmap."""
+    state = ensure(ctx)
+    set_direction(ctx, direction)
+    frames = int((preview_movement(ctx) or {}).get("frames") or 1)
+    state.frame = max(0, min(int(frame), frames - 1))
+    state.playing = False
     state.clock = 0.0
 
 
@@ -865,6 +964,14 @@ def on_task_done(ctx: Any, done: Any) -> None:
     (``in_progress`` finds them by kind and source, so the id is not kept).
     """
     state = ensure(ctx)
+    if str(done.key).startswith("troupe-qa:"):
+        # Adopted only if it is still the sheet on screen -- the matte
+        # preview's "moved on" rule -- and with no toast: a score is a thing
+        # to look at, not news.
+        if done.key == scores_key(state.job_id, state.sheet_id):
+            ctx.state.preview["troupe_scores"] = getattr(done, "result", None)
+            ctx.state.preview["troupe_scores:key"] = (state.job_id, state.sheet_id)
+        return
     # Every one of these queues or finishes a row the cast is built from, so
     # the throttled copy is dropped rather than waited out: the interval is
     # there to stop idle polling, not to delay news this pane already has.
@@ -899,6 +1006,14 @@ def on_task_done(ctx: Any, done: Any) -> None:
 
 def on_task_failed(ctx: Any, done: Any) -> None:
     """A refused request, said once and in the pane's own words."""
+    if str(getattr(done, "key", "")).startswith("troupe-qa:"):
+        # A sheet that cannot be scored is a log line, not a refusal: the
+        # preview still plays it. Latched so it is asked once.
+        state = ensure(ctx)
+        if done.key == scores_key(state.job_id, state.sheet_id):
+            ctx.state.preview["troupe_scores:failed"] = (state.job_id, state.sheet_id)
+        log.warning("could not score the character sheet: %s", getattr(done, "error", ""))
+        return
     invalidate_cast(ctx)
     invalidate_sheets(ctx)
     ctx.toast(str(getattr(done, "error", "") or "That request was refused."), "error")

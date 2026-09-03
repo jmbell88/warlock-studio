@@ -116,4 +116,4 @@ def test_the_shipped_layout_table_is_part_of_the_package():
 
 
 def test_every_module_imports():
-    from warlock.studio.troupe import spec, ulpc  # noqa: F401
+    from warlock.studio.troupe import qa, spec, ulpc  # noqa: F401

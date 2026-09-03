@@ -7,6 +7,6 @@ rule at its fourth instance.
 
 from __future__ import annotations
 
-from . import spec, ulpc
+from . import qa, spec, ulpc
 
-__all__ = ["spec", "ulpc"]
+__all__ = ["qa", "spec", "ulpc"]

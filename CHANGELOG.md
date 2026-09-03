@@ -18,6 +18,76 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **Troupe's cleanup loop, two of its three pieces** (phase 6; the third, re-rendering one animation
+  into an edited sheet, is designed in TODO.md P11 and not built). A character sheet opened in
+  Inker now grows a strip under the timeline transport: **Propagate patch** sends what changed on
+  a cell since the playhead landed on it to the same frame in every direction, a whole direction,
+  an animation, the sheet or the selected range; **Replace across scope** and **Shift selection
+  across scope** do the two other corrections a sheet needs most; and the **mirror** row offers a
+  fix drawn on one side to its opposite direction, flipped, with the face held back (measured on the
+  reference sheets: a west-onto-east mirror differs only there) and a live diff on the canvas
+  before anything is written. Every verb is one `Ctrl+Z` however many cells it touched, through
+  the range ops' own funnel (`inker/_doc_sheet.py`), addressed by the tag names alone
+  (`inker/sheetscope.py`, whose direction table is pinned to `charsheet`'s by a parity test since
+  the package may not import `pipelines`). Nothing about the `.ora` changed. Also in the **Sheet**
+  menu, so the probe census sees the same predicates the strip does.
+- **Troupe scores its sheets.** `troupe/qa.py` measures, per cell, the silhouette change from the
+  previous frame, the loop seam, centroid and foot-line jitter, palette flicker, and how far a
+  direction has drifted in size from the rest; the preview draws them as a heatmap above the
+  sprite (amber, red with a cross), hover for the numbers, click to land on the cell. Computed in
+  the task runner when a sheet is selected, never in the frame loop, and never read by anything
+  that could refuse a sheet — the scores rank cells to look at. Thresholds and their reasoning in
+  `docs/measurements/2026-09-02-troupe-qa-thresholds.md`, which is honest that they are set by
+  construction and await calibration against authored clips.
+
+- **A day of measurement on the reconstruction stage**, machine-audited in the morning and graded
+  blind the same afternoon — the first graded figure for the path that ships: props-v1 on v0.5.4
+  and v0.6.0 (`2026-09-02-trellis-060-props.md`: the 0.07 audit trigger fires on 12 of 21, then
+  5 of 22; usable **4 → 11 of 22**, `holes` tags 9 → 0, so the pin bump's first decision rule
+  fired), the guidance/token sweep on the five survivors (`2026-09-02-trellis-guidance-sweep.md`:
+  no flag moves a stable subject; TRELLIS is deterministic to four decimals from the same image
+  and SDXL is not deterministic on every prompt), the audit-vs-grade join
+  (`2026-09-02-hole-audit-vs-grade.md`: on v0.5.4 all nine `holes` tags sit above the trigger with
+  three false positives, all open forms; the reroll loop run for real buys 0.006–0.090 and its
+  kept meshes graded 0 of 5 usable, so `mesh_retries` stays 0 on a graded negative), and a new
+  22-subject high-fantasy prop corpus (`docs/measurements/corpora/fantasy-v1.txt`,
+  `2026-09-02-fantasy-v1.md`: 10 of 20 usable; the audit flags open forms the reviewer accepts
+  two times in five). Two submitters joined
+  `scripts/`: `campaign_guidance.py` for the sweep and `hole_audit_vs_grade.py` for the tables.
+- **Fixed: an imported style could outlive its removal for one frame.** `generation.load_lora_manifests`
+  cached `manifests.json` by mtime alone, and an import followed by a remove rewrites the file twice
+  inside one filesystem timestamp tick, so the second read served the first write's rows. The
+  cache stamp is now `(mtime_ns, size)` and every rewrite drops the entry outright. Found by
+  `tests/test_loras.py` failing two runs in three on 2026-09-02.
+- **trellis.cpp v0.5.4 → v0.6.0.** The vendored `trellis-server.exe` and its eight companions are
+  upstream's 2026-08-19 release ("CUDA geometry fixes, robust BiRefNet, legacy NVIDIA support"),
+  fetched and verified against the GitHub-published digest on 2026-09-02; `doctor.py`'s pin, the
+  digest beside it, `installer/runtime-manifest.json` and the manual moved together. The progress
+  parser is checked against a cold res-1024 run of the new exe
+  (`tests/fixtures/trellis_1024_v060.log`, every replay test now runs on both fixtures): the stage
+  list and every format string are unchanged. What the release does to the props-v1 hole rate is
+  the measurement `docs/measurements/2026-09-02-trellis-060-props.md` records.
+- **Sirens' Experimental chip is off.** The one gap it named — a block selection could be
+  transposed and cleared but not copied, cut or pasted — closed on 2026-09-02. `Ctrl+C` copies the
+  block (or the caret's cell), `Ctrl+X` cuts it as one undo step, `Ctrl+V` puts it down at the caret,
+  clipped at the pattern edge rather than refused. The clipboard is app-level (`SirensState.clip`,
+  the `InkerState.cel_clip` precedent), so a bar copied in one song pastes into another, and nothing
+  that moves the caret clears it. No new document API: a paste is `SongDoc.set_cells`, the one door
+  every pattern write already goes through, and `tests/test_sirens_clipboard.py` is the record.
+  Troupe is the one mode still marked Experimental.
+- **Three more trellis-server launch flags are sweep axes.** `--gss`, `--gsh` (guidance strengths)
+  and `--max-tokens` (the high-resolution token budget) were accepted by the vendored exe and never
+  passed. They follow `trellis_band` end to end — `WARLOCK_TRELLIS_GSS` / `_GSH` / `_MAX_TOKENS`,
+  per-job `create_job` kwargs, `service.sweeps` axes grouped by server restart, recorded in bench
+  manifests and the recipe fingerprint. Unset omits the flag, because the exe does not print its
+  defaults; the sweep they exist for is pre-registered in
+  `docs/measurements/2026-09-02-trellis-guidance-sweep.md`.
+- **`scripts/hole_audit_vs_grade.py`** tabulates the stored silhouette audit (`mesh_audit.worst`)
+  against the human grade and the `holes` tag for a tagged corpus — the zero-GPU half of re-testing
+  the retired `mesh_retries` trigger against props-v1. Pre-registered in
+  `docs/measurements/2026-09-02-hole-audit-vs-grade.md`. The 2026-08-30 corpus rows are no longer in
+  the store, so the table waits on the next run.
+
 - **A cel can be lifted above its own layer.** Aseprite's per-cel *z-index*, and the last ordering
   rule this timeline did not have (divergence #12, retired in place in `docs/INVARIANTS.md`). The
   value is an **offset** added to the row's position in the stack, so `+1` draws that one slot a row

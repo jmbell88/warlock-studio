@@ -56,6 +56,7 @@ from ._doc_paint import (
 )
 from ._doc_ranges import RangeOps
 from ._doc_selection import SelectionOps
+from ._doc_sheet import SheetOps
 from ._doc_slices import SliceOps
 from ._doc_tiles import TileOps
 from .anim_edits import CelSetEdit
@@ -136,6 +137,7 @@ class Document(
     SliceOps,
     TileOps,
     RangeOps,
+    SheetOps,
 ):
     stack: LayerStack
     matte: RGBA | None = None

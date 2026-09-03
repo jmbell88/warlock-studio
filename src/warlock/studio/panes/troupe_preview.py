@@ -20,9 +20,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, toolbar, troupe_mode, widgets
+from .. import controls, icons, probe, theme, toolbar, troupe_mode, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
+from ..troupe import qa
 
 #: The playback multipliers the transport offers. A short ladder rather than a
 #: slider: the useful speeds for reading a run cycle are a quarter, a half and
@@ -65,7 +66,111 @@ def draw(ctx: Any) -> None:
             "Pick one on the left, or describe a new one below it.",
         )
         return
+    _scorecard(ctx, state)
     _sprite(ctx, state, texture, record)
+
+
+#: The heatmap's square, in design pixels. Small: the picture under it is
+#: what is being judged, and a matrix of 16 directions by 12 frames has to fit
+#: above it without pushing it off the pane.
+QA_CELL = 14.0
+QA_GAP = 2.0
+
+
+def _scorecard(ctx: Any, state: Any) -> None:
+    """The animation scores as a heatmap over the frame x direction matrix.
+
+    Above the sprite for ``_transport``'s reason. One square per cell of the
+    selected movement; ok is the panel's own elevation, warn and bad the two
+    status colours, and a bad cell also carries a cross so it says so in shape
+    as well as colour (``tokens.STATUS_GLYPHS``' rule). Clicking a square
+    points the preview at that cell and stops it. The scores **rank and never
+    gate**: nothing here or anywhere refuses a sheet on their account.
+    """
+    from imgui_bundle import imgui
+
+    score = troupe_mode.scores(ctx)
+    movement = troupe_mode.preview_movement(ctx)
+    if movement is None:
+        return
+    if score is None:
+        widgets.muted(
+            "Could not score this sheet." if troupe_mode.scores_failed(ctx) else "scoring..."
+        )
+        return
+    if score.worst is None:
+        widgets.muted("No frame flagged.")
+    else:
+        metric, value, cell = score.worst
+        where = next((c for c in score.cells if c.cell == cell), None)
+        place = (
+            f" ({where.animation}/{where.direction}, frame {where.frame + 1})" if where else ""
+        )
+        widgets.muted(
+            f"worst: {metric} {value:.2f}{place} - "
+            f"{score.flagged} of {len(score.cells)} cells flagged"
+        )
+
+    by = score.lookup()
+    animation = str(movement.get("key") or "")
+    frames = int(movement.get("frames") or 1)
+    directions = [str(d.get("key") or "") for d in movement.get("directions") or ()]
+    side = sp(QA_CELL)
+    gap = sp(QA_GAP)
+    draw = imgui.get_window_draw_list()
+    fills = {
+        qa.LEVEL_OK: imgui.get_color_u32(theme.rgba(theme.ELEV_2)),
+        qa.LEVEL_WARN: imgui.get_color_u32(theme.rgba(theme.WARN)),
+        qa.LEVEL_BAD: imgui.get_color_u32(theme.rgba(theme.ERR)),
+    }
+    ring = imgui.get_color_u32(theme.rgba(theme.ACCENT))
+    ink = imgui.get_color_u32(theme.rgba(theme.TEXT))
+    label_w = max((imgui.calc_text_size(d).x for d in directions), default=0.0) + sp(8)
+    for direction in directions:
+        origin = imgui.get_cursor_screen_pos()
+        draw.add_text(
+            (origin.x, origin.y + (side - imgui.get_text_line_height()) * 0.5), ink, direction
+        )
+        imgui.set_cursor_screen_pos((origin.x + label_w, origin.y))
+        for frame in range(frames):
+            cell = by.get((animation, direction, frame))
+            level = qa.level(cell) if cell is not None else qa.LEVEL_OK
+            current = direction == state.direction and frame == state.frame
+            a = imgui.get_cursor_screen_pos()
+            b = (a.x + side, a.y + side)
+            clicked = imgui.invisible_button(f"##troupe-qa/{direction}/{frame}", (side, side))
+            tip = _tooltip(cell)
+            probe.record(
+                label=f"{animation} {direction} frame {frame + 1}",
+                kind="heatmap_cell",
+                selected=current,
+                tooltip=tip,
+            )
+            draw.add_rect_filled((a.x, a.y), b, fills[level], sp(2))
+            if level == qa.LEVEL_BAD:
+                inset = side * 0.28
+                draw.add_line((a.x + inset, a.y + inset), (b[0] - inset, b[1] - inset), ink, 1.5)
+                draw.add_line((b[0] - inset, a.y + inset), (a.x + inset, b[1] - inset), ink, 1.5)
+            if current:
+                draw.add_rect((a.x - 1, a.y - 1), (b[0] + 1, b[1] + 1), ring, sp(2), 0, 2.0)
+            if imgui.is_item_hovered() and tip:
+                imgui.set_tooltip(tip)
+            if clicked:
+                troupe_mode.goto(ctx, direction, frame)
+            if frame + 1 < frames:
+                imgui.same_line(0.0, gap)
+    imgui.dummy((0, sp(4)))
+
+
+def _tooltip(cell: Any) -> str:
+    if cell is None:
+        return ""
+    lines = [", ".join(cell.flags) if cell.flags else "ok"]
+    for name in qa.METRICS:
+        value = cell.metrics.get(name)
+        if value is not None:
+            lines.append(f"{name}: {value:.2f}")
+    return "\n".join(lines)
 
 
 def _transport(ctx: Any, state: Any) -> None:

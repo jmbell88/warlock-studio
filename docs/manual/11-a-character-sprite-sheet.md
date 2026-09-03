@@ -90,6 +90,13 @@ The preview is a clock rather than a frame counter, so it plays at real duration
 than falling behind. It draws at integer scale with nearest-neighbour filtering only, because a
 pixel-art preview that resampled would be lying about the thing you are inspecting.
 
+Above the sprite is a **heatmap**: one square per cell of the selected animation, directions down
+and frames across. A square goes amber where a frame's silhouette, position or colours jump from
+the one before it, where a cycle's last frame does not meet its first, or where one direction has
+drifted in size from the rest; red where it is well past that, or empty. Hover a square for the
+numbers; click one and the preview jumps to that cell and stops. The scores rank cells for you to
+look at and never reject a sheet -- nothing downstream reads them.
+
 Troupe is the one workspace that holds no document. There is nothing to save and no undo stack;
 entering it creates nothing. Sheets are ordinary library assets.
 
@@ -121,18 +128,20 @@ image, so **the back of a generated character is invented**, not observed.
 **Provisional.** The shipped animation keyframes are placeholders — enough to prove the pipeline,
 not finished animation. Expect to author your own in Poser's clip editor.
 
+**Built, for the cleanup.** Open the sheet in Inker and a strip under the transport sends one
+correction to the same frame in every direction, to a whole direction, an animation or the sheet,
+and offers a fix drawn on one side to its mirror with the face kept. *Inker -> Sheet corrections*
+has the whole of it.
+
 **Not built.** These do not exist, and no amount of looking will find them:
 
-- Propagating a correction across frames, directions or animations. Fix a cell and you have fixed
-  one cell.
-- Mirror-assisted cleanup.
 - Re-rendering one animation without discarding hand edits made to the others.
 - Swappable or layered equipment.
 - AI restyling of a rendered sheet, or a learned pixel refiner.
 - Any animation beyond the five above.
 
-The cleanup loop in particular is the honest gap: exporting is solid, and the workflow of *fixing a
-256-cell sheet efficiently* is not built. For now, cleanup is Inker and patience.
+The re-render half of the cleanup loop is the honest gap: you can fix a sheet efficiently now, but
+a re-rendered animation still arrives as a new sheet rather than merging into the one you edited.
 
 ## Try it
 

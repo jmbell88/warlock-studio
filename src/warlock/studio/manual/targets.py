@@ -30,6 +30,9 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "sheet": ("27-sprite-sheets", None),
     "sprites": ("27-sprite-sheets", "from-a-single-drawing"),
     "inker-timeline": ("29-inker-animation", "the-timeline"),
+    # The sheet-correction strip under the transport, which exists only on a
+    # Troupe character sheet and is the phase-6 cleanup loop.
+    "inker-sheet": ("29-inker-animation", "sheet-corrections"),
     # Found by the O118 coverage sweep: two panes a user reads and neither had
     # a way into the chapter that describes it.
     "inker-colors": ("28-inker", "colour"),

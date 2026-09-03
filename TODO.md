@@ -108,38 +108,27 @@ does not come back.
 **Expected outcome:** `git log --all -- examples/` is empty and the repository
 can be made public without redistributing art it may not.
 
-## P3. One GPU afternoon: a graded mesh run at the shipped default
+## P3. ~~One GPU afternoon: a graded mesh run at the shipped default~~
 
-**Why it is yours:** a card and a judgement. **The number the product will be
-judged on does not exist.** The only completed graded run scored 0 usable of 20
-(`docs/measurements/2026-08-13-tier-qualification.md`) on deliberately hard
-subjects with `playground`; the superseded binary-era number was 19/41. **No
-graded run has ever targeted `sdxl_cfg`, which is what ships.**
+**Done 2026-09-02.** Two corpora through `text → sdxl_cfg → TRELLIS` at the
+shipped defaults, graded blind in Review on the −5..+5 scale the same
+afternoon: props-v1 on trellis.cpp v0.6.0 is **11 of 22 usable** (8 of 16 on
+easy+medium; `docs/measurements/2026-09-02-trellis-060-props.md`), fantasy-v1
+is **10 of 20** (`docs/measurements/2026-09-02-fantasy-v1.md`). The same
+grades closed `docs/measurements/2026-09-02-hole-audit-vs-grade.md` (the silhouette audit is
+the reviewer's `holes` tag to the mesh on v0.5.4; the reroll converted 0 of 5;
+`mesh_retries` stays 0) and settled the guidance sweep's open-form question.
+The README states the figure. The library may now be cleaned — the writeups
+exist. P10's decisions are unblocked.
 
-**Do:** a representative corpus (props, not the hard set) through
-`text → sdxl_cfg → TRELLIS` at the shipped defaults, graded on the
-`docs/measurements/2026-08-09-grade-scale.md` scale, written up as a
-measurement document.
+What survived as a human item, from the props document's first decision rule:
 
-The corpus and the protocol are pre-registered in
-`docs/measurements/2026-08-30-art-verdicts-preregistration.md`, and
-`scripts/campaign_props.py` is the harness: it submits
-`docs/measurements/corpora/props-v1.txt` as ordinary library jobs tagged
-`props-v1`, which Review's recent bucket grades in one blind pass. **Do not
-clean the library until the writeup exists** — 2026-08-13 deleted its twenty
-meshes before anyone could re-inspect them, and says so.
-
-~~`scripts/qualify_tiers.py` is the harness.~~ It is not, and was never able to
-be: that script qualifies the *gltfpack tiers* against meshes a human has
-already accepted, and documents that it deliberately does not drive
-`optimize_job` because doing so would consume its own inputs. It has no way to
-generate a corpus. Its own bar is downstream of this entry — it needs accepted
-meshes, which is what a good result here would produce for the first time.
-
-**Expected outcome:** a usable-of-N figure the README can state — or, if it is
-bad, the honest position that it makes no claim. Either closes the release
-audit's "no positive quality evidence" item. It also unblocks P10's three
-decisions.
+- **Re-examine the `trellis_tex_res = 512` pin.** Reproduce the auto-tex-res
+  noise with `trellis-cli.exe --tex-res 1024` on one reference from props-v1
+  (a byte-stable one — the rock, jug or loaf, not the pouch or branches). If
+  the texture is clean on v0.6.0, a measurement document lifts the pin; if
+  not, it records the reproduction and the pin stays. One reference, one
+  judgement, well under an hour of card time.
 
 ## P4. A textured, rigged humanoid `.glb` — one file, three jobs
 
@@ -274,6 +263,32 @@ whose only interior sample is exactly 0.5, so `idle`'s `ease` renders
 identically to `linear` today (`ease_in`/`ease_out` do differ; the panel says
 so). And **the arms hang slightly forward** on the shipped keys.
 
+**The brief, per clip.** Judge each at 16–32 px through the Troupe preview,
+not as a 3D pose; the preview's heatmap (built 2026-09-02, `troupe/qa.py`)
+flags silhouette pops, foot-line jitter, a loop seam and cross-direction drift
+per cell, so use it as the measuring tool and click a flagged square to land
+on the frame.
+
+- **Idle** (cyclic): a breath — one or two pixels of vertical bob, shoulders
+  and chest, nothing else moves. The seam must be invisible; the heatmap's
+  `seam` flag is the check.
+- **Walk** (cyclic): two contacts, two passing poses, the bob passing through
+  zero between them; arms counter-swing the legs. Feet stay on the ground
+  line at the contacts (`foot` flag) and the silhouette changes smoothly
+  (`shape` flag).
+- **Run** (cyclic): the same four poses with a flight phase — both feet off the
+  ground for one frame — a forward lean, and a larger arm swing. Read it in
+  profile first: the knee drive is where the current clip crumples.
+- **Attack** (one-shot): anticipation (a wind-up, 1–2 frames), the hit (the
+  frame with the most silhouette change, and the one to draw first), recovery
+  back to idle's first pose so the return does not pop.
+- **Jump** (one-shot): crouch, launch, apex (held), fall, land in a crouch,
+  recover. The apex is the readable frame; the landing is the second.
+
+Once the clips are authored, calibrate `qa.THRESHOLDS` against the rendered
+sheet and record the values in
+`docs/measurements/2026-09-02-troupe-qa-thresholds.md`, which says so.
+
 **Expected outcome:** clips that look like movement at 32 px, verified through
 P5. This is the most important art task in the programme.
 
@@ -324,9 +339,25 @@ stops offering what has not earned its place.
   Either Poser learns to load a rigged asset for preview, or the pixel verdict
   stays in Troupe where the mesh is. The scrubber shipped as the fast loop,
   which is right either way.
-- **Phase 6, the cleanup workflow** (P13) — the hard item, "re-render one
+- ~~**Phase 6, the cleanup workflow** (P13) — the hard item, "re-render one
   animation without discarding hand edits", is a design problem that should be
-  a conversation before it is a commit.
+  a conversation before it is a commit.~~ **Decided 2026-09-02, in
+  conversation:** the merge happens **in Inker**, three-way, because Inker is
+  the only place the hand edits exist and Troupe holds no document by
+  invariant. (1) When a sheet opens in Inker, the importer records a digest of
+  each cell's rendered pixels in the document as an additive `animation.json`
+  key written only when set, the way `groups` is. (2) The character-sheet job
+  gains a `subset` parameter — a list of `(animation, direction)` runs — and
+  the worker renders only those, copying every other cell from the previous
+  atlas through a staged write, published as a new sheet id. (3) Inker gets a
+  **Merge re-render** op: per cell it compares the recorded base digest, the
+  current pixels and the new render; untouched cells take the render, cells
+  the user edited where the render did not change keep the edit, and cells
+  where both changed are **conflicts, marked in the timeline**. **Default on
+  conflict: keep the hand edit and flag the cell** — nothing painted is ever
+  overwritten silently; the user resolves per cell or per run. Deferred to its
+  own plan; the two cheaper phase-6 items were built first (P13) and the
+  merge's cell addressing is theirs (`inker/sheetscope.py`).
 - **`plotter-wave-2`.** The branch last moved 2026-08-14 and holds 52 unmerged
   commits; master has moved several hundred since. It is gated on P7's Tiled
   fixtures and on a whole-branch review. Three outcomes: rebase and finish it,
@@ -368,16 +399,20 @@ are passing oracles in `studio/troupe/ulpc.py`.
 
 **Phase 6 — the cleanup workflow.** Export exists (`inker/sheetout.py`,
 `aseout.py`, `packwright/tsxout.py`); the work is the loop:
-- *Propagate a correction* across frames / direction / animation. Inker's
+- ~~*Propagate a correction* across frames / direction / animation. Inker's
   ranged ops (`_doc_ranges.py`) are most of the machinery; through the write
-  funnel, addressed by uid.
-- *Mirror-assisted cleanup.* Measured on the reference sheets: W/E mirroring
+  funnel, addressed by uid.~~ **Built 2026-09-02**: `inker/sheetscope.py`
+  (the addressing), `inker/_doc_sheet.py` (one funnel, five verbs), the strip
+  under the timeline transport, the **Sheet** menu.
+- ~~*Mirror-assisted cleanup.* Measured on the reference sheets: W/E mirroring
   leaves 36–37 differing pixels confined to the face, and every non-zero shift
   is far worse (443 px at ±1) — real facial asymmetry, not a centring offset.
-  A fix on one side can be offered on the other, face excluded.
+  A fix on one side can be offered on the other, face excluded.~~ **Built
+  2026-09-02**: `inker/mirror.py`, the face box at 30 % of the alpha bbox by
+  default, a live diff on the canvas, apply per cell or per run.
 - *Re-render one animation without discarding hand edits.* The hardest
-  workflow problem in the programme — designed deliberately (P11), not on
-  contact.
+  workflow problem in the programme — **designed 2026-09-02 (P11)**, not yet
+  built. Its own plan.
 
 **Phase 7 — layered equipment (deferred until whole-character generation
 works).** *Multi-GLB scene composition*: `op_sheet` takes one `source_glb` and
@@ -535,6 +570,23 @@ the loader, the planner, the door and the form already take a four-direction
 kind, and the legacy row order (front/left/right/back, not the preset's
 front/left/back/right) is already pinned so a four-direction sheet lands in the
 vocabulary every draft on disk already uses.
+
+**The one step that is code, whichever way the decision goes:** until `*4.json`
+guides exist on disk the Directions control is a one-item menu, and a control
+with one option is a control that cannot be operated. Make it honest — show
+the eight-direction count as a fact (a label, not a combo) whenever the
+discovery in `spritesynth.py` (`TEMPLATE_DIR`, the `<type>.json` loader) finds
+a single count, and let the combo reappear on its own the day a second count
+ships. `SPRITE_DIRECTION_COUNTS` in `generation.py` stays `(4, 8)`, since the
+vocabulary is right; it is the *offer* that is wrong.
+
+**If yes, the six guides to author** (`src/warlock/templates/sprite_guides/`,
+same joint-coordinate shape as the `*8.json` beside them, each rendered and
+looked at): `idle4`, `walk4`, `run4`, `attack4`, `cast4`, `hurt4`, and
+`jump4` if the eight-direction jump survives P16's verdict. Four views each —
+front, left, right, back in the legacy row order — with the same keyframe
+brief as P8, since a four-direction sheet is the same motion seen from fewer
+places rather than a simpler motion.
 
 **Expected outcome:** either six authored guides and a Directions control with
 two options, or the control removed and the eight-direction count stated as a

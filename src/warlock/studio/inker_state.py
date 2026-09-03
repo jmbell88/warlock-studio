@@ -1533,6 +1533,18 @@ class InkerDoc:
     # folder would make ``dirty`` a lie.
     collapsed_groups: set[int] = field(default_factory=set)
 
+    # Sheet corrections (``inker_sheet``), all view state and journal-exempt
+    # like ``range_sel``: the mark is a copy of the active cel taken when the
+    # playhead lands on a cell of a Troupe sheet, so "what did I change here"
+    # has an answer without a marquee; the mirror preview and the face
+    # fraction are how the canvas shows what a mirror *would* write; the
+    # cache is that answer keyed on the document revision. None of it says
+    # anything about the picture, so none of it is saved or undoable.
+    sheet_mark: tuple[int, int, Any] | None = None
+    mirror_preview: bool = False
+    face_fraction: float = 0.30
+    mirror_cache: tuple[Any, Any] | None = None
+
     # This tab's own last export: where it was written and the option set
     # (``InkerState.export_options_snapshot``) it was written with. **Session-
     # scoped and journal-exempt**, like ``playing``/``range_sel`` above --
@@ -1720,6 +1732,16 @@ class InkerState:
     #: name rather than as the ``Op`` for the same reason: the popup survives
     #: across frames and the registry owns the object.
     pending_op: str = ""
+    #: The sheet-correction strip's settings (``inker_sheet``): which cells a
+    #: correction is sent to, the recolour pair and tolerance, and the shift.
+    #: App-level rather than per tab for ``op_params``' reason -- the common
+    #: case is the same scope pressed on the next cell.
+    sheet_scope: str = "directions"
+    sheet_old: tuple[int, int, int, int] = (0, 0, 0, 255)
+    sheet_new: tuple[int, int, int, int] = (0, 0, 0, 255)
+    sheet_tolerance: float = 0.0
+    sheet_dx: int = 0
+    sheet_dy: int = 0
     #: The last values each parameterised op was run with, so the common case
     #: is two clicks rather than two clicks and a number.
     op_params: dict[str, dict[str, float]] = field(default_factory=dict)

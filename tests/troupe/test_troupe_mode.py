@@ -860,3 +860,134 @@ def test_an_idle_cast_is_reread_less_often_than_a_moving_one(ctx, svc):
     state = troupe_mode.ensure(ctx)
     # Nothing on the chain, so the slower of the two.
     assert state.cast_cache is not None and state.cast_cache[1] == []
+
+
+# --- the scores -------------------------------------------------------------
+#
+# ``troupe/qa.py`` is scored in the task runner and read back by the preview.
+# What these pin: one submit per selection, adoption only for the sheet still
+# on screen, no toast either way, and -- the one that matters -- the pane
+# never scores in the frame loop.
+
+
+class _SubmitCtx(_Ctx):
+    def __init__(self, svc):
+        super().__init__(svc)
+        self.submitted: list[tuple] = []
+
+    def submit(self, key, fn, *args, **kwargs):
+        self.submitted.append((key, fn, args, kwargs))
+
+    def busy(self, key):
+        return any(entry[0] == key for entry in self.submitted)
+
+
+def _png_character(svc, size=16):
+    """A character whose sheet PNG is a real atlas rather than four bytes."""
+    import numpy as np
+    from PIL import Image
+
+    job_id, made = _v2_character(svc)
+    atlas = np.zeros((size * 4, size * charsheet.COLUMNS, 4), dtype=np.uint8)
+    atlas[..., :3] = 90
+    atlas[..., 3] = 255
+    path = rigging.sheet_png_path(svc.job_dir(job_id), made[0])
+    Image.fromarray(atlas, "RGBA").save(path)
+    record_path = rigging.sheet_path(svc.job_dir(job_id), made[0])
+    record = json.loads(record_path.read_text("utf-8"))
+    record["frame_size"] = size
+    record_path.write_text(json.dumps(record), "utf-8")
+    return job_id, made
+
+
+def test_scores_are_submitted_once_per_selection_and_not_in_the_frame_loop(svc):
+    ctx = _SubmitCtx(svc)
+    job_id, made = _png_character(svc)
+    troupe_mode.select(ctx, job_id, made[0])
+    assert troupe_mode.scores(ctx) is None
+    assert len(ctx.submitted) == 1
+    key, fn, args, _kwargs = ctx.submitted[0]
+    assert key == troupe_mode.scores_key(job_id, made[0])
+    # Asking again while it runs submits nothing more.
+    assert troupe_mode.scores(ctx) is None
+    assert len(ctx.submitted) == 1
+    # The task itself is honest: run it here and it scores the real atlas.
+    result = fn(*args)
+    assert result.cells and result.worst is None
+
+
+def test_a_landed_score_is_adopted_only_for_the_sheet_still_on_screen(svc):
+    ctx = _SubmitCtx(svc)
+    job_id, made = _png_character(svc)
+    troupe_mode.select(ctx, job_id, made[0])
+    troupe_mode.scores(ctx)
+    key, fn, args, _kwargs = ctx.submitted[0]
+    result = fn(*args)
+    stale = SimpleNamespace(key=troupe_mode.scores_key(job_id, "other"), result=result)
+    troupe_mode.on_task_done(ctx, stale)
+    assert troupe_mode.scores(ctx) is None
+    troupe_mode.on_task_done(ctx, SimpleNamespace(key=key, result=result))
+    assert troupe_mode.scores(ctx) is result
+    assert ctx.toasts == []
+
+
+def test_a_failed_score_is_latched_and_never_toasted(svc):
+    ctx = _SubmitCtx(svc)
+    job_id, made = _png_character(svc)
+    troupe_mode.select(ctx, job_id, made[0])
+    troupe_mode.scores(ctx)
+    key = ctx.submitted[0][0]
+    ctx.submitted.clear()
+    troupe_mode.on_task_failed(ctx, SimpleNamespace(key=key, error="boom"))
+    assert troupe_mode.scores(ctx) is None
+    assert troupe_mode.scores_failed(ctx)
+    assert ctx.submitted == []
+    assert ctx.toasts == []
+
+
+def test_selecting_another_sheet_drops_the_scores(svc):
+    ctx = _SubmitCtx(svc)
+    job_id, made = _png_character(svc)
+    troupe_mode.select(ctx, job_id, made[0])
+    ctx.state.preview["troupe_scores"] = "stale"
+    ctx.state.preview["troupe_scores:key"] = (job_id, made[0])
+    troupe_mode.select(ctx, job_id, "")
+    assert "troupe_scores" not in ctx.state.preview
+
+
+def test_goto_points_the_preview_at_a_cell_and_stops(ctx, svc):
+    job_id, made = _v2_character(svc)
+    troupe_mode.select(ctx, job_id, made[0])
+    state = troupe_mode.ensure(ctx)
+    state.animation = "walk"
+    state.playing = True
+    troupe_mode.goto(ctx, "back", 99)
+    assert (state.direction, state.frame, state.playing) == ("back", 5, False)
+
+
+def test_a_sheet_that_does_not_say_its_cell_size_is_latched_rather_than_submitted(svc):
+    ctx = _SubmitCtx(svc)
+    job_id, made = _v2_character(svc)
+    record_path = rigging.sheet_path(svc.job_dir(job_id), made[0])
+    record = json.loads(record_path.read_text("utf-8"))
+    record["frame_size"] = 0
+    record_path.write_text(json.dumps(record), "utf-8")
+    troupe_mode.select(ctx, job_id, made[0])
+    assert troupe_mode.scores(ctx) is None
+    assert ctx.submitted == []
+    assert troupe_mode.scores_failed(ctx)
+
+
+def test_the_pane_never_scores_in_the_frame_loop() -> None:
+    source = _preview_source()
+    assert "score_sheet" not in source
+    assert "troupe_mode.scores(" in source
+
+
+def test_cell_geometry_reads_a_non_square_plan_in_the_right_order():
+    assert troupe_mode.cell_geometry({"columns": 8, "frame_size": 32}) == (8, 32, 32)
+    assert troupe_mode.cell_geometry(
+        {"columns": 4, "frame_size": 0, "frame_w": 24, "frame_h": 40}
+    ) == (4, 24, 40)
+    assert troupe_mode.cell_geometry({"columns": 8}) is None
+    assert troupe_mode.cell_geometry(None) is None

@@ -63,6 +63,7 @@ from .. import anchors, controls, icons, inker_mode, theme, toolbar, widgets
 from ..inker import animation, sheetout
 from ..manual import render as manual_render
 from ..tokens import sp
+from . import inker_sheet as inker_sheet_pane
 
 #: The strip's height in design pixels, reserved out of the centre column.
 STRIP_H = 150.0
@@ -419,6 +420,10 @@ def draw(ctx: Any) -> None:
     if tab.doc.anim is not None:
         _transport(ctx, tab)
         imgui.separator()
+        # Between the transport and the grid, and only on a sheet document:
+        # the strip is about the cells the grid shows, and an ordinary
+        # animation has no scope for it to offer.
+        inker_sheet_pane.draw_strip(ctx, tab)
     _grid(ctx, tab)
 
 
