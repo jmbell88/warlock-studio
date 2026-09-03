@@ -640,6 +640,8 @@ class FakeTrellisServer:
         self.gss: float | None = None
         self.gsh: float | None = None
         self.max_tokens: int | None = None
+        self.decim: int | None = None
+        self.atlas: int | None = None
         self.config_calls: list[tuple[int, int | None]] = []
         self.launch_calls: list[tuple[object, ...]] = []
         self.config_threads: list[int] = []
@@ -653,13 +655,22 @@ class FakeTrellisServer:
         gss: float | None = None,
         gsh: float | None = None,
         max_tokens: int | None = None,
+        decim: int | None = None,
+        atlas: int | None = None,
     ) -> bool:
         self.config_calls.append((tex_res, band))
-        self.launch_calls.append((tex_res, band, gss, gsh, max_tokens))
+        self.launch_calls.append((tex_res, band, gss, gsh, max_tokens, decim, atlas))
         self.config_threads.append(threading.get_ident())
-        wanted = (tex_res, band, gss, gsh, max_tokens)
-        changed = (self.tex_res, self.band, self.gss, self.gsh, self.max_tokens) != wanted
-        self.tex_res, self.band, self.gss, self.gsh, self.max_tokens = wanted
+        wanted = (tex_res, band, gss, gsh, max_tokens, decim, atlas)
+        current = (
+            self.tex_res, self.band, self.gss, self.gsh, self.max_tokens,
+            self.decim, self.atlas,
+        )
+        changed = current != wanted
+        (
+            self.tex_res, self.band, self.gss, self.gsh, self.max_tokens,
+            self.decim, self.atlas,
+        ) = wanted
         if changed and self.running:
             self.restarts += 1
             self.stop()

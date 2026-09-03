@@ -184,6 +184,8 @@ def trellis_recipe(config: Any, params: Mapping[str, Any], *, mesh_seed: int) ->
         "gss": params.get("trellis_gss", config.trellis_gss),
         "gsh": params.get("trellis_gsh", config.trellis_gsh),
         "max_tokens": params.get("trellis_max_tokens", config.trellis_max_tokens),
+        "decim": params.get("trellis_decim", config.trellis_decim),
+        "atlas": params.get("trellis_atlas", config.trellis_atlas),
         "webp": config.trellis_webp,
         "mesh_profile": params.get("profile") or config.mesh_profile,
         "platform": params.get("platform"),

@@ -93,6 +93,8 @@ async def run_band(
         gss=config.trellis_gss,
         gsh=config.trellis_gsh,
         max_tokens=config.trellis_max_tokens,
+        decim=config.trellis_decim,
+        atlas=config.trellis_atlas,
     )
     started = time.monotonic()
     try:

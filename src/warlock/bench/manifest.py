@@ -30,6 +30,8 @@ CONFIG_FIELDS = (
     "trellis_gss",
     "trellis_gsh",
     "trellis_max_tokens",
+    "trellis_decim",
+    "trellis_atlas",
     "trellis_webp",
     "mesh_profile",
     "vram_exclusive",

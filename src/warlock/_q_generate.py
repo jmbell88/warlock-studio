@@ -616,6 +616,12 @@ class GenerateOps:
             max_tokens=int(params["trellis_max_tokens"])
             if "trellis_max_tokens" in params
             else self.config.trellis_max_tokens,
+            decim=int(params["trellis_decim"])
+            if "trellis_decim" in params
+            else self.config.trellis_decim,
+            atlas=int(params["trellis_atlas"])
+            if "trellis_atlas" in params
+            else self.config.trellis_atlas,
         )
 
         self.progress.update(

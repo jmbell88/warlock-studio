@@ -48,6 +48,7 @@ import campaign_props  # noqa: E402
 from warlock import vectors  # noqa: E402
 from warlock.config import Config  # noqa: E402
 from warlock.db import JobStore  # noqa: E402
+from warlock.service.core import WarlockService  # noqa: E402
 
 #: The only source and stage a mesh grade lives under. ``verdicts_for`` keys
 #: on ``(job_id, source)`` and takes ``stage`` as a filter for exactly this
@@ -89,8 +90,19 @@ def classes_by_prompt(corpus: Path) -> dict[str, str]:
     return {s.prompt: s.cls for s in campaign_props.read_corpus(corpus)}
 
 
+def _mib(path: Path) -> float | None:
+    """Size in MiB, or None when the file is not there (a failed unit)."""
+    try:
+        return round(path.stat().st_size / (1024 * 1024), 1)
+    except OSError:
+        return None
+
+
 def tabulate(
-    store: JobStore, jobs: list[dict[str, Any]], classes: dict[str, str]
+    store: JobStore,
+    jobs: list[dict[str, Any]],
+    classes: dict[str, str],
+    svc: WarlockService | None = None,
 ) -> list[dict[str, Any]]:
     verdicts = store.verdicts_for([j["id"] for j in jobs], source=SOURCE, stage=STAGE)
     rows: list[dict[str, Any]] = []
@@ -98,11 +110,17 @@ def tabulate(
         audit = (job.get("params") or {}).get("mesh_audit") or {}
         verdict = verdicts.get((job["id"], SOURCE))
         reasons = list(verdict.get("reasons") or []) if verdict else []
+        # The detail sweep's machine evidence: what the two GLBs weigh. Read
+        # from disk rather than params because nothing records it, and the
+        # source/model split is exactly the exe-decimation question.
+        job_dir = svc.job_dir(job["id"]) if svc is not None else None
         rows.append(
             {
                 "job_id": job["id"],
                 "status": job.get("status"),
                 "unit": job.get("sweep_unit") or "",
+                "source_mib": _mib(job_dir / "source.glb") if job_dir else None,
+                "model_mib": _mib(job_dir / "model.glb") if job_dir else None,
                 "seconds": (
                     round(job["finished_at"] - job["started_at"], 1)
                     if job.get("finished_at") and job.get("started_at")
@@ -131,15 +149,16 @@ def _fmt(value: Any, digits: int = 4) -> str:
 
 def print_table(rows: list[dict[str, Any]], threshold: float) -> None:
     header = (
-        f"{'class':8} {'worst':>7} {'mean':>7} {'faces':>8} {'secs':>6} "
-        f"{'grade':>5} {'holes':5}  prompt"
+        f"{'class':8} {'worst':>7} {'mean':>7} {'faces':>8} {'srcMiB':>7} {'glbMiB':>7} "
+        f"{'secs':>6} {'grade':>5} {'holes':5}  prompt"
     )
     print(header)
     print("-" * len(header))
     for r in rows:
         print(
             f"{r['class']:8} {_fmt(r['worst']):>7} {_fmt(r['mean']):>7} "
-            f"{_fmt(r['faces']):>8} {_fmt(r['seconds'], 0):>6} {_fmt(r['grade']):>5} "
+            f"{_fmt(r['faces']):>8} {_fmt(r['source_mib'], 1):>7} {_fmt(r['model_mib'], 1):>7} "
+            f"{_fmt(r['seconds'], 0):>6} {_fmt(r['grade']):>5} "
             f"{'yes' if r['holes'] else 'no':5}  {r['prompt'][:48]}"
             + (f"  [{r['unit']}]" if r['unit'] else "")
         )
@@ -200,7 +219,8 @@ def main() -> int:
     store = JobStore(db_path)
     try:
         jobs = tagged_jobs(store, args.tag)
-        rows = tabulate(store, jobs, classes_by_prompt(args.corpus))
+        svc = WarlockService(config, store)
+        rows = tabulate(store, jobs, classes_by_prompt(args.corpus), svc)
     finally:
         store.close()
     if not rows:

@@ -1771,6 +1771,7 @@ def _negative(ctx: Any, form: dict[str, Any]) -> None:
     form["negative_prompt"] = widgets.multiline(
         "##negative", form["negative_prompt"], 54, MAX_PROMPT
     )
+    widgets.char_count(form["negative_prompt"], MAX_PROMPT)
     if inert is not None:
         imgui.end_disabled()
         widgets.muted_wrapped(inert)
@@ -2182,7 +2183,9 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
         "count": _safe_int(form.get("count"), 1),
         **({"sprite_sheet": sprite_sheet} if sprite_sheet is not None else {}),
         "seed": int(form["seed"]),
-        "negative_prompt": form["negative_prompt"] or None,
+        # Verbatim, never ``or None``: an emptied box is the user asking for no
+        # negative prompt, which is a different request from the default.
+        "negative_prompt": str(form["negative_prompt"]),
         "lora_weight": float(form["lora_weight"]) if form.get("style_lora") else None,
         # Mirroring lora_weight: sent only alongside the selection it scales,
         # so an unused slider never reaches params as a live setting.
@@ -2265,7 +2268,7 @@ def tile_sheet_kwargs(form: dict[str, Any]) -> dict[str, Any]:
         "tile_size": _safe_int(form.get("tile_size"), 32),
         "view": _view_of(form),
         "seed": int(form["seed"]),
-        "negative_prompt": form.get("negative_prompt") or None,
+        "negative_prompt": form.get("negative_prompt"),
         "mode": mode,
         # The pixel look, from the two controls under Dimensions. No ``outline``
         # key at all -- and the absence is load-bearing rather than tidy: the

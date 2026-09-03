@@ -93,6 +93,8 @@ VECTOR_PARAMS = (
     "trellis_gss",
     "trellis_gsh",
     "trellis_max_tokens",
+    "trellis_decim",
+    "trellis_atlas",
 )
 
 

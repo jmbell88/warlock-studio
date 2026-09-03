@@ -18,6 +18,27 @@ the release you are actually running.
 
 ## 0.0.31 — 2026-09-03
 
+- **Two more trellis-server launch flags are sweep axes, and they are the detail ones.** `--decim`
+  and `--atlas` were accepted by the vendored exe and never passed. The first is why "Raw" was never
+  the untouched reconstruction: the exe quadric-simplifies every mesh to 300k faces at resolution
+  1024 (from ~15M) before writing the GLB, and `--decim 0` is what turns that off. The second is
+  the UV atlas edge, the texture-detail twin of `--tex-res`. Both follow `trellis_band` end to end
+  — `WARLOCK_TRELLIS_DECIM` / `_ATLAS`, per-job `create_job` kwargs, `service.sweeps` axes grouped
+  by server restart, bench manifests, the recipe fingerprint — and both default to unset. The
+  custom triangle budget's ceiling rises from 200k to 2M so a sweep can ask gltfpack for a
+  million-face mesh once the exe stops throwing them away. The detail sweep they exist for is
+  pre-registered in `docs/measurements/2026-09-03-trellis-detail-sweep.md`; the "Raw" wording in
+  the mesh column, the retarget panel and the manual now says what it ships.
+- **Create: four small promises kept.** The **Avoid** box now starts with the default negative
+  prompt visible, and an emptied box reaches the door as an explicit "none" rather than being folded
+  back into the default by an `or None` at every door -- the distinction `guidance.normalize` had
+  always drawn and no pane could express. The prompt and Avoid boxes carry the `n/1000` counter
+  chapter 22 promised, amber inside the last hundred characters, drawn in the corner of the box so
+  the command bar's height is untouched. The Mesh column gains **Lock seed** beside Reroll, and an
+  unlocked seed rerolls after every accepted **Make 3D** -- the engine is deterministic in its seed,
+  so a second press on the same reference used to produce the identical mesh. Chapter 22 stops
+  describing a **Recent** button beside the prompt and a count in the Seed section; both moved when
+  the command bar was built.
 - **Flourish: procedural spell and VFX effects, inside Inker.** **Flourish → Insert effect...** puts
   one of twenty-nine presets — fireball, explosion, lightning, heal, poison cloud, ice nova, portal,
   slash, meteor, ground shockwave and the rest — into the document as a layer group with one tag

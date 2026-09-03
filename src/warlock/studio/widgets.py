@@ -777,6 +777,38 @@ def input_text(
     return out[:max_length] if changed else value
 
 
+#: How close to the cap the counter turns amber.
+CHAR_COUNT_WARN = 100
+
+
+def char_count(text: str, cap: int) -> None:
+    """A ``used/cap`` readout in the bottom-right corner of the last item.
+
+    Drawn through the draw list rather than as a widget under the box: the
+    command bar's prompt sits in a row of fixed height with nothing below it,
+    and a text line there would push Generate off the bar. Inside the corner
+    it costs no layout anywhere, and it is not a control, so the bar's "four
+    controls" census and the probe census are both unchanged. Nothing at all
+    when the box is empty -- ``0/1000`` on an empty field is noise -- and
+    amber inside the last ``CHAR_COUNT_WARN`` characters, because
+    ``multiline`` truncates silently at the cap and that is the only warning
+    a user pasting a long prompt gets.
+    """
+    used = len(text)
+    if used == 0:
+        return
+    label = f"{used}/{cap}"
+    colour = theme.WARN if cap - used <= CHAR_COUNT_WARN else theme.MUTED
+    size = imgui.calc_text_size(label)
+    rect_max = imgui.get_item_rect_max()
+    pad = imgui.get_style().frame_padding
+    imgui.get_window_draw_list().add_text(
+        (rect_max.x - size.x - pad.x, rect_max.y - size.y - pad.y),
+        imgui.get_color_u32(theme.rgba(colour)),
+        label,
+    )
+
+
 def multiline(
     label: str, value: str, height: float, max_length: int, *, width: float = -1.0
 ) -> str:

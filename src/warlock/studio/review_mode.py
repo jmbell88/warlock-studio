@@ -1381,8 +1381,10 @@ def capture_base(ctx: Any) -> dict[str, Any]:
     }
     if form_2d.get("style_lora"):
         base["lora_weight"] = float(form_2d["lora_weight"])
-    if form_2d.get("negative_prompt"):
-        base["negative_prompt"] = form_2d["negative_prompt"]
+    if "negative_prompt" in form_2d:
+        # Copied even when empty: an emptied Avoid box is a request for no
+        # negative prompt, and dropping it here would hand the sweep the default.
+        base["negative_prompt"] = str(form_2d["negative_prompt"])
     # platform is the 3D pane's alone (the geometry resolution) since the
     # taxonomy retirement; a sweep unit runs to a mesh.
     if form_3d.get("platform"):
@@ -1533,6 +1535,17 @@ AXIS_HELP: dict[str, str] = {
     "trellis_max_tokens": (
         "The 3D engine's high-resolution token budget (it ships at 49152). "
         "A whole number; an empty value runs the engine's own default."
+    ),
+    # The two detail flags, 2026-09-03. Zero is the interesting decim value.
+    "trellis_decim": (
+        "The 3D engine's own decimation. Empty runs its default, a quadric "
+        "simplify to 300K faces at res 1024; 0 turns that off and ships the "
+        "full reconstruction; a positive grid picks the legacy cluster-grid "
+        "pass. Restarts the engine per value."
+    ),
+    "trellis_atlas": (
+        "UV atlas edge in px for the baked textures (the engine defaults 2048 "
+        "at res 1024, 1024 at 512). Restarts the engine per value."
     ),
 }
 

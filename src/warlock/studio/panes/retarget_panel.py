@@ -27,8 +27,13 @@ from ..manual import render as manual_render
 
 
 def tier_label(key: str, budget: int | None) -> str:
-    """What a named tier is called on screen: "Draft (20k)", "Raw (full
-    density)".
+    """What a named tier is called on screen: "Draft (20k)", "Raw (as
+    reconstructed)".
+
+    "As reconstructed" rather than "full density": the engine has already
+    simplified the mesh to ~300k faces at res 1024 before it reaches gltfpack
+    (``config.trellis_decim`` is the flag that lifts that), so raw is "no
+    second pass", not "every triangle the reconstruction made".
 
     Derived rather than written out, which is the same argument the custom
     range already made two functions down: ``optimize.PROFILES`` is the
@@ -38,7 +43,7 @@ def tier_label(key: str, budget: int | None) -> str:
     rather than rounded into a number it is not.
     """
     if budget is None:
-        return f"{key.capitalize()} (full density)"
+        return f"{key.capitalize()} (as reconstructed)"
     if budget % 1000 == 0:
         return f"{key.capitalize()} ({budget // 1000}k)"
     return f"{key.capitalize()} ({budget:,})"
@@ -72,7 +77,7 @@ def draw(ctx: Any, job: Any) -> None:
     options = list(TIERS) if available else [TIERS[0]]
     if not available:
         form["profile"] = "raw"
-        widgets.muted("Only full density is available: gltfpack is not installed.")
+        widgets.muted("Only the engine's own output is available: gltfpack is not installed.")
     # Form.help_text renders widgets.help_marker beside the owning label.
     #
     # **The field id is the refusal's address.** ``optimize_job`` raises
@@ -92,7 +97,7 @@ def draw(ctx: Any, job: Any) -> None:
             "Budget",
             form["profile"],
             options,
-            help_text="Rebuild model.glb from the untouched source.glb.",
+            help_text="Rebuild model.glb from source.glb, the engine's own output.",
             helper=(
                 "You can retarget repeatedly without another reconstruction; "
                 "trellis does not run again."

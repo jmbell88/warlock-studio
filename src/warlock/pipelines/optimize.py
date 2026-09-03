@@ -34,7 +34,10 @@ from .. import winjob
 
 log = logging.getLogger(__name__)
 
-# Named budgets. None means "ship the reconstruction untouched".
+# Named budgets. None means "ship what the engine returned" -- which is not
+# the untouched reconstruction: trellis-server quadric-simplifies to ~300K
+# faces at res 1024 before writing source.glb unless it is launched with
+# --decim 0 (Config.trellis_decim). "raw" here means no *second* pass.
 PROFILES: dict[str, int | None] = {
     "draft": 20_000,
     "standard": 50_000,
@@ -43,7 +46,7 @@ PROFILES: dict[str, int | None] = {
 }
 
 CUSTOM_MIN = 5_000
-CUSTOM_MAX = 200_000
+CUSTOM_MAX = 2_000_000
 
 DEFAULT_TIMEOUT = 300.0
 

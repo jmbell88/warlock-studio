@@ -891,6 +891,8 @@ class Worker(
             gss=config.trellis_gss,
             gsh=config.trellis_gsh,
             max_tokens=config.trellis_max_tokens,
+            decim=config.trellis_decim,
+            atlas=config.trellis_atlas,
         )
         self._text2image = None  # lazy: torch/diffusers may not be installed
         # Which base model the resident pipe is, so _get_text2image can tell a

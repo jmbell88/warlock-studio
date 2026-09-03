@@ -360,6 +360,39 @@ def check_trellis_max_tokens(value: int | None) -> None:
         )
 
 
+# --decim and --atlas, added 2026-09-03. A decimation grid of 0 is the rung
+# that matters -- it is "no decimation" -- so unlike every other trellis axis
+# this one admits zero. The atlas is an edge in px; the exe defaults 2048 at
+# res 1024 and 1024 at 512, and the cap leaves room for one doubling past 4096.
+MAX_TRELLIS_DECIM = 1 << 16
+MIN_TRELLIS_ATLAS = 256
+MAX_TRELLIS_ATLAS = 8192
+
+
+def check_trellis_decim(value: int | None) -> None:
+    if value is None:
+        return
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise Invalid("trellis_decim must be a whole number", field="trellis_decim")
+    if not 0 <= value <= MAX_TRELLIS_DECIM:
+        raise Invalid(
+            f"trellis_decim must be between 0 and {MAX_TRELLIS_DECIM}",
+            field="trellis_decim",
+        )
+
+
+def check_trellis_atlas(value: int | None) -> None:
+    if value is None:
+        return
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise Invalid("trellis_atlas must be a whole number", field="trellis_atlas")
+    if not MIN_TRELLIS_ATLAS <= value <= MAX_TRELLIS_ATLAS:
+        raise Invalid(
+            f"trellis_atlas must be between {MIN_TRELLIS_ATLAS} and {MAX_TRELLIS_ATLAS}",
+            field="trellis_atlas",
+        )
+
+
 def vram_plan(svc: Any) -> vram.Plan:
     """The resolved plan, or one derived from the config for a Runtime-less caller."""
     plan = getattr(svc, "vram_plan", None)

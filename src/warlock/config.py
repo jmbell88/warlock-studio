@@ -226,7 +226,8 @@ class Config:
     )
     # Vendored like trellis-server.exe: a pinned native binary, never downloaded
     # at runtime. Missing it costs you the triangle budgets, not the app --
-    # jobs then ship the raw reconstruction, which is what they did before.
+    # jobs then ship the reconstruction as the engine returned it, which is
+    # what they did before.
     gltfpack_exe: Path = field(
         default_factory=lambda: _env_path(
             "WARLOCK_GLTFPACK", PROJECT_ROOT / "vendor" / "gltfpack" / "gltfpack.exe"
@@ -412,6 +413,23 @@ class Config:
     trellis_max_tokens: int | None = field(
         default_factory=lambda: _env_opt_int("WARLOCK_TRELLIS_MAX_TOKENS", None)
     )
+    # Two more the exe accepts and Warlock never passed until 2026-09-03, and
+    # the two that decide how much of the reconstruction survives into
+    # source.glb. --decim: the exe quadric-simplifies every mesh to 300K faces
+    # at res 1024 (150K at 512) *before* writing the GLB, so "raw" has never
+    # been the untouched reconstruction -- a res-1024 run is ~15M faces before
+    # that pass (tests/fixtures/trellis_1024_v060.log). ``0`` turns the pass
+    # off; a positive value selects the legacy cluster-grid decimation at that
+    # grid. --atlas: the UV atlas edge in px (the exe defaults 2048 at res
+    # 1024, 1024 at 512), the texture-detail twin of trellis_tex_res. None
+    # omits the flag. Both are sweep axes for docs/measurements/
+    # 2026-09-03-trellis-detail-sweep.md; a default moves by that document.
+    trellis_decim: int | None = field(
+        default_factory=lambda: _env_opt_int("WARLOCK_TRELLIS_DECIM", None)
+    )
+    trellis_atlas: int | None = field(
+        default_factory=lambda: _env_opt_int("WARLOCK_TRELLIS_ATLAS", None)
+    )
     # Tri-state, and the None is the point. Unset means "decide from the card":
     # studio.runtime resolves it through vram.plan() at startup and writes a
     # plain bool back here before the Worker exists, so queue.py keeps reading
@@ -553,6 +571,8 @@ SETTINGS: tuple[tuple[str, str], ...] = (
     ("trellis_gss", "WARLOCK_TRELLIS_GSS"),
     ("trellis_gsh", "WARLOCK_TRELLIS_GSH"),
     ("trellis_max_tokens", "WARLOCK_TRELLIS_MAX_TOKENS"),
+    ("trellis_decim", "WARLOCK_TRELLIS_DECIM"),
+    ("trellis_atlas", "WARLOCK_TRELLIS_ATLAS"),
     ("gltfpack_exe", "WARLOCK_GLTFPACK"),
     ("mesh_profile", "WARLOCK_MESH_PROFILE"),
     ("mesh_retries", "WARLOCK_MESH_RETRIES"),

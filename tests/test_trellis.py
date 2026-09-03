@@ -206,6 +206,44 @@ def test_ensure_config_treats_guidance_and_tokens_as_launch_config(tmp_path):
     srv._proc = None
 
 
+def test_argv_omits_decim_and_atlas_when_unset(tmp_path):
+    """Absent means the exe's own quadric simplify and its default atlas."""
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    argv = srv._argv()
+    assert "--decim" not in argv
+    assert "--atlas" not in argv
+
+
+def test_argv_decim_zero_is_emitted_not_dropped(tmp_path):
+    """0 is the rung that turns the exe's decimation off. A truthiness test
+    would drop it and the run would silently be the shipped one."""
+    srv = TrellisServer(
+        tmp_path / "exe", tmp_path / "models", 17971, decim=0, atlas=4096,
+    )
+    argv = srv._argv()
+    assert argv[argv.index("--decim") + 1] == "0"
+    assert argv[argv.index("--atlas") + 1] == "4096"
+
+
+def test_ensure_config_treats_decim_and_atlas_as_launch_config(tmp_path):
+    from types import SimpleNamespace
+
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    calls = []
+    srv.stop = lambda: calls.append(1)
+    srv._proc = SimpleNamespace(poll=lambda: None, pid=1)
+    assert srv.ensure_config(tex_res=512, band=None) is False
+    assert srv.ensure_config(tex_res=512, band=None, decim=0) is True
+    assert calls == [1]
+    assert srv.ensure_config(tex_res=512, band=None, decim=0) is False
+    assert srv.ensure_config(tex_res=512, band=None, decim=0, atlas=4096) is True
+    assert calls == [1, 1]
+    argv = srv._argv()
+    assert argv[argv.index("--decim") + 1] == "0"
+    assert argv[argv.index("--atlas") + 1] == "4096"
+    srv._proc = None
+
+
 def test_argv_includes_models_host_port(tmp_path):
     srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
     argv = srv._argv()

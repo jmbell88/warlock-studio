@@ -1,0 +1,25 @@
+# detail-v1 -- the subjects for the trellis detail sweep, 2026-09-03
+#
+# One subject per line: `class | prompt`. Blank lines and `#` lines are ignored.
+# Read by scripts/campaign_detail.py through campaign_props.read_corpus; cited
+# by docs/measurements/2026-09-03-trellis-detail-sweep.md, which fixes the
+# subjects and the decision rules *before* the run. Editing this file after the
+# grades exist invalidates that pre-registration -- start a new corpus instead.
+#
+# Five subjects, every one a props-v1 prompt (classes carried over verbatim),
+# chosen on two facts the 2026-09-02 runs established: their reference PNG is
+# byte-identical across submits on this machine, so every delta is the
+# reconstruction's; and each carries fine surface detail (banding, hoops,
+# sutures, a visor, acanthus leaves) with no open form, so the silhouette
+# audit is a reproducibility check here and not the question. Four graded
+# usable on v0.6.0 (+4, +3, +3, +3); the capital graded 1 and is the
+# detail-heaviest subject in the corpus.
+#
+# PROMPTS ARE BARE SUBJECT DESCRIPTIONS -- pipelines/prompt.PROMPT_TEMPLATE
+# appends the framing clause.
+
+hard | a wooden treasure chest with iron banding
+easy | a wooden barrel bound with iron hoops
+easy | a weathered human skull, bleached bone
+medium | a knight's steel helmet with the visor raised
+medium | a carved stone pillar capital with acanthus leaves

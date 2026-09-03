@@ -45,7 +45,9 @@ MATTE_SOURCES = {
 # control in the inspector is the qualification path: it offers the whole list
 # once the binary is present, so a tier can be exercised before it is exposed
 # here.
-PROFILES = [("raw", "Raw (no decimation)")]
+# "As reconstructed", not "no decimation": the engine itself simplifies to
+# ~300k faces at res 1024 before Warlock sees the mesh (config.trellis_decim).
+PROFILES = [("raw", "Raw (as reconstructed, ~300k faces)")]
 
 
 def draw(ctx: Any) -> None:
@@ -126,6 +128,19 @@ def _draw_form(
         form["mesh_seed"] = max(0, seed)
     if controls.button("Reroll##mesh", role=controls.ButtonRole.GHOST):
         form["mesh_seed"] = random_seed()
+    # The 2D seed row's Lock, for the 2D seed row's reason: the engine is
+    # deterministic in its seed, so two presses of Make 3D on one reference
+    # with the seed left alone are the identical mesh twice, and that reads as
+    # "the button did nothing". Unlocked, every *accepted* submit rerolls.
+    changed, locked = form_ui.switch(
+        "mesh_seed_locked",
+        "Lock seed",
+        bool(form.get("mesh_seed_locked", False)),
+        help_text="Reuse this seed on the next Make 3D.",
+        helper="Unlocked, every accepted Make 3D draws a fresh one.",
+    )
+    if changed:
+        form["mesh_seed_locked"] = locked
 
     changed, prep = form_ui.switch(
         "reference_prep",
@@ -574,6 +589,16 @@ def submit_promotion(ctx: Any, job_id: str, kwargs: dict[str, Any], force: bool)
         "submit", svc_jobs.promote_candidates, ctx.svc, job_id, force=force, **kwargs
     ):
         ctx.toast("Still submitting the last one - try again in a moment.")
+        return
+    reroll_mesh_seed(ctx.state.form_3d)
+
+
+def reroll_mesh_seed(form: dict[str, Any]) -> None:
+    """After an *accepted* submit, and only then: the seed the job was made
+    with is already in ``kwargs``, so what moves here is the form's next one.
+    ``settings_2d.generate`` does the same for the image seed."""
+    if not form.get("mesh_seed_locked", False):
+        form["mesh_seed"] = random_seed()
 
 
 def matte_modal(ctx: Any) -> None:

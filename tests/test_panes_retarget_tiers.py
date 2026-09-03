@@ -53,7 +53,7 @@ def test_each_label_states_its_own_budget():
 
 def test_a_new_tier_would_be_labelled_without_an_edit_here():
     assert retarget_panel.tier_label("coarse", 5_000) == "Coarse (5k)"
-    assert retarget_panel.tier_label("raw", None) == "Raw (full density)"
+    assert retarget_panel.tier_label("raw", None) == "Raw (as reconstructed)"
 
 
 def test_a_budget_that_is_not_a_round_thousand_is_printed_in_full():

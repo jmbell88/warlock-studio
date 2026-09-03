@@ -13,17 +13,21 @@ not need to ask for a plain background, a single object, or a studio render: the
 you write in a fixed template that already asks for all of that, because those are the properties
 that make an image reconstruct cleanly.
 
-The prompt is capped at 1000 characters and a counter under the box shows how much you have used.
-The counter turns amber inside the last hundred characters.
+The prompt is capped at 1000 characters and a counter in the bottom-right corner of the box shows
+how much you have used once you have typed anything. The counter turns amber inside the last hundred
+characters, because past the cap the box simply stops taking text.
 
-Beside the box, a **Recent** button opens your last twenty prompts, most recent first and
-deduplicated — it appears once you have generated at least one reference, so there is history to
-show. Picking one replaces what is in the box. The history is per session and per prompt
-text only — if you want a whole recipe back, use **Copy settings to form** from a job's overflow
-menu instead, which is described in [Rerun and promotion](35-library-and-jobs.md#rerun-and-promotion).
+Further down the recipe column, under the seed row, a **Recent prompts…** button opens your last
+twenty prompts, most recent first and deduplicated — it appears once you have generated at least one
+reference, so there is history to show. Picking one replaces what is in the box. The history is per
+session and per prompt text only — if you want a whole recipe back, use **Copy settings to form**
+from a job's overflow menu instead, which is described in [Rerun and
+promotion](35-library-and-jobs.md#rerun-and-promotion).
 
-Under **Negative prompt**, further down the pane, is a second box listing what the image must not
-contain. It is pre-filled with the things that most often ruin a reconstruction:
+Under **Avoid**, further down the pane, is a second box listing what the image must not
+contain. It is pre-filled with the things that most often ruin a reconstruction, and it is yours:
+delete the text and the job runs with no negative prompt at all, which is a different request from
+the default rather than a way back to it. **Reset…** brings the default text back.
 
 ```text
 blurry, low quality, multiple objects, cropped, cut off,
@@ -187,7 +191,8 @@ noticeably stronger on the SDXL entries than on Turbo.
 Generation is deterministic in its seed: the same form and the same seed produce the same image
 every time. The **Seed** section is where you control that.
 
-**References** picks how many candidates one submit queues: 1, 2, 4 or 8. Each is a real job holding
+The **Count** control in the command bar picks how many candidates one submit queues: 1, 2, 4 or 8.
+Each is a real job holding
 a place in the serial queue, which is why eight is the ceiling. Because each one gets its own seed,
 a fan-out of four is the cheapest way to find out whether an idea works at all.
 

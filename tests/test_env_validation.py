@@ -63,6 +63,17 @@ def test_a_malformed_optional_limit_is_recorded_rather_than_silently_unset(monke
     assert any(entry[0] == "WARLOCK_VRAM_TOTAL" for entry in config_mod.INVALID_ENV)
 
 
+def test_decim_zero_parses_as_zero_and_a_word_is_recorded(monkeypatch):
+    """``WARLOCK_TRELLIS_DECIM=0`` is the setting that turns the engine's own
+    decimation off, so 0 has to survive parsing as 0 rather than as unset."""
+    monkeypatch.setenv("WARLOCK_TRELLIS_DECIM", "0")
+    assert Config().trellis_decim == 0
+    monkeypatch.setenv("WARLOCK_TRELLIS_DECIM", "grid")
+    config_mod.INVALID_ENV.clear()
+    assert Config().trellis_decim is None
+    assert any(entry[0] == "WARLOCK_TRELLIS_DECIM" for entry in config_mod.INVALID_ENV)
+
+
 def test_auto_is_still_a_word_and_not_a_typo(monkeypatch):
     """``auto`` is the documented way to say "omit the flag and let the exe
     decide", so it must not be reported as unparseable."""

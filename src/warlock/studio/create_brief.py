@@ -165,6 +165,7 @@ def _prompt(ctx: Any, form: dict[str, Any], width: float) -> None:
             "##brief-prompt", before, sp(PROMPT_H), _max_prompt(), width=width
         )
         anchors.mark("create/prompt")
+        widgets.char_count(form["prompt"], _max_prompt())
     if form["prompt"] != before:
         ctx.state.clear_field_error("prompt")
     if imgui.is_item_hovered() and not str(form["prompt"]).strip():

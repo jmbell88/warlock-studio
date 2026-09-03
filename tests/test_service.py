@@ -1503,6 +1503,15 @@ def test_the_server_axes_land_in_params_only_when_asked_for(svc):
     plain = svc_jobs.create_job(svc, kind="text", prompt="a chest", output="reference")
     unset = svc.store.get(plain["id"])["params"]
     assert "trellis_band" not in unset and "trellis_tex_res" not in unset
+    assert "trellis_decim" not in unset and "trellis_atlas" not in unset
+
+    # decim=0 is a value, not "unset": it must land as 0.
+    detail = svc_jobs.create_job(
+        svc, kind="text", prompt="a chest", output="reference",
+        trellis_decim=0, trellis_atlas=4096,
+    )
+    params = svc.store.get(detail["id"])["params"]
+    assert (params["trellis_decim"], params["trellis_atlas"]) == (0, 4096)
 
 
 @pytest.mark.parametrize(
@@ -1514,6 +1523,10 @@ def test_the_server_axes_land_in_params_only_when_asked_for(svc):
         {"trellis_tex_res": 64},
         {"trellis_tex_res": 8192},
         {"trellis_tex_res": True},
+        {"trellis_decim": -1},
+        {"trellis_decim": 8.0},
+        {"trellis_atlas": 64},
+        {"trellis_atlas": True},
     ],
 )
 def test_an_out_of_range_server_axis_is_refused_before_any_write(svc, kwargs):

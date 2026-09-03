@@ -51,7 +51,9 @@ from .validation import (
     ALLOWED_RESOLUTIONS,
     check_prompt,
     check_seed,
+    check_trellis_atlas,
     check_trellis_band,
+    check_trellis_decim,
     check_trellis_gsh,
     check_trellis_gss,
     check_trellis_max_tokens,
@@ -84,6 +86,8 @@ KWARG_AXES = (
     "trellis_gss",
     "trellis_gsh",
     "trellis_max_tokens",
+    "trellis_decim",
+    "trellis_atlas",
 )
 
 # Which of the above ``guidance.normalize`` is handed, and whose output is
@@ -102,14 +106,16 @@ NORMALIZED_KWARGS = (
     "negative_prompt",
 )
 
-# The five that decide how trellis-server is launched, and therefore the five
-# units are grouped by -- a change to any of them is a server restart.
+# The seven that decide how trellis-server is launched, and therefore the
+# seven units are grouped by -- a change to any of them is a server restart.
 SERVER_AXES = (
     "trellis_tex_res",
     "trellis_band",
     "trellis_gss",
     "trellis_gsh",
     "trellis_max_tokens",
+    "trellis_decim",
+    "trellis_atlas",
 )
 
 # How many jobs one submit may queue -- a guard against a runaway fan-out from
@@ -404,6 +410,8 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> str:
     check_trellis_gss(kwargs.get("trellis_gss"))
     check_trellis_gsh(kwargs.get("trellis_gsh"))
     check_trellis_max_tokens(kwargs.get("trellis_max_tokens"))
+    check_trellis_decim(kwargs.get("trellis_decim"))
+    check_trellis_atlas(kwargs.get("trellis_atlas"))
     resolution = kwargs.get("resolution")
     if resolution is not None and resolution not in ALLOWED_RESOLUTIONS:
         raise Invalid(

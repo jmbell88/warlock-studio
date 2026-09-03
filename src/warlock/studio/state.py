@@ -31,6 +31,7 @@ def default_form_2d() -> dict[str, Any]:
     opened on the same seed and a first Generate reproduced last week's image.
     """
     from .. import models
+    from ..guidance import DEFAULT_NEGATIVE_PROMPT
     from ..service.sprites import DEFAULT_SPRITE_OUTLINE
     from ..service.tilesheets import DEFAULT_MODE as DEFAULT_TILE_MODE
     from ..service.validation import random_seed
@@ -38,7 +39,12 @@ def default_form_2d() -> dict[str, Any]:
 
     return {
         "prompt": "",
-        "negative_prompt": "",
+        # Pre-filled with the game-asset default rather than empty, and the
+        # doors send the box verbatim: ``guidance.normalize`` reads a missing
+        # key as "use the default" and an explicit "" as "no negative prompt at
+        # all", so an empty box has to *mean* the second, and it can only do
+        # that if the default is what the user sees and can delete.
+        "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
         # Explicit rather than empty: the combo and the stored form must say
         # the same model guidance.normalize will run.  An empty selection used
         # to draw the registry's first row while silently submitting a

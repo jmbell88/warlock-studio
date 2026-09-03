@@ -111,6 +111,8 @@ class TrellisServer:
         gss: float | None = None,
         gsh: float | None = None,
         max_tokens: int | None = None,
+        decim: int | None = None,
+        atlas: int | None = None,
     ) -> None:
         self._exe = exe
         self._models_dir = models_dir
@@ -122,6 +124,8 @@ class TrellisServer:
         self._gss = gss
         self._gsh = gsh
         self._max_tokens = max_tokens
+        self._decim = decim
+        self._atlas = atlas
         self._proc: subprocess.Popen[bytes] | None = None
         self._lock = asyncio.Lock()
         # stop() is called from the event loop (ensure_started's own reap and
@@ -178,10 +182,20 @@ class TrellisServer:
             argv += ["--gsh", str(self._gsh)]
         if self._max_tokens is not None:
             argv += ["--max-tokens", str(self._max_tokens)]
+        # ``is not None`` and never truthiness: --decim 0 is the rung that
+        # matters (it turns the exe's own 300K-face simplify off), and a
+        # truthy test would silently drop it.
+        if self._decim is not None:
+            argv += ["--decim", str(self._decim)]
+        if self._atlas is not None:
+            argv += ["--atlas", str(self._atlas)]
         return argv
 
     def _launch_config(self) -> tuple[Any, ...]:
-        return (self._tex_res, self._band, self._gss, self._gsh, self._max_tokens)
+        return (
+            self._tex_res, self._band, self._gss, self._gsh, self._max_tokens,
+            self._decim, self._atlas,
+        )
 
     def ensure_config(
         self,
@@ -191,6 +205,8 @@ class TrellisServer:
         gss: float | None = None,
         gsh: float | None = None,
         max_tokens: int | None = None,
+        decim: int | None = None,
+        atlas: int | None = None,
     ) -> bool:
         """Adopt a launch config, stopping a server running with a different one.
 
@@ -211,17 +227,20 @@ class TrellisServer:
         ``asyncio.to_thread`` exactly as they dispatch ``stop``.
         """
         with self._stop_lock:
-            wanted = (tex_res, band, gss, gsh, max_tokens)
+            wanted = (tex_res, band, gss, gsh, max_tokens, decim, atlas)
             changed = self._launch_config() != wanted
-            self._tex_res, self._band, self._gss, self._gsh, self._max_tokens = wanted
+            (
+                self._tex_res, self._band, self._gss, self._gsh, self._max_tokens,
+                self._decim, self._atlas,
+            ) = wanted
             # Read under the same lock that guards stop()'s check-then-act, and
             # released before calling it: _stop_lock is a plain Lock.
             restart = changed and self._proc is not None and self._proc.poll() is None
         if restart:
             log.info(
                 "trellis-server config changed (tex_res=%s band=%s gss=%s gsh=%s "
-                "max_tokens=%s); restarting",
-                tex_res, band, gss, gsh, max_tokens,
+                "max_tokens=%s decim=%s atlas=%s); restarting",
+                tex_res, band, gss, gsh, max_tokens, decim, atlas,
             )
             self.stop()
         return restart

@@ -37,7 +37,9 @@ from .validation import (
     check_glb,
     check_prompt,
     check_seed,
+    check_trellis_atlas,
     check_trellis_band,
+    check_trellis_decim,
     check_trellis_gsh,
     check_trellis_gss,
     check_trellis_max_tokens,
@@ -236,6 +238,8 @@ def create_job(
     trellis_gss: float | None = None,
     trellis_gsh: float | None = None,
     trellis_max_tokens: int | None = None,
+    trellis_decim: int | None = None,
+    trellis_atlas: int | None = None,
     image: bytes | None = None,
     reference: bytes | None = None,
     output: str = "model",
@@ -411,6 +415,8 @@ def create_job(
     check_trellis_gss(trellis_gss)
     check_trellis_gsh(trellis_gsh)
     check_trellis_max_tokens(trellis_max_tokens)
+    check_trellis_decim(trellis_decim)
+    check_trellis_atlas(trellis_atlas)
 
     # Validated up front: a rejected request must not leave an input.png behind.
     params = _normalize_guidance(
@@ -502,8 +508,15 @@ def create_job(
     ):
         if value is not None:
             params[key] = float(value)
-    if trellis_max_tokens is not None:
-        params["trellis_max_tokens"] = int(trellis_max_tokens)
+    # ``is not None`` on every one of these, and it is load-bearing for decim:
+    # 0 is the "no decimation" rung and must land in params as 0.
+    for key, value in (
+        ("trellis_max_tokens", trellis_max_tokens),
+        ("trellis_decim", trellis_decim),
+        ("trellis_atlas", trellis_atlas),
+    ):
+        if value is not None:
+            params[key] = int(value)
     if rig:
         # Validated now rather than 90 seconds later: an unusable template
         # should cost the request, not the whole generation that precedes the

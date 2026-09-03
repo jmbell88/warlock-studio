@@ -774,7 +774,7 @@ def test_the_retarget_panel_offers_only_raw_without_gltfpack():
 
 @pytest.mark.parametrize(
     "triangles,ok",
-    [(50_000, True), (100, False), (500_000, False)],
+    [(50_000, True), (100, False), (5_000_000, False)],
 )
 def test_the_retarget_panel_states_the_services_own_range(triangles, ok):
     from warlock.studio.panes import retarget_panel

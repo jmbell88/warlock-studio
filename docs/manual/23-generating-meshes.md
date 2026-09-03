@@ -113,7 +113,7 @@ and small, a 3D one in a scene. Higher resolutions cost more VRAM and more time,
 hold both models at once they may need the exclusive VRAM mode (`WARLOCK_VRAM_EXCLUSIVE=1`), which
 stops the reconstruction engine while the image model runs.
 
-There is deliberately no **Budget** control here. Only "Raw (no decimation)" has been qualified, so
+There is deliberately no **Budget** control here. Only "Raw (as reconstructed, ~300k faces)" has been qualified, so
 the triangle-reduction tier is not something this form can offer a choice about, and a control that
 exists to explain its own inertness is worse than no control. See
 [Triangle budget](#triangle-budget) for where a budget can actually be chosen today. Once a tier is
@@ -134,7 +134,10 @@ on every job.
 `auto` is the default and is right almost always; the other two exist for images `auto` gets wrong.
 
 **Mesh seed** is the reconstruction's own seed, separate from the image seed, with its own **Reroll**
-button. Leave it at zero to let the job pick one.
+button and its own **Lock seed** switch. Leave it at zero to let the job pick one. Unlocked, every
+accepted **Make 3D** draws a fresh seed for the next one — the engine is deterministic in its seed,
+so pressing the button twice on the same reference with the seed left alone would give you the
+identical mesh twice. Lock it when you want exactly that.
 
 **Normalise the reference** recentres the subject and scales it to fill the frame before the engine
 sees it. It is off by default: the engine does its own cropping, and whether doing it twice helps or
@@ -153,12 +156,14 @@ seconds of mesh processing rather than another two minutes of reconstruction.
 The control is in the inspector at the **Rig** stage, under the collapsed **Triangle budget**
 header. It appears only on jobs that have a `source.glb` — older jobs and rig jobs do not.
 
-Five tiers exist in the code: Raw (full density), Draft (20k), Standard (50k), Detailed (100k) and
+Five tiers exist in the code: Raw (as reconstructed — the engine has already simplified it to about
+300k faces at resolution 1024, 150k at 512, unless `WARLOCK_TRELLIS_DECIM=0` is set), Draft (20k),
+Standard (50k), Detailed (100k) and
 Custom. `gltfpack` — the binary every decimating tier runs through — is a one-time manual drop into
 `vendor/gltfpack/` like the reconstruction engine, not something the checkout brings with it; see
 [Installation](38-installation.md#gltfpack). When it is there this panel offers the whole list, and
 Custom gains a triangle-count field with its own valid range. When it is not, `warlock doctor` says
-so and every tier ships the raw reconstruction instead of failing.
+so and every tier ships the engine's own output instead of failing.
 **The generate form still offers Raw alone**, because none of the decimating tiers has been
 qualified yet: a tier is only exposed there once it has been run against a chest, a sword and a rock
 and shown to keep UVs, both PBR maps and material assignment. This panel is where that qualifying
@@ -178,8 +183,8 @@ staged and swapped, so nothing reading the old one sees a truncated file.
 
 A triangle budget keeps the reconstruction's surface and thins it. A remesh replaces the surface:
 the mesh is rebuilt as **quads** at a face budget, unwrapped afresh, and the old colour, roughness
-and normals are baked onto the new geometry. This is the step that turns a ~300k-triangle
-reconstruction into something an engine budgets for, and it is what every commercial generator
+and normals are baked onto the new geometry. This is the step that turns the engine's ~300k-face
+output into something an engine budgets for, and it is what every commercial generator
 calls "game-ready". Because the high-resolution geometry ends up in a tangent-space normal map,
 a 2k-quad prop keeps most of the detail the budget threw away.
 
@@ -313,7 +318,7 @@ The inspector's **Export** tab lists everything you can take away, as a two-colu
 | Button | File | Notes |
 | --- | --- | --- |
 | GLB | `model.glb` | The finished asset: optimised, grounded, textured. |
-| Source GLB | `source.glb` | The raw reconstruction at full density, before optimisation and grounding. |
+| Source GLB | `source.glb` | The reconstruction as the engine returned it — already simplified to about 300k faces by the engine unless `WARLOCK_TRELLIS_DECIM=0` — before optimisation and grounding. |
 | STL | `model.stl` | Geometry only. |
 | OBJ (zip) | `model_obj.zip` | OBJ plus its material and texture files. |
 | FBX | `model.fbx` | Needs Blender; the button says so when it is missing. |
