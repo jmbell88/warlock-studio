@@ -1030,12 +1030,25 @@ def lora_manifest_path(config: Any) -> Path:
     return Path(config.t2i_model_root) / "loras" / "manifests.json"
 
 
-#: ``{path: (mtime_or_None, rows)}`` -- ``None`` for a cached miss (absent or
-#: unreadable), which can never collide with a real mtime. ``bench/findings.py``
+#: ``{path: (stamp_or_None, rows)}`` -- ``None`` for a cached miss (absent or
+#: unreadable), which can never collide with a real stamp. The stamp is
+#: ``(st_mtime_ns, st_size)`` rather than the mtime alone: an import followed
+#: by a remove rewrites the file twice inside one filesystem timestamp tick
+#: (NTFS reports 100 ns, and two atomic renames land inside that on a warm
+#: cache), and the second read then served the first write's rows --
+#: ``tests/test_loras.py`` failed on exactly that, two runs in three. Every
+#: write below also drops the entry outright, so the stamp is the second
+#: line of defence, not the first. ``bench/findings.py``
 #: verbatim, and for the same reason: ``resolve_recipe`` calls this and the
 #: Create pane resolves a recipe *three times a frame*, so an idle Create tab
 #: re-read and re-parsed ``manifests.json`` 180 times a second.
-_MANIFEST_CACHE: dict[Any, tuple[float | None, list[LoraManifest]]] = {}
+_MANIFEST_CACHE: dict[Any, tuple[tuple[int, int] | None, list[LoraManifest]]] = {}
+
+
+def _forget_manifests(path: Path) -> None:
+    """Drop the cached rows for ``path``: called after every rewrite so a
+    reader in the same tick cannot be served the previous contents."""
+    _MANIFEST_CACHE.pop(path, None)
 
 
 def load_lora_manifests(config: Any) -> list[LoraManifest]:
@@ -1049,7 +1062,8 @@ def load_lora_manifests(config: Any) -> list[LoraManifest]:
     except (AttributeError, TypeError, ValueError):
         return []
     try:
-        mtime: float | None = path.stat().st_mtime
+        st = path.stat()
+        mtime: tuple[int, int] | None = (st.st_mtime_ns, st.st_size)
     except OSError:
         _MANIFEST_CACHE[path] = (None, [])
         return []
@@ -1123,6 +1137,7 @@ def remove_imported_lora(config: Any, key: str) -> bool:
         fh.write(payload)
         temp = Path(fh.name)
     temp.replace(lora_manifest_path(config))
+    _forget_manifests(lora_manifest_path(config))
     # Resolved and re-checked against the directory before it is deleted, the
     # rule ``service.palettes._path`` and ``fetch.removal_plan`` both follow.
     # ``import_lora`` cannot write a filename with a separator in it, so today
@@ -1210,5 +1225,6 @@ def import_lora(
         fh.write(payload)
         temp = Path(fh.name)
     temp.replace(path)
+    _forget_manifests(path)
     register_imported_loras(config)
     return manifest

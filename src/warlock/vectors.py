@@ -90,6 +90,9 @@ VECTOR_PARAMS = (
     "custom_triangles",
     "trellis_band",
     "trellis_tex_res",
+    "trellis_gss",
+    "trellis_gsh",
+    "trellis_max_tokens",
 )
 
 

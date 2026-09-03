@@ -31,32 +31,32 @@
     {
       "path": "vendor/trellis/ggml-base.dll",
       "size": 637952,
-      "sha256": "4919ac09ed4543cd69a8ed7322843d011216ba751b68aedd9313da9afa5c5b52"
+      "sha256": "876048c25fcffff85eaa3fb38657960f31b87dcdda4f86e5e18cdedd8ebe1099"
     },
     {
       "path": "vendor/trellis/ggml-cpu.dll",
       "size": 788480,
-      "sha256": "927afa2609d9280720ba4322fb440d04abfb3cf989c7b049007fbce4c1d8f27b"
+      "sha256": "dfbb08d83a6550cf207f0c36590cc1f7d4193caf944656c1246b9116c21dc8d5"
     },
     {
       "path": "vendor/trellis/ggml-cuda.dll",
-      "size": 338202624,
-      "sha256": "3b0a876bd1b4bb30105aa2e1c28930d125ac529b8464acbe5bfba638d8698d7c"
+      "size": 338211840,
+      "sha256": "f4c3de9de67410cac14f1befa5a287580ee43ac32a3a3cb67e8a815b7a8189ab"
     },
     {
       "path": "vendor/trellis/ggml.dll",
       "size": 67072,
-      "sha256": "2d50bb8c8f1f0708fd2e111c93eede8e4544620c35ce9f44046f1737936ab9c8"
+      "sha256": "5115ba590271034f5008ba000adfa80b61c207ba6244226e8a4f41e4a5f7c9bd"
     },
     {
       "path": "vendor/trellis/trellis-cli.exe",
-      "size": 1652736,
-      "sha256": "8980a1a2dac848528cf7e3ae7f0452259c666cbbae43488cd9fe9bae082bd0ec"
+      "size": 2732544,
+      "sha256": "e3d075612388a42fcb9bea73377feac4149e3a463cff2d2e11b24975e85d427d"
     },
     {
       "path": "vendor/trellis/trellis-server.exe",
-      "size": 1897472,
-      "sha256": "ff7654354c0fcea96b4453a45c348d1e59c56ebd3f937245b9331821e0186bfe"
+      "size": 2976768,
+      "sha256": "e7d5b94a7bea2635e93616eddcb81fe52ca3e0eef31e843c3f1063874a6c0653"
     },
     {
       "path": "vendor/gltfpack/gltfpack.exe",

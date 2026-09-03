@@ -1,0 +1,32 @@
+# fantasy-v1 -- high-fantasy 2D-game props, 2026-09-02
+#
+# One subject per line: `class | prompt`. Blank lines and `#` lines are ignored.
+# Read by scripts/campaign_props.py --corpus; queued the same day on trellis.cpp
+# v0.6.0 at the shipped defaults, tag `fantasy-v1`. Written to the props-v1
+# rules: one subject, a bare noun phrase, nothing that runs off the frame, and
+# the difficulty class stays here rather than on the job so grading is blind.
+# The subjects are the inventory a top-down or side-scrolling fantasy game
+# actually draws: pickups, containers, weapons, furniture, set dressing.
+
+easy | a red health potion in a round glass flask with a cork
+easy | a blue mana potion in a tall glass vial
+easy | a leather-bound spellbook with brass clasps
+easy | a burlap sack of grain tied at the neck
+easy | a wooden signpost with two pointing arrows
+easy | a round wooden shield with an iron boss
+easy | a plain iron longsword with a leather-wrapped grip
+easy | a wax-sealed scroll tied with red ribbon
+medium | an ornate golden chalice set with rubies
+medium | a gnarled wooden wizard's staff topped with a glowing crystal
+medium | a blacksmith's forge with glowing coals and a bellows
+medium | a market stall with a striped awning and crates of apples
+medium | a stone gravestone with a carved cross, moss on its base
+medium | a wooden crossbow with a taut string
+medium | an iron-barred dungeon door set in a stone arch
+medium | a wooden tavern table with a tankard and a loaf of bread
+hard | a crystal ball on a clawed brass stand
+hard | a wooden cart with two spoked wheels, loaded with hay
+hard | a stone fountain with water in its basin
+humanoid | a goblin scout in a ragged hood holding a dagger
+humanoid | a plate-armoured paladin holding a tower shield
+humanoid | a robed elf mage holding an open book

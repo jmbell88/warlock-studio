@@ -709,7 +709,9 @@ def upload_bytes(ctx: Any, data: bytes) -> None:
     def run():
         return svc_jobs.create_job(ctx.svc, image=data, **kwargs)
 
-    ctx.submit("submit", run)
+    from . import settings_2d
+
+    settings_2d.submit_job(ctx, run)
 
 
 def _upload_kwargs(ctx: Any) -> dict[str, Any]:
@@ -757,4 +759,6 @@ def upload(ctx: Any, path: Path) -> None:
             raise Invalid(f"could not read {path.name}: {exc}", field="image") from exc
         return svc_jobs.create_job(ctx.svc, image=data, **kwargs)
 
-    ctx.submit("submit", run)
+    from . import settings_2d
+
+    settings_2d.submit_job(ctx, run)

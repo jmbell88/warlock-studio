@@ -90,6 +90,9 @@ async def run_band(
         webp=config.trellis_webp,
         tex_res=config.trellis_tex_res,
         band=band,
+        gss=config.trellis_gss,
+        gsh=config.trellis_gsh,
+        max_tokens=config.trellis_max_tokens,
     )
     started = time.monotonic()
     try:

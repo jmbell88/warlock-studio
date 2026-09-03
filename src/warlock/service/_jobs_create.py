@@ -38,6 +38,9 @@ from .validation import (
     check_prompt,
     check_seed,
     check_trellis_band,
+    check_trellis_gsh,
+    check_trellis_gss,
+    check_trellis_max_tokens,
     check_trellis_tex_res,
     check_vram,
     check_weights,
@@ -230,6 +233,9 @@ def create_job(
     custom_triangles: int | None = None,
     trellis_band: int | None = None,
     trellis_tex_res: int | None = None,
+    trellis_gss: float | None = None,
+    trellis_gsh: float | None = None,
+    trellis_max_tokens: int | None = None,
     image: bytes | None = None,
     reference: bytes | None = None,
     output: str = "model",
@@ -402,6 +408,9 @@ def create_job(
         check_seed(name, value)
     check_trellis_band(trellis_band)
     check_trellis_tex_res(trellis_tex_res)
+    check_trellis_gss(trellis_gss)
+    check_trellis_gsh(trellis_gsh)
+    check_trellis_max_tokens(trellis_max_tokens)
 
     # Validated up front: a rejected request must not leave an input.png behind.
     params = _normalize_guidance(
@@ -486,6 +495,15 @@ def create_job(
         # default is auto, so nothing can currently want it.
         if value is not None:
             params[key] = int(value)
+    # The 2026-09-02 launch axes follow the same unset-follows-config rule.
+    for key, value in (
+        ("trellis_gss", trellis_gss),
+        ("trellis_gsh", trellis_gsh),
+    ):
+        if value is not None:
+            params[key] = float(value)
+    if trellis_max_tokens is not None:
+        params["trellis_max_tokens"] = int(trellis_max_tokens)
     if rig:
         # Validated now rather than 90 seconds later: an unusable template
         # should cost the request, not the whole generation that precedes the

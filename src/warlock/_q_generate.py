@@ -607,6 +607,15 @@ class GenerateOps:
             band=int(params["trellis_band"])
             if "trellis_band" in params
             else self.config.trellis_band,
+            gss=float(params["trellis_gss"])
+            if "trellis_gss" in params
+            else self.config.trellis_gss,
+            gsh=float(params["trellis_gsh"])
+            if "trellis_gsh" in params
+            else self.config.trellis_gsh,
+            max_tokens=int(params["trellis_max_tokens"])
+            if "trellis_max_tokens" in params
+            else self.config.trellis_max_tokens,
         )
 
         self.progress.update(

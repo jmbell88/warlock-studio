@@ -19,6 +19,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -107,6 +108,9 @@ class TrellisServer:
         webp: bool = False,
         tex_res: int = 512,
         band: int | None = None,
+        gss: float | None = None,
+        gsh: float | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         self._exe = exe
         self._models_dir = models_dir
@@ -115,6 +119,9 @@ class TrellisServer:
         self._webp = webp
         self._tex_res = tex_res
         self._band = band
+        self._gss = gss
+        self._gsh = gsh
+        self._max_tokens = max_tokens
         self._proc: subprocess.Popen[bytes] | None = None
         self._lock = asyncio.Lock()
         # stop() is called from the event loop (ensure_started's own reap and
@@ -163,9 +170,28 @@ class TrellisServer:
         # heuristic is what runs when the flag is absent.
         if self._band is not None:
             argv += ["--band", str(self._band)]
+        # Same rule for the guidance strengths and the token budget: absent
+        # means the exe's default, which --help does not print.
+        if self._gss is not None:
+            argv += ["--gss", str(self._gss)]
+        if self._gsh is not None:
+            argv += ["--gsh", str(self._gsh)]
+        if self._max_tokens is not None:
+            argv += ["--max-tokens", str(self._max_tokens)]
         return argv
 
-    def ensure_config(self, *, tex_res: int, band: int | None) -> bool:
+    def _launch_config(self) -> tuple[Any, ...]:
+        return (self._tex_res, self._band, self._gss, self._gsh, self._max_tokens)
+
+    def ensure_config(
+        self,
+        *,
+        tex_res: int,
+        band: int | None,
+        gss: float | None = None,
+        gsh: float | None = None,
+        max_tokens: int | None = None,
+    ) -> bool:
         """Adopt a launch config, stopping a server running with a different one.
 
         -> whether a running server was stopped. There is no new spawn site: the
@@ -185,16 +211,17 @@ class TrellisServer:
         ``asyncio.to_thread`` exactly as they dispatch ``stop``.
         """
         with self._stop_lock:
-            changed = (self._tex_res, self._band) != (tex_res, band)
-            self._tex_res = tex_res
-            self._band = band
+            wanted = (tex_res, band, gss, gsh, max_tokens)
+            changed = self._launch_config() != wanted
+            self._tex_res, self._band, self._gss, self._gsh, self._max_tokens = wanted
             # Read under the same lock that guards stop()'s check-then-act, and
             # released before calling it: _stop_lock is a plain Lock.
             restart = changed and self._proc is not None and self._proc.poll() is None
         if restart:
             log.info(
-                "trellis-server config changed (tex_res=%s band=%s); restarting",
-                tex_res, band,
+                "trellis-server config changed (tex_res=%s band=%s gss=%s gsh=%s "
+                "max_tokens=%s); restarting",
+                tex_res, band, gss, gsh, max_tokens,
             )
             self.stop()
         return restart

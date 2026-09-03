@@ -138,6 +138,7 @@ def guidance_catalog(svc: WarlockService) -> dict[str, Any]:
                 validation.MIN_TRELLIS_TEX_RES,
                 validation.MAX_TRELLIS_TEX_RES,
             ],
+            "trellis_max_tokens_range": [1, validation.MAX_TRELLIS_MAX_TOKENS],
             "custom_triangles_range": [optimize.CUSTOM_MIN, optimize.CUSTOM_MAX],
         }
     }

@@ -329,7 +329,7 @@ def _probe_blender() -> Check:
 # for ``TRELLIS_GGUF_REVISION``'s reason one paragraph down: this is a *fatal*
 # row, so the remedy is the only path a fresh install has, and an unpinned one
 # hands the user whatever shipped this week.
-TRELLIS_EXE_VERSION = "v0.5.4"
+TRELLIS_EXE_VERSION = "v0.6.0"
 TRELLIS_EXE_ASSET = "trellis-cuda-windows-x64.zip"
 TRELLIS_EXE_URL = (
     f"https://github.com/pwilkin/trellis.cpp/releases/download/"
@@ -342,7 +342,7 @@ TRELLIS_EXE_URL = (
 # bumping ``TRELLIS_EXE_VERSION`` without re-reading the digest is worse than
 # publishing none, because a mismatch then reads as tampering rather than as a
 # stale constant.
-TRELLIS_EXE_SHA256 = "f7d2912b064bf1520f03e025c5eb344df6b347ad04831ac7aa04d847581bd7ad"
+TRELLIS_EXE_SHA256 = "4d08ab27e83094035fd8349aaf34d3460738df0466ef9c4991ddd958c0344bc2"
 TRELLIS_EXE_HINT = (
     f"download {TRELLIS_EXE_ASSET} from {TRELLIS_EXE_URL} and unpack it there "
     f"(vendored build: {TRELLIS_EXE_VERSION}; sha256 {TRELLIS_EXE_SHA256}), "

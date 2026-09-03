@@ -52,6 +52,9 @@ from .validation import (
     check_prompt,
     check_seed,
     check_trellis_band,
+    check_trellis_gsh,
+    check_trellis_gss,
+    check_trellis_max_tokens,
     check_trellis_tex_res,
     check_vram,
     check_weights,
@@ -78,6 +81,9 @@ KWARG_AXES = (
     "size_m",
     "trellis_band",
     "trellis_tex_res",
+    "trellis_gss",
+    "trellis_gsh",
+    "trellis_max_tokens",
 )
 
 # Which of the above ``guidance.normalize`` is handed, and whose output is
@@ -96,9 +102,15 @@ NORMALIZED_KWARGS = (
     "negative_prompt",
 )
 
-# The two that decide how trellis-server is launched, and therefore the two
-# units are grouped by.
-SERVER_AXES = ("trellis_tex_res", "trellis_band")
+# The five that decide how trellis-server is launched, and therefore the five
+# units are grouped by -- a change to any of them is a server restart.
+SERVER_AXES = (
+    "trellis_tex_res",
+    "trellis_band",
+    "trellis_gss",
+    "trellis_gsh",
+    "trellis_max_tokens",
+)
 
 # How many jobs one submit may queue -- a guard against a runaway fan-out from
 # a mis-typed axis list, and nothing more.
@@ -389,6 +401,9 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> str:
     check_seed("seed", kwargs["seed"])
     check_trellis_band(kwargs.get("trellis_band"))
     check_trellis_tex_res(kwargs.get("trellis_tex_res"))
+    check_trellis_gss(kwargs.get("trellis_gss"))
+    check_trellis_gsh(kwargs.get("trellis_gsh"))
+    check_trellis_max_tokens(kwargs.get("trellis_max_tokens"))
     resolution = kwargs.get("resolution")
     if resolution is not None and resolution not in ALLOWED_RESOLUTIONS:
         raise Invalid(

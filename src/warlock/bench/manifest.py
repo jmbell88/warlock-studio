@@ -27,6 +27,9 @@ FILENAME = "manifest.json"
 CONFIG_FIELDS = (
     "trellis_band",
     "trellis_tex_res",
+    "trellis_gss",
+    "trellis_gsh",
+    "trellis_max_tokens",
     "trellis_webp",
     "mesh_profile",
     "vram_exclusive",

@@ -165,6 +165,47 @@ def test_argv_band_configurable(tmp_path):
     assert argv[argv.index("--band") + 1] == "4"
 
 
+def test_argv_omits_guidance_and_token_flags_when_unset(tmp_path):
+    """The exe's defaults for these are not printed by --help; omitting the
+    flag is the only way to run them, so None must mean *absent*."""
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    argv = srv._argv()
+    assert "--gss" not in argv
+    assert "--gsh" not in argv
+    assert "--max-tokens" not in argv
+
+
+def test_argv_guidance_and_token_flags_configurable(tmp_path):
+    srv = TrellisServer(
+        tmp_path / "exe", tmp_path / "models", 17971,
+        gss=7.5, gsh=3.0, max_tokens=98304,
+    )
+    argv = srv._argv()
+    assert argv[argv.index("--gss") + 1] == "7.5"
+    assert argv[argv.index("--gsh") + 1] == "3.0"
+    assert argv[argv.index("--max-tokens") + 1] == "98304"
+
+
+def test_ensure_config_treats_guidance_and_tokens_as_launch_config(tmp_path):
+    """A change to any of the three is a restart, exactly like band."""
+    from types import SimpleNamespace
+
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    assert srv.ensure_config(tex_res=512, band=None, gss=7.5) is False  # nothing running
+    assert "--gss" in srv._argv()
+
+    calls = []
+    srv.stop = lambda: calls.append(1)
+    srv._proc = SimpleNamespace(poll=lambda: None, pid=1)
+    assert srv.ensure_config(tex_res=512, band=None, gss=7.5) is False
+    assert calls == []
+    assert srv.ensure_config(tex_res=512, band=None, gss=7.5, max_tokens=98304) is True
+    assert calls == [1]
+    argv = srv._argv()
+    assert argv[argv.index("--max-tokens") + 1] == "98304"
+    srv._proc = None
+
+
 def test_argv_includes_models_host_port(tmp_path):
     srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
     argv = srv._argv()

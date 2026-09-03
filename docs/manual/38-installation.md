@@ -61,7 +61,7 @@ The reconstruction engine is `trellis-server.exe`, a compiled CUDA binary from
 `trellis-cuda-windows-x64.zip` from that project's releases and unpack it into `vendor/trellis/`, so
 that `vendor/trellis/trellis-server.exe` exists.
 
-The vendored build is **v0.5.4** (2026-07-27). If you keep the binary somewhere else, point
+The vendored build is **v0.6.0** (2026-08-19). If you keep the binary somewhere else, point
 `WARLOCK_TRELLIS_EXE` at it — see [Environment variables](39-configuration.md#environment-variables).
 
 A missing binary is one of the **fatal** startup checks: no reconstruction engine means no mesh, and

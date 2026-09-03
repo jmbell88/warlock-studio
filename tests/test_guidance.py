@@ -393,13 +393,15 @@ def test_a_cross_family_style_lora_is_refused_by_name():
     assert guidance.normalize({"base_model": base_key})["base_model"] == base_key
 
 
-def test_a_base_no_adapter_fits_is_refused_naming_the_base():
-    """The second branch, verbatim as it was before the pairing existed."""
-    empty = [k for k, v in models.loras_by_base().items() if not v]
-    if not empty:
-        pytest.skip("every base in the registry now takes some style LoRA")
+def test_a_base_no_adapter_fits_is_refused_naming_the_base(monkeypatch):
+    """The second branch. Every base in the registry takes some style LoRA
+    today, so the "none fits" answer is staged rather than found -- the
+    branch exists for the registry of tomorrow and used to skip on every
+    run, which is a test that guards nothing."""
+    base_key, lora_key = _mismatched_pair()
+    monkeypatch.setattr(models, "loras_by_base", lambda: {base_key: []})
     with pytest.raises(ValueError, match="cannot take a style LoRA") as exc:
-        guidance.normalize({"style_lora": "render3d", "base_model": empty[0]})
+        guidance.normalize({"style_lora": lora_key, "base_model": base_key})
     assert exc.value.field == "base_model"
 
 

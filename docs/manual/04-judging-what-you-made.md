@@ -130,5 +130,5 @@ in Create. If you reach for the Wireframe button here out of habit, that is why 
 ## What to read next
 
 That is the pipeline end to end: make, find, judge. The remaining tutorial chapters are about the
-six workspaces, and they are independent of each other — read whichever matches what you want to
+seven workspaces, and they are independent of each other — read whichever matches what you want to
 make. [Drawing](05-drawing.md) is the usual next stop, and needs no GPU at all.

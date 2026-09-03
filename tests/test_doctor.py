@@ -606,16 +606,16 @@ def test_the_gguf_remedy_downloads_into_the_configured_models_dir(tmp_path):
 
 def test_the_exe_remedy_names_the_exact_release_asset_and_its_digest(tmp_path):
     """The binary is the one unsigned third-party download in the setup, so
-    the remedy pins the direct v0.5.4 asset URL and the SHA-256 GitHub
+    the remedy pins the direct v0.6.0 asset URL and the SHA-256 GitHub
     publishes for it -- a bare releases page gave the user nothing to verify
     a download against."""
     checks = {c.name: c for c in run_checks(_config(tmp_path))}
     detail = checks["trellis-server.exe"].detail
     assert (
-        "https://github.com/pwilkin/trellis.cpp/releases/download/v0.5.4/"
+        "https://github.com/pwilkin/trellis.cpp/releases/download/v0.6.0/"
         "trellis-cuda-windows-x64.zip"
     ) in detail
-    assert "f7d2912b064bf1520f03e025c5eb344df6b347ad04831ac7aa04d847581bd7ad" in detail
+    assert "4d08ab27e83094035fd8349aaf34d3460738df0466ef9c4991ddd958c0344bc2" in detail
 
 
 # --- host commit -------------------------------------------------------------

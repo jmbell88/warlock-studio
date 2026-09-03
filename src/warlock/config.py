@@ -282,7 +282,12 @@ class Config:
     # minutes of GPU the user did not ask for, and a remesh is a reroll rather
     # than a repair: the second reconstruction can perfectly well be worse than
     # the first, which is why the loop keeps whichever attempt measured best
-    # rather than whichever came last.
+    # rather than whichever came last. Graded on 2026-09-02
+    # (docs/measurements/2026-09-02-hole-audit-vs-grade.md): the loop was run
+    # for real on the five meshes the trigger still fires on under v0.6.0 and
+    # the reviewer graded the kept attempts 0 of 5 usable -- the trigger sees
+    # perforated skins, which that release fixed, and what remains is open
+    # forms a reroll cannot close.
     mesh_retries: int = field(
         default_factory=lambda: max(0, _env_int("WARLOCK_MESH_RETRIES", 0))
     )
@@ -388,6 +393,24 @@ class Config:
     # this exe at these settings. Re-measure before acting on that claim.
     trellis_band: int | None = field(
         default_factory=lambda: _env_opt_int("WARLOCK_TRELLIS_BAND", DEFAULT_TRELLIS_BAND)
+    )
+    # The three launch flags the exe accepts that Warlock never passed until
+    # 2026-09-02: --gss / --gsh (guidance strengths for the sparse-structure
+    # and structured-latent stages) and --max-tokens (the high-resolution token
+    # budget). None omits the flag, so the exe's own default runs -- and that
+    # default is *not printed by --help*, so the first rung of any sweep over
+    # these must be "omitted", never a number copied from a guess. They exist
+    # as sweep axes for the props-v1 hole question (docs/measurements/
+    # 2026-08-30-sdxl-cfg-props.md); a winning rung becomes a default here by
+    # a measurement doc, not before.
+    trellis_gss: float | None = field(
+        default_factory=lambda: _env_opt_float("WARLOCK_TRELLIS_GSS")
+    )
+    trellis_gsh: float | None = field(
+        default_factory=lambda: _env_opt_float("WARLOCK_TRELLIS_GSH")
+    )
+    trellis_max_tokens: int | None = field(
+        default_factory=lambda: _env_opt_int("WARLOCK_TRELLIS_MAX_TOKENS", None)
     )
     # Tri-state, and the None is the point. Unset means "decide from the card":
     # studio.runtime resolves it through vram.plan() at startup and writes a
@@ -527,6 +550,9 @@ SETTINGS: tuple[tuple[str, str], ...] = (
     ("trellis_webp", "WARLOCK_TRELLIS_WEBP"),
     ("trellis_tex_res", "WARLOCK_TRELLIS_TEX_RES"),
     ("trellis_band", "WARLOCK_TRELLIS_BAND"),
+    ("trellis_gss", "WARLOCK_TRELLIS_GSS"),
+    ("trellis_gsh", "WARLOCK_TRELLIS_GSH"),
+    ("trellis_max_tokens", "WARLOCK_TRELLIS_MAX_TOKENS"),
     ("gltfpack_exe", "WARLOCK_GLTFPACK"),
     ("mesh_profile", "WARLOCK_MESH_PROFILE"),
     ("mesh_retries", "WARLOCK_MESH_RETRIES"),
