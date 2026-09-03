@@ -16,6 +16,49 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
+## 0.0.31 — 2026-09-03
+
+- **Flourish: procedural spell and VFX effects, inside Inker.** **Flourish → Insert effect...** puts
+  one of twenty-nine presets — fireball, explosion, lightning, heal, poison cloud, ice nova, portal,
+  slash, meteor, ground shockwave and the rest — into the document as a layer group with one tag
+  per phase (*cast*, *projectile*, *impact*, *explosion*, *dissipate*), rendered from a *recipe*: a
+  seed, phases, and a stack of primitive layers (core, flame, particles, smoke, ring, flash, glow,
+  trail, heat shimmer, sprite) with animation curves. Every primitive is stateless, so frame forty
+  renders before frame thirty-nine and the same recipe renders the same bytes on any machine
+  (`tests/inker/flourish/digests.json` pins them; seeds come from a layer's stack position, never
+  its uid, because uids are reissued on every load). Painterly keeps a layer per ingredient; pixel
+  art runs the existing `pipelines/pixelize` pass once, on the composite, after the facing
+  rotation, with one palette over every frame. One to eight facings turn the *simulation*, not the
+  pixels. Nine layers at 128 px cost 130 ms a frame after two measured rules (noise sampled at
+  logical resolution, discs painted only in their windows); the first draft was 1,100 ms.
+- **The inspector under the timeline**, drawn only on an effect layer: seed, rate, look, every
+  phase's frames and loop, and every parameter of the picked layer from the primitive's own
+  table. Edits are pending until the value rests a quarter second; then one render runs in a task
+  and lands as **one undo step**. **Nothing you painted is overwritten silently**: every render
+  records a digest per cel, an untouched cel takes the new render, a painted one keeps the paint
+  and is flagged — the character-sheet merge's three-way rule, applied to effects. Keep painted
+  cels, Replace painted cels, Detach. The recipe, digests and textures ride in the `.ora` beside
+  the group (`animation.json`'s additive `flourish` key, `data/flourish{n}_{id}.png` members);
+  `.aseprite` keeps the layers and tags and drops the recipe (`docs/COMPAT.md`).
+- **Export per phase** is the per-tag sheet export, since a phase is a tag; **Engine snippet...**
+  shows the lines that load one exported phase in Pygame-CE, Godot, Unity or Phaser, with Copy.
+- **Three AI doors, all opt-in, each owed a measurement** (TODO.md P19–P21) before anything uses
+  it by default. *Textures*: **Use selection as texture** (offline) or **Generate texture...** (a
+  reference job, keyed out of black, or matted where the machine has BiRefNet) become assets a
+  sprite layer or textured particles stamp; a missing asset renders nothing, never a placeholder.
+  *The prompt field*: "colder, more sparks, no smoke" through a fixed vocabulary
+  (`flourish/keywords.py`, deterministic), or through a small local instruct model when one is
+  placed at `<model root>/text-instruct/` (`pipelines/recipe_worker.py`, one-shot in the
+  kill-on-close job) — asked for a diff and nothing else, and every answer clamped by the same
+  funnel a slider goes through. The model is deliberately **not** a registry entry: every entry
+  carries a fetch pinned to a revision, and the pin comes from the measurement that picks the
+  model. Doctor has a row for it. *Restyled keyframes*: a few frames of a phase through the image
+  model as img2img, the frames between crossfaded under the recipe's own motion field, landed as
+  a snapshot track a regenerate never touches.
+- Manual: tutorial **15 Casting a spell**, an **Effects** section in the animation chapter. The
+  decision record is in `docs/INVARIANTS.md`: it lives in Inker because its output is an Inker
+  document; a thirteenth mode would have meant a bake round trip to clean up in Inker anyway.
+
 ## 0.0.30 — 2026-08-30
 
 - **Troupe's cleanup loop, two of its three pieces** (phase 6; the third, re-rendering one animation
