@@ -617,3 +617,119 @@ def test_a_fill_floor_reserves_room_out_of_the_shares_above_it():
     assert sum(got) == 900.0
     assert got[0] == 750.0, "the share gave way to what is under it"
     assert got[0] < 900.0 * 0.95
+
+
+# --- Settings' three layout doors, which all looked like they worked ---------
+#
+# The 2026-09-02 review found the same shape three times over in one pane: a
+# control that redraws, toasts and persists nothing. All three are here rather
+# than in ``test_layout.py`` because all three are really about what reaches
+# ``layouts.Library``, which is where a user's drags actually live.
+
+
+def _bound(workspace="inker"):
+    """A ``Layout`` and the ``Library`` it writes through, on one settings blob.
+
+    The pair, not either alone: every one of these defects lived in the seam
+    between them, and a test that builds only the ``Layout`` reproduces the
+    *old* passing behaviour.
+    """
+    from warlock.studio import layout as layout_mod
+
+    settings = _Settings()
+    library = layouts.Library(settings)
+    lay = layout_mod.Layout(settings)
+    lay.bind_workspace(library, workspace)
+    return settings, library, lay
+
+
+def test_a_rail_toggle_after_a_splitter_drag_is_still_saved():
+    """``save`` used to return early whenever a share edit had just gone to the
+    library -- and it is the only writer of ``rail`` and ``sidebar``. One drag
+    anywhere, and the next rail or sidebar choice was silently dropped."""
+    settings, _library, lay = _bound()
+
+    lay.set_share("inker.timeline", 0.4)
+    lay.set_rail("labels")
+
+    assert settings.get("layout")["rail"] == "labels"
+
+
+def test_a_sidebar_width_after_a_splitter_drag_is_still_saved():
+    settings, _library, lay = _bound()
+
+    lay.set_share("inker.timeline", 0.4)
+    lay.set_sidebar_width("wide")
+
+    assert settings.get("layout")["sidebar"] == "wide"
+
+
+def test_a_clamped_drag_does_not_swallow_the_next_save():
+    """The latch was armed by *any* call, including one clamped to the rail --
+    so a drag that moved nothing still cost the following preference."""
+    from warlock.studio import layout as layout_mod
+
+    settings, _library, lay = _bound()
+
+    lay.set_share("inker.timeline", layout_mod.SHARE_MAX + 10.0)
+    lay.set_rail("icons")
+
+    assert settings.get("layout")["rail"] == "icons"
+
+
+def test_choosing_a_named_sidebar_width_reaches_a_workspace_already_dragged():
+    """Settings' "Sidebar width" moved ``SIDEBAR_W``, which nothing in the
+    running app reads: ``measure`` fills ``SIDE_FIT`` from
+    ``Library.width``. The control was inert on every workspace."""
+    from warlock.studio import layout as layout_mod
+
+    _settings, library, lay = _bound()
+    library.set_width("inker", "left", 460.0)
+    assert library.width("inker", "left") == 460.0
+
+    lay.set_sidebar_width("narrow")
+
+    assert library.width("inker", "left") == layout_mod.SIDEBAR_WIDTHS["narrow"]
+    assert library.width("clay", "left") == layout_mod.SIDEBAR_WIDTHS["narrow"]
+
+
+def test_reset_pane_sizes_clears_the_splits_a_drag_actually_wrote():
+    """The button cleared the legacy global dict, which ``Layout.share`` only
+    consults when the library has nothing -- i.e. for the splits nobody had
+    ever moved. Every split the user had dragged came back unchanged."""
+    _settings, library, lay = _bound()
+    lay.set_share("inker.timeline", 0.7)
+    library.set_width("inker", "left", 460.0)
+
+    lay.reset_sizes()
+
+    assert library.arrangement("inker").shares == {}
+    assert library.arrangement("inker").widths == {}
+    assert library.share("inker", "inker.timeline") != pytest.approx(0.7)
+
+
+def test_reset_pane_sizes_keeps_the_pane_arrangement():
+    """Sizes, not *which panes are where*: ``hidden`` and ``columns`` belong to
+    "Reset pane layout", a different button with a different promise."""
+    _settings, library, lay = _bound()
+    lay.set_share("inker.timeline", 0.7)
+    arrangement = library.current().workspaces["inker"]
+    arrangement.hidden = ["swatches"]
+    arrangement.columns = {"left": ["tools", "layers"]}
+
+    lay.reset_sizes()
+
+    assert library.arrangement("inker").hidden == ["swatches"]
+    assert library.arrangement("inker").columns == {"left": ["tools", "layers"]}
+
+
+def test_an_unreadable_layout_is_never_rewritten_by_either_reset():
+    """A blob from a newer build stays verbatim, which is this feature's one
+    load-bearing safety property -- and both new doors write."""
+    settings = _Settings({layouts.LAYOUTS_KEY: {"default": {"v": 999, "mystery": 1}}})
+    library = layouts.Library(settings)
+
+    library.reset_sizes()
+    library.set_width_seed(360.0)
+
+    assert settings.get(layouts.LAYOUTS_KEY)["default"] == {"v": 999, "mystery": 1}

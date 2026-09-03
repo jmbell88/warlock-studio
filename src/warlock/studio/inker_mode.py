@@ -1559,6 +1559,11 @@ class _Leg:
     #: in the same step, so the two cannot come apart. Only a GIF reads it --
     #: see ``sheetout.index_plane_one``.
     planes: list[Any] = field(default_factory=list)
+    #: The colour table in force on each read frame -- the document's, or that
+    #: frame's own override. Parallel to ``planes`` and appended beside it, for
+    #: the same reason: a table read at a different moment than the slots it
+    #: resolves is a frame drawn with one frame's indices and another's colours.
+    palettes: list[Any] = field(default_factory=list)
 
     @property
     def done(self) -> bool:
@@ -1613,6 +1618,10 @@ class _Export:
     @property
     def planes(self) -> list[Any]:
         return self.leg.planes
+
+    @property
+    def palettes(self) -> list[Any]:
+        return self.leg.palettes
 
     @property
     def span(self) -> tuple[int, int] | None:
@@ -1929,6 +1938,25 @@ def _split_stems(
     return out
 
 
+def _frame_palette(doc: Any, uid: str) -> list | None:
+    """One frame's own colour table, or None to mean "the document's".
+
+    None rather than the effective table, so a document that has never used
+    per-frame palettes carries no per-frame data through the export at all:
+    ``has_frame_palettes`` is this feature's one-boolean gate everywhere else
+    (``group_fold``'s rule) and this keeps the export's cost the same shape.
+
+    Resolved by uid here because that is what the stepper holds -- the same
+    ``leg.uids`` entry ``index_plane_one`` was just handed, which is what makes
+    the table and the slots a matched pair.
+    """
+    anim = getattr(doc, "anim", None)
+    if anim is None or not doc.has_frame_palettes:
+        return None
+    frame = next((entry for entry in anim.frames if str(entry.uid) == str(uid)), None)
+    return None if frame is None else anim.frame_palette(frame.uid)
+
+
 def pump_export(ctx: Any) -> None:
     """One frame of an in-flight export's read. Called once a frame by the app.
 
@@ -1957,6 +1985,7 @@ def pump_export(ctx: Any) -> None:
             # edited, and the two have to be a matched pair or the GIF is drawn
             # with one frame's slots and another frame's colours.
             leg.planes.append(sheetout.index_plane_one(tab.doc, uid))
+            leg.palettes.append(_frame_palette(tab.doc, uid))
         else:
             plane = sheetout.flatten_subset(tab.doc, uid, leg.track_uids)
             # None rather than a subset index plane: ``index_plane_one`` decides
@@ -1965,6 +1994,7 @@ def pump_export(ctx: Any) -> None:
             # the colours, as every GIF did before index planes existed --
             # correct, just not slot-stable.
             leg.planes.append(None)
+            leg.palettes.append(None)
         leg.frames.append(plane)
     except Exception as exc:  # noqa: BLE001 - the lock must clear whatever failed
         # Any failure, not a list of three: a ``MemoryError`` on a big flatten
@@ -1997,6 +2027,9 @@ class _Payload:
     label: str
     frames: list[Any]
     planes: list[Any]
+    #: One colour table per frame, or None to mean "the document's". Only the
+    #: GIF runner reads it; a sheet is RGBA and has no table to write.
+    palettes: list[Any]
     durations: list[int]
     tags: list[Any]
     layout: Any
@@ -2153,6 +2186,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
                 label=leg.label,
                 frames=frames,
                 planes=leg.planes,
+                palettes=leg.palettes,
                 durations=durations,
                 tags=tags if getattr(state, "export_meta_tags", True) else [],
                 layout=layout,
@@ -2292,6 +2326,13 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     # The document's own table when it has one, so an indexed clip exports the
     # colours that were authored rather than a per-frame quantise of them. Read
     # on the frame thread here, with the frames, not inside the task.
+    #
+    # The *fallback*, since 2026-09-03: a frame carrying its own table
+    # (``animation.frame_palettes``) is written with that one instead. This was
+    # read once, outside the frame loop, so every such frame had its slots
+    # resolved through the document's table and came out the wrong colours --
+    # the ORA and Aseprite writers both honoured the override and GIF was the
+    # only exporter that did not.
     palette = list(doc.palette) if doc.palette else None
 
     def run_gif() -> dict[str, Any] | None:
@@ -2324,6 +2365,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
                     load.durations,
                     loop=load.loop,
                     palette=palette,
+                    palettes=load.palettes,
                     # Magnified by the same whole number as the pixels, which is
                     # exact on an index plane in a way it is on nothing else:
                     # ``upscale`` repeats each element, so a magnified slot is

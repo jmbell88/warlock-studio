@@ -787,9 +787,22 @@ def land_inpaint(ctx: Any, pending: dict[str, Any], pixels: Any) -> bool:
     )
     if ok:
         ctx.toast("Regeneration landed.")
-    else:
+    elif _still_in_the_stack(tab.doc, int(pending["layer_uid"])):
         ctx.toast("The layer it was for is gone.", "warn")
+    else:
+        # The uid names a *cel*, and stepping the playhead takes that cel out
+        # of the stack. "The layer is gone" reads as data loss for what is
+        # really "you are looking at a different frame".
+        ctx.toast("It was asked for on a frame that is no longer showing.", "warn")
     return ok
+
+
+def _still_in_the_stack(doc: Any, layer_uid: int) -> bool:
+    try:
+        doc.layer_by_uid(layer_uid)
+    except KeyError:
+        return False
+    return True
 
 
 def _open_filter(ctx: Any, tab: Any) -> None:

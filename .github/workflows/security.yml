@@ -1,0 +1,83 @@
+# A separate workflow from ``windows-ci.yml`` on purpose. That one is the gate
+# every push waits on and it is already ~60 minutes of Windows runner; a
+# vulnerability scan answers a question about the *dependency set*, which
+# changes when ``uv.lock`` changes and not when a pane does. So this runs on a
+# schedule, on pull requests, and on demand -- never on every push.
+#
+# Scoped honestly: this application is offline by construction
+# (``HF_HUB_OFFLINE=1`` is the first thing the package does) and ships as a
+# desktop installer with no server, no request handling and no untrusted
+# network input. That makes this supply-chain hygiene -- knowing what is in
+# the tree and being told when it is withdrawn or advised against -- rather
+# than perimeter defence. The genuinely untrusted inputs are *files*: archives,
+# images and meshes, which is what ``pixelguard``/``zipguard``/``xmlguard`` and
+# ``tests/test_untrusted_input.py`` are for, and no scanner substitutes for
+# those.
+name: Security
+
+on:
+  schedule:
+    # Mondays, early. A weekly cadence matches how often an advisory that
+    # matters to a pinned lockfile actually appears.
+    - cron: "17 6 * * 1"
+  pull_request:
+    paths:
+      - "uv.lock"
+      - "pyproject.toml"
+      - ".github/workflows/security.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Python
+        run: uv python install 3.13
+      # The *resolved* set, exported from the lockfile rather than from an
+      # installed environment: a scan of what CI happened to install answers a
+      # question about the runner, and what ships is decided by ``uv.lock``.
+      # Ubuntu rather than Windows because nothing here executes the code --
+      # it reads names and versions, and a Linux runner is a fraction of the
+      # cost of a Windows one.
+      - name: Export the resolved dependency set
+        run: >
+          uv export --frozen --no-hashes --no-emit-project
+          --extra studio --extra text2image --extra rig
+          --format requirements-txt --output-file requirements-audit.txt
+      - name: Audit
+        # Not a gate on a red advisory alone. This project pins a CUDA-era
+        # torch and a vendored native runtime, and an advisory against a
+        # transitive package that no code path reaches is a thing to read, not
+        # a thing to block a beta on. The job records; a human decides.
+        continue-on-error: true
+        run: uvx pip-audit --requirement requirements-audit.txt --strict --progress-spinner off
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # **Code scanning is free for public repositories only.** This repository is
+    # private for the closed beta, so the job would fail on every run for a
+    # reason that is not a finding. Gated on visibility rather than deleted, so
+    # it starts working by itself the day the repository is made public --
+    # which is when its results would first matter to anyone but us.
+    if: github.event.repository.visibility == 'public'
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v3

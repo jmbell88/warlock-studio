@@ -31,8 +31,7 @@ are looking at.
    reference (prompt, guidance, base model and style LoRA, conditioning, seeds
    and candidates), then the mesh, then rig, pose, sprite sheet and surface
    re-texture. Text jobs stop at the reference for approval by default, before
-   anything pays for a trellis run. Saved **style profiles** for the reference
-   form live here as a sheet rather than as a mode of their own.
+   anything pays for a trellis run.
 
 **Workspaces** — each fills the window with its own three-column layout:
 
@@ -98,12 +97,12 @@ not making something — entered rarely and left again:
 12. **Settings** — the app's own preferences: theme, UI scale, layout, and the
     model list, from which a missing one can be downloaded.
 
-Two things are deliberately *not* modes. The **manual** is an overlay
-(`F1`, and every pane's (?) button) because help is consulted *about* a screen,
-and taking that screen away to show it answers the question by removing it.
-**Profiles** are a sheet over the reference form, because a shelf of saved
-settings sitting beside six creative workspaces would say that "manage my
-styles" is a place you travel to.
+Two things are deliberately *not* modes, and both are overlays. The
+**manual** (`F1`, and every pane's (?) button) is one, because help is consulted
+*about* a screen, and taking that screen away to show it answers the question by
+removing it. The **guided tour** is the other, for that reason turned around: it
+points at the controls it is naming, so it has to be drawn *over* the screen
+holding them rather than in place of it.
 
 ## What comes out
 
@@ -120,7 +119,7 @@ Everything but the primary artifacts is derived lazily on first request and cach
 - **16 GB VRAM** for 3D reconstruction (`vram.py`'s `TRELLIS_GIB = 16.0`). Tested on an RTX 5090 / 32 GB; a 4080/5080-class card or better is the comfortable range.
 - **32 GB system RAM.** More than the GPU figure suggests it should need: Windows charges trellis's ~16 GiB device allocation against *host* commit, so admission control refuses jobs at 96% commit on a 63.5 GB machine even with 24 GB physically free. 16 GB will fight you.
 - **~23 GB disk before the first asset** — 16.1 GB of TRELLIS.2 GGUF weights plus 7.0 GB for SDXL 1.0 — then roughly 35–50 MB per generated 3D job. There is no automatic age-out; pruning is manual.
-- **A 1920×1080 display or larger at 100% scaling.** The window opens at 1600×950 (scaled by your DPI setting) and is clamped to the desktop, so it fits smaller panels, but below that the six workspaces get cramped.
+- **A 1920×1080 display or larger at 100% scaling.** The window opens at 1600×950 (scaled by your DPI setting) and is clamped to the desktop, so it fits smaller panels, but below that the seven workspaces get cramped.
 - [uv](https://docs.astral.sh/uv/); Python ≥ 3.12, but **rigging needs 3.13** — `bpy` ships CPython 3.13 wheels only. On any other Python the rig extra installs nothing, `warlock doctor` reports rigging unavailable, and the app hides the rig controls; everything else works unchanged.
 
 **How long a generation takes:** roughly two minutes of GPU per 3D attempt on the tested card — a reference image in seconds, then the reconstruction. Budget for more than one attempt: the approval gate exists because the first reference is often not the one you want.

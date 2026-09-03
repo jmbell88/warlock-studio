@@ -5,7 +5,9 @@ struck: the sentences the code contradicted, and the tables that had drifted.
 from __future__ import annotations
 
 import inspect
+import re
 from importlib import import_module
+from pathlib import Path
 
 import pytest
 
@@ -66,17 +68,87 @@ def test_the_shortcut_sheet_lists_the_sirens_clipboard():
     assert "Ctrl+C" in keys and "Ctrl+V" in keys
 
 
-def test_no_document_says_six_workspaces():
-    from pathlib import Path
+#: Files that record what was true on a date rather than claiming what is
+#: true now. A count in one of them is correct as history and must not be
+#: "fixed" -- ``FINDINGS.md`` quotes the very sentences it wants corrected.
+_HISTORIES = {"CHANGELOG.md", "FINDINGS.md"}
 
+#: Number words this project actually writes, for the workspace-count sweep.
+_WORKSPACE_WORDS = {
+    "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+#: "seven workspaces", "seven creative workspaces" -- the two phrasings the
+#: docs use. Deliberately *not* "N of the seven workspaces", which is a
+#: different sentence and correct with any N.
+_WORKSPACE_PHRASE = re.compile(
+    r"\b(" + "|".join(_WORKSPACE_WORDS) + r")\s+(?:creative\s+)?workspaces\b",
+    re.IGNORECASE,
+)
+
+
+def _prose_files():
+    """Every file whose workspace count is a live claim about this build.
+
+    The repo root is walked as well as ``docs``/``src``, and it is the half
+    that matters: the two files a new reader opens (``README.md`` and
+    ``INSTALL.md``) are both there, and both said "six creative workspaces"
+    while this test watched two directories that did not contain them.
+
+    ``CHANGELOG.md``, ``FINDINGS.md`` and ``docs/measurements/`` are left out
+    on purpose -- they are records of what was true on a date, and a count in
+    them is correct as history. ``FINDINGS.md`` earns its place in that list
+    the hard way: it *quotes* the wrong sentences it is asking somebody to fix.
+    """
     root = Path(__file__).resolve().parents[1]
-    offenders = [
-        path
-        for folder in ("docs", "src")
-        for path in (root / folder).rglob("*")
-        if path.suffix in {".md", ".py"}
-        and "six workspaces" in path.read_text(encoding="utf-8", errors="ignore")
-    ]
+    for path in sorted(root.glob("*.md")):
+        if path.name not in _HISTORIES:
+            yield path
+    for folder in ("docs", "src"):
+        for path in sorted((root / folder).rglob("*")):
+            if path.suffix not in {".md", ".py"}:
+                continue
+            if "measurements" in path.parts or path.name in _HISTORIES:
+                continue
+            yield path
+
+
+def test_no_document_miscounts_the_workspaces():
+    """The rail's own group is the answer; prose that names another is drift.
+
+    Derived rather than hardcoded, for the reason the CI wheel step's
+    ``len(modes.KEYS) == 11`` was deleted: a literal in a guard is a second
+    place to update, and the update is exactly what gets forgotten.
+    """
+    from warlock.studio import modes
+
+    group = modes.RAIL_GROUPS[modes.RAIL_GROUP_LABELS.index("Workspaces")]
+    offenders = []
+    for path in _prose_files():
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for match in _WORKSPACE_PHRASE.finditer(text):
+            if _WORKSPACE_WORDS[match.group(1).lower()] != len(group):
+                line = text.count("\n", 0, match.start()) + 1
+                offenders.append(f"{path.name}:{line}: {match.group(0)!r}")
+    assert offenders == [], (
+        f"the rail draws {len(group)} workspaces; these say otherwise: {offenders}"
+    )
+
+
+def test_no_document_still_describes_the_deleted_profiles_feature():
+    """``README.md`` told every reader that Profiles "are a sheet over the
+    reference form" long after Profiles was deleted (``settings_2d`` still
+    carries the epitaph: "Kept when Profiles went"). A deleted feature in the
+    file a new user reads first is worse than an undocumented one."""
+    offenders = []
+    for path in _prose_files():
+        if path.suffix != ".md":
+            continue
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1
+        ):
+            if re.search(r"\bProfiles\b", line) and "deleted" not in line.lower():
+                offenders.append(f"{path.name}:{number}: {line.strip()!r}")
     assert offenders == []
 
 

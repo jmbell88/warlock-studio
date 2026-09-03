@@ -327,7 +327,6 @@ class Layout:
         self._settings = settings
         self._workspace_library: Any = None
         self._workspace = ""
-        self._workspace_share_saved = False
         stored = as_dict(settings.get("layout"))
         try:
             share = float(stored.get("settings_share", 0.55))
@@ -429,7 +428,6 @@ class Layout:
         value = min(max(value, SHARE_MIN), SHARE_MAX)
         if self._workspace_library is not None and self._workspace:
             self._workspace_library.set_share(self._workspace, key, value)
-            self._workspace_share_saved = True
             return
         self.shares[key] = value
 
@@ -440,19 +438,56 @@ class Layout:
         self._workspace = str(workspace)
 
     def set_sidebar_width(self, key: str) -> None:
+        """Adopt a named side-column width, everywhere.
+
+        **Write-through, or the control is decorative.** ``SIDEBAR_W`` is what
+        this used to move and nothing in the running app reads it: every
+        workspace is measured by :func:`measure` through
+        ``layouts.Library.width``, which consults a stored per-workspace width
+        first and a seed taken at *construction* second. A width picked here
+        reached neither, so the combo in Settings did nothing at all.
+
+        The named widths are a global preference and a splitter drag is a local
+        override, so picking one here replaces the overrides -- which is what
+        "set the sidebar width" means, and the drag is available again the
+        moment the user wants a different answer for one workspace.
+        """
         self.sidebar = set_sidebar(key, animate=True)
+        if self._workspace_library is not None:
+            self._workspace_library.set_width_seed(SIDEBAR_WIDTHS[self.sidebar])
         self.save()
 
     def set_rail(self, key: str) -> None:
         self.rail = "labels" if key == "labels" else "icons"
         self.save()
 
+    def reset_sizes(self) -> None:
+        """Every split and side width back to the built-in proportions.
+
+        Sizes only. ``columns`` and ``hidden`` are the pane *arrangement*,
+        which is a different button, so this is deliberately not
+        ``layouts.Library.reset``.
+
+        Clearing ``self.shares`` alone -- which is what "Reset pane sizes" did
+        -- reset nothing a user could see: :meth:`share` consults the bound
+        library first, and every drag persists there, so the only splits the
+        legacy dict still governed were the ones nobody had ever moved.
+        """
+        self.settings_share = 0.55
+        self.shares.clear()
+        if self._workspace_library is not None:
+            self._workspace_library.reset_sizes()
+        self.save()
+
     def save(self) -> None:
-        if self._workspace_share_saved:
-            # ``layouts.Library.set_share`` already persisted the explicit
-            # workspace edit.  The legacy global blob remains only as a seed.
-            self._workspace_share_saved = False
-            return
+        # **No early return here, whatever else has already persisted.** This
+        # is the only writer of ``rail`` and ``sidebar``, and it used to skip
+        # the whole write whenever ``layouts.Library`` had just taken a share
+        # edit -- so a rail toggle or a sidebar width chosen after any splitter
+        # drag was silently discarded, exactly as the paragraph below warns.
+        # Rewriting the legacy share blob unchanged in that case costs nothing:
+        # it is a migration seed, not a source of truth.
+        #
         # Only the surviving keys: Settings.set replaces the whole dict, so the
         # stale sidebar_w/inspector_w a settings file may still carry are gone
         # the first time anything saves. ``sidebar`` is the *name* of a width,

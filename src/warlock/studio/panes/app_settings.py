@@ -655,11 +655,10 @@ def _layout(ctx: Any) -> None:
         widgets.muted("No layout to reset.")
         return
     if controls.button("Reset pane sizes"):
-        lay.settings_share = 0.55
-        # Every keyed split too, or "reset" would leave each workspace on
-        # whatever it had drifted to and only move the ones that never did.
-        lay.shares.clear()
-        lay.save()
+        # Through the layout rather than by clearing one dict here: the splits
+        # a user has actually dragged live in ``layouts.Library``, and clearing
+        # the legacy global dict alone moved only the ones nobody had touched.
+        lay.reset_sizes()
         ctx.toast("Pane sizes reset.")
     imgui.same_line()
     if controls.button("Reset collapsed sections"):

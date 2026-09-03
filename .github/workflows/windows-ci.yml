@@ -44,7 +44,13 @@ jobs:
           import warlock, warlock.models, warlock.doctor, warlock.changelog
           from warlock.studio import modes
           assert warlock.models.BASE_MODELS, 'the registry is empty'
-          assert len(modes.KEYS) == 11, modes.KEYS
+          # ``modes`` is imported to prove it *loads* from a wheel, not to count
+          # it. A literal here is a number no test can keep in sync -- it said
+          # 11 against a twelve-mode tree and failed every push. The count is
+          # asserted where it can be derived from ``modes.MODES``:
+          # ``tests/manual/test_docs.py`` and ``tests/test_studio_state.py``,
+          # both of which ran above.
+          assert modes.KEYS, 'the rail is empty'
           # The two force-includes, which are exactly what a wheel drops
           # silently: the manual tree and the changelog.
           from importlib.resources import files

@@ -65,7 +65,7 @@ A few things worth knowing so you don't worry unnecessarily:
 
 Separately, the Home screen offers a dismissible **"New here?"** guided tour with **Start** and **Not now** buttons. It's entirely optional and never launches on its own.
 
-When it opens, you'll see a rail on the left with **Home**, **Library**, and **Create**, then six creative workspaces — **Inker**, **Clay**, **Poser**, **Troupe**, **Plotter**, and **Packwright** — with **Review** and **Settings** tucked into the footer.
+When it opens, you'll see a rail on the left with **Home**, **Library**, and **Create**, then seven creative workspaces — **Inker**, **Clay**, **Poser**, **Troupe**, **Plotter**, **Packwright**, and **Sirens** — with **Review** and **Settings** tucked into the footer.
 
 Everything you make and download lives at `%USERPROFILE%\.warlock` (`assets/`, `models/`, `palettes/`) — worth knowing if you ever want to back it up or check how much space it's using.
 

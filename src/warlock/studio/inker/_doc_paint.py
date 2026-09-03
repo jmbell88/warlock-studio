@@ -357,18 +357,31 @@ class PaintOps:
 
         The landing for a picture that arrived *later* -- a regeneration the
         image model returned while the user carried on editing -- so it is
-        addressed by uid, refuses a layer that has gone (or turned into a
-        placeholder cel), and refuses the tilemap and write-locked layers the
-        filter session refuses. ``weight`` is the selection's coverage at the
-        time it was asked for, applied by ``masked_apply`` so a feathered
-        selection fades the result in like every other bounded write.
+        addressed by uid, refuses a layer that has gone, and refuses the
+        tilemap and write-locked layers the filter session refuses. ``weight``
+        is the selection's coverage at the time it was asked for, applied by
+        ``masked_apply`` so a feathered selection fades the result in like
+        every other bounded write.
+
+        **An empty animated cel is written, not refused.** This was the one
+        pixel-writing path that did not autovivify, and the uid it is handed
+        was captured at submit -- which on an empty cel is the placeholder's.
+        Regenerating a selection on an empty frame therefore always came back
+        "The layer it was for is gone", which is both a refusal of the ordinary
+        case and untrue. ``_ensure_cel_for`` keeps the placeholder's uid, so
+        the caller holding it across this call is unaffected; the refusal below
+        survives for the case it was really about -- a slot that cannot be
+        materialised at all, such as a tilemap track bound to no tileset.
         """
         try:
             layer = self.layer_by_uid(layer_uid)
         except KeyError:
             return False
         if self.anim is not None and self.anim.is_placeholder(layer):
-            return False
+            self._ensure_cel_for(layer_uid)
+            layer = self.layer_by_uid(layer_uid)
+            if self.anim.is_placeholder(layer):
+                return False
         if self.write_locked():
             return False
         self._refuse_tilemap_layer(layer_uid, "regenerating")

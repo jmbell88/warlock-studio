@@ -82,7 +82,7 @@ from .animation import (
     Track,
 )
 from .layers import Layer, LayerStack
-from .tiles import TilemapCel, TilesetSlot, materialize
+from .tiles import TilemapCel, TilesetSlot, grid_shape, materialize
 
 THUMBNAIL_MAX = 256
 
@@ -1960,9 +1960,13 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
     honestly on the canvas -- every tilemap cel's own PNG decoded RGBA,
     complete -- so a wrong version or any single entry failing on its own
     terms drops the whole member and costs the structure alone. Nothing is
-    written onto ``doc`` until every entry in the member has validated
-    cleanly, so a failure partway through leaves the document exactly as it
-    already was, never half-swapped.
+    written onto ``doc`` until every entry in the member has validated cleanly
+    **and every replacement cel has been rebuilt from its own refs**, so a
+    failure partway through leaves the document exactly as it already was,
+    never half-swapped. Validating covers the refs grid against this canvas,
+    not merely against the blob's own length: ``materialize`` is tolerant by
+    design, so an undersized grid would otherwise be accepted and quietly
+    blank whatever it did not cover.
 
     On success every named cel is replaced **in place**: the same uid, and
     the same *object* wherever it is linked, which is what lets a linked cel
@@ -2016,6 +2020,34 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
                 )
             refs = np.frombuffer(blob, dtype="<u4").reshape(grid_h, grid_w).astype(gid.DTYPE)
             ts = slots[si].tileset
+            # **The grid the canvas has, not merely a grid the blob fits.**
+            # The byte-length check above only proves the file is
+            # self-consistent, and ``materialize`` is deliberately tolerant --
+            # it breaks out past the canvas edge and clamps unknown ids -- so a
+            # refs grid smaller than the canvas was accepted, silently blanked
+            # the uncovered remainder, and discarded the decoded PNG that had
+            # been holding those pixels honestly.
+            wanted = grid_shape(doc.size, ts.tile_w, ts.tile_h)
+            if (grid_h, grid_w) != wanted:
+                raise ValueError(
+                    f"{entry['refs']} is a {grid_h}x{grid_w} grid; this "
+                    f"{doc.size[0]}x{doc.size[1]} canvas at {ts.tile_w}x{ts.tile_h} "
+                    f"tiles is {wanted[0]}x{wanted[1]}"
+                )
+            # **The grid the canvas has, not merely a grid the blob fits.**
+            # The byte-length check above only proves the file is
+            # self-consistent, and ``materialize`` is deliberately tolerant --
+            # it breaks out past the canvas edge and clamps unknown ids -- so a
+            # refs grid smaller than the canvas was accepted, silently blanked
+            # the uncovered remainder, and discarded the decoded PNG that had
+            # been holding those pixels honestly.
+            wanted = grid_shape(doc.size, ts.tile_w, ts.tile_h)
+            if (grid_h, grid_w) != wanted:
+                raise ValueError(
+                    f"{entry['refs']} is a {grid_h}x{grid_w} grid; this "
+                    f"{doc.size[0]}x{doc.size[1]} canvas at {ts.tile_w}x{ts.tile_h} "
+                    f"tiles is {wanted[0]}x{wanted[1]}"
+                )
             if ts.tile_w != ts.tile_h and (refs & gid.DTYPE(gid.FLIP_D)).any():
                 # The refs door's own mask (``_doc_tiles._strip_diagonal``),
                 # applied to what a file carries: a diagonal flip of a
@@ -2070,11 +2102,23 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
                     raise ValueError(f"{TILES_MEMBER} cel names layer {li}")
                 layer = stack_layers[li]
                 replacements[id(layer)] = _new_cel(layer, entry)
+        # **Materialized here, inside the guard, before anything is swapped
+        # in.** The cels in ``replacements`` are still standalone objects at
+        # this point, so a failure in this loop -- a ``MemoryError`` on a large
+        # canvas is the reachable one -- costs the member and nothing else.
+        # Run after the swap, as it was, it left the document holding tilemap
+        # cels whose pixels had never been rebuilt, with the decoded PNG that
+        # had been standing in for them already dropped.
+        by_uid = {slot.uid: slot for slot in slots}
+        for new_cel in replacements.values():
+            slot = by_uid[new_cel.tileset_uid]
+            new_cel.pixels = materialize(new_cel.refs, slot.tileset, new_cel.size)
     except (
         AttributeError,
         KeyError,
         ValueError,
         TypeError,
+        MemoryError,
         OSError,
         json.JSONDecodeError,
     ) as exc:
@@ -2085,8 +2129,11 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
         log.warning("ignoring %s in %s: %s", TILES_MEMBER, getattr(zf, "filename", "?"), exc)
         return
 
-    # Everything above is read-only against ``doc`` -- what follows is the
-    # atomic apply, safe now that every entry in the member has validated.
+    # Everything above is read-only against ``doc`` -- what follows is pure
+    # assignment, safe now that every entry has validated *and* every
+    # replacement cel has been rebuilt. ``MemoryError`` joins the caught five
+    # for that reason: the rebuild is this member's one genuinely large
+    # allocation, and it is now inside the guard rather than after it.
     doc.tilesets.extend(slots)
     if anim is not None:
         for ti, si in track_binds:
@@ -2103,11 +2150,6 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
         new = replacements.get(id(layer))
         if new is not None:
             doc.stack.layers[i] = new
-
-    by_uid = {slot.uid: slot for slot in slots}
-    for new_cel in replacements.values():
-        slot = by_uid[new_cel.tileset_uid]
-        new_cel.pixels = materialize(new_cel.refs, slot.tileset, new_cel.size)
     doc.invalidate_all()
 
 

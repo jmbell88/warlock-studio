@@ -206,3 +206,53 @@ def test_undoing_a_first_draw_on_a_continuous_track_removes_the_cel():
 
     assert doc.history.undo(doc)
     assert doc.anim.is_placeholder(doc.stack.active)
+
+
+# --- the one write path that refused instead of autovivifying ----------------
+
+
+def test_a_regeneration_lands_on_an_empty_animated_cel():
+    """``apply_pixels`` is the landing for a picture the image model returned
+    while the user carried on editing, and it is addressed by uid because the
+    active layer may have moved. On an empty animated cel the uid captured at
+    submit is the *placeholder's*, and this refused it -- so "Regenerate
+    selection" on an empty frame always came back "The layer it was for is
+    gone", which was both a refusal of the ordinary case and untrue.
+    """
+    doc = _animated()
+    uid = doc.stack.active.uid
+    assert doc.anim is not None and doc.anim.is_placeholder(doc.stack.active)
+    pixels = np.zeros((4, 4, 4), dtype=np.uint8)
+    pixels[..., 0] = 255
+    pixels[..., 3] = 255
+
+    assert doc.apply_pixels(uid, (0, 0, 4, 4), pixels) is True
+
+    cel = doc.stack.active
+    assert not doc.anim.is_placeholder(cel)
+    assert cel.uid == uid, "the cel keeps the slot's uid the caller held"
+    assert tuple(cel.pixels[0, 0]) == RED
+    # And the blank plane every other empty slot shares is still blank.
+    assert doc.anim.blank_plane(*doc.size)[0, 0].tolist() == [0, 0, 0, 0]
+
+
+def test_a_regeneration_that_lands_on_an_empty_cel_is_one_undo_step():
+    """Autovivification plus the blend, not two steps: the placeholder is not
+    a state the history should be able to stop at."""
+    doc = _animated()
+    uid = doc.stack.active.uid
+    pixels = np.full((4, 4, 4), 255, dtype=np.uint8)
+
+    assert doc.apply_pixels(uid, (0, 0, 4, 4), pixels) is True
+    doc.undo()
+
+    assert doc.anim is not None
+    assert tuple(doc.stack.active.pixels[0, 0]) == (0, 0, 0, 0)
+
+
+def test_a_regeneration_is_still_refused_when_the_layer_has_gone():
+    """The refusal survives for what it was really about."""
+    doc = _animated()
+    pixels = np.full((4, 4, 4), 255, dtype=np.uint8)
+
+    assert doc.apply_pixels(9_999_999, (0, 0, 4, 4), pixels) is False

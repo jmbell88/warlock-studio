@@ -696,3 +696,69 @@ def test_the_written_tileset_chunk_declares_tile_zero_empty():
     flags = _tileset_chunk_flags(data)
     assert flags, "the document writes at least one tileset chunk"
     assert all(word == (2 | 4) for word in flags)
+
+
+def _tiles_payload(path: Path) -> dict:
+    """``tiles.json`` as a dict, for a test that wants to rewrite one field."""
+    with zipfile.ZipFile(path) as zf:
+        return json.loads(zf.read(ora.TILES_MEMBER))
+
+
+def test_a_refs_grid_that_disagrees_with_the_canvas_costs_the_member_only(
+    tmp_path: Path, caplog
+):
+    """``materialize`` is tolerant by design -- it breaks out past the canvas
+    edge and clamps unknown ids -- so the only check on the grid was that the
+    blob's byte length matched the grid the file *claimed*. A hand-edited or
+    truncated archive whose grid disagreed with ``ceil(canvas / tile)`` was
+    accepted, the remainder it did not cover was silently blanked, and the
+    honest decoded PNG that had been holding those pixels was already gone.
+    """
+    doc = _still_doc()
+    path = tmp_path / "grid.ora"
+    ora.write_ora(doc, path)
+    with zipfile.ZipFile(path) as zf:
+        entry = json.loads(zf.read(ora.TILES_MEMBER))["cels"][0]
+    # One row short: still a rectangle, still self-consistent, still wrong.
+    payload = _tiles_payload(path)
+    cel = payload["cels"][0]
+    assert cel["grid_h"] > 1, "the fixture needs a grid to shorten"
+    cel["grid_h"] -= 1
+    _rewrite_member(
+        path, entry["refs"], b"\x00\x00\x00\x00" * cel["grid_h"] * cel["grid_w"]
+    )
+    _rewrite_member(path, ora.TILES_MEMBER, json.dumps(payload).encode("utf-8"))
+
+    with caplog.at_level(logging.WARNING):
+        back = ora.read_ora(path)
+
+    assert back.tilesets == [], "the member is dropped whole"
+    assert not any(isinstance(layer, TilemapCel) for layer in back.stack)
+    doc.invalidate_all()
+    assert np.array_equal(back.composite, doc.composite), "the pixels survive intact"
+    assert any("grid" in record.getMessage() for record in caplog.records)
+
+
+def test_a_failing_rebuild_leaves_the_document_exactly_as_it_was(
+    tmp_path: Path, monkeypatch, caplog
+):
+    """The member's contract is all-or-nothing, and the rebuild used to run
+    *after* the cels had been swapped in -- so a ``MemoryError`` there (the
+    reachable failure on a large canvas) left the document holding tilemap
+    cels whose pixels had never been materialized, with the decoded PNG that
+    had been standing in for them already dropped."""
+    doc = _still_doc()
+    path = tmp_path / "rebuild.ora"
+    ora.write_ora(doc, path)
+
+    def _boom(*_args, **_kwargs):
+        raise MemoryError("not this time")
+
+    monkeypatch.setattr(ora, "materialize", _boom)
+    with caplog.at_level(logging.WARNING):
+        back = ora.read_ora(path)
+
+    assert back.tilesets == []
+    assert not any(isinstance(layer, TilemapCel) for layer in back.stack)
+    doc.invalidate_all()
+    assert np.array_equal(back.composite, doc.composite)

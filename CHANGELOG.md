@@ -18,6 +18,52 @@ the release you are actually running.
 
 ## 0.0.31 — 2026-09-03
 
+- **Beta-readiness pass: CI could not go green, and three Settings controls did nothing.** The wheel
+  smoke test asserted `len(modes.KEYS) == 11` against a twelve-mode tree, so *every* push failed on
+  a hardcoded number rather than on a packaging mistake; the assertion is deleted rather than
+  bumped, because `tests/manual/test_docs.py` and `tests/test_studio_state.py` already derive the
+  count from `modes.MODES` and both run earlier in the same workflow. Alongside it, the three
+  layout doors in **Settings → Advanced** that all had the same shape — a control that redraws,
+  toasts and persists nothing. `Layout.save` returned early whenever a splitter drag had just gone
+  to `layouts.Library`, and it is the only writer of `rail` and `sidebar`, so one drag anywhere
+  silently discarded the next rail toggle or sidebar choice; the latch is gone rather than made
+  accurate, since no early return there can be right and the method's own comment already said so.
+  **Sidebar width** moved a module global nothing reads and is now write-through, replacing the
+  per-workspace overrides the way choosing a global preference should. **Reset pane sizes** cleared
+  the legacy dict that `Layout.share` consults *last*, so it reset only the splits nobody had ever
+  dragged; it now clears every arrangement's widths and shares and deliberately not `columns` or
+  `hidden`, which are a different button's promise.
+- **Three Inker output paths that produced the wrong file.** **Regenerate selection** on an empty
+  animated cel always failed: the uid captured at submit is the placeholder's, and `apply_pixels`
+  was the one pixel-writing path that refused a placeholder instead of autovivifying it, so the
+  ordinary case came back "The layer it was for is gone" — untrue as well as unhelpful. **GIF
+  export** ignored per-frame palette overrides: the table was read once outside the frame loop, so
+  a frame with its own colours exported the right slots resolved through the document's table. The
+  table is now read per frame beside the index plane it resolves, and `write_gif` emits a *local*
+  colour table for any frame that overrides — asserted by decoding the file, which is the only way
+  to tell a local table from a global one. And **`.ora` tile loading** checked a refs grid only
+  against its own byte length: since `materialize` is tolerant by design, a grid that disagreed
+  with `ceil(canvas / tile)` was accepted and silently blanked whatever it did not cover, with the
+  honest decoded PNG already discarded. It is now checked against `tiles.grid_shape`, and the
+  rebuild moved *inside* the guard and before the cel swap, so a failure there costs the member
+  rather than leaving the document holding cels whose pixels were never rebuilt.
+- **Documentation that described an app that does not exist.** `INSTALL.md` and `README.md` still
+  said "six creative workspaces" and omitted **Sirens**, and `README.md` told every reader that
+  **Profiles** "are a sheet over the reference form" long after Profiles was deleted. The guard
+  written for exactly this drift walked only `docs/` and `src/` and matched one phrasing, so it
+  could see neither of the two files a new user actually opens; it now walks the repository root,
+  derives the count from the rail's own group rather than hardcoding it, and excludes `CHANGELOG.md`
+  and `FINDINGS.md`, which are correct as history.
+- **Code signing: a recorded no, with its triggers.** `docs/INVARIANTS.md` now carries why the
+  installer ships unsigned for a closed beta, what SmartScreen's wall actually costs, the two events
+  that reopen the question, and the option that gets priced when they do. A `Security` workflow adds
+  a weekly dependency audit over the exported lockfile (and a CodeQL job gated on the repository
+  being public, since code scanning is free only there), plus a Dependabot config that deliberately
+  ignores the torch/CUDA stack pinned to the vendored native runtime. And `THIRD-PARTY-NOTICES.md`
+  gained the one asset in the tree with an attribution *requirement* — CesiumMan, CC-BY 4.0, which
+  `/tests` in the sdist allowlist means every source release redistributes — with a test that keeps
+  the notices file agreeing with the `ATTRIBUTION.md` files beside the assets.
+
 - **Two more trellis-server launch flags are sweep axes, and they are the detail ones.** `--decim`
   and `--atlas` were accepted by the vendored exe and never passed. The first is why "Raw" was never
   the untouched reconstruction: the exe quadric-simplifies every mesh to 300k faces at resolution

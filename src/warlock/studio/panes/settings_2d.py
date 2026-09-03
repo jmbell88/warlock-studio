@@ -935,8 +935,9 @@ def palette_options(installed: list[str], chosen: str) -> tuple[tuple[str, str],
     like without saying so. Listed and marked, the thing keeping Generate off is
     the one thing on screen.
 
-    Shared with the profile editor, which draws the same picker over the same
-    directory against a draft rather than the live form.
+    It was shared with the profile editor, which drew the same picker over the
+    same directory against a draft rather than the live form; that editor went
+    with Profiles, and the helper stayed because the pane is its real caller.
     """
     options = [("", "Derived from the render"), *((name, name) for name in installed)]
     if chosen and chosen not in installed:
@@ -1150,7 +1151,7 @@ def _view_of(form: dict[str, Any]) -> str:
     """The form's view, in today's spelling.
 
     The form field is still ``projection`` -- it is a persisted key and a
-    control the user has a name for -- and a profile saved before the
+    control the user has a name for -- and a form saved before the
     vocabulary widened carries ``"orthogonal"``. Read through the service's
     alias table rather than by comparing strings here, so the pane never holds
     a second opinion about what an old value means.
@@ -1692,14 +1693,14 @@ def lora_default_weight(key: str) -> float:
 def reseed_lora_weight(form: dict[str, Any], was_lora: str) -> None:
     """Put the newly-picked adapter's tuned strength into ``form``.
 
-    Shared by this pane and the profile editor rather than written twice.
+    One copy of the rule, which is the point of the function.
     Each adapter carries its own measured strength -- pixel-art-klein restores
     an rslora scale of 16, so the flat ``DEFAULT_LORA_WEIGHT`` is ~14x its
     usable band and returns black frames -- and ``guidance.normalize`` only
     applies ``default_weight`` when the caller *omits* the field. Both of these
     forms always send a number, so the seed has to happen at the widget. It
-    lives here because the profile editor already had this bug once by holding
-    a second copy of the rule, and a third copy would find it again.
+    lives here because the deleted profile editor already had this bug once by
+    holding a second copy of the rule, and a third copy would find it again.
     """
     if form["style_lora"] != was_lora:
         form["lora_weight"] = lora_default_weight(form["style_lora"])

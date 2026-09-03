@@ -13,6 +13,17 @@ tags: **Critical** (crash, data loss, or corrupts a document), **High** (wrong
 result the user will hit, or a promise in the docs the code breaks), **Medium**,
 **Low**. Line numbers are against the working tree at review time.
 
+**Every functional High is closed as of 2026-09-03.** The two that remain
+unstruck are both `[Structure]` extractions (T7) and are debt rather than
+defects; `main.py` and `inker_mode.py` have *grown* since this review was
+written, to 6,427 and 4,814 lines, which is the argument for doing them rather
+than against it. Two of the entries closed that day were closed by *striking*
+rather than by building: `review_mode.launch` and `_reload_linked` had both
+been fixed as collateral of the T2 sweep and left standing here. An audit that
+lists work already done overstates what is open, which is a defect in the
+audit -- so a theme being struck is now a prompt to re-read the per-section
+entries it touched.
+
 ---
 
 ## 0. Do these first
@@ -102,11 +113,12 @@ readers can disagree and still pass.
 ### Correctness
 - **[Medium]** `_layouts_popup`, `component_gallery.draw()` and `_shortcuts_popup` all
   draw at host scope with no `guard.run` (`main.py:3422, 3427, 3440`). Wrap each.
-- **[High] `Layout.save()` can skip persisting rail/sidebar.** `layout.py:427-455`
-  `set_share` sets `_workspace_share_saved = True` unconditionally; a drag clamped at
-  `SHARE_MIN/MAX` never calls `save()`, the latch stays armed, and the next
-  `set_rail()`/`set_sidebar_width()`/"Reset pane sizes" returns early without writing.
-  Return whether it persisted rather than latching.
+- ~~**[High] `Layout.save()` can skip persisting rail/sidebar.**~~ Built 2026-09-03:
+  the latch is gone rather than made accurate. `save` is the only writer of `rail` and
+  `sidebar` -- which the library never persists -- so *no* early return there can be
+  right, and its own comment already said so ("a key this method forgets is a preference
+  that silently resets"). Rewriting the legacy share blob unchanged costs nothing: it is
+  a migration seed, not a source of truth. `tests/test_layouts.py`.
 - **[Medium] Ctrl chords leak through the command palette.** `palette_open` is not in
   `modal_open` (`main.py:218`); Ctrl+Enter with the palette open in Create generates.
 - **[Medium] The Manual overlay does not own the keyboard.** Only Esc is intercepted
@@ -121,15 +133,16 @@ readers can disagree and still pass.
   (`imgui_backend.py:288-359`).
 
 ### UX
-- **[High] Settings → Advanced "Sidebar width" is dead.** `set_sidebar_width` animates
-  `layout.SIDEBAR_W`, but `_build_ui` always calls `layout_mod.measure(...)`, so the only
-  reader (`layout.py:235`) never runs; `Library._width_seed` is read once at
-  construction. Remove the control or make it live and say "next launch" for dragged
-  workspaces.
-- **[High] "Reset pane sizes" does nothing for a split ever dragged.**
-  `app_settings.py:657-663` clears the legacy `lay.shares`; `Layout.share` consults the
-  bound `Library.share` first, and every drag persists there. Reset must also clear the
-  library's per-workspace shares.
+- ~~**[High] Settings → Advanced "Sidebar width" is dead.**~~ Built 2026-09-03: made
+  live rather than removed, and write-through rather than "next launch". `Layout.
+  set_sidebar_width` now calls `layouts.Library.set_width_seed`, which updates the seed
+  *and* drops the per-workspace overrides -- a named width is a global preference and a
+  splitter drag is a local override, so choosing one replaces them, and the drag is
+  there again the moment one workspace wants a different answer.
+- ~~**[High] "Reset pane sizes" does nothing for a split ever dragged.**~~ Built
+  2026-09-03: `Layout.reset_sizes` -> `layouts.Library.reset_sizes`, which clears every
+  arrangement's `widths` and `shares` and deliberately *not* `columns`/`hidden` --
+  those are which panes are where, which is a different button's promise.
 - **[Medium]** Delete key is bound in the Create sidebar library but not in Library mode
   (`main.py:2964` vs the `library` branch at ~2826); the shortcuts sheet advertises it.
 - **[Medium]** The window title reflects only unsaved *pose* edits (`main.py:2272`); a
@@ -165,10 +178,12 @@ readers can disagree and still pass.
 ## 3. Create, Review, Library, Home
 
 ### Correctness
-- **[High]** `review_mode.launch` runs `create_sweep` inline on the frame thread
-  (`review_mode.py:1455-1493`); its docstring cites a `settings_2d._submit` that no
-  longer exists. Submit under a `review-launch` key and keep `form.submitting` true until
-  it lands.
+- ~~**[High]** `review_mode.launch` runs `create_sweep` inline on the frame thread.~~
+  Built 2026-09-03 exactly as prescribed, as part of T2 rather than as this entry:
+  `LAUNCH_KEY = "review-launch"` (`review_mode.py:108`), `form.submitting` set before
+  `ctx.submit` (`:1500-1503`), landing and failure at `:703`/`:781`. Struck late --
+  it had been fixed and left standing here, which is how an audit comes to overstate
+  what is open.
 - **[Medium]** `_sync_viewer` decodes the reference PNG on the frame thread the moment a
   job finishes (`viewer_embed.load_reference:183-192`). Split like `parse_model`/`_adopt_model`.
 - **[Medium]** Results-tray "Open" bypasses `asset_open.open_asset`
@@ -266,15 +281,22 @@ refused `"submit"` is reported. Nothing pins where the reference PNG decode happ
   deselecting.~~ Built 2026-09-03: `is_click` asks the *pixels* whether the pointer ever
   left the one it pressed in, which is the question `marquee_rect`'s floor/ceil corners
   cannot answer.
-- **[High]** Regenerate selection on an empty animated cel captures the placeholder uid
-  and is refused on landing with "The layer it was for is gone." (`inker_bridge.py:646`).
+- ~~**[High]** Regenerate selection on an empty animated cel captures the placeholder
+  uid and is refused on landing.~~ Built 2026-09-03: `apply_pixels` was the one
+  pixel-writing path that refused a placeholder instead of autovivifying it, and
+  `_ensure_cel_for` keeps the slot's uid, so the uid captured at submit still names the
+  cel it makes. The refusal survives for the slot that genuinely cannot be materialised
+  (a tilemap track bound to no tileset), and a job landing on a frame the user has since
+  left now says that rather than "the layer is gone".
 - ~~**[High]** `fg_slot` goes stale after palette move/sort/remove/ramp insert.~~ Built
   2026-09-03: `InkerState.palette_moved()` at the six doors that reorder the table drops
   the brush's slot claim (and the usage counts keyed on it), so the next stroke paints
   the nearest slot exactly as a colour from the wheel does.
 - ~~**[High]** Repeat Last Export re-opens the dialog for PNG sequences and can never
   repeat slices (`inker_mode.py:1666-1672, 2284, 1372`).~~ Built 2026-09-03 (T5).
-- **[High]** `_reload_linked` decodes on the frame thread (`inker_mode.py:2817`).
+- ~~**[High]** `_reload_linked` decodes on the frame thread.~~ Built 2026-09-03,
+  also T2 collateral: `_reload_linked` takes an already-decoded document and owns only
+  the textures and the tab; the decode moved to the revert task (`inker_mode.py:2626`).
 - **[Medium]** Space mid-stroke kills its own pan: `clear_drag` resets `space_held`
   (`inker_state.py:2636`). Keyboard state is not gesture state.
 - **[Medium]** `fill_selection`/`stroke_selection`/`shift_selected` skip the busy gate
@@ -295,10 +317,23 @@ refused `"submit"` is reported. Nothing pins where the reference PNG decode happ
   lattice. "Queued a mesh…" toasted before the job exists (`:2489`).
 
 ### File IO
-- **[High]** GIF export ignores per-frame palette overrides: frames are nearest-matched
-  against the document table (`inker_mode.py:2215`, `gifout.py`).
-- **[High]** `ora._read_tiles` never validates the refs grid against the canvas, and the
-  "atomic apply" swaps cels before `materialize` (`ora.py:1814-1918`).
+- ~~**[High]** GIF export ignores per-frame palette overrides.~~ Built 2026-09-03.
+  (The mechanism had drifted by the time it was fixed: the export passes exact per-frame
+  index planes, so it was index-mapped, not nearest-matched, through the one document
+  table.) The table is now read per frame beside the index plane it resolves --
+  `_Leg.palettes` parallel to `_Leg.planes`, for that field's own reason -- and
+  `gifout.write_gif` writes a *local* colour table for any frame that overrides.
+  Asserted by decoding the file, which is the only way to tell a local table from a
+  global one.
+- ~~**[High]** `ora._read_tiles` never validates the refs grid against the canvas, and
+  the "atomic apply" swaps cels before `materialize`.~~ Built 2026-09-03. Half of this
+  entry was wrong and is worth recording: the apply *was* atomic with respect to
+  validation -- everything that can raise already ran inside the `try`. What was real is
+  both halves of the rest. The grid is now checked against `tiles.grid_shape(doc.size,
+  ...)` and not merely against the blob's byte length, because `materialize` is tolerant
+  by design and would have blanked whatever an undersized grid did not cover; and the
+  rebuild moved *inside* the guard, before the swap, with `MemoryError` added to the
+  caught set since that loop is the member's one large allocation.
 - **[Medium]** Hand-listed `Layer` fields drop `background`/`reference` on open
   (`ora.py:1814-1861`, `asein.py:1515`); use `fields(Layer)`.
 - **[Medium]** `gifin`/`sheetin` set `duration_ms` past the clamp; `aseout._frame` then
@@ -567,4 +602,15 @@ wider than the remaining channels. None of the six Sirens panes has a test.
    mode, the one-pixel selection, the stale `fg_slot`). The *footprint* cursor is the one
    piece left and is named in section 5. The "mirror fix" was withdrawn on 2026-09-03 as
    measured-and-wrong; see the top of section 5.
-7. Extractions (T7) once the behaviour above is pinned, so the moves are pure.
+7. ~~Settings' three layout doors: the `save` latch, the dead "Sidebar width", and
+   "Reset pane sizes".~~ Done 2026-09-03. All three were the same shape -- a control
+   that redraws, toasts and persists nothing -- and all three lived in the seam between
+   `layout.Layout` and `layouts.Library`. `tests/test_layouts.py` builds the pair,
+   because a test holding only the `Layout` reproduces the old passing behaviour.
+8. ~~The three Inker output paths: empty-cel regeneration, per-frame GIF palettes, and
+   the `.ora` tile grid.~~ Done 2026-09-03. The GIF and `.ora` tests assert the *file*
+   -- decoded frames, and a document byte-identical to its pre-load state -- since both
+   defects are invisible to a test that inspects arguments.
+9. Extractions (T7) once the behaviour above is pinned, so the moves are pure. This is
+   now the only item left in this list, and the only unstruck **[High]** entries in the
+   document are its two halves (sections 2 and 5).

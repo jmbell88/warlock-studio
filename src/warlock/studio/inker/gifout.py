@@ -219,6 +219,7 @@ def write_gif(
     loop: bool | int = True,
     palette: Sequence[Any] | None = None,
     indices: Sequence[Any] | None = None,
+    palettes: Sequence[Any] | None = None,
 ) -> None:
     """Write one animated GIF. Off-thread: takes arrays, not a document.
 
@@ -232,6 +233,15 @@ def write_gif(
     Per frame rather than all-or-nothing, because a clip routinely has one frame
     with a blended layer on it and forty without.
 
+    *palettes* is one **per-frame override** table, or None in the slots with
+    no override -- ``animation.frame_palettes``, which a document grows the
+    moment somebody gives one frame its own colours. A frame with an override
+    is written with that table and the format's *local* colour table; the rest
+    share *palette* as the global one. Without this every frame was resolved
+    through the document's table, so an overridden frame exported the right
+    slots in the wrong colours -- and GIF was the only exporter with that bug,
+    since ``aseout`` and ``ora`` both round-trip the overrides.
+
     ``loop`` takes a tag's repeat count as well as a flag; see
     :func:`loop_option` for what each spelling writes.
     """
@@ -244,13 +254,19 @@ def write_gif(
         raise ValueError("every frame of a gif is the same size")
     if indices is not None and len(indices) != len(frames):
         raise ValueError("every frame needs an index plane or None")
+    if palettes is not None and len(palettes) != len(frames):
+        raise ValueError("every frame needs a palette or None")
 
-    fixed = bool(palette) and len(palette) <= MAX_PALETTE
     planes = list(indices) if indices is not None else [None] * len(frames)
-    images = [
-        map_to_palette(plane, palette, slots) if fixed else quantise(plane)
-        for plane, slots in zip(frames, planes, strict=True)
-    ]
+    tables = list(palettes) if palettes is not None else [None] * len(frames)
+    images = []
+    for plane, slots, own in zip(frames, planes, tables, strict=True):
+        # The frame's own table wins, then the document's, then the adaptive
+        # quantiser. A table too long for the format falls through rather than
+        # dropping swatches, exactly as the global one always has.
+        table = own or palette
+        usable = bool(table) and len(table) <= MAX_PALETTE
+        images.append(map_to_palette(plane, table, slots) if usable else quantise(plane))
     try:
         images[0].save(
             path,

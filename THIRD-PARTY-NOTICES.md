@@ -53,6 +53,21 @@ fetched at runtime. The pinned commit, the SHA-256 of every original file and a
 documented diff are in that directory's own
 [`ATTRIBUTION.md`](src/warlock/pipelines/birefnet/ATTRIBUTION.md).
 
+## Test fixtures
+
+Not part of the application and not staged by the installer, but `/tests` is in
+the source distribution's allowlist (`pyproject.toml`), so a source release
+redistributes them — and CC-BY's attribution requirement travels with the file.
+
+| Asset | Where | Upstream | Licence |
+|---|---|---|---|
+| CesiumMan | `tests/fixtures/humanoid/cesium_man.glb` | Cesium, via the [Khronos glTF sample models](https://github.com/KhronosGroup/glTF-Sample-Models) | CC-BY 4.0 |
+
+**Anything published that was rendered from CesiumMan credits Cesium.** That
+file's own [`ATTRIBUTION.md`](tests/fixtures/humanoid/ATTRIBUTION.md) carries the
+full terms and travels beside it; this table exists because a reader looking for
+what this project redistributes looks here first.
+
 ## Python dependencies
 
 Installed from PyPI by `uv`, and packed into the installer's runtime. The

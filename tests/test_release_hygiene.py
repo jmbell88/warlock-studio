@@ -62,6 +62,41 @@ def test_the_licence_and_notices_exist_where_every_reference_points():
     assert "THIRD-PARTY-NOTICES.md" in (ROOT / "LICENSE").read_text(encoding="utf-8")
 
 
+def test_every_attributed_asset_is_named_in_the_notices():
+    """An ``ATTRIBUTION.md`` beside a file is the licence condition met; the
+    notices file is where somebody deciding what this project redistributes
+    actually looks.
+
+    ``tests/fixtures/humanoid/cesium_man.glb`` is CC-BY 4.0 and ``/tests`` is in
+    the sdist allowlist, so a source release redistributes it -- and the notices
+    file named every bundled binary, font and weight and not the one asset with
+    an attribution *requirement*. The sibling file is what satisfies the licence;
+    this asserts the index agrees with it.
+    """
+    notices = (ROOT / "THIRD-PARTY-NOTICES.md").read_text(encoding="utf-8")
+    tracked = {Path(p) for p in _tracked()}
+    missing = []
+    for relative in sorted(tracked):
+        if relative.name != "ATTRIBUTION.md":
+            continue
+        text = (ROOT / relative).read_text(encoding="utf-8", errors="ignore")
+        # The "| Author | <name> |" row. *Author*, not upstream: attribution
+        # is a licence condition about crediting a person or an organisation,
+        # and an upstream URL is neither. A file with no author row is one
+        # whose licence asks for no credit, which is most of them.
+        for line in text.splitlines():
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if len(cells) == 2 and cells[0].lower() == "author":
+                name = cells[1].split("(")[0].strip(" <>*`")
+                if name and name.lower() not in notices.lower():
+                    missing.append(f"{relative.as_posix()}: {name}")
+                break
+    assert not missing, (
+        "attributed but not named in THIRD-PARTY-NOTICES.md -- "
+        f"the file a reader checks: {missing}"
+    )
+
+
 def test_the_installer_shows_the_user_the_licence():
     """Inno Setup shows no terms at all without ``LicenseFile=``, which is the
     same posture as having no licence for everyone who installs rather than

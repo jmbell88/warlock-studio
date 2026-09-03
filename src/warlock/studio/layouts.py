@@ -263,6 +263,42 @@ class Library:
         arrangement.widths[side] = min(max(float(value), 220.0), 480.0)
         self.save()
 
+    def set_width_seed(self, value: float) -> None:
+        """Adopt a newly chosen global side-column width.
+
+        ``_width_seed`` is read once, at construction, from the v1 blob, so a
+        width chosen in Settings during this session reached nothing: a
+        workspace with a stored width consulted that, and one without consulted
+        a seed from the file. Both are answered here -- see
+        ``layout.Layout.set_sidebar_width`` for why replacing the per-workspace
+        overrides is the intended reading of a global preference rather than a
+        loss.
+        """
+
+        self._width_seed = min(max(float(value), 220.0), 480.0)
+        layout = self.current()
+        if not layout.readable:
+            return
+        for arrangement in layout.workspaces.values():
+            arrangement.widths.clear()
+        self.save()
+
+    def reset_sizes(self) -> None:
+        """Drop every stored width and split, keeping the pane arrangement.
+
+        Not :meth:`reset`: that also discards ``columns`` and ``hidden``, which
+        are *which panes are where*, and "Reset pane sizes" does not claim to
+        touch them.
+        """
+
+        layout = self.current()
+        if not layout.readable:
+            return
+        for arrangement in layout.workspaces.values():
+            arrangement.widths.clear()
+            arrangement.shares.clear()
+        self.save()
+
     def set_share(self, workspace: str, key: str, value: float) -> None:
         layout = self.current()
         if not layout.readable:

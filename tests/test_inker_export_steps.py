@@ -197,3 +197,42 @@ def test_the_gif_path_steps_the_same_way():
     assert state.export is not None and state.export.kind == "gif"
     assert _pump_until_done(ctx, state) == 4
     assert ctx.submitted == [f"inker-export:{tab.uid}"]
+
+
+def test_the_gif_export_carries_each_frames_own_palette(monkeypatch, tmp_path):
+    """The whole path, not the writer alone: the table is read on the frame
+    thread beside the index plane it resolves, carried on the payload and
+    handed to the encoder. Read once outside the loop, as it was, a frame with
+    its own table exported the wrong colours -- and ``aseout`` and ``ora``
+    both honoured the override, so GIF was the only exporter that did not.
+    """
+    from warlock.studio import dialogs
+
+    dest = tmp_path / "flash.gif"
+    monkeypatch.setattr(dialogs, "save_file", lambda *a, **k: dest)
+
+    ctx, state, tab = _open(2)
+    # Truly indexed, because that is what palette animation *is*: the slots
+    # stay put and the table under them changes. On a palette-constrained RGB
+    # document the export has only colours to go on, so re-matching them
+    # against the new table is the correct answer and there is nothing to test.
+    assert tab.doc.convert_to_indexed([(0, 0, 0, 255), RED]) is True
+    assert tab.doc.set_frame_palette([(0, 0, 0, 255), (30, 30, 220, 255)], 1) is True
+    assert tab.doc.has_frame_palettes
+
+    inker_mode.export_gif(ctx, tab)
+    _pump_until_done(ctx, state)
+    assert state.export is None
+    # The stepper read one table per frame, beside the planes.
+    assert ctx.submitted == [f"inker-export:{tab.uid}"]
+    assert ctx.run() is not None
+
+    from PIL import Image
+
+    with Image.open(dest) as im:
+        im.seek(0)
+        first = np.asarray(im.convert("RGBA"))
+        im.seek(1)
+        second = np.asarray(im.convert("RGBA"))
+    assert tuple(first[0, 0])[:3] == RED[:3]
+    assert tuple(second[0, 0])[:3] == (30, 30, 220)

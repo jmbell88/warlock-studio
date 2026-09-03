@@ -1,0 +1,40 @@
+version: 2
+
+# Two ecosystems, and the split matters. Action pins are the supply chain that
+# runs *with write-ish context on our own CI*, and they go stale silently
+# because a tag can be moved under you; dependencies are the supply chain that
+# ships. Both are read by a human before merging -- nothing here auto-merges.
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Deliberately low. Every bump is a full Windows CI run and a re-resolve of
+    # a lockfile that pins a CUDA-era torch; a queue of twenty is a queue nobody
+    # reads, which is worse than none.
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps"
+    ignore:
+      # **Not tracked here, on purpose.** The torch/CUDA stack is pinned to what
+      # the vendored `trellis-server.exe` and the shipped `cudart64_13.dll` were
+      # built against (`installer/runtime-manifest.json` pins those by SHA-256).
+      # A minor bump is not a routine update in this tree -- it is a decision
+      # about the native runtime, and it belongs to whoever is holding that.
+      - dependency-name: "torch"
+      - dependency-name: "torchvision"
+      - dependency-name: "nvidia-*"
+      # `bpy` ships CPython 3.13 wheels only and the rig extra's whole
+      # degradation path is written around that; a version bump here changes
+      # which Python this project supports.
+      - dependency-name: "bpy"

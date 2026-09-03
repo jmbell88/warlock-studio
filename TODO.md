@@ -116,6 +116,31 @@ with an attribution file naming source and licence —
 `src/warlock/pipelines/birefnet/ATTRIBUTION.md` is the shape. The Nintendo pair
 does not come back.
 
+**Rehearsed on 2026-09-03 against a throwaway clone, and it is clean.** All 962
+commits survive, both tags survive (`v0.0.29-imgui`, `archive/plotter-wave-2`),
+all five local branches survive, the pack drops 96.7 MiB → 71.6 MiB, and the
+rewritten `HEAD` tree hash is **byte-identical** to the current one — so the
+working tree provably does not move. `git log --all -- examples/` is empty
+afterwards. Two things the rehearsal turned up that the plain command does not
+mention:
+
+- **`filter-repo` deletes the `origin` remote** (by design, so a rewritten
+  history cannot be pushed back by reflex). It has to be re-added before any
+  push.
+- **`origin/claude/sirens-audio-mode-planning-gbyypk` exists only on the
+  remote**, and it carries eight commits that touch `examples/`. Rewriting the
+  five local branches and force-pushing them would leave that branch pointing
+  at unpurged history and every blob still reachable. It has **zero** commits
+  that are not already in `master`, so deleting it on GitHub is the whole fix
+  — but it has to be done, and it is invisible from the local branch list.
+
+**And the force-push is not the end of it.** GitHub keeps unreachable objects
+fetchable by SHA after a force-push and only garbage-collects on request, so a
+rewritten-but-not-collected repository still serves the blobs to anyone who
+knows the hash. Either open a support request to have it collected, or —
+simpler for a private solo repository — delete the remote repository and
+push the rewritten history to a fresh one.
+
 **Expected outcome:** `git log --all -- examples/` is empty and the repository
 can be made public without redistributing art it may not.
 
@@ -303,16 +328,14 @@ sheet and record the values in
 **Expected outcome:** clips that look like movement at 32 px, verified through
 P5. This is the most important art task in the programme.
 
-## P9. Decide: code signing
+## ~~P9. Decide: code signing~~
 
-**Why it is yours:** money. No `SignTool=` in `warlock.iss`, no signing step in
-`build.ps1`. Every public install trips SmartScreen's "unrecognized app" wall,
-the single largest install-abandonment cause for a free tool outside a store.
-An OV certificate is a few hundred dollars a year; reputation accrues from
-there.
-
-**Expected outcome:** a yes (then a certificate, a `SignTool=` line and a
-signing step — code, once the certificate exists) or a recorded no.
+**Answered 2026-09-03: no, for the closed beta.** The reasoning, the two named
+revisit triggers (a public download link, or the first report of somebody
+stopping at the wall) and the option actually priced when they fire (Azure
+Trusted Signing, not an OV certificate) are recorded in `docs/INVARIANTS.md`.
+A recorded no was one of the two outcomes this item asked for, so it is closed
+rather than carried.
 
 ## P10. Decide: what the model picker offers
 
@@ -726,6 +749,34 @@ diffusion frames is exactly where the plan expected it to fail.
   the manual says which, and the measurement says why.
 
 **Expected outcome:** one measurement document and one of the two edits.
+
+## P22. Write what the closed beta is told it has not seen
+
+**Why it is yours:** it is a claim about the product, made in your name, to
+people you invited.
+
+Only Troupe carries an **Experimental** chip (`modes.MATURITY`). Two other
+surfaces have comparable evidence gaps and no chip: **Sirens** has never been
+heard on a machine with a sound card (P14 — the engine is asserted sample by
+sample and nobody has listened to it), and **Plotter's Tiled interop** has only
+ever round-tripped through Warlock's own reader and writer (P7). Troupe's
+character-sheet job has never run against real Blender (P5) and Warlock-written
+`.aseprite` files have never been opened in real Aseprite (P6).
+
+**Do:** name those five, by mode, in whatever the invite is — a note beside the
+download, not buried in `docs/`. One sentence each: what runs, what has never
+been checked against the other implementation, and what to report if it breaks.
+
+**Not by adding chips.** A maturity chip is a permanent statement about a mode's
+design; these are temporary statements about *evidence*, and the beta is the
+thing that removes them. A chip added now would have to be argued away later,
+and the argument would be "somebody finally listened to it", which is not what
+the chip means. The chip stays for Troupe, whose gap is a design one (prompt-to-
+character is measured not to work), and the rest goes in the release note.
+
+**Expected outcome:** an invited user who hits one of these five knows they hit
+a known gap rather than a bug, and reports the right thing. It also converts
+P5, P6, P7 and P14 from work you owe yourself into work the beta can close.
 
 ## Also owed, smaller
 

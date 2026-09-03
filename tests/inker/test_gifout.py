@@ -298,3 +298,60 @@ def test_a_short_plane_list_is_refused_by_name(tmp_path):
             tmp_path / "x.gif", [plane, plane], [10, 10], palette=[(0, 0, 0, 255)],
             indices=[None],
         )
+
+
+# --- per-frame colour tables -------------------------------------------------
+
+
+def test_a_frame_with_its_own_table_is_written_in_its_own_colours(tmp_path):
+    """Palette animation: the drawing does not move and the colours do. Every
+    frame used to be resolved through the one document table, so an overridden
+    frame exported the right slots in the wrong colours -- read back here
+    rather than asserted at the call, because that is the only way to tell a
+    local colour table from a global one."""
+    dest = tmp_path / "flash.gif"
+    slots = np.zeros((4, 4), dtype=np.uint8)
+    slots[:] = 1
+    plane = _plane((4, 4), (10, 10, 10, 255))
+    document = [(0, 0, 0, 255), (220, 30, 30, 255)]
+    override = [(0, 0, 0, 255), (30, 30, 220, 255)]
+
+    gifout.write_gif(
+        dest,
+        [plane, plane],
+        [100, 100],
+        palette=document,
+        indices=[slots, slots],
+        palettes=[None, override],
+    )
+
+    frames = _frames_of(dest)
+    assert tuple(np.asarray(frames[0][0])[0, 0])[:3] == (220, 30, 30)
+    assert tuple(np.asarray(frames[1][0])[0, 0])[:3] == (30, 30, 220)
+
+
+def test_no_override_writes_exactly_what_it_always_did(tmp_path):
+    """The ordinary document must not pay for the feature or change output."""
+    plane = _plane((4, 4), (10, 10, 10, 255))
+    slots = np.ones((4, 4), dtype=np.uint8)
+    table = [(0, 0, 0, 255), (220, 30, 30, 255)]
+
+    before = tmp_path / "before.gif"
+    after = tmp_path / "after.gif"
+    gifout.write_gif(before, [plane, plane], [100, 100], palette=table, indices=[slots, slots])
+    gifout.write_gif(
+        after,
+        [plane, plane],
+        [100, 100],
+        palette=table,
+        indices=[slots, slots],
+        palettes=[None, None],
+    )
+
+    assert before.read_bytes() == after.read_bytes()
+
+
+def test_a_palettes_list_the_wrong_length_is_refused(tmp_path):
+    plane = _plane((4, 4), (10, 10, 10, 255))
+    with pytest.raises(ValueError):
+        gifout.write_gif(tmp_path / "x.gif", [plane, plane], [10, 10], palettes=[None])

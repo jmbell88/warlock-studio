@@ -55,7 +55,7 @@ from . import parser
 # subsystem.
 # Troupe joined Part I as chapter 14 on 2026-08-20, moving everything from the
 # old 14 onward by one. It is the Troupe programme's own mode and it belongs
-# beside the five workspaces it follows rather than after the library: the
+# beside the workspaces it sits among rather than after the library: the
 # grouping in Part I is the *rail's*, and Troupe is in the rail's second group.
 #
 # The tutorials took 01-19 on 2026-08-22, moving all twenty-five existing
