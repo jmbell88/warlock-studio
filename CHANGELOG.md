@@ -18,6 +18,16 @@ the release you are actually running.
 
 ## 0.0.31 — 2026-09-03
 
+- **A cancel could leave Blender running to completion.** `request_cancel` reads the live subprocess
+  handle once, at the instant the button is pressed, and nothing re-reads it — so a cancel landing
+  between a stage publishing its phase and the handle reaching `_note_blender` found `None`, marked
+  the row cancelled, and left Blender working. The window is as long as Blender takes to start, which
+  is seconds, and it is exactly the window a user who pressed cancel *because* the stage had just
+  begun is in; the process is in `winjob`'s kill-on-close set, so the orphan lived until the app did.
+  The two halves are now a handshake — `request_cancel` sets the event then reads the handle,
+  `_note_blender` sets the handle then reads the event — so whichever runs second does the kill, and
+  the only way to miss is for neither to have moved, which is the state with nothing to kill. Found
+  by CI: the load made an existing test land in the window it had been synchronising past.
 - **The Python floor is 3.13, because the 3.12 claim was finally run.** A CI leg to test that claim was
   added on 2026-08-24 and nobody read its output until 2026-09-03 — which is the real defect, since a
   support claim with no run behind it is a guess with a version number. Read, it was not green:

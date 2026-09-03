@@ -209,23 +209,30 @@ async def test_cancelling_a_rig_never_deletes_the_source_mesh(worker, monkeypatc
     await worker.shutdown()
 
 
+class FakeProc:
+    """A Popen that only answers the two questions ``request_cancel`` asks."""
+
+    def __init__(self, killed: list[bool]) -> None:
+        self._killed = killed
+
+    def poll(self):
+        return None
+
+    def kill(self):
+        self._killed.append(True)
+
+
 async def test_cancelling_a_rig_kills_the_blender_subprocess(worker, monkeypatch):
     killed: list[bool] = []
-
-    class FakeProc:
-        def poll(self):
-            return None
-
-        def kill(self):
-            killed.append(True)
-
     hold = threading.Event()
+    registered = threading.Event()
 
     def fake(spec, *, on_progress=None, on_start=None, timeout=0.0):
         if on_progress is not None:
             on_progress(0.4, "Computing weights")  # puts the phase in "rig"
         if on_start is not None:
-            on_start(FakeProc())
+            on_start(FakeProc(killed))
+        registered.set()
         hold.wait(timeout=10)
         raise rigging.BlenderError("killed")
 
@@ -234,12 +241,57 @@ async def test_cancelling_a_rig_kills_the_blender_subprocess(worker, monkeypatch
     rig_id = worker.store.create("rig", None, {"source_job": source})
 
     worker.start()
-    await _wait_until(lambda: worker.progress.snapshot(rig_id) is not None
-                      and worker.progress.snapshot(rig_id)["phase"] == "rig")
+    # The handle, not the phase. ``on_progress`` runs *before* ``on_start``, so
+    # waiting on the phase let the cancel land in the window between them --
+    # rarely on a workstation and reliably on a loaded CI runner. That window is
+    # a real defect and has its own test below; this one is about the ordinary
+    # case, so it waits for the thing it is actually about.
+    await _wait_until(registered.is_set)
     await worker.request_cancel(rig_id)
     hold.set()
     await _wait_until(lambda: worker.store.get(rig_id)["status"] == "cancelled")
     assert killed, "cancel must kill the subprocess; bpy checks nothing itself"
+    await worker.shutdown()
+
+
+async def test_a_cancel_before_the_handle_arrives_still_kills_blender(worker, monkeypatch):
+    """The window between a stage publishing its phase and its subprocess
+    handle reaching ``_note_blender``.
+
+    ``request_cancel`` reads the handle once and nothing re-reads it, so a
+    cancel in this window used to mark the row cancelled and leave Blender
+    running to completion -- and the window is as long as Blender takes to
+    start, which is the very moment a user who saw the stage begin would press
+    the button. Found by CI, where the load made the ordinary test land here.
+    """
+    killed: list[bool] = []
+    hold = threading.Event()
+    cancelled = threading.Event()
+
+    def fake(spec, *, on_progress=None, on_start=None, timeout=0.0):
+        if on_progress is not None:
+            on_progress(0.4, "Computing weights")
+        # The cancel happens *here*, between the phase and the handle.
+        cancelled.wait(timeout=10)
+        if on_start is not None:
+            on_start(FakeProc(killed))
+        hold.wait(timeout=10)
+        raise rigging.BlenderError("killed")
+
+    monkeypatch.setattr(rigging, "run_worker", fake)
+    source = _mesh_job(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(
+        lambda: worker.progress.snapshot(rig_id) is not None
+        and worker.progress.snapshot(rig_id)["phase"] == "rig"
+    )
+    await worker.request_cancel(rig_id)
+    cancelled.set()
+    hold.set()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "cancelled")
+    assert killed, "a cancel that beat the handle left Blender running"
     await worker.shutdown()
 
 

@@ -1354,8 +1354,32 @@ class Worker(
         polite abort -- bpy is inside a C solve and checks nothing -- so
         holding the handle is the only thing that lets ``request_cancel`` stop
         one.
+
+        **And it kills the process itself if the cancel already happened.**
+        ``request_cancel`` reads ``self._blender`` once, at the instant the
+        user presses the button, and nothing re-reads it later -- so a cancel
+        landing between the stage publishing its phase and the handle arriving
+        here found ``None``, marked the row cancelled, and left Blender running
+        to completion. That window is not theoretical: it is exactly as long as
+        Blender takes to start, which is seconds, and it is the window a user
+        who pressed the button *because* the stage had just begun is in. The
+        job was in ``winjob``'s kill-on-close set, so the orphan lived until
+        the app did.
+
+        The two halves are a handshake, and it is safe in either order because
+        each side writes before it reads: ``request_cancel`` sets the event and
+        then reads the handle, this sets the handle and then reads the event.
+        Whichever runs second sees the other's write and does the kill, so the
+        only way to miss is for neither to have moved -- which is the state
+        where there is nothing to kill.
         """
         self._blender = proc
+        cancel = self._cancel
+        if cancel is None or not cancel.event.is_set():
+            return
+        if proc is not None and proc.poll() is None:
+            with contextlib.suppress(OSError):
+                proc.kill()
 
     def _resolve_base_key(self, params: dict[str, Any], *, default: str | None = None) -> str:
         """Which checkpoint a stage should load, from params it may not trust.
