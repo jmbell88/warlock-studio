@@ -12,8 +12,9 @@ every earlier version and every deleted plan (`git log --all --diff-filter=D`).
    making a decision. None of it is derivable from the tree and none of it can
    be closed by writing code.
 2. **Work that is fully specified and deliberately unstarted** — today that is
-   Troupe's phases 6, 7 and 8 alone (P13), each here with the argument that
-   makes it actionable, not as a title.
+   Troupe's phases 7 and 8 alone (P13), each here with the argument that
+   makes it actionable, not as a title. Phase 6 closed on 2026-09-03 with the
+   re-render merge, its last unbuilt item.
 
 **The moment an item could be built, it is built and struck out rather than
 tracked.** A plan whose boxes disagree with the tree is worse than no plan, and
@@ -118,8 +119,8 @@ is **10 of 20** (`docs/measurements/2026-09-02-fantasy-v1.md`). The same
 grades closed `docs/measurements/2026-09-02-hole-audit-vs-grade.md` (the silhouette audit is
 the reviewer's `holes` tag to the mesh on v0.5.4; the reroll converted 0 of 5;
 `mesh_retries` stays 0) and settled the guidance sweep's open-form question.
-The README states the figure. The library may now be cleaned — the writeups
-exist. P10's decisions are unblocked.
+The README states the figure. The library was cleaned on 2026-09-03 once the
+open sweeps were reviewed; the verdict rows stay. P10's decisions are unblocked.
 
 What survived as a human item, from the props document's first decision rule:
 
@@ -410,9 +411,18 @@ are passing oracles in `studio/troupe/ulpc.py`.
   A fix on one side can be offered on the other, face excluded.~~ **Built
   2026-09-02**: `inker/mirror.py`, the face box at 30 % of the alpha bbox by
   default, a live diff on the canvas, apply per cell or per run.
-- *Re-render one animation without discarding hand edits.* The hardest
-  workflow problem in the programme — **designed 2026-09-02 (P11)**, not yet
-  built. Its own plan.
+- ~~*Re-render one animation without discarding hand edits.*~~ **Built
+  2026-09-03**, as designed in P11. Three parts: `inker/sheetmerge.py` holds the
+  digest and the five-verdict comparison, and the base rides in `animation.json`
+  as an additive `sheet` key the way `groups` does; `charsheet.check_subset` /
+  `subset_indices` plus `sheet.pack(only=)` and `sheet.compose_cells` are the
+  subset arithmetic, and `service.troupe.rerender_charsheet` is the door — it
+  copies its pixel settings from the row that made the sheet, so the new cells
+  match the ones they land beside. `_doc_sheet.merge_render` is the sixth verb,
+  and on conflict the hand edit stands and the cell is flagged. Two ordering
+  traps are recorded where they bite: the pixel-art pass is not idempotent, so
+  the compose happens *after* the quantise, and the palette is pinned off the
+  base atlas or a subset would derive its own.
 
 **Phase 7 — layered equipment (deferred until whole-character generation
 works).** *Multi-GLB scene composition*: `op_sheet` takes one `source_glb` and

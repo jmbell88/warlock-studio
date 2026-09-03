@@ -16,7 +16,7 @@ zero, which costs importers nothing and needs no new format version.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -587,7 +587,11 @@ def extrude_edges(atlas: Any, x: int, y: int, w: int, h: int, margin: int) -> No
 
 
 def pack(
-    sheet: Plan, frames: Mapping[int, Path], out_png: Path
+    sheet: Plan,
+    frames: Mapping[int, Path],
+    out_png: Path,
+    *,
+    only: Collection[int] | None = None,
 ) -> dict[int, dict[str, int] | None]:
     """Composite the rendered frames into one RGBA atlas.
 
@@ -597,14 +601,28 @@ def pack(
     A missing or wrong-sized frame raises rather than silently leaving a hole:
     a sheet with an invisible gap in it looks like a modelling problem, and the
     user would go looking in the wrong place.
+
+    ``only`` packs a *subset* of the plan's cells and leaves the rest
+    transparent -- a re-render of one animation, which is composited onto the
+    previous atlas by :func:`compose_cells` afterwards. The geometry is the
+    whole plan's either way, so a cell keeps the rectangle it has always had.
+
+    **The refusal above keeps its force**, which is why this is a filter and
+    not a relaxation: every index in ``only`` must still arrive, and a cell
+    outside it is deliberately absent rather than missing. Softening the raise
+    to "skip whatever is not there" would have made a dropped render frame
+    indistinguishable from a subset, in the one function positioned to notice.
     """
     from PIL import Image
 
     size = (sheet.cell_w, sheet.cell_h)
     atlas = Image.new("RGBA", (sheet.width, sheet.height), (0, 0, 0, 0))
     trims: dict[int, dict[str, int] | None] = {}
+    wanted = None if only is None else set(only)
     try:
         for cell in sheet.cells:
+            if wanted is not None and cell.index not in wanted:
+                continue
             path = frames.get(cell.index)
             if path is None or not path.exists():
                 raise ValueError(f"no rendered frame for cell {cell.index}")
@@ -619,6 +637,66 @@ def pack(
     finally:
         atlas.close()
     return trims
+
+
+def compose_cells(
+    base_png: Path,
+    overlay_png: Path,
+    sheet: Plan,
+    indices: Collection[int],
+    out_png: Path,
+) -> None:
+    """Paste ``indices``' cells from ``overlay_png`` onto a copy of ``base_png``.
+
+    The last step of a subset re-render, and it is deliberately the *last* one.
+
+    **The pixel-art pass is not idempotent**, which is what fixes this order.
+    ``pixelize.pixelize_atlas`` runs ``clean_orphans`` and ``outline`` per cell,
+    and ``outline`` in the shipped ``outer`` mode grows the silhouette by a
+    pixel on every side -- so composing first and quantising the result would
+    fatten every *copied* cell once per re-render, cumulatively, and the sheet
+    would drift a pixel thinner in the runs nobody re-rendered. Render, reduce,
+    pack the subset, quantise the subset, and only then compose. Quantise once.
+
+    Geometry is taken from the plan rather than measured, because both images
+    are the same plan's atlas by construction; a size mismatch is refused by
+    name rather than pasted at an offset that happens to fit.
+    """
+    from PIL import Image
+
+    wanted = set(indices)
+    with Image.open(base_png) as opened:
+        base = opened.convert("RGBA")
+    try:
+        with Image.open(overlay_png) as opened:
+            overlay = opened.convert("RGBA")
+        try:
+            expected = (sheet.width, sheet.height)
+            if base.size != expected:
+                raise ValueError(
+                    f"the sheet being re-rendered is {base.size[0]}x{base.size[1]} "
+                    f"and this layout is {expected[0]}x{expected[1]}"
+                )
+            if overlay.size != expected:
+                raise ValueError(
+                    f"the re-rendered cells are {overlay.size[0]}x{overlay.size[1]} "
+                    f"and this layout is {expected[0]}x{expected[1]}"
+                )
+            for cell in sheet.cells:
+                if cell.index not in wanted:
+                    continue
+                box = (cell.x, cell.y, cell.x + sheet.cell_w, cell.y + sheet.cell_h)
+                # Pasted, not alpha-composited: a re-rendered cell *replaces*
+                # what was there. Blending would leave the old silhouette
+                # showing through wherever the new one is transparent, which is
+                # a ghost rather than a merge.
+                base.paste(overlay.crop(box), (cell.x, cell.y))
+        finally:
+            overlay.close()
+        out_png.parent.mkdir(parents=True, exist_ok=True)
+        base.save(out_png, "PNG")
+    finally:
+        base.close()
 
 
 def sidecar(

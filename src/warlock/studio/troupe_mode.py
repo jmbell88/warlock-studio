@@ -34,6 +34,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .. import followups
 from . import icons
 from .state import set_mode
 from .troupe import spec as troupe_spec
@@ -194,6 +195,68 @@ def _read_sheets(ctx: Any, job_id: str) -> list[dict[str, Any]]:
 #: gate is the only one the *user* can be blocking on, which is why it is the
 #: only one that offers a button.
 _WAITING = "Waiting for you. Approve the drawing in Create."
+#: The three the chain moves through after the gate. One table, shared with
+#: :func:`_sent_in_progress`, because a mesh-sourced character and a
+#: reference-sourced one are at the *same* phase once the mesh exists and two
+#: spellings of one phase is two chances to drift.
+_BUILDING_MESH = "Building the mesh..."
+_RIGGING = "Rigging the mesh..."
+_RENDERING = "Rendering the character sheet..."
+#: The window between a mesh landing and its follow-up row being minted. Short,
+#: real, and not a failure -- so it names the whole remainder rather than
+#: claiming a phase that has not started.
+_QUEUEING = "Building the mesh, rig and sheet..."
+
+#: A row is *live* when it can still make progress. Errored and cancelled rows
+#: cannot, which is the whole of what :func:`_phase_of` needs from a status.
+_DEAD = ("error", "cancelled")
+
+
+def _phase_of(
+    kids: list[dict[str, Any]], sourced: dict[str, list[dict[str, Any]]]
+) -> str | None:
+    """Where a promoted character actually is, or ``None`` if it stopped.
+
+    **This is the branch that used to be a constant.** :func:`in_progress`
+    classified from the reference row's own status and whether it had children,
+    so once a mesh existed the sidebar said "Building the mesh, rig and
+    sheet..." for ever -- through a failed mesh, a failed rig, a failed
+    charsheet and a recorded follow-up failure alike. Every one of those facts
+    was already on the page the caller walks; none of them was read.
+
+    ``None`` means the chain has stopped, and the caller drops the row. That is
+    the decision the other two failure paths in this module already take, for
+    the reason both of them state: the library's failure card owns a failed row,
+    with the error text and the reroll, and a second account of one failure in a
+    sidebar that cannot act on it is worse than none. What changes here is only
+    that the row stops *claiming* to be working.
+
+    Read in chain order and newest-first within it, because a reroll can leave a
+    dead rig beside a live one and the live one is the answer.
+    """
+    live_kids = [kid for kid in kids if str(kid.get("status") or "") not in _DEAD]
+    if not live_kids:
+        return None
+    for kid in live_kids:
+        if str(kid.get("status") or "") != "done":
+            # The mesh itself is still being reconstructed.
+            return _BUILDING_MESH
+    # Every surviving mesh is finished, so the chain is at the rig or the sheet.
+    rows = [row for kid in live_kids for row in sourced.get(str(kid["id"]), [])]
+    live = [row for row in rows if str(row.get("status") or "") not in _DEAD]
+    if live:
+        kinds = {str(row.get("kind") or "") for row in live}
+        return _RENDERING if "charsheet" in kinds else _RIGGING
+    if rows:
+        # Follow-ups were minted and every one of them is dead.
+        return None
+    # None minted yet. A recorded failure is why that will never happen; its
+    # absence is the ordinary window between the mesh landing and the queue
+    # picking the follow-up up.
+    for kid in live_kids:
+        if followups.records(kid.get("params"), kid.get("stage")):
+            return None
+    return _QUEUEING
 
 #: How many unfinished characters the cast lists. A reference that was never
 #: approved stays unapproved forever, so without a cap a user who abandons
@@ -284,7 +347,12 @@ def in_progress(ctx: Any) -> list[dict[str, Any]]:
         elif not kids:
             phase, waiting = _WAITING, True
         else:
-            phase, waiting = "Building the mesh, rig and sheet...", False
+            resolved = _phase_of(kids, sourced)
+            if resolved is None:
+                # The chain stopped. Dropped rather than relabelled, which is
+                # what the two failure paths above and below already do.
+                continue
+            phase, waiting = resolved, False
         out.append(
             {
                 "id": str(row["id"]),
@@ -337,11 +405,7 @@ def _sent_in_progress(
         # throughout -- which is what keeps ``_WAITING``'s claim true by
         # construction: the gate is the only phase the user can be blocking on
         # and therefore the only one that offers a button.
-        phase = (
-            "Rendering the character sheet..."
-            if "charsheet" in kinds
-            else "Rigging the mesh..."
-        )
+        phase = _RENDERING if "charsheet" in kinds else _RIGGING
         job = ctx.cache.get(source) or {}
         if job.get("deleted_at"):
             continue
@@ -390,27 +454,55 @@ def can_send_to_troupe(ctx: Any, job: Any) -> bool:
 
 
 def sendable_meshes(ctx: Any) -> list[dict[str, Any]]:
-    """Every mesh the picker inside Troupe may offer, newest first.
+    """Every mesh the picker inside Troupe may offer, newest first. Throttled.
 
     ``characters``' page cap and its argument: an unbounded walk over a corpus
     of thousands is a frame-thread cost that grows with how long the user has
     owned the app.
+
+    **And the page cap alone was not enough.** ``panes.troupe_settings`` calls
+    this on every frame its picker header is open, and the predicate reads
+    ``files`` -- which is ``attach_files``' doing and not a column, at one stat
+    per listed name per row. That function's own docstring calls itself the
+    frame loop's single largest syscall cost and asks callers to own a cache;
+    this one did neither, so a 400-row page was thousands of stats a frame on
+    the thread that must not block. Both halves are fixed here rather than one:
+    ``files_cache`` is what ``list_jobs`` offers for exactly this
+    (``service._jobs_list``), and the throttle is ``cast_and_pending``'s, over
+    the same store, at the same cadence, for the same reason. A mesh becomes
+    sendable only when a job finishes, which is not a per-frame event.
     """
     from ..service import jobs as svc_jobs
 
-    # Through the service's listing rather than ``store.list``: the predicate
-    # reads ``files``, which is ``attach_files``' doing and not a column.
-    out = [
-        {
-            "id": str(row["id"]),
-            "prompt": row.get("name") or row.get("prompt") or "",
-            "created_at": row.get("created_at"),
-        }
-        for row in svc_jobs.list_jobs(ctx.svc, limit=SCAN_LIMIT)
-        if can_send_to_troupe(ctx, row)
-    ]
-    out.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
-    return out
+    state = ensure(ctx)
+    now = time.monotonic()
+    if state.sendable_cache is None or now >= state.sendable_next:
+        # Through the service's listing rather than ``store.list``: the
+        # predicate reads ``files``, which is ``attach_files``' doing.
+        out = [
+            {
+                "id": str(row["id"]),
+                "prompt": row.get("name") or row.get("prompt") or "",
+                "created_at": row.get("created_at"),
+            }
+            for row in svc_jobs.list_jobs(
+                ctx.svc, limit=SCAN_LIMIT, files_cache=state.sendable_files
+            )
+            if can_send_to_troupe(ctx, row)
+        ]
+        out.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        state.sendable_cache = out
+        state.sendable_next = now + CAST_REFRESH_LIVE
+    return state.sendable_cache
+
+
+def invalidate_sendable(ctx: Any) -> None:
+    """Drop the throttled mesh list so the next draw re-reads it.
+
+    ``invalidate_cast``'s sibling, and called beside it: the two lists go stale
+    on the same events, because both are answers about what the store holds.
+    """
+    ensure(ctx).sendable_cache = None
 
 
 def send_to_troupe(ctx: Any, job: Any, form: dict[str, Any] | None = None) -> bool:
@@ -440,6 +532,13 @@ def send_to_troupe(ctx: Any, job: Any, form: dict[str, Any] | None = None) -> bo
             reduce_mode=request.get("reduce_mode"),
             dither=bool(request.get("dither")),
             palette=request.get("palette") or None,
+            # **No control writes these two, and the read is still right.**
+            # ``elevation`` and ``lighting`` are validated by the door, reach
+            # ``charsheet.plan`` and ``op_sheet``, and have working defaults --
+            # they are simply not offered in the form yet. Read through
+            # ``request`` rather than dropped so that adding the controls is a
+            # pane change and nothing else; ``name`` sat in exactly this state
+            # until its field landed beside the palette.
             elevation=request.get("elevation"),
             lighting=request.get("lighting"),
             name=str(request.get("name") or ""),
@@ -546,6 +645,23 @@ def preview_layout(ctx: Any) -> dict[str, Any]:
             valid = False
         if valid:
             return snapshot
+        # Named, not just swallowed. An empty layout draws "That animation and
+        # direction are not on this sheet", which reads like a selection
+        # problem and sends the user looking at the selectors; the sidecar is
+        # the actual answer and nothing else was going to say so.
+        #
+        # **Once per sheet**, latched the way the scorer latches a failure:
+        # this function is called several times a frame by the panes, so a bare
+        # warning here would be sixty lines a second in ``warlock.log`` -- a
+        # diagnosis nobody can read is not one.
+        sheet_id = str(record.get("id") or record.get("sheet_id") or "?")
+        if ctx.state.preview.get("troupe_layout:warned") != sheet_id:
+            ctx.state.preview["troupe_layout:warned"] = sheet_id
+            log.warning(
+                "the layout snapshot on sheet %s is not readable; "
+                "the preview will be empty",
+                sheet_id,
+            )
         return {"version": 2, "movements": [], "runs": [], "cell_count": 0}
     table = troupe_spec.load()
     movements = [
@@ -678,6 +794,65 @@ def step(ctx: Any, delta: int) -> None:
     frames = int((preview_movement(ctx) or {}).get("frames") or 1)
     state.frame = (state.frame + delta) % frames
     state.clock = 0.0
+
+
+def _cycle(names: list[str], current: str, delta: int) -> str | None:
+    """The next name round the ring, or None when there is nothing to cycle.
+
+    None rather than a default on an empty list, because an invalid v2 snapshot
+    resolves to a layout with no movements (:func:`preview_layout`) and a key
+    press must not invent a direction the sheet does not have.
+    """
+    if not names:
+        return None
+    try:
+        index = names.index(current)
+    except ValueError:
+        # The selection is off this sheet -- ``_reconcile_preview``'s case,
+        # reached here when a key arrives first. Start from the top.
+        return names[0]
+    return names[(index + delta) % len(names)]
+
+
+def cycle_direction(ctx: Any, delta: int) -> None:
+    """Turn the character one direction round the compass.
+
+    Through :func:`set_direction`, which deliberately does *not* reset the
+    clock -- ``docs/manual/33-troupe.md`` promises that turning mid-stride shows
+    the same frame from the other side, and that promise is this function's
+    whole point at the keyboard.
+    """
+    state = ensure(ctx)
+    names = [
+        str(entry.get("key") or "")
+        for entry in (preview_movement(ctx) or {}).get("directions") or ()
+    ]
+    picked = _cycle(names, state.direction, delta)
+    if picked is not None:
+        set_direction(ctx, picked)
+
+
+def cycle_animation(ctx: Any, delta: int) -> None:
+    """Move to the next animation on the sheet.
+
+    Through :func:`set_animation`, which *does* reset the clock and reconciles
+    the direction -- a movement need not carry the one currently selected.
+    """
+    state = ensure(ctx)
+    names = [
+        str(movement.get("key") or "")
+        for movement in preview_layout(ctx).get("movements") or ()
+    ]
+    picked = _cycle(names, state.animation, delta)
+    if picked is not None:
+        set_animation(ctx, picked)
+
+
+def to_end(ctx: Any, last: bool) -> None:
+    """Jump to the first or last frame of the run on screen, and stop."""
+    state = ensure(ctx)
+    frames = int((preview_movement(ctx) or {}).get("frames") or 1)
+    goto(ctx, state.direction, frames - 1 if last else 0)
 
 
 # --- the scores -------------------------------------------------------------
@@ -924,7 +1099,49 @@ def build_sheet(ctx: Any, job_id: str, form: dict[str, Any]) -> bool:
         dither=bool(form.get("dither")),
         palette=form.get("palette") or "",
         layout=_layout_request(form),
+        name=str(form.get("name") or ""),
     )
+
+
+def rerender_runs(ctx: Any, subset: list[dict[str, str]]) -> bool:
+    """Re-render some runs of the selected sheet. -> whether it was submitted.
+
+    Takes no options: the door copies them from the row that made the sheet, so
+    the cells that come back match the ones they land beside. See
+    ``service.troupe.rerender_charsheet`` for why that is not negotiable.
+    """
+    from ..service import troupe as svc_troupe
+
+    state = ensure(ctx)
+    if not (state.job_id and state.sheet_id and subset):
+        return False
+    key = f"troupe-sheet:{state.job_id}"
+    if ctx.busy(key):
+        return False
+    ctx.state.clear_field_errors()
+    return bool(
+        ctx.submit(
+            key,
+            svc_troupe.rerender_charsheet,
+            ctx.svc,
+            state.job_id,
+            sheet_id=state.sheet_id,
+            subset=list(subset),
+        )
+    )
+
+
+def sheet_runs(ctx: Any) -> list[dict[str, str]]:
+    """Every ``(animation, direction)`` run on the selected sheet.
+
+    From the sheet's own layout snapshot rather than from the shipped table: a
+    sheet built with four directions has four, and offering it eight would be
+    offering runs it does not contain.
+    """
+    return [
+        {"animation": str(run.get("movement") or ""), "direction": str(run.get("direction") or "")}
+        for run in preview_layout(ctx).get("runs") or ()
+    ]
 
 
 def open_in_inker(ctx: Any) -> bool:
@@ -977,6 +1194,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
     # there to stop idle polling, not to delay news this pane already has.
     invalidate_cast(ctx)
     invalidate_sheets(ctx)
+    invalidate_sendable(ctx)
     result = getattr(done, "result", None)
     if done.key == "troupe-start":
         # The form's own choice: this fires on the way out of the submit, and
@@ -987,7 +1205,14 @@ def on_task_done(ctx: Any, done: Any) -> None:
             "Approve it in Create to build the mesh.",
             "success",
         )
-        set_mode(ctx.state, "create")
+        # Only if the user is still standing where they pressed the button.
+        # This fires when the *submit* returns, which can be seconds later and
+        # in another mode entirely -- and a mode switch nobody asked for takes
+        # the window away from whatever they moved on to. The toast still
+        # tells them where the reference went, which is the part that has to
+        # arrive whether or not they are looking at Troupe.
+        if ctx.state.mode == "troupe":
+            set_mode(ctx.state, "create")
     elif done.key.startswith("troupe-send:"):
         # Two shapes behind one press, and the toast says which happened: an
         # unrigged mesh is minutes of CPU behind a button that is not called
@@ -1016,14 +1241,29 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         return
     invalidate_cast(ctx)
     invalidate_sheets(ctx)
+    invalidate_sendable(ctx)
     ctx.toast(str(getattr(done, "error", "") or "That request was refused."), "error")
 
 
 def handle_key(ctx: Any, event: Any) -> bool:
-    """Space toggles playback; Left/Right step a frame.
+    """The transport, at the keyboard. Every key here is one imgui never sees.
 
     Which is why ``troupe`` is in ``modes.NAV_KEY_MODES``: one press must not
     also step imgui's focus ring.
+
+    **The set is exactly ``imgui_backend._NAV_KEYS``, and that is the argument
+    for it.** Membership of ``NAV_KEY_MODES`` withholds all nine of those keys
+    from imgui while this mode is up, and ``main._shortcut``'s Troupe arm
+    returns whether or not this function consumed the press. So a reserved key
+    left unbound here is not a key that does nothing imgui-ish -- it is a key
+    that does *nothing at all*, taken from one consumer and given to none. Six
+    of the nine were in that state: Up, Down, PageUp, PageDown, Home and End.
+    Binding them adds no entry to any table and no new focus-ring hazard,
+    because the reservation is already paid for.
+
+    Direction gets the arrows perpendicular to the frame arrows, being the
+    smaller unit; animation gets PageUp/PageDown, which is the larger-jump
+    meaning those keys already carry elsewhere in the app.
 
     **Presses only.** This used to act on ``event.key`` without looking at
     ``event.type``, so every one of these ran twice per press -- Space toggled
@@ -1045,6 +1285,24 @@ def handle_key(ctx: Any, event: Any) -> bool:
         return True
     if event.key == pygame.K_RIGHT:
         step(ctx, 1)
+        return True
+    if event.key == pygame.K_UP:
+        cycle_direction(ctx, -1)
+        return True
+    if event.key == pygame.K_DOWN:
+        cycle_direction(ctx, 1)
+        return True
+    if event.key == pygame.K_PAGEUP:
+        cycle_animation(ctx, -1)
+        return True
+    if event.key == pygame.K_PAGEDOWN:
+        cycle_animation(ctx, 1)
+        return True
+    if event.key == pygame.K_HOME:
+        to_end(ctx, last=False)
+        return True
+    if event.key == pygame.K_END:
+        to_end(ctx, last=True)
         return True
     return False
 

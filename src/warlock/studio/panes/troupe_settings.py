@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ... import rigging
 from ...service import troupe as svc_troupe
 from .. import forms, troupe_mode, widgets
 from ..manual import render as manual_render
@@ -160,6 +161,7 @@ def _form(state: Any, options: dict[str, Any]) -> dict[str, Any]:
             "reduce_mode": str(defaults.get("reduce_mode") or "box"),
             "dither": False,
             "palette": "",
+            "name": "",
             "layout": {
                 "version": 2,
                 "columns": 8,
@@ -294,6 +296,19 @@ def _palette(
         )
         form["colors"] = int(colors)
     _changed, form["dither"] = form_ui.switch("dither", "Dither", bool(form["dither"]))
+    # **Last, and optional.** A sheet has always been able to carry a name --
+    # the door validates it, the worker writes it into the sidecar and the
+    # chooser reads it back -- and there was no field, so every sheet a
+    # character had was "sheet - 32px". Two builds at one size were two
+    # identical rows in a list that only appears once there are two.
+    _changed, form["name"] = form_ui.text(
+        "name",
+        "Name this sheet",
+        str(form.get("name") or ""),
+        hint="optional",
+        max_length=rigging.MAX_SHEET_NAME,
+        helper="Shown in the sheet chooser. The size and cell count are added for you.",
+    )
 
 
 def _submit(ctx: Any, form: dict[str, Any]) -> None:

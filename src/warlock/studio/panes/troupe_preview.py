@@ -1,10 +1,16 @@
-"""Troupe's centre pane: one sprite, playing, at an integer scale.
+"""Troupe's centre pane: one sprite, at an integer scale.
 
-**It never stops**, and that is the design the program spec asks for: a bad
-frame in a walk cycle is obvious in half a second of playback and invisible in a
-contact sheet. Which is also why the mode's default is playing and why a
-one-shot holds its last frame rather than freezing the preview -- see
-``troupe_mode.advance``.
+**Once it is playing it does not stop itself**, and that is the design the
+program spec asks for: a bad frame in a walk cycle is obvious in half a second
+of playback and invisible in a contact sheet. A one-shot holds its last frame
+rather than freezing the preview, because a preview that stops needs a control
+to start it again -- see ``troupe_mode.advance``.
+
+**It opens paused, though**, which this docstring claimed the opposite of until
+2026-09-03. The default was overturned on 2026-08-23 and the reasoning is on
+``TroupeState.playing``: the first thing anyone does with a new sheet is look
+at a *frame*, and a clip already moving when you arrive is one you have to stop
+before you can look at anything in it.
 
 **The scale is an integer and the filter is NEAREST.** A sprite drawn at 6.3x
 through a linear filter is a blurred sprite, which is precisely the thing the

@@ -26,13 +26,13 @@ edit away from a form that offers a size the renderer refuses.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from .. import rigging
 from ..clips import expand_clips
 from ..pipelines import charsheet, pixelize, spritesynth
-from .errors import Invalid, invalid_from
+from .errors import Invalid, NotFound, invalid_from
 from .sheets import check_sheet_cap
 from .validation import check_job_id, check_vram
 
@@ -76,6 +76,11 @@ DEFAULT_TROUPE_OUTLINE = "outer"
 #: one the clip library carries clips for -- and ``rigging.clip_library``
 #: answers "no clips" for the rest rather than failing, so without this the
 #: refusal would land in the worker as a frame-count mismatch.
+#: How many ``charsheet`` rows deep the settings lookup looks. The library's
+#: own page size, and ``studio.troupe_mode``'s: a sheet older than this is one
+#: whose settings the door reports as no longer on record, by name.
+_SCAN_LIMIT = 400
+
 TROUPE_TEMPLATE = "humanoid"
 
 #: Pinned rather than inherited from the character's row, the rule
@@ -281,6 +286,118 @@ def create_charsheet(
         )
     svc.wake_worker()
     return {"id": new_id, "source_job": job_id, "sheet_id": params["sheet_id"]}
+
+
+def rerender_charsheet(
+    svc: WarlockService,
+    job_id: str,
+    *,
+    sheet_id: str,
+    subset: Sequence[Mapping[str, Any]],
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Re-render some of a sheet's runs, copying the rest from the sheet itself.
+
+    **It takes no pixel options, and that is the design.** The settings are
+    copied verbatim from the row that produced ``sheet_id``, because the new
+    cells have to be reduced, quantised and outlined exactly as the ones they
+    will sit beside were -- and any option this door accepted separately would
+    be an option a user could set to something else. That turns a whole class
+    of "these twelve cells look wrong" into a lookup.
+
+    The output is a **new sheet**, not a rewrite of the old one: sheets are
+    write-once under a fresh id, the old one stays openable, and Inker's merge
+    is what brings the two together over a document that has hand edits on it.
+
+    -> ``{"id", "source_job", "sheet_id", "runs"}``
+    """
+    check_job_id(job_id)
+    source = svc.require_job(job_id)
+    job_dir = svc.job_dir(job_id)
+    if not rigging.is_valid_id(str(sheet_id or "")):
+        raise Invalid("that is not a sheet id", field="sheet_id")
+    record = rigging.read_sheet(job_dir, str(sheet_id))
+    if not record:
+        raise NotFound("that sheet is no longer on disk", field="sheet_id")
+    snapshot = record.get("troupe")
+    if not isinstance(snapshot, Mapping):
+        raise Invalid(
+            "that is not a character sheet, so it has no runs to re-render",
+            field="sheet_id",
+        )
+
+    row = _charsheet_row(svc, job_id, str(sheet_id))
+    if row is None:
+        # Honest, and it names what to do instead. The settings are the whole
+        # point of this door; without them the new cells could not be made to
+        # match the ones they are landing beside.
+        raise Invalid(
+            "the settings that produced that sheet are no longer on record, so it "
+            "cannot be re-rendered a run at a time -- build a new sheet instead",
+            field="sheet_id",
+        )
+
+    try:
+        resolved_layout = charsheet.resolve_layout(snapshot)
+        runs = charsheet.check_subset(subset, resolved_layout)
+    except ValueError as exc:
+        raise invalid_from(exc, "Those runs cannot be re-rendered", field="subset") from exc
+
+    sheet_name = (name or "").strip()
+    if len(sheet_name) > rigging.MAX_SHEET_NAME:
+        raise Invalid(
+            f"sheet name must be at most {rigging.MAX_SHEET_NAME} characters", field="name"
+        )
+
+    params = dict(row.get("params") or {})
+    params.update(
+        {
+            "source_job": job_id,
+            "sheet_id": rigging.new_id(),
+            "base_sheet": str(sheet_id),
+            "subset": [{"animation": a, "direction": d} for a, d in runs],
+            "layout": resolved_layout.as_dict(),
+            "name": sheet_name or str(params.get("name") or ""),
+        }
+    )
+    # Not inherited: they are the *previous* run's answers about its own output
+    # and a fresh row must not wear them. ``DERIVED_PARAMS`` says the same thing
+    # for a rerun; this door mints a new row, so it strips them itself.
+    for derived in ("cells", "rendered_cells", "pixel_report"):
+        params.pop(derived, None)
+
+    # A re-render is a new sheet and draws on the same pool -- ``create_charsheet``'s
+    # arrangement verbatim, under the same job-wide hold.
+    with svc.convert_lock(job_id, "sheets"):
+        check_sheet_cap(svc, job_id, job_dir)
+        new_id = svc.store.create(
+            "charsheet", source["prompt"], params, uuid.uuid4().hex[:12]
+        )
+    svc.wake_worker()
+    return {
+        "id": new_id,
+        "source_job": job_id,
+        "sheet_id": params["sheet_id"],
+        "runs": [{"animation": a, "direction": d} for a, d in runs],
+    }
+
+
+def _charsheet_row(
+    svc: WarlockService, job_id: str, sheet_id: str
+) -> dict[str, Any] | None:
+    """The ``charsheet`` row that produced one sheet, or None.
+
+    Narrowed by ``kind`` in SQL rather than walked unfiltered: the answer is one
+    row and the page this searches is the same one the mode's own sheet list is
+    built from.
+    """
+    for row in svc.store.list(limit=_SCAN_LIMIT, kind="charsheet"):
+        params = row.get("params") or {}
+        if str(params.get("source_job") or "") != job_id:
+            continue
+        if str(params.get("sheet_id") or "") == sheet_id:
+            return row
+    return None
 
 
 def send_to_troupe(

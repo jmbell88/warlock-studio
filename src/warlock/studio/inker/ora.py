@@ -769,6 +769,18 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
         # groups existed. Written only when there is a group, so an ungrouped
         # document's ``animation.json`` is byte-identical to what it was.
         payload["groups"] = grouping
+    base = getattr(doc, "sheet_base", None)
+    if base is not None:
+        # Additive and the version stays 1, for ``groups``' reason exactly: the
+        # reader is guarded on its own, and a build that does not know this key
+        # opens the file as the document it was before the key existed. Written
+        # only when a sheet base is actually held, so an ordinary document's
+        # ``animation.json`` stays byte-identical to what it was.
+        # ``frames`` is already uid -> index, built at the top of this
+        # function; a second copy here is a second thing to keep in step.
+        block = base.payload(frames)
+        if block is not None:
+            payload["sheet"] = block
     return json.dumps(payload, indent=2).encode("utf-8")
 
 
@@ -1477,6 +1489,37 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
     ), payload
 
 
+def _read_sheet_base(doc, payload: dict) -> None:
+    """Rebuild the recorded render digests, or leave the document without one.
+
+    ``_read_groups``' guard, one key over and for a stronger version of its
+    reason: a base digest is metadata about a picture that is already whole, so
+    a block we cannot use costs the document its *merge* and never its pixels.
+
+    ``sheetmerge.base_from_payload`` does the validating and answers ``None``
+    for everything it does not recognise -- including an algorithm it cannot
+    recompute, which is deliberately in that class. Digests that cannot be
+    reproduced are worse than none: every cell would classify as edited and the
+    merge would refuse to take anything, silently and for a reason nothing on
+    screen could explain.
+    """
+    from . import sheetmerge
+
+    raw = payload.get("sheet")
+    if raw is None:
+        return
+    try:
+        uid_at = [frame.uid for frame in doc.anim.frames] if doc.anim else []
+        base = sheetmerge.base_from_payload(raw, uid_at)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        log.warning("could not read this sheet's recorded render; merging is off")
+        return
+    if base is None:
+        log.warning("this sheet's recorded render is not one we can use; merging is off")
+        return
+    doc.sheet_base = base
+
+
 def _read_groups(doc, payload: dict) -> None:
     """Rebuild the layer-group tree from ``animation.json``, or leave it empty.
 
@@ -1994,6 +2037,7 @@ def read_ora(path: Path, *, budget: int | None = None):
                 slices=found_slices,
             )
             _read_groups(doc, grid_payload)
+            _read_sheet_base(doc, grid_payload)
             _read_matte(doc, root)
             doc.file_format = "ora"
             doc.dpi = found_dpi

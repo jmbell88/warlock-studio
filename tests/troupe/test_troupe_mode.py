@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pygame
 import pytest
 
 from warlock import rigging
@@ -226,6 +227,129 @@ def test_a_failed_reference_is_left_to_the_library(ctx, svc):
     _troupe_reference(svc, status="error")
     assert troupe_mode.in_progress(ctx) == []
 
+
+def test_a_promoted_character_names_the_link_it_is_actually_on(ctx, svc):
+    """The branch that used to be a constant. Once a mesh existed the sidebar
+    said "Building the mesh, rig and sheet..." whatever had happened since, so
+    the rig and the render -- the two long links -- were indistinguishable."""
+    ref_id = _troupe_reference(svc)
+    mesh_id = svc.store.create(
+        "image", "a fire guardian", {}, stage="model", parent_id=ref_id, status="done"
+    )
+
+    # The window between the mesh landing and the follow-up being minted is
+    # real, and is the one phase that still names the whole remainder.
+    assert troupe_mode.in_progress(ctx)[0]["phase"] == troupe_mode._QUEUEING
+
+    rig_id = svc.store.create("rig", "a fire guardian", {"source_job": mesh_id})
+    assert troupe_mode.in_progress(ctx)[0]["phase"] == troupe_mode._RIGGING
+
+    svc.store.set_status(rig_id, "done")
+    svc.store.create("charsheet", "a fire guardian", {"source_job": mesh_id})
+    assert troupe_mode.in_progress(ctx)[0]["phase"] == troupe_mode._RENDERING
+
+
+def test_a_character_whose_mesh_is_still_running_says_so(ctx, svc):
+    ref_id = _troupe_reference(svc)
+    svc.store.create(
+        "image", "a fire guardian", {}, stage="model", parent_id=ref_id, status="running"
+    )
+    assert troupe_mode.in_progress(ctx)[0]["phase"] == troupe_mode._BUILDING_MESH
+
+
+@pytest.mark.parametrize("status", ["error", "cancelled"])
+def test_a_broken_chain_stops_claiming_to_be_building(ctx, svc, status):
+    """**The bug this closes.** ``in_progress`` read the reference's own status
+    and whether it had children, so a failed mesh left the sidebar saying
+    "Building the mesh, rig and sheet..." for ever. Dropped rather than
+    relabelled, which is what the failed-reference path beside it already does:
+    the library's failure card owns a failed row, with the error text and the
+    reroll."""
+    ref_id = _troupe_reference(svc)
+    svc.store.create(
+        "image", "a fire guardian", {}, stage="model", parent_id=ref_id, status=status
+    )
+    assert troupe_mode.in_progress(ctx) == []
+
+
+@pytest.mark.parametrize("kind", ["rig", "charsheet"])
+def test_a_failed_follow_up_stops_the_chain_too(ctx, svc, kind):
+    """The mesh landed and the link after it did not. Same answer, one link
+    further down, and it was the same silent "building" before."""
+    ref_id = _troupe_reference(svc)
+    mesh_id = svc.store.create(
+        "image", "a fire guardian", {}, stage="model", parent_id=ref_id, status="done"
+    )
+    svc.store.create(
+        kind, "a fire guardian", {"source_job": mesh_id}, status="error"
+    )
+    assert troupe_mode.in_progress(ctx) == []
+
+
+def test_a_recorded_follow_up_failure_stops_the_chain(ctx, svc):
+    """The follow-up was never queued at all, so there is no row to read. The
+    stamp on the mesh is the only record that it is never coming."""
+    from warlock import followups
+
+    ref_id = _troupe_reference(svc)
+    mesh_id = svc.store.create(
+        "image", "a fire guardian", {}, stage="model", parent_id=ref_id, status="done"
+    )
+    followups.persist(svc.store, mesh_id, "rig", "no rig template for that mesh")
+
+    assert troupe_mode.in_progress(ctx) == []
+
+
+def test_a_live_reroll_beside_a_dead_one_is_still_building(ctx, svc):
+    """A reroll leaves the dead row in place, so "any dead follow-up" would be
+    the wrong test -- it would call a working chain broken."""
+    ref_id = _troupe_reference(svc)
+    mesh_id = svc.store.create(
+        "image", "a fire guardian", {}, stage="model", parent_id=ref_id, status="done"
+    )
+    svc.store.create(
+        "rig", "a fire guardian", {"source_job": mesh_id}, status="error"
+    )
+    svc.store.create("rig", "a fire guardian", {"source_job": mesh_id})
+
+    assert troupe_mode.in_progress(ctx)[0]["phase"] == troupe_mode._RIGGING
+
+
+def test_the_mesh_picker_does_not_walk_the_library_every_frame(ctx, svc):
+    """``sendable_meshes``' predicate reads ``files``, which ``attach_files``
+    fills at one stat per listed name per row -- its own docstring calls that
+    the frame loop's single largest syscall cost and asks the caller to own a
+    cache. The picker owned none and asked per frame, for as long as its header
+    was open."""
+    _plain_mesh(svc)
+    reads = []
+    original = svc.store.list
+
+    def counted(*args, **kwargs):
+        reads.append(1)
+        return original(*args, **kwargs)
+
+    svc.store.list = counted
+    try:
+        first = troupe_mode.sendable_meshes(ctx)
+        for _ in range(30):
+            troupe_mode.sendable_meshes(ctx)
+    finally:
+        svc.store.list = original
+
+    assert len(reads) == 1
+    assert troupe_mode.sendable_meshes(ctx) == first
+
+
+def test_a_finished_job_drops_the_picker_cache_rather_than_waiting_it_out(ctx, svc):
+    """The interval is there to stop idle polling, not to delay news the pane
+    already has -- ``invalidate_cast``'s rule, for the list beside it."""
+    _plain_mesh(svc)
+    troupe_mode.sendable_meshes(ctx)
+    assert troupe_mode.ensure(ctx).sendable_cache is not None
+
+    troupe_mode.invalidate_sendable(ctx)
+    assert troupe_mode.ensure(ctx).sendable_cache is None
 
 def test_only_troupe_references_are_listed(ctx, svc):
     svc.store.create("text", "a barrel", {}, stage="reference")
@@ -510,6 +634,100 @@ def test_entering_from_home_creates_nothing(ctx, svc):
     assert len(svc.store.list()) == before
 
 
+def _press(key):
+    """One KEYDOWN. ``handle_key`` is presses-only by contract."""
+    return SimpleNamespace(type=pygame.KEYDOWN, key=key, mod=0)
+
+
+def test_every_reserved_nav_key_does_something_in_troupe():
+    """**The assertion that catches the whole class.** ``NAV_KEY_MODES``
+    membership withholds all nine of ``imgui_backend._NAV_KEYS`` from imgui
+    while Troupe is up, and ``main._shortcut``'s Troupe arm returns whatever
+    ``handle_key`` answered -- so a reserved key this mode does not bind is
+    taken from one consumer and given to none. Six of the nine were dead that
+    way: Up, Down, PageUp, PageDown, Home and End.
+
+    Asserted over the reserved set rather than over a list written here, so a
+    tenth key joining ``_NAV_KEYS`` fails until somebody decides what it means
+    in Troupe."""
+    import inspect
+
+    from warlock.studio import imgui_backend, modes
+
+    assert "troupe" in modes.NAV_KEY_MODES
+    source = inspect.getsource(troupe_mode.handle_key)
+    # By the constant's own name, resolved off ``pygame`` -- ``key.name`` gives
+    # "page up" with a space, which no source line spells.
+    names = {
+        value: attr
+        for attr in dir(pygame)
+        if attr.startswith("K_") and isinstance(value := getattr(pygame, attr), int)
+    }
+    missing = sorted(
+        names.get(key, str(key))
+        for key in imgui_backend._NAV_KEYS
+        if names.get(key, "") not in source
+    )
+    assert not missing, f"reserved but unbound in Troupe: {missing}"
+
+
+def test_up_and_down_walk_the_directions_and_wrap(ctx, svc):
+    """Through ``set_direction``, so the frame is held -- the manual promises
+    you can turn the character mid-stride and see the same moment."""
+    _v2_character(svc)
+    state = troupe_mode.ensure(ctx)
+    names = [
+        d["key"] for d in (troupe_mode.preview_movement(ctx) or {})["directions"]
+    ]
+    state.direction, state.frame = names[0], 1
+
+    for expected in names[1:] + names[:1]:
+        assert troupe_mode.handle_key(ctx, _press(pygame.K_DOWN)) is True
+        assert state.direction == expected
+    assert state.frame == 1, "turning must not move the frame"
+
+    troupe_mode.handle_key(ctx, _press(pygame.K_UP))
+    assert state.direction == names[-1]
+
+
+def test_the_page_keys_change_animation_and_restart_the_clip(ctx, svc):
+    """The documented difference from a direction change, and the reason the
+    two pairs are different keys."""
+    _v2_character(svc)
+    state = troupe_mode.ensure(ctx)
+    names = [m["key"] for m in troupe_mode.preview_layout(ctx)["movements"]]
+    state.animation, state.frame, state.clock = names[0], 3, 0.4
+
+    assert troupe_mode.handle_key(ctx, _press(pygame.K_PAGEDOWN)) is True
+    assert state.animation == names[1]
+    assert (state.frame, state.clock) == (0, 0.0)
+
+
+def test_home_and_end_land_on_the_ends_of_the_run_and_pause(ctx, svc):
+    _v2_character(svc)
+    state = troupe_mode.ensure(ctx)
+    state.playing = True
+
+    assert troupe_mode.handle_key(ctx, _press(pygame.K_END)) is True
+    frames = int(troupe_mode.preview_movement(ctx)["frames"])
+    assert state.frame == frames - 1
+    assert state.playing is False
+
+    assert troupe_mode.handle_key(ctx, _press(pygame.K_HOME)) is True
+    assert state.frame == 0
+
+
+def test_a_key_on_a_sheet_with_no_layout_is_consumed_and_does_nothing(ctx):
+    """An invalid v2 snapshot resolves to a layout with no movements. A press
+    must not invent a direction the sheet does not have."""
+    state = troupe_mode.ensure(ctx)
+    state.job_id, state.sheet_id = "", ""
+    before = (state.animation, state.direction)
+
+    for key in (pygame.K_UP, pygame.K_DOWN, pygame.K_PAGEUP, pygame.K_PAGEDOWN):
+        assert troupe_mode.handle_key(ctx, _press(key)) is True
+    assert (state.animation, state.direction) == before
+
 def test_a_key_release_never_acts_twice(ctx):
     """``handle_key`` used to read ``event.key`` without looking at
     ``event.type``, so every binding ran on the press *and* on the release:
@@ -656,6 +874,34 @@ def test_sending_submits_under_its_own_key_and_does_not_switch_mode(ctx, svc):
     assert submitted == [f"troupe-send:{job_id}"]
     assert ctx.state.mode == "troupe"
 
+
+def test_a_sheet_can_be_named_from_the_form(ctx, svc):
+    """**The whole path existed except the field.** The door validates
+    ``name`` against ``rigging.MAX_SHEET_NAME``, the worker writes it into the
+    sidecar and the chooser reads it back -- and ``build_sheet`` passed none,
+    so every sheet a character had was "sheet - 32px" and two builds at one
+    size were two identical rows."""
+    import inspect
+
+    source = inspect.getsource(troupe_mode.build_sheet)
+    assert "name=" in source, "build_sheet must carry the form's name to the door"
+
+    from warlock.studio.panes import troupe_settings
+
+    pane = inspect.getsource(troupe_settings)
+    assert '"name"' in pane, "the form needs a name field for build_sheet to carry"
+    assert "MAX_SHEET_NAME" in pane, "the field must cap at what the door accepts"
+
+
+def test_the_send_door_still_carries_every_parameter_it_validates(ctx, svc):
+    """``elevation`` and ``lighting`` have no control yet. The read stays, so
+    adding one is a pane change -- which is the state ``name`` was in until its
+    field landed."""
+    import inspect
+
+    source = inspect.getsource(troupe_mode.send_to_troupe)
+    for field in ("elevation", "lighting", "name"):
+        assert f"{field}=" in source, field
 
 def test_the_picker_never_points_the_mode_at_a_bare_mesh(ctx, svc):
     """The trap this is written around.

@@ -379,6 +379,9 @@ def _render(
     loop_start: int | None = None
     body_end: int | None = None
     tail_left = 0 if looping else int(TAIL_SECONDS * rate)
+    # Sample offset at which each order entry was first entered at row 0 --
+    # what a backward ``Bxx`` loops back to. See the jump check below.
+    order_starts: dict[int, int] = {}
 
     while produced < ceiling:
         playing = 0 <= player.order_index < len(order) and not player.halted
@@ -404,6 +407,8 @@ def _render(
                 player.row = 0
                 player.order_index += 1
                 continue
+            if player.row == 0 and player.tick == 0:
+                order_starts.setdefault(player.order_index, produced)
             at_loop = player.order_index == loop_order and player.row == 0
             if loop_start is None and looping and at_loop:
                 loop_start = produced
@@ -449,7 +454,19 @@ def _render(
             player.tick += 1
             if player.tick >= player.speed:
                 player.tick = 0
-                _end_of_row(player, order, pattern.rows)
+                was = player.order_index
+                jumped = _end_of_row(player, order, pattern.rows)
+                if jumped and player.order_index <= was:
+                    # A ``Bxx`` to an entry at or before this one is the
+                    # tracker idiom for "loop the song here". Without this it
+                    # was an infinite song that rendered to
+                    # ``MAX_RENDER_SECONDS`` -- ten minutes, on every
+                    # keystroke. The body ends at the jump and the loop
+                    # points at where the target entry first started.
+                    looping = True
+                    loop_start = order_starts.get(player.order_index, 0)
+                    tail_left = 0
+                    player.halted = True
 
     if not left:
         return np.zeros((0, 2), dtype=np.float32), None
@@ -461,8 +478,9 @@ def _render(
     return out, loop
 
 
-def _end_of_row(player: Player, order: list[int], rows: int) -> None:
+def _end_of_row(player: Player, order: list[int], rows: int) -> bool:
     """Advance the row, honouring whichever of ``Bxx``/``Dxx`` the row set.
+    -> whether a ``Bxx`` was taken.
 
     A jump and a break on the same row is a real thing people write: the jump
     picks the order entry and the break picks the row within it, so both are
@@ -473,11 +491,12 @@ def _end_of_row(player: Player, order: list[int], rows: int) -> None:
     if jump is not None or brk is not None:
         player.order_index = jump if jump is not None else player.order_index + 1
         player.row = brk or 0
-        return
+        return jump is not None
     player.row += 1
     if player.row >= rows:
         player.row = 0
         player.order_index += 1
+    return False
 
 
 def render(doc: D.SongDoc, *, rate: int = SAMPLE_RATE) -> tuple[np.ndarray, tuple[int, int] | None]:

@@ -44,10 +44,12 @@ __all__ = [
     "TroupeCell",
     "animation_block",
     "check_frame_counts",
+    "check_subset",
     "frame_table",
     "plan",
     "resolve_layout",
     "spans",
+    "subset_indices",
 ]
 
 #: ``(name, frames, loop, duration_ms)``, as a literal table rather than a
@@ -305,6 +307,71 @@ def spans(
             )
             index += movement.frames
     return tuple(out)
+
+
+def check_subset(
+    subset: Sequence[Mapping[str, Any]] | None,
+    layout: LayoutSpec | Mapping[str, Any] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """Normalise a re-render request to ``((animation, direction), ...)``.
+
+    A subset names whole *runs* -- one animation seen from one direction --
+    because a run is the unit a person judges and re-authors. Half a walk cycle
+    re-rendered against the other half is not a thing anybody wants and would be
+    a seam by construction.
+
+    Refused by name rather than filtered, which is ``check_frame_counts``' rule
+    one function up: a request naming an animation this sheet does not carry is
+    a mistake about the sheet, and silently rendering the rest of it would leave
+    the user looking for a change that never happened.
+
+    **A subset naming every run is refused too**, and that one is not
+    pedantry: it is a full render taking the slower path, with a copy step and
+    a pinned palette it does not need. The ordinary door is right there.
+    """
+    resolved = layout if isinstance(layout, LayoutSpec) else resolve_layout(layout)
+    available = {(animation, direction) for animation, direction, *_ in spans(resolved)}
+    if not subset:
+        raise ValueError("name at least one animation and direction to re-render")
+    wanted: list[tuple[str, str]] = []
+    for entry in subset:
+        animation = str((entry or {}).get("animation") or "")
+        direction = str((entry or {}).get("direction") or "")
+        if not animation or not direction:
+            raise ValueError("each run needs an animation and a direction")
+        if animation not in {name for name, _d in available}:
+            raise ValueError(f"{animation} is not an animation on this sheet")
+        if (animation, direction) not in available:
+            raise ValueError(f"this sheet has no {animation} facing {direction}")
+        if (animation, direction) in wanted:
+            raise ValueError(f"{animation} facing {direction} is named twice")
+        wanted.append((animation, direction))
+    if len(wanted) == len(available):
+        raise ValueError(
+            "that is every run on the sheet -- build a new sheet instead of "
+            "re-rendering all of it"
+        )
+    return tuple(wanted)
+
+
+def subset_indices(
+    subset: Sequence[Mapping[str, Any]] | None,
+    layout: LayoutSpec | Mapping[str, Any] | None = None,
+) -> tuple[int, ...]:
+    """The cell indices a subset covers, ascending.
+
+    Expanded from ``spans`` rather than from arithmetic of its own, so this
+    answer and ``sheetscope.runs``' Inker-side answer come from the two copies
+    ``tests/troupe/test_troupe_geometry_agreement.py`` already owns rather than
+    from a third nothing owns.
+    """
+    resolved = layout if isinstance(layout, LayoutSpec) else resolve_layout(layout)
+    wanted = set(check_subset(subset, resolved))
+    out: list[int] = []
+    for animation, direction, start, end, _loop in spans(resolved):
+        if (animation, direction) in wanted:
+            out.extend(range(start, end + 1))
+    return tuple(sorted(out))
 
 
 def check_frame_counts(

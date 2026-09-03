@@ -635,6 +635,7 @@ class SongDoc:
         """
         if len(self.oneshots) >= MAX_ONESHOTS:
             raise ValueError(f"a song holds {MAX_ONESHOTS} sound effects")
+        depth = self.history.mark()
         pattern = self.add_pattern(rows=rows, name=name or "Effect")
         oneshot = OneShot(
             uid=new_uid(),
@@ -644,7 +645,6 @@ class SongDoc:
             speed=self.speed,
         )
         index = len(self.oneshots)
-        depth = len(self.history) - 1
         self.history.push(E.OneShotAddEdit(oneshot=oneshot, index=index))
         self._attach_oneshot(oneshot, index)
         # The pattern and the effect that names it are one gesture: undoing the

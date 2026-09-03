@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from .. import troupe_mode, widgets
+from .. import controls, troupe_mode, widgets
 from ..manual import render as manual_render
 
 
@@ -47,6 +47,7 @@ def draw(ctx: Any) -> None:
 
     imgui.dummy((0, 8))
     _rebuild(ctx, state)
+    _rerender(ctx, state)
 
 
 def _pixel_report(ctx: Any, state: Any) -> dict[str, Any]:
@@ -85,6 +86,76 @@ def _pixel_report(ctx: Any, state: Any) -> dict[str, Any]:
     state.pixel_report_key = state.sheet_id
     state.pixel_report_next = now + troupe_mode.SHEETS_REFRESH
     return found
+
+
+_RERENDER_SLOT = "troupe_rerender_runs"
+
+
+def _rerender(ctx: Any, state: Any) -> None:
+    """Re-render some of this sheet's runs, keeping the rest.
+
+    The other half of the cleanup loop: fix a clip in Poser, re-render only the
+    animation it changed, and merge it into the document you have been cleaning
+    up in Inker. A whole new sheet would throw those cleanups away.
+
+    Picked as *runs* rather than as cells because a run is the unit a person
+    judges and re-authors -- half a walk cycle re-rendered against the other
+    half is a seam by construction.
+    """
+    from imgui_bundle import imgui
+
+    runs = troupe_mode.sheet_runs(ctx)
+    if not runs:
+        return
+    if not widgets.header("Re-render some runs", default_open=False):
+        return
+    chosen = ctx.state.preview.setdefault(_RERENDER_SLOT, set())
+    by_animation: dict[str, list[dict[str, str]]] = {}
+    for run in runs:
+        by_animation.setdefault(run["animation"], []).append(run)
+
+    for animation, entries in by_animation.items():
+        if not imgui.tree_node(f"{animation}##rerender-{animation}"):
+            continue
+        for run in entries:
+            token = f"{run['animation']}/{run['direction']}"
+            _clicked, on = controls.checkbox(
+                f"{run['direction']}##rr-{token}", token in chosen
+            )
+            if on:
+                chosen.add(token)
+            else:
+                chosen.discard(token)
+        imgui.tree_pop()
+
+    subset = [
+        {"animation": token.split("/", 1)[0], "direction": token.split("/", 1)[1]}
+        for token in sorted(chosen)
+    ]
+    key = f"troupe-sheet:{state.job_id}"
+    busy = ctx.busy(key)
+    # Every run selected is a full render taking the slower path; the door
+    # refuses it by name and the button says so before the press rather than
+    # after it.
+    everything = len(subset) == len(runs)
+    if widgets.disabled_button(
+        f"Re-render {len(subset)} run(s)",
+        bool(subset) and not everything and not busy,
+        (-1, 0),
+        reason=(
+            "A sheet is already being queued for this character."
+            if busy
+            else "That is every run -- use Build another sheet instead."
+            if everything
+            else "Tick the runs to re-render."
+        ),
+    ) and troupe_mode.rerender_runs(ctx, subset):
+        chosen.clear()
+    widgets.cost_note(
+        "Renders only the ticked runs and copies the rest from this sheet, at "
+        "this sheet's own settings. The result is a new sheet -- open it in "
+        "Inker with Merge re-render to keep hand edits."
+    )
 
 
 def _rebuild(ctx: Any, state: Any) -> None:

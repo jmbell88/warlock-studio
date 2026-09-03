@@ -285,6 +285,38 @@ writes every frame of the direction onto its counterpart.
 Every one of these is a single `Ctrl+Z` however many cells it touched, a linked cel is written once,
 an empty cell stays empty, and a press that would change nothing pushes nothing.
 
+### Merging a re-render
+
+The corrections above fix a sheet you have. This is what happens when the sheet itself changes
+underneath you.
+
+Say you clean up a walk cycle, then find the *run* clip was wrong, fix it in Poser and re-render. A
+whole new sheet would throw away every cleanup you made to the walk. **Sheet ▸ Merge re-render**
+brings the new render into the document you already have, cell by cell, and decides each one against
+what the renderer gave you the first time:
+
+- Cells you never touched take the new render.
+- Cells you painted, where the render did not change, keep your work.
+- Cells where **both** changed are conflicts. Your paint stays and the cell is flagged.
+
+Nothing you painted is ever overwritten without asking. That is the rule, and it is not a setting:
+a cell wrongly kept costs you one click to re-take, and a cell wrongly taken costs you the
+afternoon. The whole merge is a single `Ctrl+Z`.
+
+**Go to the next conflicted cell** walks the flagged cells and wraps at the end, and **Keep the hand
+edit on this cell** clears a flag once you have looked. Keeping writes nothing — your paint is
+already what is on the canvas — so it too undoes in one step.
+
+The merge is offered only on a document opened from a rendered character sheet, because it needs a
+third picture to compare against: what the renderer gave you when the document was made. A sheet
+opened as a plain image has no such record, and the menu row says so rather than going grey with no
+reason. That record travels in the `.ora` file, so it survives closing the document and coming back
+to it a week later.
+
+To make the sheet to merge, use **Re-render some runs** in Troupe: tick the animations and
+directions you want rebuilt, and the rest are copied from the sheet you are re-rendering, at that
+sheet's own settings.
+
 ### A palette per frame
 
 On an **indexed** drawing each frame can carry a colour table of its own, which is how palette

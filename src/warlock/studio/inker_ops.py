@@ -2301,6 +2301,66 @@ def _sheet_tab(verb: str) -> Callable[..., Any]:
     return _run
 
 
+def _sheet_merge(ctx: Any, tab: Any, **_: Any) -> Any:
+    """Pick a re-rendered sheet of the same character and merge it in.
+
+    The load is a decode of a whole atlas, so it goes through the task runner
+    -- the frame loop never blocks. The document write lands back on the frame
+    thread, which is where every other document write happens.
+    """
+    from . import inker_mode, inker_sheet
+
+    doc = getattr(tab, "doc", None)
+    base = getattr(doc, "sheet_base", None)
+    if base is None:
+        return False
+    job_id = str(base.source.get("job") or "")
+    sheet_id = str(base.source.get("sheet") or "")
+    if not (job_id and sheet_id):
+        ctx.toast(
+            "This sheet does not record which job it came from, so the "
+            "re-render cannot be found automatically.",
+            "warn",
+        )
+        return False
+    newest = inker_mode.newest_sheet_after(ctx.svc, job_id, sheet_id)
+    if not newest:
+        ctx.toast("No newer sheet of this character to merge in.", "info")
+        return False
+
+    def work() -> Any:
+        return inker_mode.load_sheet_cells(ctx.svc, job_id, newest)
+
+    def done(cells: Any) -> None:
+        if inker_sheet.merge(ctx, tab, cells):
+            base.source["sheet"] = newest
+
+    return ctx.submit(f"inker-merge:{newest}", work, on_done=done)
+
+
+def _sheet_conflict_next(ctx: Any, tab: Any, **_: Any) -> Any:
+    from . import inker_sheet
+
+    doc = getattr(tab, "doc", None)
+    if doc is None or doc.anim is None:
+        return False
+    nxt = inker_sheet.next_conflict(tab, doc.anim.current)
+    if nxt is None:
+        ctx.toast(inker_sheet.NO_CONFLICTS, "info")
+        return False
+    doc.anim.current = nxt
+    return True
+
+
+def _sheet_keep_edit(ctx: Any, tab: Any, **_: Any) -> Any:
+    from . import inker_sheet
+
+    doc = getattr(tab, "doc", None)
+    if doc is None or doc.anim is None:
+        return False
+    return inker_sheet.resolve_keep(ctx, tab, [doc.anim.current])
+
+
 def _sheet_pred(name: str) -> Callable[[Any, Any], bool]:
     def _enabled(state: Any, tab: Any) -> bool:
         from . import inker_sheet
@@ -2318,6 +2378,49 @@ def _sheet_reason(name: str) -> Callable[[Any, Any], str]:
 
     return _reason
 
+
+register(
+    Op(
+        "sheet_merge",
+        "Merge re-render...",
+        _sheet_merge,
+        menu="Sheet",
+        separator_before=True,
+        enabled=_sheet_pred("can_merge"),
+        reason=_sheet_reason("merge_reason"),
+        hint=(
+            "Brings a re-rendered sheet into this document three ways: cells you "
+            "have not touched take the new render, cells you painted keep your "
+            "work, and cells where both changed are flagged for you to decide. "
+            "Nothing you painted is overwritten without asking. One undo step."
+        ),
+    )
+)
+register(
+    Op(
+        "sheet_conflict_next",
+        "Go to the next conflicted cell",
+        _sheet_conflict_next,
+        menu="Sheet",
+        enabled=_sheet_pred("can_merge"),
+        reason=_sheet_reason("merge_reason"),
+        hint="Walks the cells a merge could not decide, wrapping at the end.",
+    )
+)
+register(
+    Op(
+        "sheet_keep_edit",
+        "Keep the hand edit on this cell",
+        _sheet_keep_edit,
+        menu="Sheet",
+        enabled=_sheet_pred("can_merge"),
+        reason=_sheet_reason("merge_reason"),
+        hint=(
+            "Clears this cell's conflict flag and leaves what you painted. "
+            "Nothing is written -- your work is already what is on the canvas."
+        ),
+    )
+)
 
 register(
     Op(

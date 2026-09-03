@@ -17,6 +17,7 @@ correction is not sent twice by a second press.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -42,6 +43,13 @@ __all__ = [
     "targets",
     "mirror_to",
     "mirror_run",
+    "can_merge",
+    "conflicts",
+    "has_base",
+    "merge",
+    "merge_reason",
+    "next_conflict",
+    "resolve_keep",
 ]
 
 NO_SHEET = (
@@ -53,6 +61,11 @@ ONE_DIRECTION = "This animation has only one direction on the sheet."
 NO_MIRROR = "{direction} has no mirror direction."
 NO_SELECTION = "Select the pixels to move first."
 NO_REACH = "That scope reaches no other cell."
+NO_BASE = (
+    "This document was not opened from a rendered sheet, so there is no render "
+    "to merge against."
+)
+NO_CONFLICTS = "No cell is in conflict."
 
 
 def _doc(tab: Any) -> Any:
@@ -298,6 +311,106 @@ def _framed(ctx: Any, verb: str, work: Any) -> bool:
     except ValueError as exc:
         ctx.toast(f"{verb} was not applied: {exc}.", "warn")
         return False
+
+
+# -- merging a re-render ------------------------------------------------------
+#
+# The other half of the cleanup loop. ``_doc_sheet.merge_render`` decides what a
+# fresh render may do to each cell and :mod:`~warlock.studio.inker.sheetmerge`
+# holds the rule; this is the tab-shaped wrapper the ops call.
+
+
+def has_base(tab: Any) -> bool:
+    """Whether this document remembers what the renderer last gave it."""
+    return getattr(_doc(tab), "sheet_base", None) is not None
+
+
+def can_merge(state: Any, tab: Any) -> bool:
+    return is_sheet_tab(state, tab) and has_base(tab)
+
+
+def merge_reason(state: Any, tab: Any) -> str:
+    """Why the merge is greyed, or "" when it is not. Never silently disabled."""
+    if not is_sheet_tab(state, tab):
+        return no_sheet_reason(state, tab)
+    return "" if has_base(tab) else NO_BASE
+
+
+def merge(ctx: Any, tab: Any, incoming: Sequence[np.ndarray]) -> bool:
+    """Land ``incoming`` on this document. -> whether anything was pushed.
+
+    The toast names all three outcomes rather than a total, because "took 48"
+    and "flagged 2 conflicts" are the two things the reader has to act on and a
+    single number hides the second inside the first.
+    """
+    from .inker import sheetmerge
+
+    doc = tab.doc
+    track_uid = active_track_uid(tab)
+    if track_uid is None:
+        return False
+    counts: list[Any] = []
+
+    def run() -> bool:
+        counts.append(doc.merge_render(track_uid, incoming))
+        return True
+
+    if not _framed(ctx, "The merge", run):
+        return False
+    result = counts[0]
+    ctx.toast(
+        sheetmerge.counts_sentence(result),
+        "warn" if result.conflicts else "success",
+    )
+    return True
+
+
+def conflicts(tab: Any) -> list[int]:
+    """The flagged cells, as frame indices. Resolved from uids at the door."""
+    doc = _doc(tab)
+    base = getattr(doc, "sheet_base", None)
+    if base is None or doc.anim is None:
+        return []
+    at = {frame.uid: i for i, frame in enumerate(doc.anim.frames)}
+    return sorted(at[uid] for uid in base.conflicts if uid in at)
+
+
+def next_conflict(tab: Any, after: int) -> int | None:
+    """The first flagged cell past ``after``, wrapping. None if there are none.
+
+    Wraps because the point is to walk every conflict once and stop, and a
+    reader who starts halfway down the timeline should not have to scroll back
+    up to reach the ones above them.
+    """
+    flagged = conflicts(tab)
+    if not flagged:
+        return None
+    return next((i for i in flagged if i > after), flagged[0])
+
+
+def resolve_keep(ctx: Any, tab: Any, frames: Sequence[int]) -> bool:
+    """Accept the hand edit on these cells and clear their flags.
+
+    Nothing is written: the edit is already what is on the canvas, and the base
+    already holds the render, so resolving is only the flag coming off. Pushed
+    as its own step so it can be undone like everything else.
+    """
+    from .inker.undo import SheetBaseEdit
+
+    doc = _doc(tab)
+    base = getattr(doc, "sheet_base", None)
+    if base is None or doc.anim is None:
+        return False
+    at = [frame.uid for frame in doc.anim.frames]
+    wanted = {at[i] for i in frames if 0 <= i < len(at)} & base.conflicts
+    if not wanted:
+        return False
+    after = base.copy()
+    after.conflicts -= wanted
+    doc.history.push(SheetBaseEdit(before=base.copy(), after=after))
+    doc.sheet_base = after
+    ctx.toast(f"Kept the hand edit on {len(wanted)} cell(s).", "success")
+    return True
 
 
 def propagate(ctx: Any, tab: Any) -> bool:

@@ -89,6 +89,16 @@ class TroupeState:
     pixel_report_cache: dict[str, Any] | None = None
     pixel_report_key: str = ""
     pixel_report_next: float = 0.0
+    #: The mesh picker's list, and the file-existence answers behind it. See
+    #: ``troupe_mode.sendable_meshes``: the predicate reads ``files``, which
+    #: ``attach_files`` fills with one stat per listed name per row -- its own
+    #: docstring calls that the frame loop's single largest syscall cost. The
+    #: picker asked for it *per frame* for as long as its header was open.
+    #: ``sendable_files`` is that helper's own ``{job: (stamp, names)}`` cache,
+    #: owned here because the caller is required to own it.
+    sendable_cache: list[dict[str, Any]] | None = None
+    sendable_next: float = 0.0
+    sendable_files: dict[str, Any] = field(default_factory=dict)
 
 
 

@@ -324,6 +324,7 @@ def document_from_sheet(
     animation: Mapping[str, Any] | None = None,
     *,
     track_name: str = "Sprite",
+    source: Mapping[str, str] | None = None,
 ) -> Any:
     """A rendered sheet plus its sidecar's ``animation`` block, as a document.
 
@@ -353,4 +354,43 @@ def document_from_sheet(
         duration = int(entry.get("duration_ms") or 0)
         if 0 <= index < len(doc.anim.frames) and duration > 0:
             doc.anim.frames[index].duration_ms = duration
+    _record_render(doc, source)
     return doc
+
+
+def _record_render(doc: Any, source: Mapping[str, str] | None) -> None:
+    """Remember what the renderer just gave us, cell by cell.
+
+    **This is the third picture a merge needs.** Without it, a re-rendered
+    sheet arriving later can only be compared against what is on screen, and
+    "this cell differs" cannot be told apart from "somebody spent an afternoon
+    on this cell". See :mod:`.sheetmerge`.
+
+    Digested from the imported *cel* pixels, which at this moment are the atlas
+    slices verbatim -- ``_document_from_rects`` copies them. Deliberately not
+    the composite: there is exactly one track here today, so the two are the
+    same picture, and digesting the composite would silently make the base
+    depend on layers the user adds afterwards.
+
+    Only from this door. ``document_from_grid`` and ``document_from_atlas`` are
+    "a sheet from anywhere" and "a fixed-kind sprite atlas", and neither has a
+    re-renderer behind it -- a recorded base is a claim that one exists.
+    """
+    from . import sheetmerge
+
+    if doc.anim is None or not doc.anim.tracks:
+        return
+    track = doc.anim.tracks[0]
+    digests: dict[int, str] = {}
+    for frame in doc.anim.frames:
+        cel = doc.anim.cel(track.uid, frame.uid)
+        pixels = getattr(cel, "pixels", None)
+        if pixels is None:
+            continue
+        digests[frame.uid] = sheetmerge.cell_digest(pixels)
+    if not digests:
+        return
+    doc.sheet_base = sheetmerge.SheetBase(
+        digests=digests,
+        source={str(k): str(v) for k, v in (source or {}).items()},
+    )

@@ -29,6 +29,7 @@ import numpy as np
 from . import filters, mirror, sheetscope
 from ._doc_ranges import masked_apply
 from .tiles import TilemapCel
+from .undo import SheetBaseEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import Document
@@ -85,6 +86,31 @@ class SheetOps:
         :meth:`mirror_run` can pair a different source with every target and
         still push once. ``pairs`` is already deduped by the caller.
         """
+        edits = self._sheet_cel_edits(track, pairs, box)
+        if not edits:
+            return False
+        pushed = self._push_range(edits)
+        self.invalidate_all()
+        return pushed
+
+    def _sheet_cel_edits(
+        self: Document,
+        track: Any,
+        pairs: Sequence[tuple[Any, PixelFn, np.ndarray | None]],
+        box: tuple[int, int, int, int],
+    ) -> list[Any]:
+        """:meth:`_map_cels` without the push, so a caller can add to the step.
+
+        Named for this mixin because ``RangeOps`` already has a ``_cel_edits`` of
+        its own and ``Document`` inherits both -- a collision the MRO resolves
+        silently and in the other direction. Split out for :meth:`merge_render`,
+        which changes the document's recorded render in the *same* step as the
+        pixels -- a merge undone
+        without its base restores the picture and leaves the document's idea of
+        what the renderer last gave it in the future, and the next merge would
+        then read every restored edit as untouched. The five existing verbs go
+        on calling :meth:`_map_cels` and behave exactly as they did.
+        """
         if any(isinstance(layer, TilemapCel) for layer, _fn, _w in pairs):
             raise ValueError("a sheet correction of a tilemap layer is not yet modeled")
         x0, y0, x1, y1 = box
@@ -103,11 +129,7 @@ class SheetOps:
                 continue
             self._stamp_layer(layer.uid)
             edits.append(edit)
-        if not edits:
-            return False
-        pushed = self._push_range(edits)
-        self.invalidate_all()
-        return pushed
+        return edits
 
     def map_frames(
         self: Document,
@@ -278,6 +300,122 @@ class SheetOps:
         if not pairs:
             return False
         return self._map_cels(track, pairs, box)
+
+
+    def merge_render(
+        self: Document,
+        track_uid: int,
+        incoming: Sequence[np.ndarray],
+    ) -> Any:
+        """Land a re-rendered sheet on this document without losing hand edits.
+
+        The sixth verb, and the only one that reads a cell before deciding
+        whether it may write it. :mod:`.sheetmerge` holds the comparison and
+        the rule; this holds the document work.
+
+        **Nothing painted is overwritten silently.** A cell the user changed
+        and the renderer also changed is a *conflict*: the edit stands, the
+        cell is flagged, and a person decides. That default is not
+        configurable, because the two mistakes do not cost the same -- a cell
+        wrongly kept is one click to re-take, and a cell wrongly taken is work
+        that is gone.
+
+        **The base advances to the incoming render**, for every cell including
+        the ones that kept an edit, because that is now what the renderer last
+        gave us. It rides in the same undo step as the pixels; see
+        :class:`~.undo.SheetBaseEdit` for what goes wrong if it does not.
+
+        Cells outside the re-rendered runs need no special case: their incoming
+        pixels are the previous atlas's own, copied through by the worker, so
+        they compare equal to the base and classify themselves. The merge never
+        has to be told what the subset was.
+
+        Returns :class:`~.sheetmerge.MergeCounts`.
+        """
+        from . import sheetmerge
+
+        if self.anim is None:
+            raise ValueError("this document has no timeline to merge into")
+        base = getattr(self, "sheet_base", None)
+        if base is None:
+            raise ValueError(
+                "this document has no recorded render to merge against -- open the "
+                "sheet from Troupe rather than as a plain image"
+            )
+        frames = self.anim.frames
+        if len(incoming) != len(frames):
+            raise ValueError(
+                f"this document has {len(frames)} frames and that sheet has "
+                f"{len(incoming)}"
+            )
+        width, height = self.size
+        for cell in incoming:
+            if cell.shape[:2] != (height, width):
+                raise ValueError(
+                    f"that sheet's cells are {cell.shape[1]}x{cell.shape[0]} and this "
+                    f"document is {width}x{height}"
+                )
+        track = self._track_by_uid(track_uid)
+        if track.alpha_lock:
+            # Refused, never bypassed. ``_sheet_cel_edits`` passes the lock into
+            # ``masked_apply``, so a locked track would keep the *old*
+            # silhouette while this function reported the render as taken --
+            # a merge that lies about what it did.
+            raise ValueError(
+                "turn off this track's alpha lock: a merged render replaces the "
+                "whole cell rather than painting inside it"
+            )
+        self.commit_floating()
+
+        counts = {verdict: 0 for verdict in sheetmerge.VERDICTS}
+        pairs: list[tuple[Any, PixelFn, np.ndarray | None]] = []
+        conflicts: set[int] = set()
+        digests: dict[int, str] = {}
+        for index, frame in enumerate(frames):
+            layer = self._cel_at(track.uid, index)
+            fresh = sheetmerge.cell_digest(incoming[index])
+            digests[frame.uid] = fresh
+            if layer is None:
+                counts["unknown"] += 1
+                continue
+            if self.anim.is_linked(track.uid, frame.uid):
+                # One cel serving two slots cannot take two different renders,
+                # and ``_sheet_cel_edits`` dedupes by identity -- so one of them
+                # would be dropped without a word. An imported sheet has no
+                # linked cels; this only fires if somebody linked them by hand.
+                raise ValueError(
+                    "unlink this sheet's cels before merging: a linked cel cannot "
+                    "take two different renders"
+                )
+            verdict = sheetmerge.classify(
+                base.digests.get(frame.uid),
+                sheetmerge.cell_digest(layer.pixels),
+                fresh,
+            )
+            counts[verdict] += 1
+            if verdict == "take":
+                pairs.append((layer, _constant(incoming[index]), None))
+            elif verdict == "conflict":
+                conflicts.add(frame.uid)
+
+        edits = self._sheet_cel_edits(track, pairs, self._box(None)) if pairs else []
+        after = sheetmerge.SheetBase(
+            digests=digests,
+            conflicts=conflicts,
+            source=dict(base.source),
+            algorithm=base.algorithm,
+        )
+        edits.append(SheetBaseEdit(before=base.copy(), after=after))
+        self.sheet_base = after
+        self._push_range(edits)
+        self.invalidate_all()
+        return sheetmerge.MergeCounts(
+            taken=counts["take"],
+            kept=counts["keep"],
+            agreed=counts["agreed"],
+            conflicts=counts["conflict"],
+            unknown=counts["unknown"],
+        )
 
 
 def _constant(plane: np.ndarray) -> PixelFn:

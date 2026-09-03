@@ -333,8 +333,17 @@ def test_every_edit_arms_the_renderer():
         lambda: sirens_mode.write_note(ctx, 0),
         lambda: sirens_mode.transpose(ctx, 1),
         lambda: sirens_mode.clear_selection(ctx),
+        lambda: sirens_mode.cut_selection(ctx),
+        # Pasted away from the cell it was cut from: putting the same block
+        # back where it already is is a no-op, and a no-op arms nothing.
+        lambda: (sirens_mode.set_caret(ctx, row=4), sirens_mode.paste(ctx)),
     ):
         tab.render_dirty = False
+        sirens_mode.set_caret(ctx, row=0)
+        # Something under the caret for cut to take and paste to put down
+        # somewhere new -- a no-op is not an edit and arms nothing.
+        state = sirens_mode.ensure(ctx)
+        tab.doc.set_cell(state.pattern, 0, 0, 0, 12)
         sirens_mode.set_caret(ctx, row=0)
         call()
         assert tab.render_dirty, call

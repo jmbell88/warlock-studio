@@ -37,6 +37,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from . import dialogs, docmodes, journal, recents, sirens_audio, sirens_io, sirens_state
 
 # ``ensure`` and ``active`` live in :mod:`.sirens_state` -- they touch nothing
@@ -251,7 +253,12 @@ def move_caret(ctx: Any, drow: int = 0, dchannel: int = 0, dcolumn: int = 0,
     else:
         state.anchor = None
     if drow:
-        state.row = (state.row + drow) % pattern.rows
+        if select:
+            # A selection has an edge where a caret has a loop: Shift+Up at
+            # row 0 wrapped to the last row and selected the whole pattern.
+            state.row = max(0, min(state.row + drow, pattern.rows - 1))
+        else:
+            state.row = (state.row + drow) % pattern.rows
     if dchannel:
         state.channel = max(0, min(state.channel + dchannel, pattern.channels - 1))
     if dcolumn:
@@ -314,13 +321,29 @@ def write_cell(
     held in a buffer somewhere -- and must nevertheless *not* drop the caret by
     the edit step, or the low nibble would land a row further down.
     """
+    return _write_at_caret(ctx, column, [int(value)], advance=advance)
+
+
+def _write_at_caret(
+    ctx: Any, column: int | None, values: list[int], *, advance: bool
+) -> bool:
+    """:func:`write_cell`'s body over a run of adjacent columns.
+
+    A note and the instrument stamped beside it are one keystroke and have to
+    be one undo step -- as two ``set_cell`` calls, Ctrl+Z after a note removed
+    the instrument and left the note. One ``set_cells`` over a ``1×1×n`` block
+    is one step; ``write_cell`` is the ``n == 1`` case.
+    """
+    import numpy as np
+
     state = ensure(ctx)
     tab = state.active
     if tab is None or tab.busy or state.pattern is None:
         return False
     column = state.column if column is None else int(column)
+    block = np.array(values, dtype=np.int16).reshape(1, 1, len(values))
     try:
-        changed = tab.doc.set_cell(state.pattern, state.row, state.channel, column, int(value))
+        changed = tab.doc.set_cells(state.pattern, state.row, state.channel, column, block)
     except ValueError as exc:
         ctx.toast(f"That note was not written: {exc}", "error")
         return False
@@ -355,16 +378,14 @@ def write_note(ctx: Any, semitone: int) -> bool:
     value = state.octave * 12 + int(semitone)
     if not notes.is_note(value):
         return False
-    row, channel = state.row, state.channel
-    written = write_cell(ctx, value, column=0)
-    if written and state.instrument is not None:
-        from .sirens import document as D
+    from .sirens import document as D
 
-        _touch(
-            tab,
-            tab.doc.set_cell(state.pattern, row, channel, D.INSTRUMENT, state.instrument),
-        )
-    return written
+    values = [value]
+    if state.instrument is not None:
+        # The note and its instrument as one block, so one Ctrl+Z takes back
+        # the whole keystroke -- see ``_write_at_caret``.
+        values.append(int(state.instrument))
+    return _write_at_caret(ctx, D.NOTE, values, advance=True)
 
 
 def _column_ceiling(column: int) -> int:
@@ -428,9 +449,22 @@ def write_hex(ctx: Any, value: int) -> bool:
     if wanted > _column_ceiling(column):
         return False
     last = state.digit >= width - 1
+    history = tab.doc.history
+    if last and width > 1 and state.digit_head == history.head and history.can_undo:
+        # The high nibble already went in as its own step (it is drawn in the
+        # grid while the low one is awaited). Two steps for one byte meant
+        # Ctrl+Z took back half a number; the first step is withdrawn here,
+        # without a redo, and the whole byte lands as one.
+        history.undo(tab.doc, redoable=False)
+        tab.render_dirty = True
+    before = history.head
     written = write_cell(ctx, wanted, column=column, advance=last)
     if written and not last:
         state.digit = 1
+        # Remembered only when the nibble pushed a step: retyping the digit
+        # already there pushes nothing, and withdrawing "the top step" would
+        # then withdraw somebody else's.
+        state.digit_head = history.head if history.head != before else -1
     return written
 
 
@@ -481,6 +515,7 @@ def clear_selection(ctx: Any) -> bool:
     tab = state.active
     if tab is None or tab.busy or state.pattern is None:
         return False
+    state.digit = 0  # the edit moved on; a half-typed nibble must not land in it
     block = state.selection() or (state.row, state.channel, 1, 1)
     return _touch(tab, tab.doc.clear_cells(state.pattern, *block))
 
@@ -491,8 +526,73 @@ def transpose(ctx: Any, by: int) -> bool:
     tab = state.active
     if tab is None or tab.busy or state.pattern is None:
         return False
+    state.digit = 0  # the edit moved on; a half-typed nibble must not land in it
     block = state.selection() or (state.row, state.channel, 1, 1)
     return _touch(tab, tab.doc.transpose(state.pattern, *block, by))
+
+
+# --- the block clipboard ------------------------------------------------------
+#
+# The last thing the Experimental chip named, closed 2026-09-02. Three verbs
+# and no new document API: a copy is a read of ``pattern.cells``, a paste is
+# ``SongDoc.set_cells`` -- the one door every pattern write already goes through,
+# which clips at the pattern edge and pushes one ``CellsEdit`` (``edits.py``
+# says the class exists for exactly this) -- and a cut is a copy followed by
+# ``clear_cells``, which is one history step because ``clear_cells`` is one
+# ``set_cells``. The clipboard is read-only from the document's point of view:
+# ``copy_selection`` takes a private copy, so a later edit to the source block
+# cannot change what a paste puts down.
+
+
+def copy_selection(ctx: Any) -> bool:
+    """Copy the block (or the caret's cell) to the app-level clipboard.
+
+    Not an edit -- the document is untouched and no history is pushed -- so
+    it is allowed on a busy tab, which is why it is not in ``_MUTATING_CTRL``.
+    """
+    state = ensure(ctx)
+    tab = state.active
+    if tab is None or state.pattern is None:
+        return False
+    pattern = tab.doc.pattern(state.pattern)
+    if pattern is None:
+        return False
+    row, chan, rows, chans = state.selection() or (state.row, state.channel, 1, 1)
+    block = pattern.cells[row : row + rows, chan : chan + chans, :]
+    if block.size == 0:
+        return False
+    state.clip = np.ascontiguousarray(block, dtype=np.int16).copy()
+    return True
+
+
+def cut_selection(ctx: Any) -> bool:
+    """Copy, then blank -- one history step, because the blanking is one
+    ``set_cells``. -> whether anything was blanked; the copy happens either
+    way, so cutting an already-empty block still fills the clipboard."""
+    state = ensure(ctx)
+    tab = state.active
+    if tab is None or tab.busy or state.pattern is None:
+        return False
+    state.digit = 0  # the edit moved on; a half-typed nibble must not land in it
+    if not copy_selection(ctx):
+        return False
+    row, chan, rows, chans = state.selection() or (state.row, state.channel, 1, 1)
+    return _touch(tab, tab.doc.clear_cells(state.pattern, row, chan, rows, chans))
+
+
+def paste(ctx: Any) -> bool:
+    """Put the clipboard down with its top-left corner at the caret.
+
+    A block that runs off the pattern's edge is clipped, not refused
+    (``SongDoc.set_cells``). Nothing on the clipboard is a no-op that pushes
+    no history, the way retyping the note already there is.
+    """
+    state = ensure(ctx)
+    tab = state.active
+    if tab is None or tab.busy or state.pattern is None or state.clip is None:
+        return False
+    state.digit = 0  # the edit moved on; a half-typed nibble must not land in it
+    return _touch(tab, tab.doc.set_cells(state.pattern, state.row, state.channel, 0, state.clip))
 
 
 # --- instruments --------------------------------------------------------------
@@ -534,7 +634,7 @@ def begin_envelope_drag(ctx: Any, tab: SongTab | None, field: str, grip: str) ->
     if tab is None or tab.busy:
         return
     state.env_field, state.env_grip = field, grip
-    state.env_depth = len(tab.doc.history)
+    state.env_depth = tab.doc.history.mark()
     state.env_step = -1
 
 
@@ -570,16 +670,17 @@ def adopt_sample(ctx: Any, tab: SongTab, result: dict[str, Any]) -> str:
     """
     doc = tab.doc
     key = free_sample_key(doc, str(result.get("name", "")))
-    depth = len(doc.history)
+    depth = doc.history.mark()
     try:
         doc.set_sample(key, result["pcm"])
     except ValueError as exc:
         ctx.toast(f"That sample was not added: {exc}", "error")
+        doc.history.collapse_since(depth)
         return ""
     instrument = result.get("instrument")
     if instrument is not None and doc.instrument(instrument) is not None:
         doc.update_instrument(instrument, sample=key)
-        doc.history.collapse_since(depth)
+    doc.history.collapse_since(depth)
     tab.render_dirty = True
     ctx.toast(f"Added the sample {key}.")
     return key
@@ -764,13 +865,13 @@ def play(ctx: Any, tab: SongTab | None = None) -> bool:
     if not sirens_audio.available():
         ctx.toast(sirens_audio.unavailable_reason(), "warn")
         return False
+    if tab.rendering or tab.render_dirty:
+        # Stale, whether or not an older buffer exists: the transport reads
+        # "Rendering..." and the old bar must not play under it.
+        ctx.toast("Still rendering your latest edits -- try again in a moment.", "info")
+        return False
     if tab.pcm is None:
-        ctx.toast(
-            "Still rendering your latest edits -- try again in a moment."
-            if tab.rendering or tab.render_dirty
-            else "There is nothing in the order list to play yet.",
-            "error" if not (tab.rendering or tab.render_dirty) else "info",
-        )
+        ctx.toast("There is nothing in the order list to play yet.", "error")
         return False
     if not sirens_audio.play(tab.pcm):
         ctx.toast("That song could not be played; see the log for details.", "error")
@@ -965,7 +1066,9 @@ PIANO_KEYS: dict[str, int] = {
     "6": 20, "y": 21, "7": 22, "u": 23,
 }
 
-_MUTATING_CTRL = frozenset({"z", "y"})
+# The Ctrl chords a busy tab refuses. Copy is not among them: it reads the
+# document and pushes nothing, so a tab mid-save can still be copied from.
+_MUTATING_CTRL = frozenset({"z", "y", "x", "v"})
 
 
 def handle_key(ctx: Any, event: Any) -> bool:
@@ -1105,6 +1208,15 @@ def _ctrl_key(
         return True
     if name == "y":
         redo(ctx, tab)
+        return True
+    if name == "c":
+        copy_selection(ctx)
+        return True
+    if name == "x":
+        cut_selection(ctx)
+        return True
+    if name == "v":
+        paste(ctx)
         return True
     if name == "tab":
         state.cycle(-1 if shift else 1)

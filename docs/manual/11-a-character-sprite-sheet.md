@@ -84,7 +84,9 @@ optimisation. It also keeps the smooth resize used for previews away from your p
 ## Watching it
 
 The preview plays the sheet. `Space` starts and stops; `Left` and `Right` step one frame and pause.
-That is the entire keyboard — there is nothing else.
+`Up` and `Down` turn the character to the next direction and hold the frame you were on, `PageUp`
+and `PageDown` move between animations, and `Home` and `End` jump to the ends of the run. That is
+the entire keyboard.
 
 The preview is a clock rather than a frame counter, so it plays at real durations and loops rather
 than falling behind. It draws at integer scale with nearest-neighbour filtering only, because a
@@ -133,15 +135,18 @@ correction to the same frame in every direction, to a whole direction, an animat
 and offers a fix drawn on one side to its mirror with the face kept. *Inker -> Sheet corrections*
 has the whole of it.
 
+**Built, for the re-render.** *Re-render some runs* in the sheet panel rebuilds only the animations
+and directions you tick and copies the rest from the sheet you started with, at that sheet's own
+settings. The result is a new sheet, and Inker's *Merge re-render* brings it into the document you
+have been cleaning up: untouched cells take the render, cells you painted keep your work, and cells
+where both changed are flagged for you rather than overwritten. *Inker -> Merging a re-render* has
+the whole of it.
+
 **Not built.** These do not exist, and no amount of looking will find them:
 
-- Re-rendering one animation without discarding hand edits made to the others.
 - Swappable or layered equipment.
 - AI restyling of a rendered sheet, or a learned pixel refiner.
 - Any animation beyond the five above.
-
-The re-render half of the cleanup loop is the honest gap: you can fix a sheet efficiently now, but
-a re-rendered animation still arrives as a new sheet rather than merging into the one you edited.
 
 ## Try it
 

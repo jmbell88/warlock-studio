@@ -118,6 +118,10 @@ with the playhead instead of with the caret.
 **Selections and moving about.** Shift with the arrow keys extends a block over rows and channels;
 `Esc` drops it. `Page Up` and `Page Down` move sixteen rows, which is four beats — one bar in every
 time signature this idiom uses. `Shift+1` and `Shift+2` transpose the block down and up a semitone.
+`Ctrl+C` copies the block (or the cell under the caret), `Ctrl+X` cuts it, and `Ctrl+V` puts it down
+with its top-left corner at the caret — a block that runs off the bottom or the last channel is
+clipped, not refused. The clipboard belongs to the mode rather than the song, so a bar copied in one
+tab pastes into another, and a cut is one undo step.
 
 Clicking anywhere in the grid moves the caret there.
 
@@ -322,12 +326,8 @@ you might reach for are absent on purpose rather than pending:
 - **No import of other trackers' formats.** A `.wsng` is written here or nowhere. `.wav` is the only
   format that comes in, and only as a sample.
 
-And two limits of the current build, stated plainly rather than left to be discovered:
+And one limit of the current build, stated plainly rather than left to be discovered:
 
-- **A block cannot be copied or pasted.** A selection can be transposed and it can be cleared, and
-  that is all it can do — there is no copy, no cut and no paste, so a bar that repeats is retyped or
-  is a second entry in the order list pointing at the same pattern. This is the unfinished part of
-  the mode and the reason for the **Experimental** chip on the rail.
 - **Playback has no scrub and no start-from-here.** `Space` plays the song from the beginning and
   stops it. To hear one section, put it at the top of the order.
 

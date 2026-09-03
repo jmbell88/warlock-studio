@@ -80,6 +80,26 @@ class TroupeOps:
 
         template = str(params.get("template") or "humanoid")
         troupe_layout = charsheet.resolve_layout(params.get("layout"))
+
+        # **A re-render of some of the runs.** Both keys or neither: a subset
+        # with nothing to copy from is a sheet with holes in it, and a base
+        # with nothing to re-render is a copy of a sheet that already exists.
+        subset = params.get("subset")
+        base_sheet = str(params.get("base_sheet") or "")
+        if bool(subset) != bool(base_sheet):
+            raise ValueError("a re-render needs both the runs and the sheet to copy")
+        wanted: set[int] = set()
+        base_png: Path | None = None
+        if subset:
+            if not rigging.is_valid_id(base_sheet):
+                raise ValueError(f"base_sheet is not a sheet id: {base_sheet!r}")
+            wanted = set(charsheet.subset_indices(subset, troupe_layout))
+            base_png = rigging.sheet_png_path(source_dir, base_sheet)
+            base_record = rigging.read_sheet(source_dir, base_sheet)
+            if not base_png.exists() or not base_record:
+                raise RuntimeError(
+                    "the sheet this re-render copies from is no longer on disk"
+                )
         records = await asyncio.to_thread(clips.expand_clips, template, troupe_layout)
         logical = int(params.get("logical_size", 32))
         layout = charsheet.plan(
@@ -101,6 +121,13 @@ class TroupeOps:
         roots, root_bone = await self._charsheet_roots(source_dir, records)
         cells: list[dict[str, Any]] = []
         for c in layout.cells:
+            # **The plan is built unfiltered and only the spec list is cut.**
+            # ``cell.index``, ``row``, ``column``, ``x`` and ``y`` are therefore
+            # byte-identical to a full render's, which is the geometry claim the
+            # whole re-render rests on: a re-rendered cell lands on exactly the
+            # rectangle it has always had.
+            if wanted and c.index not in wanted:
+                continue
             record = by_key.get((c.pose, c.frame)) or {}
             cell: dict[str, Any] = {
                 "index": c.index,
@@ -148,6 +175,7 @@ class TroupeOps:
             result, trims = await self._render_charsheet(
                 rig_glb, layout, cells, on_progress=on_progress, job_id=job_id,
                 pack_target=atlas_path, reduce_mode=reduce_mode,
+                only=wanted or None,
             )
 
             # --- the pixel-art pass -------------------------------------------
@@ -187,6 +215,17 @@ class TroupeOps:
                 # reason a palette file does not cost the shared-across-cells
                 # property.
                 designed = queue_mod._palette_entries(self.config, palette_name)
+                if base_png is not None and designed is None:
+                    # **Pinned from the sheet being re-rendered.** With no
+                    # designed palette ``resolve_palette`` median-cuts the atlas
+                    # it is given -- and a subset atlas is a handful of cells, so
+                    # it would derive its own colours and the re-rendered runs
+                    # would come back a different shade from the ones beside
+                    # them. That is precisely the "same shirt, two shades"
+                    # failure the whole-atlas pass exists to prevent, reached by
+                    # a different road. The base atlas is already mapped, so its
+                    # own colour set *is* the answer, exactly.
+                    designed = _atlas_entries(base_png, colors)
                 entries, chosen = pixelsheet.resolve_palette(
                     atlas, colors=colors, entries=designed or None
                 )
@@ -246,6 +285,40 @@ class TroupeOps:
                 # sheet complete, so nothing is reading this yet -- but the rule
                 # that a write onto a served path is staged does not have an
                 # exception for "nothing is reading it yet".
+                if base_png is not None:
+                    # **Composed last, and that ordering is the whole point.**
+                    # ``pixelize_atlas`` runs ``outline`` per cell, which in the
+                    # shipped ``outer`` mode grows a silhouette by a pixel on
+                    # every side -- so composing first and quantising the result
+                    # would fatten every *copied* cell once per re-render, and
+                    # the sheet would drift thinner in the runs nobody touched.
+                    # Render, reduce, pack the subset, quantise the subset, then
+                    # compose. Quantise once.
+                    composed = png.with_name(f".{png.name}.composed")
+                    out.save(composed, format="PNG")
+                    try:
+                        sheetlib.compose_cells(
+                            base_png, composed, layout, wanted, composed
+                        )
+                        with Image.open(composed) as opened:
+                            opened.load()
+                            out = opened.convert("RGBA")
+                    finally:
+                        with contextlib.suppress(OSError):
+                            composed.unlink(missing_ok=True)
+                    trimmed = {
+                        cell.index: sheetlib.measure_trim(
+                            out.crop(
+                                (
+                                    cell.x,
+                                    cell.y,
+                                    cell.x + layout.cell_w,
+                                    cell.y + layout.cell_h,
+                                )
+                            )
+                        )
+                        for cell in layout.cells
+                    }
                 tmp = png.with_name(f".{png.name}.tmp")
                 out.save(tmp, format="PNG")
                 tmp.replace(png)
@@ -275,6 +348,15 @@ class TroupeOps:
             trims=trims,
             animation=charsheet.animation_block(troupe_layout),
         )
+        if subset:
+            # Additive on the ordinary sheet v1 format, ``meta["troupe"]``'s
+            # neighbour and its rule: a reader that does not know these keys
+            # sees the sheet it would have seen anyway.
+            meta["base_sheet"] = base_sheet
+            meta["subset"] = [
+                {"animation": animation, "direction": direction}
+                for animation, direction in charsheet.check_subset(subset, troupe_layout)
+            ]
         # Additive metadata on the ordinary sheet v1 format. Inker continues to
         # consume ``animation``; Troupe uses this immutable snapshot to drive
         # its per-sheet preview controls.
@@ -300,7 +382,17 @@ class TroupeOps:
         if self._cancel is not None:
             self._cancel.commit()
         params["sheet_id"] = sheet_id
-        params["cells"] = len(cells)
+        # **The sheet's cell count, not the subset's.** ``cells`` is now the
+        # filtered *spec* list on a re-render, and letting this follow it would
+        # quietly change what a ``DERIVED_PARAMS`` field means -- a 12-cell
+        # re-render of a 256-cell sheet reporting twelve. The plan is the sheet.
+        params["cells"] = len(layout.cells)
+        if subset:
+            # Derived: something the worker learned about the output, ``cells``'
+            # neighbour. ``subset`` and ``base_sheet`` are deliberately *not* --
+            # they are the request, normalised, which is ``layout``'s case
+            # below, so "run that again" re-renders those runs against that base.
+            params["rendered_cells"] = len(wanted)
         # Deliberately **not** in ``DERIVED_PARAMS``, though the worker writes
         # it. What goes in that set is something the worker learned about the
         # *output* -- a value a reroll must not inherit or it wears a stale
@@ -348,6 +440,7 @@ class TroupeOps:
         job_id: str,
         pack_target: Path,
         reduce_mode: str = "box",
+        only: set[int] | None = None,
     ) -> tuple[Any, Any]:
         """Render at ``RENDER_SIZE``, reduce to the layout's size, then pack.
 
@@ -391,7 +484,11 @@ class TroupeOps:
                 job_id, phase="reduce", label="Reducing frames", inner=0.0,
                 inner_next=1.0, nominal=6.0, detail="",
             )
-            rendered = {c.index: frames_dir / f"{c.index:04d}.png" for c in layout.cells}
+            rendered = {
+                c.index: frames_dir / f"{c.index:04d}.png"
+                for c in layout.cells
+                if only is None or c.index in only
+            }
             reduced = await asyncio.to_thread(
                 functools.partial(
                     pixelize.reduce_frames,
@@ -420,8 +517,48 @@ class TroupeOps:
             # here because that directory is about to go away and the quantise
             # pass runs after it.
             pack_target.parent.mkdir(parents=True, exist_ok=True)
-            trims = await asyncio.to_thread(sheetlib.pack, layout, reduced, pack_target)
+            trims = await asyncio.to_thread(
+                functools.partial(sheetlib.pack, layout, reduced, pack_target, only=only)
+            )
         return result, trims
+
+def _atlas_entries(png: Path, colors: int) -> list[tuple[int, int, int]]:
+    """The exact colour set a published sheet is already mapped to.
+
+    Used to **pin** the palette of a subset re-render, so the cells that come
+    back land in the same colours as the ones beside them. Exact rather than
+    approximate: the base atlas went through ``pixelize_atlas`` and its opaque
+    pixels *are* the entries, so reading them back is a lookup and not a second
+    median cut that might land somewhere else.
+
+    Sorted, because ``map_palette`` searches by nearest and the answer must not
+    depend on dictionary order; opaque only, because a transparent pixel has no
+    colour to contribute and ``outline`` writes its ink at full alpha.
+
+    **Refused when the set is implausibly large.** A pin is only sound while the
+    base really is palette-mapped; an unquantised atlas would yield thousands of
+    "entries" and the re-render would be mapped to noise. Answering empty hands
+    the caller back to the ordinary median cut, which is wrong in a smaller and
+    much more visible way than being wrong by four thousand colours.
+    """
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(png) as opened:
+        opened.load()
+        pixels = np.asarray(opened.convert("RGBA"))
+    opaque = pixels[pixels[..., 3] > 0]
+    if opaque.size == 0:
+        return []
+    unique = np.unique(opaque[:, :3].reshape(-1, 3), axis=0)
+    if len(unique) > max(int(colors), 1) * 4:
+        log.warning(
+            "the sheet being re-rendered carries %d colours, which is not a "
+            "palette -- deriving one instead of pinning",
+            len(unique),
+        )
+        return []
+    return [tuple(int(v) for v in row) for row in unique]
 
 # ``_palette_path`` was lifted to ``queue._palette_entries`` on 2026-08-29. It
 # was this file's own restatement of ``service.palettes._path``'s traversal

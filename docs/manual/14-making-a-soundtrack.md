@@ -4,10 +4,6 @@ Sirens is the tracker: pattern grid, five NES-shaped voices, one `.wsng` documen
 Inker and Packwright it needs no GPU, no weights and nothing downloaded — but unlike them it needs a
 sound card if you want to hear anything. Everything else in this chapter works without one.
 
-The mode carries an *Experimental* chip on the rail, for one reason this chapter never runs into: a
-block selection can be transposed and cleared but not copied or pasted, so a bar that repeats is
-retyped. Everything this chapter does is finished.
-
 This walks one path: a new song, a bassline, a lead, a hat, an envelope, a sound effect, an export.
 Fifteen minutes, and at the end you have a looping track and a coin pickup on disk.
 

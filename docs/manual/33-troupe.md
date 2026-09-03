@@ -42,13 +42,18 @@ Five animations, in eight directions, at a fixed frame count each:
 | attack | 6 | no | 80 ms |
 | jump | 6 | no | 100 ms |
 
-That is 32 frames per direction and 256 cells in total, laid out eight to a row in the order
-`animation → direction → frame`. The directions are the eight compass points of a turn, starting
-at `front` and going clockwise in 45° steps.
+That is the default: 32 frames per direction and 256 cells in total, laid out eight to a row in the
+order `animation → direction → frame`. The directions are the eight compass points of a turn,
+starting at `front` and going clockwise in 45° steps.
 
-The counts are not settings. A sheet is a *contract* with whatever imports it — an engine that
-knows a Troupe sheet knows where `walk_left` starts without reading anything — and a per-character
-frame count would make that impossible to state.
+That layout is configurable, and the form is where you change it. Each animation can be switched off
+or given a different frame count, and each can be rendered in 1, 4, 8 or 16 directions. A sheet
+warns above 256 cells and refuses above 512.
+
+What does not change is the *shape* of the contract. Eight cells to a row, and the order
+`animation → direction → frame`, so an engine that reads the sidecar knows where `walk_left` starts
+without guessing. The sidecar carries the layout the sheet was actually built with, which is what
+makes a per-character frame count safe to offer.
 
 ## Making a character
 
@@ -145,7 +150,8 @@ The row above the sprite carries the transport and the two selectors:
   `Left` and `Right` do the same.
 - The **animation** and **direction** buttons choose what plays. Changing animation restarts the
   clip; changing direction does not, so you can turn the character mid-stride and see the same
-  frame from the other side.
+  frame from the other side. `Up` and `Down` turn the character, `PageUp` and `PageDown` change
+  animation, and `Home` and `End` jump to the first and last frame of the run.
 - The **zoom** field is how many screen pixels one sprite pixel is drawn as.
 
 A looping animation loops. A one-shot — attack, jump — holds its last frame rather than stopping,

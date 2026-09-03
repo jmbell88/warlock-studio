@@ -176,6 +176,9 @@ class SirensState:
     #: the user never typed, in a cell they were not looking at, under an undo
     #: step they will not recognise.
     digit: int = 0
+    #: ``history.head`` after the high nibble's own step, or -1. What lets
+    #: the low nibble fold the two into one step -- see ``write_hex``.
+    digit_head: int = -1
 
     #: Which octave a letter key types into, and how far the caret falls after.
     octave: int = DEFAULT_OCTAVE
@@ -192,6 +195,14 @@ class SirensState:
     #: selection with no second cursor to keep in step, and what makes clearing
     #: the selection a single assignment.
     anchor: tuple[int, int] | None = None
+
+    #: The block clipboard: a contiguous ``int16`` ``(rows, channels, columns)``
+    #: array, or ``None`` before the first copy. App-level rather than per tab,
+    #: for the reason Inker's ``cel_clip`` is (``InkerState``): a bar copied in
+    #: one song pastes into another, which is the only thing a clipboard does
+    #: that a second order-list entry cannot. Nothing that moves the caret
+    #: clears it; only the next copy or cut overwrites it.
+    clip: Any = None
 
     #: Which instrument new notes are stamped with, by uid. ``None`` means the
     #: document has none yet, which a fresh song never is.

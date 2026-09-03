@@ -8,6 +8,7 @@ row or a place in the queue behind.
 
 from __future__ import annotations
 
+import math
 import re
 import secrets
 from typing import Any
@@ -117,6 +118,13 @@ DERIVED_PARAMS = (
     # from the source row for that kind after this strip.
     "sheet_id",
     "cells",
+    # How many of a re-render's cells were actually rendered rather than copied
+    # from the sheet it was built on. Recorded by the worker about the output,
+    # so a reroll must not inherit it. Its two *inputs* -- ``subset`` and
+    # ``base_sheet`` -- are deliberately absent from this tuple: they are the
+    # request normalised, which is ``layout``'s case, and "run that again" means
+    # re-rendering those runs against that base.
+    "rendered_cells",
     "reference_report",
     # Advisory, and about this run's pixels -- a reroll inheriting it would
     # claim a seam verdict about an image it is about to replace. The tile
@@ -312,6 +320,43 @@ def check_trellis_tex_res(value: int | None) -> None:
             f"trellis_tex_res must be between {MIN_TRELLIS_TEX_RES} and "
             f"{MAX_TRELLIS_TEX_RES}",
             field="trellis_tex_res",
+        )
+
+
+# The guidance strengths and the token budget, added 2026-09-02. The exe
+# documents no range for any of them and prints no default, so the checks are
+# the shape checks only: a strength is a finite positive float, a budget a
+# positive int. The cap on the budget is generous on purpose -- the point of the
+# axis is to sweep past the 49152 the exe ships with.
+MAX_TRELLIS_MAX_TOKENS = 1 << 20
+
+
+def check_trellis_gss(value: float | None) -> None:
+    _check_strength("trellis_gss", value)
+
+
+def check_trellis_gsh(value: float | None) -> None:
+    _check_strength("trellis_gsh", value)
+
+
+def _check_strength(name: str, value: float | None) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise Invalid(f"{name} must be a number", field=name)
+    if not math.isfinite(value) or value <= 0:
+        raise Invalid(f"{name} must be a positive number", field=name)
+
+
+def check_trellis_max_tokens(value: int | None) -> None:
+    if value is None:
+        return
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise Invalid("trellis_max_tokens must be a whole number", field="trellis_max_tokens")
+    if not 1 <= value <= MAX_TRELLIS_MAX_TOKENS:
+        raise Invalid(
+            f"trellis_max_tokens must be between 1 and {MAX_TRELLIS_MAX_TOKENS}",
+            field="trellis_max_tokens",
         )
 
 
