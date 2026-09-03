@@ -1382,8 +1382,18 @@ async def test_a_refused_job_does_not_rearm_the_cache_eviction_clock(
         # And the consequence, which is the property that actually matters: the
         # idle sweep is free to run despite the refusal, so the caches holding
         # the memory get dropped rather than pinned by the retry.
-        assert worker._caches_evicted_at > stale, (
-            "the refusal blocked the cache eviction it should have left alone"
+        #
+        # Waited for rather than asserted outright. The sweep runs on its own
+        # cadence and the only thing synchronised above is the job reaching
+        # ``error``; on an unloaded machine the sweep has always landed by now,
+        # and on a loaded one it has not, which made this fail as
+        # ``-9209.438 > -9209.438`` -- the clock never moved because the sweep
+        # had not run yet, not because the refusal blocked it. The distinction
+        # the test is making is "eventually, despite the refusal", so the wait
+        # is the honest spelling of it.
+        await _wait_until(
+            lambda: worker._caches_evicted_at > stale,
+            timeout=10.0,
         )
     finally:
         await worker.shutdown()

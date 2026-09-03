@@ -31,10 +31,10 @@ def test_a_non_fatal_failure_names_itself_and_says_why():
     """The regression this page exists for. A warning that only ever rendered
     as "1 thing needs attention" is a number the reader cannot act on."""
     rows = app_settings.health_rows(
-        [_check("Blender (rigging)", False, detail="bpy is not installed on Python 3.12")]
+        [_check("Blender (rigging)", False, detail="bpy is not installed on this Python")]
     )
     assert [row.name for row in rows] == ["Blender (rigging)"]
-    assert rows[0].detail == "bpy is not installed on Python 3.12"
+    assert rows[0].detail == "bpy is not installed on this Python"
     assert not rows[0].ok
 
 

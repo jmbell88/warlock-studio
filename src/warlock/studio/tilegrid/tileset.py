@@ -243,6 +243,20 @@ class TerrainSpec:
         object.__setattr__(self, "outline", rgba_colour(self.outline, "a terrain outline"))
 
 
+def rgba_shape(pixels: Any, what: str = "a tileset image") -> tuple[int, int]:
+    """``(width, height)`` of an RGBA image, **without copying it**.
+
+    :func:`frozen_rgba`'s validation half on its own, so a caller can size a
+    pack before paying for one. The refusal is the same sentence from the same
+    place, because two spellings of "must be RGBA" is how one of them comes to
+    be relaxed alone -- the rule ``frozen_rgba`` states about itself.
+    """
+    array = np.asarray(pixels)
+    if array.ndim != 3 or array.shape[2] != 4:
+        raise ValueError(f"{what} must be RGBA, shaped (h, w, 4)")
+    return int(array.shape[1]), int(array.shape[0])
+
+
 def frozen_rgba(pixels: Any, what: str = "a tileset image") -> np.ndarray:
     """A private RGBA copy nothing can write through.
 
@@ -374,8 +388,14 @@ def compose_collection(
     ids = tuple(sorted(int(key) for key in images))
     if not ids:
         raise ValueError("an image collection needs at least one tile")
-    frames = [frozen_rgba(images[local], "a collection tile") for local in ids]
-    sizes = tuple((int(f.shape[1]), int(f.shape[0])) for f in frames)
+    # **Sized before anything is copied, and that ordering is the point.**
+    # This read every image through ``frozen_rgba`` first, which copies -- so
+    # the guard against one 42 GB allocation was reached only after making a
+    # larger one out of the same inputs: ten thousand entries naming one 1024px
+    # file is 40 GB of copies before the refusal it exists for. It survived on
+    # a workstation with the memory to absorb it and died on a CI runner, which
+    # is the wrong way round for a ceiling.
+    sizes = tuple(rgba_shape(images[local], "a collection tile") for local in ids)
     cell_w = max(w for w, _ in sizes)
     cell_h = max(h for _, h in sizes)
     across = int(columns) if columns else max(1, math.ceil(math.sqrt(len(ids))))
@@ -387,6 +407,7 @@ def compose_collection(
             f"this image collection packs to {across * cell_w}x{down * cell_h},"
             f" past the {MAX_COLLECTION_PIXELS} pixels this build will allocate"
         )
+    frames = [frozen_rgba(images[local], "a collection tile") for local in ids]
     atlas = np.zeros((down * cell_h, across * cell_w, 4), dtype=np.uint8)
     for slot, frame in enumerate(frames):
         y, x = (slot // across) * cell_h, (slot % across) * cell_w

@@ -5,7 +5,7 @@ description = "Local AI 3D asset generator (Meshy-style) for game development"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: GPU :: NVIDIA CUDA",
@@ -14,7 +14,6 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Graphics :: 3D Modeling",
     "Topic :: Games/Entertainment",
@@ -92,14 +91,21 @@ studio = [
     # site, so a checkout without the studio extra still imports the plotter.
     "zstandard>=0.22",
 ]
-# Skeleton fitting and skinning. bpy ships cp313 wheels only, so this extra
-# effectively requires Python 3.13 even though the project floor stays 3.12 --
-# everything else here runs fine on 3.12 and rigging degrades to "unavailable"
-# rather than failing (see doctor.blender_check).
+# Skeleton fitting and skinning. bpy ships cp313 wheels only.
+#
+# **The floor was 3.12 until 2026-09-03, and the claim had never been run.**
+# The CI leg added to test it was read for the first time that day and was not
+# green: fourteen failures, six of them rig paths that fail rather than skip
+# when bpy is absent -- which is the "rigging unavailable" degradation the 3.12
+# floor existed to keep working. Since bpy is 3.13-only, rigging can never work
+# on 3.12; since the installer packs its own 3.13 runtime, no user of the
+# shipped product is on 3.12 either. So the floor is 3.13 and the claim matches
+# what is actually exercised, rather than the reverse.
+#
+# The upper bound stays: bpy's wheels declare Requires-Python >=3.13,<3.14, and
+# an unmarked requirement would make the whole project unresolvable on 3.14
+# rather than leaving rigging out of it.
 rig = [
-    # The marker is not decoration: bpy's wheels declare
-    # Requires-Python >=3.13,<3.14, so an unmarked requirement makes the whole
-    # project unresolvable on 3.12 rather than just leaving rigging out of it.
     "bpy>=5.2; python_version >= '3.13' and python_version < '3.14'",
 ]
 

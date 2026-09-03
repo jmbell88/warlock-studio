@@ -345,6 +345,33 @@ def test_composing_a_collection_past_the_pixel_ceiling_is_refused():
         compose_collection(images)
 
 
+def test_the_collection_ceiling_refuses_before_it_copies_anything(monkeypatch):
+    """The sentence above -- "before any of them is read" -- was not true.
+
+    ``compose_collection`` built ``frames`` through ``frozen_rgba``, which
+    *copies*, and only then measured the pack and refused. So the guard against
+    one 42 GB allocation was reached only after making a larger one out of the
+    same inputs: ten thousand ids sharing one 1024px image is 40 GB of copies
+    on the way to a refusal about 42 GB. It passed on a workstation with the
+    memory to absorb that and died on a CI runner with a ``MemoryError`` over
+    4 MiB, which is the wrong way round for a ceiling.
+
+    Pinned by making the copy itself fail: if anything is read before the
+    refusal, this raises ``AssertionError`` rather than ``ValueError``.
+    """
+    from warlock.studio.tilegrid import tileset
+
+    def _refuse_to_copy(*_args, **_kwargs):
+        raise AssertionError("a frame was copied before the ceiling refused")
+
+    monkeypatch.setattr(tileset, "frozen_rgba", _refuse_to_copy)
+
+    one = _tile_image(64, 64, 7)
+    images = dict.fromkeys(range(100_000), one)
+    with pytest.raises(ValueError, match="past the .* pixels this build will allocate"):
+        tileset.compose_collection(images)
+
+
 def test_an_ordinary_collection_still_composes():
     """The ceiling must not be felt by a real collection of images."""
     from warlock.studio.tilegrid.tileset import compose_collection

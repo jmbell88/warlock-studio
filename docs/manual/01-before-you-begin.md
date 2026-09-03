@@ -18,9 +18,11 @@ chapters instead walk one path through it and explain what you are looking at as
 - **Windows, with an NVIDIA GPU.** The reconstruction engine has no CPU fallback — it either has a
   CUDA card with about 16 GB free or it does not run. The tested machine is an RTX 5090 with 32 GB.
 - **[uv](https://docs.astral.sh/uv/)**, which manages the Python environment.
-- **Python 3.12 or newer**, with one exception worth knowing now: **rigging needs exactly 3.13**,
-  because `bpy` — Blender as a library — ships CPython 3.13 wheels and nothing else. On any other
-  version the rig extra installs nothing at all, quietly. The app then hides its rig controls and
+- **Python 3.13**, and the reason is `bpy` — Blender as a library — which ships CPython 3.13
+  wheels and nothing else. The floor used to be 3.12, on the theory that rigging could simply be
+  unavailable there; that theory was tested for the first time on 2026-09-03 and was not true, so
+  the floor now matches what rigging actually needs. On 3.14 or later the rig extra installs
+  nothing at all, quietly. The app then hides its rig controls and
   `warlock doctor` reports rigging unavailable; everything else works unchanged. If posing and
   character sheets are why you are here, use 3.13.
 - **About 23 GB of disk for weights**, plus room for what you make.

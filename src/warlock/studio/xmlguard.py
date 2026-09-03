@@ -39,7 +39,7 @@ at the door is the only place that failure can be spent once.
 Element and attribute counts get the same treatment, because expat's own
 amplification limit (CPython >= 3.12.2) bounds only *entity expansion*: a merely
 enormous element tree, or one element with a million attributes, is unbounded at
-every XML door regardless, and ``requires-python = ">=3.12"`` admits builds
+every XML door regardless, and ``requires-python = ">=3.13"`` admits builds
 without even that limit.
 """
 

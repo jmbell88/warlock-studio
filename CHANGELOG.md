@@ -18,6 +18,24 @@ the release you are actually running.
 
 ## 0.0.31 — 2026-09-03
 
+- **The Python floor is 3.13, because the 3.12 claim was finally run.** A CI leg to test that claim was
+  added on 2026-08-24 and nobody read its output until 2026-09-03 — which is the real defect, since a
+  support claim with no run behind it is a guess with a version number. Read, it was not green:
+  fourteen failures, six of them rig paths that *fail* rather than skip when `bpy` is absent, which is
+  exactly the "rigging unavailable" degradation the 3.12 floor was premised on. The floor moved rather
+  than the tests, for reasons about what ships: `bpy` is cp313-only so rigging can never work below
+  3.13, and the installer packs its own 3.13 runtime, so nobody running the product was on 3.12 to
+  begin with. The leg is retired with the reason written where it ran, and comes back if the floor is
+  ever lowered. Two of its failures were real and are fixed — see below.
+- **A ceiling that allocated more than the thing it was guarding.** `compose_collection` read every
+  image through `frozen_rgba`, which copies, and only then measured the pack and refused: so the guard
+  against one 42 GB atlas was reached only after making 40 GB of copies out of the same inputs. It
+  survived on a workstation with the memory to absorb that and died on a CI runner with a
+  `MemoryError` over 4 MiB, which is the wrong way round for a ceiling. Sizes are now read without
+  copying (`tilegrid.tileset.rgba_shape`, `frozen_rgba`'s validation half, sharing its refusal so the
+  two spellings cannot drift), the refusal comes before any copy, and a test pins that by making the
+  copy itself raise. The cache-eviction queue test was separately racing the idle sweep rather than
+  observing it, and now waits for the condition it is about.
 - **Beta-readiness pass: CI could not go green, and three Settings controls did nothing.** The wheel
   smoke test asserted `len(modes.KEYS) == 11` against a twelve-mode tree, so that step could only ever
   fail once anything reached it — on a hardcoded number rather than on a packaging mistake, and it

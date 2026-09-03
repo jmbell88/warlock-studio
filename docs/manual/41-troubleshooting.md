@@ -102,9 +102,9 @@ is not hidden, though — it says "Posing needs Blender, which is not installed.
 Health** names the failing check, "Blender (rigging)", and prints its detail; `warlock doctor` says
 the same thing in a terminal.
 
-**Why.** Almost always the Python version. `bpy` ships CPython 3.13 wheels only, so on Python 3.12
-`uv sync --extra rig` installs nothing at all and the probe finds no `bpy`. The other cause is a
-missing skeleton template directory, which the check names explicitly.
+**Why.** Almost always the Python version. `bpy` ships CPython 3.13 wheels only, so on anything
+else `uv sync --extra rig` installs nothing at all and the probe finds no `bpy`. The other cause is
+a missing skeleton template directory, which the check names explicitly.
 
 **Fix.** Create the environment on Python 3.13 and run `uv sync --extra rig`. The check is non-fatal
 either way: everything except rigging, posing and sheets works exactly as before.

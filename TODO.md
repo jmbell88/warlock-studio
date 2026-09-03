@@ -832,11 +832,19 @@ P5, P6, P7 and P14 from work you owe yourself into work the beta can close.
   chapters 05, 07, 09, 10 and 11. **Expected outcome:** the "Try it" sections
   gain a starting file for readers who would rather learn the tools than
   design a character in the same ten minutes.
-- **Read the first 3.12 CI run.** The `floor` job in
-  `.github/workflows/windows-ci.yml` runs the suite under Python 3.12 without
-  the `rig` extra; it was added 2026-08-24 and 3.13 changed docstring
-  dedenting, which several source-scanning tests depend on. **Expected
-  outcome:** green, or a raised floor to 3.13 — not a deleted leg.
+- ~~**Read the first 3.12 CI run.**~~ **Read 2026-09-03, and it was not
+  green: fourteen failures.** Six were rig paths that *fail* rather than skip
+  when `bpy` is absent — which is precisely the "rigging unavailable"
+  degradation the 3.12 floor existed to keep working, so the floor's own
+  premise was false. Five were list-ordering assertions that tie on a coarse
+  clock, two were load-sensitive, and one was a `MemoryError`. Of the two
+  outcomes this item allowed, the answer was **a raised floor to 3.13**: `bpy`
+  is 3.13-only so rigging can never work below it, and the installer packs its
+  own 3.13 runtime so nobody running the shipped product was on 3.12 anyway.
+  `requires-python` is now `>=3.13` and the leg is retired with the reason
+  written where it ran. The remaining eight failures were never 3.12-specific
+  and two of them are fixed (see the closed records); the rest have not been
+  reproduced on 3.13 and are not known to exist there.
 
 ## Closed records (kept so nobody re-derives them)
 

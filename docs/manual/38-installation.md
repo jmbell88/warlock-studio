@@ -12,7 +12,7 @@ after it the app never touches the network again.
 - Roughly 16 GB of disk for the TRELLIS.2 GGUF weights, plus about 7 GB for SDXL 1.0 if you want
   text-to-3D.
 
-Python 3.12 or newer. Rigging is the one part that wants a specific version — see
+Python 3.13. Rigging is why the version is exact rather than a floor — see
 [Python dependencies](#python-dependencies) below.
 
 ## Python dependencies
@@ -47,12 +47,18 @@ to run on a machine with no display — the command line only imports the window
 opens one.
 
 `rig` carries one constraint worth knowing before you install it. `bpy` ships **CPython 3.13 wheels
-only**, so the requirement is marked `python_version >= '3.13' and python_version < '3.14'`. On
-Python 3.12 the extra installs
+only**, so the requirement is marked `python_version >= '3.13' and python_version < '3.14'`. On any
+other version the extra installs
 nothing at all: `warlock doctor` reports rigging as unavailable, the app hides the rig controls, and
 everything else works unchanged. The marker is not decoration — without it, `bpy`'s own
-`Requires-Python` would make the whole project unresolvable on 3.12 rather than merely leaving
+`Requires-Python` would make the whole project unresolvable on 3.14 rather than merely leaving
 rigging out.
+
+The project floor is **3.13** and was 3.12 until 2026-09-03. The older floor said rigging could be
+absent and everything else would carry on; the CI leg that tested it was read for the first time
+that day and disagreed — six of its fourteen failures were rig paths that fail rather than degrade
+when `bpy` is missing. Since the Windows installer packs its own 3.13 runtime, nobody running the
+shipped product was ever on 3.12 anyway.
 
 ## The trellis binary
 
