@@ -51,10 +51,18 @@ class _Ctx:
         self.accept = accept
 
     def submit(self, key: str, run: Any, *args: Any, **kwargs: Any) -> bool:
+        """Run inline *and deliver*, which is what the app does one frame later.
+
+        The delivery is not decoration: since the review's T3 the write hands
+        its mark back through ``Done.result`` and ``journal.on_task_done``
+        applies it on the frame thread, so a runner that ran the task and
+        dropped its result would leave every mark unset.
+        """
         self.submitted.append(key)
         if not self.accept:
             return False
-        run(*args, **kwargs)
+        result = run(*args, **kwargs)
+        journal.on_task_done(self, SimpleNamespace(key=key, result=result))
         return True
 
     def toast(self, text: str, level: str = "info", **_kw: Any) -> None:
@@ -72,6 +80,13 @@ class _Slot:
         self.journal_name = ""
         self.journal_head = None
         self.journal_at = 0.0
+
+
+def _land(ctx: Any, run: Any, key: str = "journal:probe:s1") -> Any:
+    """Run a queued write and deliver its result the way ``App`` does."""
+    result = run()
+    journal.on_task_done(ctx, SimpleNamespace(key=key, result=result))
+    return result
 
 
 @pytest.fixture
@@ -311,7 +326,7 @@ def test_a_failed_write_is_not_recorded_as_a_copy_that_exists(tmp_path, kind, mo
     monkeypatch.setattr(mod, "_write_pair", real_write_pair)
     assert journal.pump(ctx, now=10_000.0 + journal.JOURNAL_SECONDS - 1.0) == 0
     assert journal.pump(ctx, now=10_000.0 + journal.JOURNAL_SECONDS + 1.0) == 1
-    queued[-1]()
+    _land(ctx, queued[-1])
     assert slot.journal_head == slot.head, "the copy that landed is the one recorded"
 
 
@@ -326,7 +341,9 @@ def test_the_head_is_advanced_by_the_write_and_not_by_the_submit(tmp_path, kind)
     journal.pump(ctx, now=9_000.0)
     journal.pump(ctx, now=10_000.0)
     assert slot.journal_head is None
-    queued[0]()
+    result = queued[0]()
+    assert slot.journal_head is None, "the write ran on a task; the mark is not its to set"
+    journal.on_task_done(ctx, SimpleNamespace(key="journal:probe:s1", result=result))
     assert slot.journal_head == slot.head
     assert (tmp_path / slot.journal_name).read_bytes() == b"a"
 

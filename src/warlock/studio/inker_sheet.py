@@ -46,6 +46,7 @@ __all__ = [
     "can_merge",
     "conflicts",
     "has_base",
+    "land_merge",
     "merge",
     "merge_reason",
     "next_conflict",
@@ -362,6 +363,43 @@ def merge(ctx: Any, tab: Any, incoming: Sequence[np.ndarray]) -> bool:
         sheetmerge.counts_sentence(result),
         "warn" if result.conflicts else "success",
     )
+    return True
+
+
+def land_merge(ctx: Any, state: Any, done: Any) -> bool:
+    """Adopt a loaded re-render. Frame thread; ``_sheet_merge``'s other half.
+
+    Three things this does that the door cannot. The tab is resolved through
+    the uid in the key rather than through ``active``, ``inker-index``'s
+    reason: the decode is unbounded and the user may have switched documents
+    while it ran. ``busy`` is re-checked here, the way the tileset import
+    re-checks it, because a save or playback may have started since the press
+    and ``merge_render`` pushes into a stack an encode is walking. And the
+    sheet id advances on the base the merge *left behind*, not the one the door
+    read -- ``merge_render`` replaces ``sheet_base`` wholesale, so writing to
+    the object the door held would update nothing at all.
+    """
+    result = done.result
+    key = str(getattr(done, "key", ""))
+    if not isinstance(result, dict) or ":" not in key:
+        return False
+    tab = state.get(key.split(":", 1)[1])
+    if tab is None:
+        return False
+    if tab.busy:
+        ctx.toast(
+            "The re-render finished loading while this document was busy; "
+            "press Merge re-render again.",
+            "warn",
+        )
+        return False
+    if not merge(ctx, tab, result["cells"]):
+        return False
+    base = getattr(_doc(tab), "sheet_base", None)
+    if base is not None:
+        # In the step's own ``after``, which is this same object, so an undo
+        # takes the id back with the pixels and a redo brings it forward.
+        base.source["sheet"] = str(result["sheet"])
     return True
 
 

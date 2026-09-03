@@ -258,10 +258,13 @@ def test_auto_columns_still_re_derives_from_the_rounded_width():
 
 
 def test_a_frame_records_where_its_trim_came_from():
+    """MaxRects: a grid deliberately does not trim, so there is nothing there
+    for a frame to record."""
     pixels = np.zeros((20, 20, 4), dtype=np.uint8)
     pixels[5:9, 3:11] = (255, 0, 0, 255)
-    result = lay.grid_layout(
-        [Sprite(key="a", name="a", pixels=pixels)], PackSettings(power_of_two=False)
+    result = lay.maxrects_layout(
+        [Sprite(key="a", name="a", pixels=pixels)],
+        PackSettings(mode="maxrects", power_of_two=False),
     )
     frame = result.frames[0]
     assert frame.trim == (3, 5, 8, 4)

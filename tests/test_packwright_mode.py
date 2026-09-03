@@ -93,6 +93,18 @@ def _sprite(key: str, w: int = 8, h: int = 6) -> Sprite:
     return Sprite(key=key, name=key, pixels=pixels)
 
 
+def _edited(key: str) -> Sprite:
+    """The same source after the user changed it on disk: one pixel differs.
+
+    A sprite's pixels are read-only by construction (the frozen-source rule),
+    so the edit is made on the array before it becomes one.
+    """
+    pixels = np.zeros((6, 8, 4), dtype=np.uint8)
+    pixels[1:-1, 1:-1] = (200, 30, 30, 255)
+    pixels[0, 0] = (1, 2, 3, 255)
+    return Sprite(key=key, name=key, pixels=pixels)
+
+
 def _tab(ctx: FakeCtx, *, sources: int = 3) -> Any:
     tab = packwright_mode.new_document(ctx)
     for index in range(sources):
@@ -251,9 +263,97 @@ def test_a_batch_skips_what_is_already_there_rather_than_refusing():
     coexist; this is the caller deciding what to ask for."""
     ctx = FakeCtx()
     tab = _tab(ctx, sources=2)
-    added = packwright_mode._add_sprites(ctx, tab, [_sprite("s0"), _sprite("new")])
-    assert added == 1
+    added, replaced = packwright_mode._add_sprites(
+        ctx, tab, [_sprite("s0"), _sprite("new")]
+    )
+    assert (added, replaced) == (1, 0), "the identical one is a skip, not a step"
     assert len(tab.doc.sources) == 3
+
+
+def test_re_adding_a_changed_file_updates_the_sprite_it_is_already_holding():
+    """``wpack``'s own contract -- "what the document records is what was
+    packed; re-adding the source is how you pick up a change" -- which was
+    false until 2026-09-03: a key already present was skipped whatever its
+    pixels said, so the only way to pick up an edit was to delete the sprite
+    first."""
+    ctx = FakeCtx()
+    tab = _tab(ctx, sources=2)
+    uid = tab.doc.sources[0].uid
+    edited = _edited("s0")
+
+    added, replaced = packwright_mode._add_sprites(ctx, tab, [edited])
+
+    assert (added, replaced) == (0, 1)
+    assert len(tab.doc.sources) == 2, "a replacement, not a second sprite"
+    assert tab.doc.source(uid) is not None, "and the same uid, so nothing else moved"
+    assert tuple(tab.doc.source(uid).sprite.pixels[0, 0]) == (1, 2, 3, 255)
+    assert tab.pack_dirty
+
+
+def test_an_update_is_one_undo_step_back_to_the_old_picture():
+    ctx = FakeCtx()
+    tab = _tab(ctx, sources=1)
+    uid = tab.doc.sources[0].uid
+    before = tab.doc.source(uid).sprite.pixels.copy()
+    packwright_mode._add_sprites(ctx, tab, [_edited("s0")])
+
+    tab.doc.undo()
+
+    assert np.array_equal(tab.doc.source(uid).sprite.pixels, before)
+
+
+def test_a_sentence_names_both_halves_of_a_mixed_batch():
+    """"Added 19" hides the twentieth file being the edited one the user
+    dropped the folder for."""
+    assert packwright_mode._added_sentence(19, 1) == "Added 19 sprite(s), updated 1."
+    assert packwright_mode._added_sentence(0, 2) == "Updated 2 sprite(s)."
+    assert packwright_mode._added_sentence(3, 0) == "Added 3 sprite(s)."
+    assert "unchanged" in packwright_mode._added_sentence(0, 0)
+
+
+def test_a_failed_repack_marks_the_atlas_it_left_on_screen():
+    """A failed pack keeps the last good atlas -- a picture beats a blank pane
+    -- but nothing said it was the old one, so the preview drew it unmarked and
+    both exports wrote it."""
+    ctx = FakeCtx()
+    tab = _tab(ctx, sources=1)
+    tab.adopt_pack(tab.doc.layout(), np.zeros((4, 4, 4), dtype=np.uint8))
+    assert tab.pack_stale_why == ""
+
+    packwright_mode.on_task_failed(
+        ctx,
+        type("Done", (), {"key": f"packwright-pack:{tab.uid}", "message": "too big"})(),
+    )
+
+    assert tab.atlas is not None, "the last good picture is kept"
+    assert "too big" in tab.pack_stale_why
+
+
+def test_neither_export_will_write_a_stale_atlas(monkeypatch):
+    from warlock.studio import dialogs
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, sources=1)
+    tab.adopt_pack(tab.doc.layout(), np.zeros((4, 4, 4), dtype=np.uint8))
+    tab.pack_error = "too big"
+    monkeypatch.setattr(
+        dialogs, "save_file", lambda *a, **k: pytest.fail("a picker opened")
+    )
+
+    packwright_mode.export_files(ctx, tab)
+    packwright_mode.export_library(ctx, tab)
+
+    assert ctx.submitted == [], "nothing was written"
+    assert len(ctx.toasts) == 2
+    assert all("atlas from before it" in message for message, _ in ctx.toasts)
+
+
+def test_a_pack_that_lands_clears_the_mark():
+    ctx = FakeCtx()
+    tab = _tab(ctx, sources=1)
+    tab.pack_error = "too big"
+    tab.adopt_pack(tab.doc.layout(), np.zeros((4, 4, 4), dtype=np.uint8))
+    assert tab.pack_stale_why == ""
 
 
 def test_adding_with_nothing_open_says_so():
@@ -623,7 +723,76 @@ def test_adding_a_library_asset_with_no_atlas_starts_one(tmp_path, monkeypatch):
     assert tab is not None
     assert not ctx.toasts
     assert ctx.state.mode == "packwright"
-    assert ctx.submitted == [f"packwright-add:{tab.uid}"]
+    assert ctx.submitted == [f"packwright-add:{tab.uid}:j1"]
+
+
+class _DedupingCtx(FakeCtx):
+    """A ctx whose ``submit`` refuses a key already in flight, as the real
+    runner does, and hands its results back through ``on_task_done``.
+
+    The plain ``FakeCtx`` above runs every submit inline and keeps no keys, so
+    it cannot see a refusal at all -- which is why a multi-file drop looked
+    fine here for as long as it was broken in the app.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pending: list[tuple[str, Any]] = []
+        self.refused: list[str] = []
+
+    def submit(self, key: str, run: Any, *args: Any) -> bool:
+        self.submitted.append(key)
+        if any(key == in_flight for in_flight, _ in self.pending):
+            self.refused.append(key)
+            return False
+        self.pending.append((key, run(*args)))
+        return True
+
+    def deliver(self) -> None:
+        for key, result in self.pending:
+            packwright_mode.on_task_done(
+                self, type("Done", (), {"key": key, "result": result})()
+            )
+        self.pending.clear()
+
+
+def test_dropping_several_files_adds_every_one(tmp_path):
+    """pygame raises one ``DROPFILE`` per file, so a drag of three PNGs is
+    three calls in one pump. Under a per-tab key the runner refused the second
+    and third and nothing read the refusal, so a multi-file drop added the
+    first file and said "Added 1 sprite(s)"."""
+    from PIL import Image
+
+    paths = []
+    for index, colour in enumerate([(255, 0, 0, 255), (0, 255, 0, 255), (0, 0, 255, 255)]):
+        path = tmp_path / f"tile{index}.png"
+        Image.new("RGBA", (4, 4), colour).save(path)
+        paths.append(path)
+
+    ctx = _DedupingCtx()
+    tab = packwright_mode.new_document(ctx)
+    for path in paths:
+        packwright_mode.add_source_paths(ctx, [path])
+
+    assert ctx.refused == [], "every distinct drop got its own key"
+    ctx.deliver()
+    assert [s.key for s in tab.doc.sprites()] == [str(p) for p in paths]
+
+
+def test_the_same_drop_twice_over_still_dedupes(tmp_path):
+    """The half of the key worth keeping: one file decoded twice at once is
+    one decode, and the second press was not a second intention."""
+    from PIL import Image
+
+    path = tmp_path / "tile.png"
+    Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(path)
+
+    ctx = _DedupingCtx()
+    packwright_mode.new_document(ctx)
+    packwright_mode.add_source_paths(ctx, [path])
+    packwright_mode.add_source_paths(ctx, [path])
+
+    assert len(ctx.refused) == 1
 
 
 def test_an_inker_document_with_no_atlas_starts_one_too():

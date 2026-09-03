@@ -203,18 +203,45 @@ def test_only_the_ceiling_is_the_inkers_own_now():
     postage stamp nobody can nib -- true, and it cost Fit: a page too large to
     fit at 25% centred and *overflowed* the pane rather than shrinking to meet
     it, which is the one thing Fit means. Nobody nibs at 5% on purpose, and
-    the wheel notch that reaches it also leaves it. The ceiling stays Inker's
-    own: 32x is a tile map's magnifier.
+    the wheel notch that reaches it also leaves it.
+
+    **The ceiling is the Inker's own and now goes past the shared one**: a
+    16 px sprite at the old 10x was 160 screen pixels, and 16 px is the size
+    this app is for. Aseprite stops at 6400%.
     """
     assert inker_state.MIN_ZOOM == inker_state.INKER_MIN_ZOOM
-    assert inker_state.INKER_MAX_ZOOM < inker_state.MAX_ZOOM
+    assert inker_state.INKER_MAX_ZOOM > inker_state.MAX_ZOOM
+    assert inker_state.INKER_MAX_ZOOM == 64.0
+    assert inker_state.ZOOM_LADDER[-1] == inker_state.INKER_MAX_ZOOM
+
+
+def test_the_wheel_can_actually_reach_the_ceiling():
+    """5% notches from 1x to 64x is 1,260 of them, which is not a control."""
+    view = PaintView(zoom=1.0)
+    notches = 0
+    while view.zoom < inker_state.INKER_MAX_ZOOM and notches < 400:
+        inker_state.zoom_step(view, (0.0, 0.0), (0.0, 0.0), 1.0, **_inker_bounds())
+        notches += 1
+    assert view.zoom == pytest.approx(inker_state.INKER_MAX_ZOOM)
+    assert notches < 200, "the top must be a scroll, not a workout"
+
+
+def test_the_wheel_keeps_its_five_percent_notches_where_they_mean_something():
+    view = PaintView(zoom=1.0)
+    inker_state.zoom_step(view, (0.0, 0.0), (0.0, 0.0), 1.0, **_inker_bounds())
+    assert view.zoom == pytest.approx(1.05)
 
 
 def test_zoom_is_clamped_to_the_inker_bounds_when_they_are_passed():
+    """One notch at a time, which is how a wheel delivers them: above
+    ``FINE_ZOOM_MAX`` a notch is a rung rather than 5%, so a single call
+    carrying five hundred notches is not a gesture this has to answer."""
     view = PaintView(zoom=1.0)
-    inker_state.zoom_step(view, (0.0, 0.0), (0.0, 0.0), 500.0, **_inker_bounds())
+    for _ in range(400):
+        inker_state.zoom_step(view, (0.0, 0.0), (0.0, 0.0), 1.0, **_inker_bounds())
     assert view.zoom == pytest.approx(inker_state.INKER_MAX_ZOOM)
-    inker_state.zoom_step(view, (0.0, 0.0), (0.0, 0.0), -500.0, **_inker_bounds())
+    for _ in range(400):
+        inker_state.zoom_step(view, (0.0, 0.0), (0.0, 0.0), -1.0, **_inker_bounds())
     assert view.zoom == pytest.approx(inker_state.INKER_MIN_ZOOM)
 
 
@@ -2082,3 +2109,50 @@ def test_a_document_with_no_palette_has_no_image_to_export(monkeypatch):
     state.add(_tab())
     inker_mode.export_palette_image(ctx)
     assert ctx.submitted == []
+
+
+# --- the shortcut sheet reads the registry ------------------------------------
+
+
+def test_the_shifted_tool_chords_come_from_the_bindings():
+    """They were a hand copy checked against the table of *tools* rather than
+    the table of *bindings*, so a rebound tool left the Ctrl+/ sheet
+    advertising a chord that did nothing."""
+    from warlock.studio import inker_ops
+
+    expected = {
+        binding.target: binding.chord
+        for binding in inker_ops.BINDINGS
+        if binding.kind == "tool" and binding.chord.startswith("Shift+")
+    }
+    assert expected == inker_mode.ALT_TOOL_CHORDS
+    assert expected, "there are shifted tool chords to find"
+    assert set(inker_mode.SHIFT_TOOL_KEYS.values()) == set(expected)
+
+
+def test_the_verbs_the_review_named_have_chords_now():
+    """Flip, merge down and duplicate layer were menu-only, and redo answered
+    to Windows' Ctrl+Y alone."""
+    from warlock.studio import inker_ops
+
+    chords = {op.name: op.key for op in inker_ops.OPS if op.key}
+    assert chords["flip_h"] == "Shift+H"
+    assert chords["flip_v"] == "Shift+V"
+    assert chords["merge_down"] == "Ctrl+Shift+M"
+    assert chords["duplicate_layer"] == "Ctrl+Shift+L"
+    aliases = {b.chord for b in inker_ops.BINDINGS if b.target == "redo"}
+    assert {"Ctrl+Y", "Ctrl+Shift+Z"} <= aliases
+
+
+def test_no_two_commands_answer_to_one_chord():
+    """The check the new chords were picked against, kept so the next one is
+    picked against it too."""
+    from warlock.studio import inker_ops
+
+    seen: dict[tuple[str, str], str] = {}
+    for op in inker_ops.OPS:
+        if not op.key:
+            continue
+        where = (op.context, op.key)
+        assert where not in seen, f"{op.name} and {seen[where]} both take {op.key}"
+        seen[where] = op.name

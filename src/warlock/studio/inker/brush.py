@@ -355,6 +355,22 @@ def axis_or_default(
     return default_axis(size) if axis is None else axis
 
 
+def mirrors_of(
+    point: tuple[float, float],
+    size: tuple[int, int],
+    symmetry: Any,
+    axis: tuple[float, float] | None = None,
+    radial: int = DEFAULT_RADIAL,
+) -> list[tuple[float, float]]:
+    """A point and its reflections, for a caller outside a stroke.
+
+    Public for :func:`axes_of`'s reason: the canvas draws the cursor's mirrored
+    twins, and a canvas computing its own reflection is a cursor that lands
+    somewhere the stroke does not. One name, one arithmetic.
+    """
+    return _mirror(point, size, symmetry, axis, radial)
+
+
 def _mirror(
     point: tuple[float, float],
     size: tuple[int, int],

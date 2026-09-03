@@ -882,3 +882,381 @@ def test_a_tab_switch_drops_the_effect_selection():
     state.oneshot = one.uid
     sirens_mode.new_document(ctx)
     assert state.oneshot is None
+
+
+# --- the playhead: a bisect of what the renderer did --------------------------
+#
+# The estimate this replaced was seconds over the document's own seconds-per-row,
+# which describes one imaginary pattern of unbounded length: right for a
+# one-pattern song and wrong for every other, and wrong again after every
+# ``Fxx``, ``Bxx`` and ``Dxx`` (the 2026-09-02 review, section 8).
+
+
+def _two_pattern_song(ctx: FakeCtx) -> Any:
+    """A song whose order list is two different patterns, both rendered."""
+    tab = _tab(ctx)
+    doc = tab.doc
+    first = doc.patterns[0].uid
+    second = doc.add_pattern().uid
+    doc.set_order(list(doc.order) + [second])
+    _render(ctx, tab)
+    return tab, first, second
+
+
+def _sounding(monkeypatch, tab: Any, seconds: float) -> None:
+    from warlock.studio import sirens_audio
+
+    monkeypatch.setattr(sirens_audio, "tag", lambda: tab.uid)
+    monkeypatch.setattr(sirens_audio, "position", lambda: seconds)
+
+
+def test_a_render_carries_a_row_map(monkeypatch):
+    ctx = FakeCtx()
+    tab, first, second = _two_pattern_song(ctx)
+
+    assert tab.marks, "the render says which row it played where"
+    offsets = [mark[0] for mark in tab.marks]
+    assert offsets == sorted(offsets), "ascending, so a bisect is legal"
+    assert {mark[2] for mark in tab.marks} == {first, second}
+
+
+def test_the_playhead_is_none_while_the_song_is_in_another_pattern(monkeypatch):
+    """The half the estimate could not express at all: it answered with a row
+    number whatever was playing, so a two-pattern song highlighted a row of the
+    pattern on screen because a different pattern had reached it."""
+    ctx = FakeCtx()
+    tab, first, second = _two_pattern_song(ctx)
+    state = sirens_mode.ensure(ctx)
+    state.follow = False
+    state.pattern = first
+    # A moment inside the *second* entry, by asking the map itself where that is.
+    at = next(mark[0] for mark in tab.marks if mark[2] == second)
+    _sounding(monkeypatch, tab, at / 44100.0)
+
+    assert sirens_mode.playhead_mark(ctx, tab)[1] == second
+    assert sirens_mode.playhead_row(ctx, tab) is None
+
+    state.pattern = second
+    assert sirens_mode.playhead_row(ctx, tab) == 0
+
+
+def test_the_playhead_is_the_row_the_renderer_was_on(monkeypatch):
+    ctx = FakeCtx()
+    tab, first, _second = _two_pattern_song(ctx)
+    state = sirens_mode.ensure(ctx)
+    state.follow = False
+    state.pattern = first
+    wanted = next(mark for mark in tab.marks if mark[2] == first and mark[3] == 3)
+    _sounding(monkeypatch, tab, (wanted[0] + 1) / 44100.0)
+
+    assert sirens_mode.playhead_row(ctx, tab) == 3
+
+
+def test_a_sound_effect_on_the_channel_is_not_the_songs_playhead(monkeypatch):
+    """One channel: an audition replaces the song on it, and bisecting the
+    song's map against an effect's clock walks rows nothing is playing."""
+    from warlock.studio import sirens_audio
+
+    ctx = FakeCtx()
+    tab, _first, _second = _two_pattern_song(ctx)
+    monkeypatch.setattr(sirens_audio, "tag", lambda: "")
+    monkeypatch.setattr(sirens_audio, "position", lambda: 0.5)
+
+    assert sirens_mode.playhead_mark(ctx, tab) is None
+
+
+def test_following_moves_the_caret_onto_the_sounding_row(monkeypatch):
+    """Follow used to scroll the view and leave the caret behind, so the row
+    under the highlight was not the row a keystroke wrote to -- and on a
+    two-pattern song the highlight was not even in the pattern being edited."""
+    ctx = FakeCtx()
+    tab, first, second = _two_pattern_song(ctx)
+    state = sirens_mode.ensure(ctx)
+    state.follow = True
+    state.pattern = first
+    state.row = 0
+    state.digit = 1
+    at = next(mark for mark in tab.marks if mark[2] == second and mark[3] == 2)
+    _sounding(monkeypatch, tab, (at[0] + 1) / 44100.0)
+
+    assert sirens_mode.follow_playhead(ctx) is True
+    assert (state.pattern, state.row) == (second, 2)
+    assert state.digit == 0, "everything that moves the caret clears the nibble"
+    assert sirens_mode.playhead_row(ctx, tab) == 2
+
+
+def test_following_leaves_the_caret_alone_when_it_is_off(monkeypatch):
+    ctx = FakeCtx()
+    tab, first, second = _two_pattern_song(ctx)
+    state = sirens_mode.ensure(ctx)
+    state.follow = False
+    state.pattern = first
+    state.row = 7
+    at = next(mark for mark in tab.marks if mark[2] == second)
+    _sounding(monkeypatch, tab, (at[0] + 1) / 44100.0)
+
+    assert sirens_mode.follow_playhead(ctx) is False
+    assert (state.pattern, state.row) == (first, 7)
+
+
+def test_nothing_playing_is_no_playhead_and_no_follow():
+    ctx = FakeCtx()
+    tab, _first, _second = _two_pattern_song(ctx)
+    assert sirens_mode.playhead_mark(ctx, tab) is None
+    assert sirens_mode.playhead_row(ctx, tab) is None
+    assert sirens_mode.follow_playhead(ctx) is False
+
+
+# --- the order list's own doors -------------------------------------------------
+
+
+def test_the_caret_on_a_sound_effect_is_named_so_the_order_button_can_refuse():
+    """Adding an effect mints a pattern of its own and points the grid at it,
+    so "+ To order" used to append a coin pickup into the middle of the song
+    and say nothing (the 2026-09-02 review, section 8)."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = sirens_mode.ensure(ctx)
+    assert sirens_mode.oneshot_name_for_caret(ctx, tab) == ""
+
+    effect = tab.doc.add_oneshot(name="coin")
+    state.pattern = effect.pattern
+    assert sirens_mode.oneshot_name_for_caret(ctx, tab) == "coin"
+
+    state.pattern = tab.doc.patterns[0].uid
+    assert sirens_mode.oneshot_name_for_caret(ctx, tab) == ""
+
+
+def test_deleting_an_unused_pattern_asks_nothing():
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    spare = tab.doc.add_pattern().uid
+
+    sirens_mode.confirm_remove_pattern(ctx, tab, spare, used=0)
+
+    assert ctx.confirms.pending is None
+    assert tab.doc.pattern(spare) is None
+
+
+def test_deleting_a_pattern_the_order_plays_asks_first_and_says_what_goes():
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    doc = tab.doc
+    first = doc.patterns[0].uid
+    second = doc.add_pattern().uid
+    doc.set_order([first, second, second])
+
+    sirens_mode.confirm_remove_pattern(ctx, tab, second, used=2)
+
+    pending = ctx.confirms.pending
+    assert pending is not None and "2 time(s)" in pending.message
+    assert doc.pattern(second) is not None, "nothing happens before the answer"
+
+    pending.on_confirm()
+    assert doc.pattern(second) is None
+    assert doc.order == [first]
+
+
+def test_moving_an_entry_carries_the_loop_point_with_it():
+    """The loop is an index into the order list, so moving entries under it
+    repoints it at whatever landed there -- a song looping from somewhere the
+    user never chose."""
+    from warlock.studio.panes.sirens_orders import moved_loop
+
+    # The moved entry takes its own loop with it.
+    assert moved_loop(2, 2, 0) == 0
+    # An entry the move stepped over shifts the other way.
+    assert moved_loop(0, 2, 0) == 1
+    assert moved_loop(3, 1, 3) == 2
+    # And one the move did not reach does not move.
+    assert moved_loop(5, 1, 3) == 5
+    assert moved_loop(-1, 1, 3) == -1
+    assert moved_loop(2, 1, 1) == 2
+
+
+# --- mute and solo --------------------------------------------------------------
+#
+# View state, not the song: a mute is how a person listens to what they are
+# writing, and a ``.wsng`` remembering one would hand somebody else a song with
+# a missing part. It reaches the mix through the render.
+
+
+def test_muting_a_channel_takes_it_out_of_the_mix_and_re_renders():
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    doc = tab.doc
+    state = sirens_mode.ensure(ctx)
+    _render(ctx, tab)
+    assert tab.render_dirty is False
+
+    second = doc.channels[1].uid
+    assert sirens_mode.toggle_mute(ctx, second, tab) is True
+    assert tab.render_dirty is True, "a mute the mix has not heard yet is not a mute"
+    assert sirens_mode.audible_channels(doc, state) == (0, 2, 3, 4)
+
+    assert sirens_mode.toggle_mute(ctx, second, tab) is False
+    assert sirens_mode.audible_channels(doc, state) == (0, 1, 2, 3, 4)
+
+
+def test_solo_wins_over_every_mute():
+    """Soloing to check a bass line and then unsoloing must not have to undo
+    four mutes."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    doc = tab.doc
+    state = sirens_mode.ensure(ctx)
+    sirens_mode.toggle_mute(ctx, doc.channels[0].uid, tab)
+    sirens_mode.toggle_mute(ctx, doc.channels[2].uid, tab)
+
+    assert sirens_mode.toggle_solo(ctx, doc.channels[2].uid, tab) == doc.channels[2].uid
+    assert sirens_mode.audible_channels(doc, state) == (2,)
+
+    assert sirens_mode.toggle_solo(ctx, doc.channels[2].uid, tab) == -1
+    assert sirens_mode.audible_channels(doc, state) == (1, 3, 4), "the mutes stood"
+
+
+def test_a_solo_on_a_channel_the_song_no_longer_has_is_not_silence():
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    doc = tab.doc
+    state = sirens_mode.ensure(ctx)
+    state.solo = 999_999
+
+    assert sirens_mode.audible_channels(doc, state) == tuple(range(len(doc.channels)))
+
+
+def test_the_header_can_tell_muted_from_merely_unheard():
+    """Two different facts: a channel that is not the soloed one is silent
+    without being muted, and one button lighting for both would lie about what
+    a click undoes."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    doc = tab.doc
+    first, second = doc.channels[0].uid, doc.channels[1].uid
+    sirens_mode.toggle_mute(ctx, first, tab)
+    assert sirens_mode.channel_state(ctx, first) == (True, False, False)
+
+    sirens_mode.toggle_solo(ctx, second, tab)
+    assert sirens_mode.channel_state(ctx, first) == (True, False, False)
+    assert sirens_mode.channel_state(ctx, second) == (False, True, True)
+    third = doc.channels[2].uid
+    assert sirens_mode.channel_state(ctx, third) == (False, False, False)
+
+
+def test_a_muted_render_keeps_the_row_map_the_full_one_has():
+    """The effect column survives a mute, so the mix stays sample-aligned and
+    the playhead does not move when a channel is silenced."""
+    from warlock.studio.sirens import synth
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    doc = tab.doc
+    doc.set_cell(doc.patterns[0].uid, 0, 0, 0, 60)
+    _whole, _loop, marks = synth.render_marked(doc)
+    _muted, _loop2, muted_marks = synth.render_only(doc, {1})
+
+    assert muted_marks == marks
+
+
+def test_a_mute_does_not_touch_the_document():
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    before = len(tab.doc.history)
+    sirens_mode.toggle_mute(ctx, tab.doc.channels[0].uid, tab)
+    assert len(tab.doc.history) == before, "a mute is not an edit"
+    assert not tab.doc.dirty
+
+
+# --- playing less than the whole song from the top ------------------------------
+
+
+def _audible(monkeypatch):
+    from warlock.studio import sirens_audio
+
+    played: list[tuple[Any, dict[str, Any]]] = []
+    monkeypatch.setattr(sirens_audio, "available", lambda: True)
+    monkeypatch.setattr(
+        sirens_audio, "play", lambda pcm, **kw: played.append((pcm, kw)) or True
+    )
+    return played
+
+
+def test_playing_from_the_caret_slices_the_buffer_at_that_row(monkeypatch):
+    """The row map's second job: writing bar 40 of a three-minute song and
+    having to hear the first two minutes to check it is the complaint."""
+    played = _audible(monkeypatch)
+    ctx = FakeCtx()
+    tab, _first, second = _two_pattern_song(ctx)
+    wanted = next(mark for mark in tab.marks if mark[2] == second and mark[3] == 2)
+    sirens_mode.set_caret(ctx, pattern=second, row=2)
+
+    assert sirens_mode.play_from_caret(ctx, tab) is True
+
+    pcm, kwargs = played[-1]
+    assert len(pcm) == len(tab.pcm) - wanted[0]
+    assert kwargs["tag"] == tab.uid
+    assert tab.play_offset == wanted[0]
+
+
+def test_the_playhead_is_still_the_songs_row_after_playing_from_the_caret(monkeypatch):
+    played = _audible(monkeypatch)
+    ctx = FakeCtx()
+    tab, _first, second = _two_pattern_song(ctx)
+    sirens_mode.set_caret(ctx, pattern=second, row=2)
+    sirens_mode.play_from_caret(ctx, tab)
+    assert played
+
+    from warlock.studio import sirens_audio
+
+    monkeypatch.setattr(sirens_audio, "tag", lambda: tab.uid)
+    monkeypatch.setattr(sirens_audio, "position", lambda: 0.0)
+    assert sirens_mode.playhead_row(ctx, tab) == 2
+
+
+def test_a_row_the_order_never_reaches_says_so_rather_than_playing_the_top(monkeypatch):
+    played = _audible(monkeypatch)
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    spare = tab.doc.add_pattern().uid
+    _render(ctx, tab)
+    sirens_mode.set_caret(ctx, pattern=spare, row=0)
+
+    assert sirens_mode.play_from_caret(ctx, tab) is False
+    assert played == []
+    assert any("never reaches" in message for message, _kind in ctx.toasts)
+
+
+def test_playing_one_pattern_never_touches_the_songs_buffer(monkeypatch):
+    """``AUDITION_PREFIX``'s rule: an effect -- or a pattern -- landing on
+    ``tab.pcm`` would replace the song until the next edit re-armed the
+    renderer."""
+    played = _audible(monkeypatch)
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    _render(ctx, tab)
+    song = tab.pcm
+    sirens_mode.set_caret(ctx, pattern=tab.doc.patterns[0].uid)
+
+    assert sirens_mode.play_pattern(ctx, tab) is True
+    assert ctx.submitted[-1] == f"{sirens_mode.PATTERN_PREFIX}{tab.uid}"
+    sirens_mode.on_task_done(
+        ctx, _Done(f"{sirens_mode.PATTERN_PREFIX}{tab.uid}", ctx.result)
+    )
+
+    assert tab.pcm is song, "the song is still the song"
+    assert played[-1][1]["tag"].startswith("pattern:"), "and not the song's playhead"
+
+
+def test_loop_playback_asks_the_mixer_to_repeat(monkeypatch):
+    played = _audible(monkeypatch)
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    _render(ctx, tab)
+    state = sirens_mode.ensure(ctx)
+
+    assert sirens_mode.play(ctx, tab) is True
+    assert played[-1][1]["loops"] == 0
+
+    state.loop_playback = True
+    assert sirens_mode.play(ctx, tab) is True
+    assert played[-1][1]["loops"] == -1

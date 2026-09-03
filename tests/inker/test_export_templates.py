@@ -337,6 +337,57 @@ def test_repeating_an_export_asks_no_dialog_and_writes_where_it_wrote(
     assert tab.export_dest == tmp_path / "first.png"
 
 
+def test_repeating_a_png_sequence_asks_no_dialog_either(monkeypatch, tmp_path):
+    """``run_pngs`` read the picker unconditionally while the sheet and the GIF
+    beside it honoured ``export.recorded``, so the one command documented as
+    "asks nothing" asked -- and wrote wherever the second answer pointed."""
+    ctx, state, tab = _open(_clip(2))
+    calls = _saved(monkeypatch, tmp_path / "seq.png")
+
+    inker_mode.export_pngs(ctx, tab)
+    _done(ctx, tab, _finish(ctx, state))
+    assert len(calls) == 1 and tab.export_kind == "pngs"
+
+    assert inker_mode.repeat_export(ctx, tab) is True
+    _done(ctx, tab, _finish(ctx, state))
+
+    assert len(calls) == 1, "the repeat opened no dialog"
+    assert sorted(p.name for p in tmp_path.glob("*.png")) == [
+        "seq_0000.png",
+        "seq_0001.png",
+    ]
+
+
+def _sliced() -> Any:
+    doc = _clip(1)
+    doc.add_slice((0, 0, 2, 2), name="hitbox")
+    return doc
+
+
+def test_a_slice_export_records_what_it_wrote_so_it_can_be_repeated(
+    monkeypatch, tmp_path
+):
+    """Slices recorded neither ``dest`` nor ``export_kind``, so ``REPEATABLE``'s
+    own row for them was unreachable: the command could never repeat the export
+    a user is most likely to run twice."""
+    ctx, state, tab = _open(_sliced())
+    calls = _saved(monkeypatch, tmp_path / "sheet.png")
+
+    inker_mode.export_slices(ctx, tab)
+    _done(ctx, tab, ctx.run())
+
+    assert tab.export_kind == "slices"
+    assert tab.export_dest == tmp_path / "sheet.png"
+    assert (tmp_path / "hitbox.png").exists()
+
+    (tmp_path / "hitbox.png").unlink()
+    assert inker_mode.repeat_export(ctx, tab) is True
+    _done(ctx, tab, ctx.run())
+
+    assert len(calls) == 1, "the repeat opened no dialog"
+    assert (tmp_path / "hitbox.png").exists()
+
+
 def test_repeating_with_nothing_to_repeat_says_so():
     ctx, state, tab = _open()
     assert inker_mode.repeat_export(ctx, tab) is False

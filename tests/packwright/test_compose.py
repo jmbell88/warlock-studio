@@ -36,15 +36,36 @@ def test_each_sprite_lands_exactly_where_its_frame_says():
 
 
 def test_only_the_trimmed_region_is_pasted():
+    """MaxRects, because a *grid* never trims: a tile moved to its own bounding
+    box no longer sits where the arithmetic that slices the tileset says."""
     pixels = np.zeros((10, 10, 4), dtype=np.uint8)
     pixels[4:6, 3:7] = RED
     sprites = [Sprite(key="a", name="a", pixels=pixels)]
-    result = layout(sprites, PackSettings(power_of_two=False))
+    result = layout(sprites, PackSettings(mode="maxrects", power_of_two=False))
     atlas = compose.compose(sprites, result)
     frame = result.frames[0]
     assert (frame.w, frame.h) == (4, 2)
     assert (atlas[frame.y : frame.y + 2, frame.x : frame.x + 4] == np.array(RED, np.uint8)).all()
     assert int(atlas[..., 3].sum()) == 4 * 2 * 255
+
+
+def test_a_grid_cell_keeps_a_tile_where_the_artist_drew_it():
+    """The whole point of the mode. Trimming used to move the content to the
+    cell's top-left, so a 10px tile whose art sat three pixels in came out three
+    pixels up and left of every neighbour -- and a ``.tsx`` slices by
+    arithmetic and cannot know (the 2026-09-02 review, section 7)."""
+    pixels = np.zeros((10, 10, 4), dtype=np.uint8)
+    pixels[4:6, 3:7] = RED
+    sprites = [Sprite(key="a", name="a", pixels=pixels)]
+    result = layout(sprites, PackSettings(mode="grid", trim=True, power_of_two=False))
+    atlas = compose.compose(sprites, result)
+    frame = result.frames[0]
+
+    assert (frame.w, frame.h) == (10, 10), "the cell is the whole tile"
+    assert frame.trim == (0, 0, 10, 10)
+    block = atlas[frame.y : frame.y + frame.h, frame.x : frame.x + frame.w]
+    assert (block[4:6, 3:7] == np.array(RED, np.uint8)).all()
+    assert int(block[..., 3].sum()) == 4 * 2 * 255
 
 
 def test_the_gutter_is_transparent_without_extrude():

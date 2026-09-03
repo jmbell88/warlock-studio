@@ -101,6 +101,17 @@ def draw(ctx: Any) -> None:
     changed, trim = widgets.toggle("Trim transparent edges", settings.trim)
     if changed and editable:
         packwright_mode.set_settings(ctx, tab, trim=trim)
+    if settings.mode == "grid":
+        # Said rather than left to be discovered from the numbers: a grid pack
+        # ignores this, because a tile moved to its own bounding box no longer
+        # sits where the arithmetic slicing the tileset says it does. The
+        # setting is kept, not overwritten, so switching to MaxRects brings the
+        # user's answer back.
+        widgets.muted_wrapped(
+            "A grid pack does not trim: its cells are sliced by arithmetic, so "
+            "every tile has to keep the position it was drawn at. This applies "
+            "on MaxRects."
+        )
 
     changed, pot = widgets.toggle("Power-of-two atlas", settings.power_of_two)
     if changed and editable:

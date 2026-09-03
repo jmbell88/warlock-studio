@@ -239,6 +239,9 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Ctrl+Alt+I | Image size (resamples the picture) |
 | Ctrl+Alt+C | Canvas size (changes the room around it) |
 | Ctrl+Shift+N | New layer |
+| Ctrl+Shift+L | Duplicate the layer |
+| Ctrl+Shift+M | Merge the layer down into the one below |
+| Shift+H / Shift+V | Flip the whole sprite across / down |
 | Alt+S | Solo the active layer, and again to bring the rest back |
 | Ctrl+Shift+Up / Down | Move the layer up / down the stack |
 | `[` / `]` | Brush size (with Shift, hardness) |
@@ -268,7 +271,7 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Ctrl+5 | Mirror the view left to right |
 | Space drag, middle drag | Pan |
 | Shift+wheel | Scroll the canvas sideways (the wheel alone scrolls it up and down) |
-| Ctrl+wheel | Zoom in 5% steps |
+| Ctrl+wheel | Zoom in 5% steps, and by whole scales past 800% |
 | Delete | Clear the selected pixels |
 | Esc | Cancel a floating selection, then deselect |
 
@@ -294,6 +297,11 @@ wheel's 5% notches. Pixel art wants the whole ones: at 135% a source pixel is 1.
 some are drawn one wide and some two, and a dither comes out as bands. Ctrl+wheel is still the fine
 control, and Ctrl+0 and Ctrl+1 still fit and reset. The wheel on its own scrolls rather than zooming,
 which is Aseprite's default.
+
+**The ceiling is 6400%**, the same as Aseprite's: a 16 px sprite at the old 1000% was 160 screen
+pixels, which on a large display is a stamp in the middle of an empty canvas. Past 800% a Ctrl+wheel
+notch is a whole scale rather than 5%, because 5% of 6400% is a twentieth of a pixel and the top
+would otherwise be a thousand notches away.
 
 ### Inker — an animated document
 

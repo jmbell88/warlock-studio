@@ -83,7 +83,56 @@ def draw(ctx: Any) -> None:
         widgets.muted("This song has no patterns. Add one from the Order panel.")
         return
 
+    _headers(ctx, state, tab, pattern)
     _grid(ctx, state, tab, pattern)
+
+
+def _headers(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
+    """One button per channel, over the column it belongs to.
+
+    **The channels had no names on screen at all**, which is the plainest thing
+    missing from this pane: five columns of dots, and the only way to find out
+    which one was the noise channel was to type into it (the 2026-09-02 review,
+    section 8). The button carries the name, its state says whether the mix is
+    playing it, and a click mutes -- with solo on the right-hand button, since
+    the two are used together and a modifier-click is a control nobody finds.
+    """
+    from imgui_bundle import imgui
+
+    channels = list(tab.doc.channels)[: pattern.channels]
+    if not channels:
+        return
+    chan_w = sp(CHANNEL_W)
+    imgui.dummy((sp(GUTTER_W) - sp(4), 1))
+    for index, channel in enumerate(channels):
+        imgui.same_line()
+        muted, soloed, audible = sirens_mode.channel_state(ctx, channel.uid)
+        name = channel.name or f"{channel.kind.capitalize()} {index + 1}"
+        # Two buttons in one column's width: the name (mute) and an S (solo).
+        label = name if audible else f"{icons.SLASH} {name}"
+        if widgets.disabled_button(
+            f"{label}###sirens-mute-{channel.uid}",
+            True,
+            (chan_w - sp(26), 0),
+            tooltip=(
+                f"{name} -- {channel.kind}. Click to "
+                f"{'unmute' if muted else 'mute'} it in the mix."
+                + ("" if audible or muted else " Another channel is soloed.")
+            ),
+        ):
+            sirens_mode.toggle_mute(ctx, channel.uid, tab)
+        imgui.same_line()
+        if widgets.disabled_button(
+            f"{icons.CIRCLE if soloed else 'S'}###sirens-solo-{channel.uid}",
+            True,
+            (sp(20), 0),
+            tooltip=(
+                "Stop soloing this channel."
+                if soloed
+                else "Play this channel alone. Solo wins over every mute."
+            ),
+        ):
+            sirens_mode.toggle_solo(ctx, channel.uid, tab)
 
 
 def _tabs(ctx: Any, state: Any) -> None:
@@ -162,6 +211,33 @@ def _caret_span(column: int, digit: int, part: str) -> tuple[int, int]:
     if sirens_mode.COLUMN_DIGITS[column] > 1 and 0 <= digit < len(part):
         return (digit, 1)
     return (0, len(part))
+
+
+def column_at(dx: float, widths: Any, gap: float) -> int:
+    """Which of a cell's five columns a click ``dx`` into its channel is on.
+
+    ``widths`` is the drawn advance of each column's text, in order, and ``gap``
+    is the space after each -- the same two numbers the draw loop steps ``cx``
+    by, so the answer is the column under the pixel rather than a second
+    opinion about the layout.
+
+    A click in the gap after a column takes that column: the space belongs to
+    the value on its left the way a tracker's does, and a caret that refused to
+    move because the press landed one pixel wide of a glyph is a control that
+    works most of the time. Left of the first column and right of the last both
+    clamp, for the same reason the row does.
+
+    Pure, and here rather than inline in the click branch, because "click on
+    ``Fxx``, type, get a note" was the whole defect: the press moved the row and
+    the channel and left the column where it was (the 2026-09-02 review,
+    section 8).
+    """
+    edge = 0.0
+    for column, width in enumerate(widths):
+        edge += float(width) + float(gap)
+        if dx < edge:
+            return column
+    return max(0, len(tuple(widths)) - 1)
 
 
 def _advance(imgui: Any, text: str) -> float:
@@ -261,7 +337,18 @@ def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
         row = top + int((mouse.y - origin.y) // row_h)
         channel = int((mouse.x - origin.x - gutter) // chan_w)
         if mouse.x >= origin.x + gutter:
-            sirens_mode.set_caret(ctx, row=row, channel=channel)
+            # The column too, measured off the cell that was actually drawn:
+            # a press that moved the row and the channel and left the column
+            # alone meant clicking on ``Fxx``, typing, and getting a note.
+            column = state.column
+            if 0 <= row < pattern.rows and 0 <= channel < pattern.channels:
+                parts = _cell_text(cells, row, channel)
+                column = column_at(
+                    mouse.x - (origin.x + gutter + channel * chan_w),
+                    [_advance(imgui, part) for part in parts],
+                    sp(6),
+                )
+            sirens_mode.set_caret(ctx, row=row, channel=channel, column=column)
 
 
 def _toolbar(ctx: Any, state: Any) -> None:

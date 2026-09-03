@@ -73,6 +73,19 @@ _sound: Any = None
 _started: float = 0.0
 _length: float = 0.0
 
+#: What is on the channel: the caller's own name for the buffer it handed over
+#: (a tab uid for a song, an effect's key for an audition), or "". There is one
+#: channel, so an audition replaces the song -- and a playhead drawn against a
+#: song's row map while a sound effect is sounding is a highlight moving
+#: through rows nothing is playing.
+_tag: str = ""
+
+#: What was passed to ``Channel.play``: 0 for once, -1 for forever. Kept
+#: because :func:`position` has to answer differently for the two -- a looping
+#: buffer's playhead wraps, and clamping it at the end would park the highlight
+#: on the last row for the rest of the session.
+_loops: int = 0
+
 
 def _reset() -> None:
     """Forget the device answer and drop the held sound. Tests only.
@@ -81,9 +94,11 @@ def _reset() -> None:
     pieces of state have to go together: a cached ``True`` with a released
     channel is a module that thinks it can play and cannot.
     """
-    global _available, _channel, _sound, _started, _length
+    global _available, _channel, _sound, _started, _length, _tag, _loops
     _available = None
     _channel = None
+    _tag = ""
+    _loops = 0
     _sound = None
     _started = 0.0
     _length = 0.0
@@ -120,7 +135,7 @@ def available() -> bool:
     return _available
 
 
-def play(pcm: Any, rate: int = RATE) -> bool:
+def play(pcm: Any, rate: int = RATE, *, tag: str = "", loops: int = 0) -> bool:
     """Play an ``int16`` buffer. -> whether it started.
 
     ``pcm`` is ``(n, 2)`` ``int16`` -- what ``wavout.to_int16`` produces from a
@@ -133,7 +148,7 @@ def play(pcm: Any, rate: int = RATE) -> bool:
     wrong pitch. A caller that has one is asking for something this module
     cannot do, and saying so is better than transposing their song.
     """
-    global _sound, _started, _length
+    global _sound, _started, _length, _tag, _loops
     if not available():
         return False
     if int(rate) != RATE:
@@ -153,21 +168,25 @@ def play(pcm: Any, rate: int = RATE) -> bool:
     try:
         _sound = pygame.sndarray.make_sound(buffer)
         stop()
-        _channel.play(_sound)
+        _channel.play(_sound, loops=int(loops))
     except Exception:
         log.exception("sirens: the device refused a buffer")
         _sound = None
         return False
     _started = time.perf_counter()
     _length = buffer.shape[0] / float(RATE)
+    _tag = str(tag)
+    _loops = int(loops)
     return True
 
 
 def stop() -> None:
     """Silence. Safe with no device, and safe when nothing is playing."""
-    global _started, _length
+    global _started, _length, _tag, _loops
     _started = 0.0
     _length = 0.0
+    _tag = ""
+    _loops = 0
     if _channel is not None:
         try:
             _channel.stop()
@@ -190,6 +209,11 @@ def playing() -> bool:
         return time.perf_counter() - _started < _length
 
 
+def tag() -> str:
+    """Whose buffer is on the channel, or "". See :data:`_tag`."""
+    return _tag if playing() else ""
+
+
 def position() -> float:
     """Seconds into the current buffer, or ``0.0`` when nothing is playing.
 
@@ -203,6 +227,8 @@ def position() -> float:
     elapsed = time.perf_counter() - _started - (BUFFER / float(RATE))
     if elapsed <= 0.0:
         return 0.0
+    if _loops != 0 and _length > 0.0:
+        return elapsed % _length
     return min(elapsed, _length)
 
 

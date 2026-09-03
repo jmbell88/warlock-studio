@@ -919,7 +919,24 @@ def read_tsx(data: bytes, image: Any) -> Tileset:
     two because a tileset is one or the other and never both, and a second
     parameter would be a second thing every caller has to decide about.
     """
-    root = xml_root(data, "tileset")
+    return tileset_from_element(xml_root(data, "tileset"), image)
+
+
+def tileset_from_element(root: ET.Element, image: Any) -> Tileset:
+    """One XML ``<tileset>`` element, external or embedded, as a :class:`Tileset`.
+
+    :func:`tileset_from_json`'s twin, and here for the same reason it is: the
+    embedded spelling in :mod:`.tmx` had its own copy of this construction, and
+    the copy had drifted. It dropped the five presentation fields, the foreign
+    Wang model and the image's ``trans`` colour key -- all three of which the
+    *JSON* twin of the same map read -- so one map saved both ways loaded as two
+    different tilesets, and several `docs/COMPAT.md` rows were claims about this
+    function rather than about Tiled (the 2026-09-02 review, section 7).
+
+    ``image`` is the atlas, or a **mapping of local id to decoded pixels** for
+    an image collection; resolving either means touching a filesystem, which
+    this package deliberately cannot.
+    """
     check_tileset_features(root)
     grid = root.find("grid")
     transformations = root.find("transformations")

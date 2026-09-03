@@ -144,7 +144,7 @@ def test_the_same_cut_twice_is_a_duplicate_and_says_so() -> None:
         state.tileset_cell = (4, 4)
         packwright_mode.import_tileset(ctx)
     assert len(tab.doc.sources) == 3
-    assert ctx.toasts[-1][0] == "Those tiles are already in this atlas."
+    assert ctx.toasts[-1][0] == "Those tiles are already in this atlas, unchanged."
 
 
 def test_import_with_nothing_parked_is_a_no_op() -> None:

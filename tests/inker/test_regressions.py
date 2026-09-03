@@ -334,6 +334,33 @@ def test_a_right_to_left_marquee_covers_the_same_pixels_as_a_left_to_right_one()
     assert forward == (2, 2, 11, 11)
 
 
+def test_a_click_inside_a_select_tool_is_a_click_and_not_a_one_pixel_drag():
+    """``marquee_rect`` floors one corner and ceils the other -- correctly, so
+    a drag rounds outward whichever way it was drawn -- which makes a press and
+    release at the same point a 1x1 rectangle rather than an empty one. The
+    "click deselects" branch was therefore unreachable, and every stray click
+    left a one-pixel selection nothing could be painted outside of."""
+    from warlock.studio.panes import inker_canvas
+
+    assert inker_canvas.is_click((6.3, 4.2), (6.9, 4.8)) is True
+    assert inker_canvas.marquee_rect((6.3, 4.2), (6.9, 4.8)) == (6, 4, 7, 5), (
+        "which is why the rectangle alone cannot answer it"
+    )
+    assert inker_canvas.is_click((6.3, 4.2), (7.1, 4.2)) is False
+    assert inker_canvas.is_click((6.3, 4.2), (6.3, 5.0)) is False
+
+
+def test_an_overlay_line_lands_inside_one_device_pixel():
+    """imgui centres a one-pixel line on the coordinate, so a grid line at a
+    whole number covers half of two columns and is antialiased across both --
+    a 16 px grid over pixel art came out as a grey haze."""
+    from warlock.studio.panes import inker_canvas
+
+    assert inker_canvas.crisp((40.0, 12.0)) == (40.5, 12.5)
+    assert inker_canvas.crisp((40.7, 12.2)) == (40.5, 12.5)
+    assert inker_canvas.crisp((-1.0, -0.5)) == (-1.0 + 0.5, -1.0 + 0.5)
+
+
 def test_the_composite_matches_a_from_scratch_flatten_after_an_undo():
     """A belt-and-braces check on the cache: whatever path got us here, the
     cached composite must equal one computed with no cache at all."""

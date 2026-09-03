@@ -38,9 +38,11 @@ class _FakeChannel:
         self.played: list[Any] = []
         self.stopped = 0
         self.busy = False
+        self.loops = 0
 
-    def play(self, sound: Any) -> None:
+    def play(self, sound: Any, loops: int = 0) -> None:
         self.played.append(sound)
+        self.loops = loops
         self.busy = True
 
     def stop(self) -> None:
@@ -266,3 +268,38 @@ def test_this_is_the_only_module_in_the_repo_that_touches_the_mixer():
             if reached:
                 offenders.append(f"{path.relative_to(root)}:{node.lineno}")
     assert offenders == []
+
+
+# --- looping ------------------------------------------------------------------
+
+
+def test_a_looping_buffer_is_asked_for_by_the_caller(monkeypatch):
+    mixer = _install(monkeypatch)
+    sirens_audio.play(_pcm(), loops=-1)
+    assert mixer.channel.loops == -1
+    sirens_audio.play(_pcm())
+    assert mixer.channel.loops == 0
+
+
+def test_a_looping_playhead_wraps_rather_than_parking_on_the_last_row(monkeypatch):
+    """Clamped, the highlight sits on the final row for the rest of the
+    session while the song goes round again underneath it."""
+    _install(monkeypatch)
+    sirens_audio.play(_pcm(seconds=0.25), loops=-1)
+    sirens_audio._started -= 0.6
+    latency = sirens_audio.BUFFER / sirens_audio.RATE
+    assert sirens_audio.position() == pytest.approx((0.6 - latency) % 0.25, abs=1e-3)
+    assert sirens_audio.position() < 0.25
+
+
+def test_the_tag_says_whose_buffer_is_on_the_channel(monkeypatch):
+    """One channel: an audition replaces the song on it, and a playhead drawn
+    against the song's row map while an effect sounds walks rows nothing is
+    playing."""
+    _install(monkeypatch)
+    sirens_audio.play(_pcm(), tag="sg1")
+    assert sirens_audio.tag() == "sg1"
+    sirens_audio.play(_pcm(), tag="pattern:4")
+    assert sirens_audio.tag() == "pattern:4"
+    sirens_audio.stop()
+    assert sirens_audio.tag() == ""

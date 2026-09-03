@@ -220,3 +220,41 @@ def test_the_effects_pane_draws_an_effect_whose_pattern_is_gone(frames):
     tab.doc.remove_pattern(one.pattern)
     sirens_mode.ensure(ctx).oneshot = one.uid
     frames(lambda: sirens_effects.draw(ctx))
+
+
+# --- a click picks the column ---------------------------------------------------
+#
+# "Click on ``Fxx``, type, get a note": the press moved the row and the channel
+# and left the column where it was (the 2026-09-02 review, section 8).
+
+
+def test_a_click_inside_a_column_picks_that_column():
+    from warlock.studio.panes.sirens_patterns import column_at
+
+    widths = [30.0, 20.0, 20.0, 10.0, 20.0]
+    gap = 6.0
+    assert column_at(0.0, widths, gap) == 0
+    assert column_at(29.0, widths, gap) == 0
+    assert column_at(40.0, widths, gap) == 1
+    assert column_at(70.0, widths, gap) == 2
+    assert column_at(96.0, widths, gap) == 3
+    assert column_at(110.0, widths, gap) == 4
+
+
+def test_the_gap_after_a_column_belongs_to_it():
+    """A caret that refused to move because the press landed one pixel wide of
+    a glyph is a control that works most of the time."""
+    from warlock.studio.panes.sirens_patterns import column_at
+
+    widths = [30.0, 20.0, 20.0, 10.0, 20.0]
+    assert column_at(33.0, widths, 6.0) == 0
+    assert column_at(35.9, widths, 6.0) == 0
+    assert column_at(36.0, widths, 6.0) == 1
+
+
+def test_a_click_past_the_last_column_clamps_rather_than_refusing():
+    from warlock.studio.panes.sirens_patterns import column_at
+
+    widths = [30.0, 20.0, 20.0, 10.0, 20.0]
+    assert column_at(10_000.0, widths, 6.0) == 4
+    assert column_at(-5.0, widths, 6.0) == 0

@@ -31,7 +31,9 @@ def test_play_refuses_a_stale_buffer(monkeypatch):
 
     played: list = []
     monkeypatch.setattr(sirens_audio, "available", lambda: True)
-    monkeypatch.setattr(sirens_audio, "play", lambda pcm: played.append(pcm) or True)
+    monkeypatch.setattr(
+        sirens_audio, "play", lambda pcm, **_kw: played.append(pcm) or True
+    )
     ctx = FakeCtx()
     tab = _tab(ctx)
     tab.pcm = np.zeros((10, 2), dtype=np.float32)

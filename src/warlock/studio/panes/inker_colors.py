@@ -301,7 +301,7 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
     changed, value = controls.color_edit4("Slot", _vec(palette[slot]), FLAGS)
     controls.fold_undo(doc.history)
     if changed and doc.recolour_slot(slot, _to_rgba(value)):
-        state.palette_usage = None
+        state.palette_moved()
     if controls.button("+ from colour") and doc.add_slot(state.fg):
         state.palette_slot = len(doc.palette) - 1
         state.palette_usage = None
@@ -312,14 +312,16 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
         reason="An indexed document keeps at least one colour.",
         tooltip="Pixels painted in it merge into the nearest remaining colour.",
     ) and doc.remove_slot(slot):
-        state.palette_usage = None
+        state.palette_moved()
     if widgets.disabled_button("<", slot > 0, reason="Already first."):
         doc.move_slot(slot, slot - 1)
         state.palette_slot = slot - 1
+        state.palette_moved()
     imgui.same_line()
     if widgets.disabled_button(">", slot < len(palette) - 1, reason="Already last."):
         doc.move_slot(slot, slot + 1)
         state.palette_slot = slot + 1
+        state.palette_moved()
     imgui.same_line()
     widgets.muted(f"{slot + 1} of {len(palette)}")
 
@@ -404,7 +406,7 @@ def _sort_and_ramp(ctx: Any, state: Any, tab: Any, counts: list[int] | None) -> 
             counts=counts,
             descending=state.palette_sort_desc,
         ):
-            state.palette_usage = None
+            state.palette_moved()
     imgui.same_line()
     changed, value = controls.checkbox("Down##palsortdir", state.palette_sort_desc)
     if changed:
@@ -423,8 +425,12 @@ def _sort_and_ramp(ctx: Any, state: Any, tab: Any, counts: list[int] | None) -> 
         len(selection) >= 2,
         reason="Ctrl-click or Shift-click two slots to ramp between them.",
         tooltip="Interpolated colours between the two, inserted between them.",
-    ) and not doc.insert_ramp(min(selection), max(selection), state.palette_ramp):
-        ctx.toast("That ramp is already in the palette.")
+    ):
+        if doc.insert_ramp(min(selection), max(selection), state.palette_ramp):
+            # Inserted *between* two slots, so every index after them moved.
+            state.palette_moved()
+        else:
+            ctx.toast("That ramp is already in the palette.")
 
 
 def _usage(state: Any, tab: Any, slots: int) -> list[int] | None:

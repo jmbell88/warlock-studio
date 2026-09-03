@@ -27,6 +27,7 @@ this that is both.
 
 from __future__ import annotations
 
+import bisect
 import itertools
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +36,12 @@ from typing import Any
 import numpy as np
 
 from . import docmodes
+
+#: Bigger than any order index, pattern uid or row, so a bisect key of
+#: ``(offset, _LAST, _LAST, _LAST)`` lands past every mark that shares the
+#: offset -- which is what makes "the row sounding *now*" the last one that
+#: started, rather than the first.
+_LAST = float("inf")
 
 WSNG_SUFFIX = ".wsng"
 
@@ -95,6 +102,15 @@ class SongTab:
     # render has landed.
     pcm: np.ndarray | None = None
     loop: tuple[int, int] | None = None
+    #: Where in the rendered buffer the sound now playing started, in samples.
+    #: Non-zero after "play from here", so the playhead bisects against the
+    #: song rather than against the slice that was handed to the mixer.
+    play_offset: int = 0
+
+    #: One ``(sample offset, order index, pattern uid, row)`` per row as the
+    #: renderer actually played it, ascending in the offset. What the playhead
+    #: bisects; see :func:`~.sirens.synth.render_marked`.
+    marks: tuple[tuple[int, int, int, int], ...] = ()
     # Bumped once, where a render is adopted. Playback keys on it.
     render_generation: int = 0
     # A render is in flight. Separate from ``saving`` because a re-render does
@@ -122,12 +138,39 @@ class SongTab:
     def label(self) -> str:
         return f"{self.title}###{self.uid}"
 
+    def mark_at(self, seconds: float, rate: int) -> tuple[int, int, int] | None:
+        """Which ``(order index, pattern uid, row)`` is sounding at ``seconds``.
+
+        A bisect of :attr:`marks`, so the answer is what the renderer did
+        rather than an estimate: every order entry, every pattern length, every
+        ``Fxx`` and every jump are already in the offsets. ``None`` before the
+        first row and after the last -- the tail of a song is its instruments
+        decaying, and highlighting the final row through it says the song is
+        still on it.
+        """
+        marks = self.marks
+        if not marks:
+            return None
+        offset = int(float(seconds) * int(rate)) + int(self.play_offset)
+        if offset < marks[0][0]:
+            return None
+        index = bisect.bisect_right(marks, (offset, _LAST, _LAST, _LAST)) - 1
+        if index < 0:
+            return None
+        _at, order_index, pattern, row = marks[index]
+        return order_index, pattern, row
+
     def mark_saved(self, head: int | None = None) -> None:
         self.doc.mark_saved(head)
         self.saved_head = self.doc.saved_head
         self.saving = False
 
-    def adopt_render(self, pcm: np.ndarray, loop: tuple[int, int] | None) -> None:
+    def adopt_render(
+        self,
+        pcm: np.ndarray,
+        loop: tuple[int, int] | None,
+        marks: tuple[tuple[int, int, int, int], ...] = (),
+    ) -> None:
         """Take a finished render. The one place ``render_generation`` moves.
 
         **``render_dirty`` is deliberately not touched here.** An edit made
@@ -140,6 +183,7 @@ class SongTab:
         """
         self.pcm = pcm
         self.loop = loop
+        self.marks = tuple(marks)
         self.render_generation += 1
         self.rendering = False
         self.render_error = ""
@@ -189,6 +233,21 @@ class SirensState:
     #: editing bar 40 while bar 1 plays. Default on, because the first thing
     #: anybody does with Space is watch it.
     follow: bool = True
+
+    #: Channel uids the mix is playing without, and the one channel it is
+    #: playing *alone* (``-1`` for none). **View state, not the song**: a mute
+    #: is how a person listens to what they are writing, and a ``.wsng`` that
+    #: remembered one would hand somebody else a song with a missing part. It
+    #: reaches the mix through the render (``synth.render_only``), so toggling
+    #: one re-renders exactly as an edit does.
+    muted: set[int] = field(default_factory=set)
+    solo: int = -1
+
+    #: Whether Play repeats the rendered song. View state like the mutes: the
+    #: *document's* ``loop_order`` is what the exported WAV's ``smpl`` chunk
+    #: says and is a property of the song, while this is how the person writing
+    #: it wants to hear it in the next thirty seconds.
+    loop_playback: bool = False
 
     #: The block selection's anchor, as ``(row, channel)``, or ``None``. The
     #: *other* corner is the caret -- which is what makes shift-arrow a

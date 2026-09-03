@@ -24,6 +24,8 @@ import itertools
 from dataclasses import dataclass, replace
 from typing import Any
 
+import numpy as np
+
 from ..undo import Edit, UndoStack
 from .layout import MAX_SPRITES, Layout, PackSettings
 from .layout import layout as build_layout
@@ -116,6 +118,33 @@ class SourceRenameEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         doc._apply_name(self.uid, self.after)
+
+
+@dataclass
+class SourceReplaceEdit(Edit):
+    """One source's pixels swapped for a fresh reading of the same key.
+
+    The uid, the index and the name override all stand: this is the *same*
+    sprite with a newer picture, which is what re-adding a file that has
+    changed on disk means (``wpack``'s module docstring: "what the document
+    records is what was packed; re-adding the source is how you pick up a
+    change"). Addressed by uid like every other edit here, never by index.
+    """
+
+    uid: int
+    before: Any
+    after: Any
+
+    def __post_init__(self) -> None:
+        # Both pictures are held for as long as the step is: an undone replace
+        # is the only reference to the newer one and a redone one to the older.
+        self.cost = int(self.before.pixels.nbytes) + int(self.after.pixels.nbytes)
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_sprite(self.uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_sprite(self.uid, self.after)
 
 
 @dataclass
@@ -243,6 +272,36 @@ class PackDoc:
         self.history.push(SourceRemoveEdit(source=source, index=index))
         self._detach(source)
 
+    def replace_source(self, uid: int, sprite: Sprite) -> None:
+        """Give one source a fresh reading of its own key. One undo step.
+
+        What "re-add a file you have edited" does, and it is a replacement
+        rather than a remove-and-add for two reasons: the uid is what the
+        selection, the preview and every undo step already refer to, and a pair
+        of steps would put a document with the sprite *missing* between them,
+        which is a state no gesture asked for.
+
+        The key has to match. A sprite arriving under another key is a
+        different sprite, and quietly rewriting this one's identity would make
+        the pack order -- which is the key order, and the whole determinism
+        contract -- depend on the order somebody dropped files in.
+        """
+        source = self.source(uid)
+        if source is None:
+            raise ValueError(MISSING_SOURCE)
+        if sprite.key != source.key:
+            raise ValueError(
+                f"{sprite.key!r} is not {source.key!r} -- a replacement is a new "
+                "reading of one source, not a different one"
+            )
+        before = source.sprite
+        if before.pixels.shape == sprite.pixels.shape and np.array_equal(
+            before.pixels, sprite.pixels
+        ):
+            return
+        self.history.push(SourceReplaceEdit(uid=int(uid), before=before, after=sprite))
+        self._apply_sprite(int(uid), sprite)
+
     def rename_source(self, uid: int, name: str) -> None:
         """Rename one source, or clear the override with an empty string.
 
@@ -326,6 +385,12 @@ class PackDoc:
                 del self.sources[index]
                 return
         raise ValueError(MISSING_SOURCE)
+
+    def _apply_sprite(self, uid: int, sprite: Sprite) -> None:
+        source = self.source(uid)
+        if source is None:
+            raise ValueError(MISSING_SOURCE)
+        source.sprite = sprite
 
     def _apply_name(self, uid: int, name: str) -> None:
         source = self.source(uid)

@@ -73,7 +73,7 @@ def test_a_trimmed_sprite_reports_where_it_came_from():
     """``spriteSourceSize`` plus ``sourceSize`` is what puts a sprite back where
     the artist drew it rather than flush against its own bounding box."""
     sprites = [_sprite("a", 20, 16, mark=(3, 5, 11, 9))]
-    result = layout(sprites, PackSettings(power_of_two=False))
+    result = layout(sprites, PackSettings(mode="maxrects", power_of_two=False))
     entry = texturepacker.tp_json(result, image_name="a.png")["frames"][0]
     assert entry["trimmed"] is True
     assert entry["spriteSourceSize"] == {"x": 3, "y": 5, "w": 8, "h": 4}

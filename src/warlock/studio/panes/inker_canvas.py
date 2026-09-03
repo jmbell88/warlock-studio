@@ -1444,7 +1444,11 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     )
     state.drag_anchor = point
     state.last_point = point
-    state.combine = _combine_op(state.shortcut_overrides)
+    # A held modifier wins for this gesture; with none held the context bar's
+    # own mode stands. Assigning the modifier's answer unconditionally is what
+    # made the bar's *Add* a control that showed one thing and did another.
+    held = _combine_op(state.shortcut_overrides)
+    state.combine = held if held != "replace" else state.sticky_combine
     ipoint = (int(math.floor(point[0])), int(math.floor(point[1])))
 
     # Before every paint branch, and it returns rather than falling through:
@@ -2423,6 +2427,27 @@ def marquee_rect(anchor, point) -> tuple[int, int, int, int]:
     )
 
 
+def is_click(anchor, point) -> bool:
+    """Whether a gesture never left the pixel it started in.
+
+    The question ``marquee_rect`` cannot answer. Its corners are floored and
+    ceiled -- correctly, so that a drag rounds outward whichever way it was
+    drawn -- which means a press and release at the same point come back as a
+    1x1 rectangle rather than as an empty one. So the "click deselects" branch
+    was unreachable, and every stray click inside a select tool left a
+    one-pixel selection that nothing could be painted outside of (the
+    2026-09-02 review, section 5).
+
+    Asked of the pixels rather than of a distance in either space: the pixel is
+    what the user aimed at, and a threshold in screen pixels would deselect at
+    one zoom and select at another.
+    """
+    return (int(math.floor(anchor[0])), int(math.floor(anchor[1]))) == (
+        int(math.floor(point[0])),
+        int(math.floor(point[1])),
+    )
+
+
 def _release(ctx: Any, state: Any, tab: Any, point) -> None:
     from ..inker import SelectionMask
 
@@ -2462,7 +2487,7 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
         )
     elif kind == "marquee":
         rect = marquee_rect(anchor, point)
-        if rect[2] > rect[0] and rect[3] > rect[1]:
+        if not is_click(anchor, point) and rect[2] > rect[0] and rect[3] > rect[1]:
             build = (
                 SelectionMask.from_ellipse
                 if state.tool == "select_ellipse"
@@ -3023,11 +3048,11 @@ def _grid(
     for x in range(lo_x, hi_x + 1, step):
         a = inker_state.to_screen(view, origin, x, 0)
         b = inker_state.to_screen(view, origin, x, height)
-        draw_list.add_line(a, b, colour)
+        draw_list.add_line(crisp(a), crisp(b), colour)
     for y in range(lo_y, hi_y + 1, step):
         a = inker_state.to_screen(view, origin, 0, y)
         b = inker_state.to_screen(view, origin, width, y)
-        draw_list.add_line(a, b, colour)
+        draw_list.add_line(crisp(a), crisp(b), colour)
 
 
 # --- scrollbars ---------------------------------------------------------------
@@ -3281,6 +3306,22 @@ def _ruler_band(
                 draw_list.add_text((cross + 2.0, position + 1.0), ink, str(value))
 
 
+def crisp(point) -> tuple[float, float]:
+    """A screen point snapped to the centre of a device pixel.
+
+    imgui draws a one-pixel line *centred* on the coordinate, so a line at
+    x = 40.0 covers half of column 39 and half of column 40 and the renderer
+    antialiases it across both: a grid over pixel art came out as a grey haze
+    two pixels wide rather than as a line. ``floor + 0.5`` puts it inside one
+    column, which is what makes a 16 px grid at 800% look like a grid (the
+    2026-09-02 review, section 5).
+
+    Only for axis-aligned lines. A diagonal crosses columns whatever is done to
+    its endpoints, and snapping one would move it off the pixels it is about.
+    """
+    return (math.floor(point[0]) + 0.5, math.floor(point[1]) + 0.5)
+
+
 def symmetry_axes(state: Any) -> tuple[str, ...]:
     """Which symmetries are on, resolved. One reader, for one reason.
 
@@ -3322,6 +3363,12 @@ def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:
     # Both endpoints through ``to_screen``, for ``_grid``'s reason: the axis a
     # mirror line lands on swaps with the page, so borrowing one coordinate
     # from a corner would draw it across the canvas the wrong way.
+    # **Not through ``crisp``**, unlike the grid and the cell outline. A mirror
+    # line is a *reflection axis*, and the axis genuinely lies on the boundary
+    # between two columns -- a guide covering half of each is drawing where the
+    # engine reflects, which is the property ``test_the_symmetry_guide_is_drawn
+    # _where_the_engine_reflects`` pins after a bug that had them half a pixel
+    # apart. Snapping would trade a soft line for a line in the wrong place.
     if "x" in axes:
         a = inker_state.to_screen(view, origin, ax, 0)
         b = inker_state.to_screen(view, origin, ax, height)
@@ -3539,11 +3586,38 @@ def _pixel_cell(state: Any, tab: Any, draw_list: Any, origin) -> None:
     point, _picked = _cursor_pixel(state, tab, origin, True)
     if point is None:
         return
+    _cell_outline(view, origin, draw_list, point, _u32(theme.TEXT, 0.85))
+    # **And its mirrored twins.** With symmetry on, a dab lands in more than one
+    # place and only one of them had a cursor -- so the pixel the user was
+    # aiming at was drawn and the pixels the same click would also paint were
+    # not (the 2026-09-02 review, section 5). Dimmer, because they follow the
+    # pointer rather than being it. Through the engine's own ``mirrors_of``, so
+    # the outline cannot land somewhere the stroke will not.
+    from ..inker import brush
+
+    size = tab.doc.size
+    twins = brush.mirrors_of(
+        (float(point[0]), float(point[1])),
+        (int(size[0]), int(size[1])),
+        state.symmetry,
+        state.symmetry_axis,
+        int(state.radial_count),
+    )
+    faint = _u32(theme.TEXT, 0.35)
+    for twin in twins[1:]:
+        _cell_outline(
+            view, origin, draw_list, (int(math.floor(twin[0])), int(math.floor(twin[1]))), faint
+        )
+
+
+def _cell_outline(view: Any, origin: Any, draw_list: Any, point, colour: int) -> None:
+    """One image pixel, outlined. Two corners describe it -- see
+    :func:`_pixel_cell` on why a quarter turn needs no more than that."""
     a = inker_state.to_screen(view, origin, float(point[0]), float(point[1]))
     b = inker_state.to_screen(view, origin, float(point[0] + 1), float(point[1] + 1))
-    lo = (min(a[0], b[0]), min(a[1], b[1]))
-    hi = (max(a[0], b[0]), max(a[1], b[1]))
-    draw_list.add_rect(lo, hi, _u32(theme.TEXT, 0.85))
+    lo = crisp((min(a[0], b[0]), min(a[1], b[1])))
+    hi = crisp((max(a[0], b[0]), max(a[1], b[1])))
+    draw_list.add_rect(lo, hi, colour)
 
 
 def _tile_cursor(state: Any, tab: Any, draw_list: Any, origin) -> None:

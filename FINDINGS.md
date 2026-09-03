@@ -38,11 +38,13 @@ task-thread halves with a frame-thread adopt, the rule in `docs/INVARIANTS.md` (
 three-threads paragraph) and a worker-thread guard per door in
 `tests/test_frame_thread_doors.py`.
 
-**T3. Task-thread writes into UI state.** `journal.write` sets tab marks from the task
-closure (`journal.py:427-446`); `jobs_cache.measure_one` mutates `_dir_sizes`
-(`jobs_cache.py:244-248`); ~~Clay `reserve_uid` races `new_uid` on an unlocked
-`itertools.count`~~ (locked 2026-09-03, with the recovery decode joining the task
-path). Hand results back through `Done.result` and apply on the frame thread.
+**T3. ~~Task-thread writes into UI state.~~** Built 2026-09-03: the journal write hands
+its mark back through `Done.result` (`journal.on_task_done`, routed from `main` where
+`drop` also runs, so the two can no longer interleave) and `jobs_cache.measure`/
+`measure_one` are readings that `adopt_storage` publishes on the frame thread. Clay
+`reserve_uid` was locked the same day. The rule is in `docs/INVARIANTS.md` and the guard
+is `tests/test_task_thread_writes.py`, which runs each task half on a real worker thread
+and asserts the UI state it must not touch did not move.
 
 **T4. Greyed controls with no or wrong reason.** Progress-card Cancel
 (`panes/overlay.py:367`), Plotter layer menu passing `BUSY` for an `active`/`many` gate
@@ -51,12 +53,19 @@ yet" (`generation_workspace.py:198-223`), Inker tileset doors saying "Open a dra
 first" when the tab is saving (`inker_mode.py:4319, 4359`). The app's own rule is that a
 disabled control explains itself.
 
-**T5. Documented behaviour the code does not have.** Sirens "instrument kind vs
-channel kind is a refusal" (nothing checks); Inker Repeat Last Export "no dialog" (PNG
-sequences reopen it, slices can never repeat); `_refresh`'s "lazy import" of
-`inker_mode` (unconditional on frame 1). Either fix the code or fix the sentence;
-never leave both. (The X-ray pick, the stale-buffer `play`, the imgui-nav sentences,
-`TILED_VERSION` and "six workspaces" were settled on 2026-09-03.)
+**T5. ~~Documented behaviour the code does not have.~~** Closed 2026-09-03, each the way
+it deserved. Sirens' "instrument kind vs channel kind is a refusal": the *sentence* went --
+the channel decides the voice and the instrument brings its envelopes, which is the tracker
+convention and a working idiom, and the one silent combination (a non-`sample` instrument on
+the sample channel) is now a line in the manual's "a typed note is silent" list. Inker's
+Repeat Last Export "no dialog": the *code* went -- `run_pngs` honours `export.recorded` like
+the two runners beside it, and `export_slices` both records `dest`/`export_kind` and takes
+`repeat`, so `REPEATABLE`'s own "slices" row is reachable at last
+(`tests/inker/test_export_templates.py`). `_refresh`'s "lazy import": the sentence, again --
+the import is eager and would be even without that line, because `journal.snapshot` reaches
+`ensure_providers`, which imports all six mode modules to register their kinds.
+(The X-ray pick, the stale-buffer `play`, the imgui-nav sentences, `TILED_VERSION` and
+"six workspaces" were settled on 2026-09-03 too.)
 
 **T6. Per-frame recomputation nobody looks at.** Menu bar rebuilds every command spec
 and evaluates every `enabled()` each frame including a 200-job scan (`menus.py:180`,
@@ -106,8 +115,8 @@ readers can disagree and still pass.
 - **[Medium] Prompt dialog cannot be tabbed.** `dialogs.py:494` calls
   `set_keyboard_focus_here` every frame the field is not active; use the `Confirm._focused`
   one-shot.
-- **[Medium]** `journal.write` sets three tab attributes from the task thread with no
-  lock on the read side (`journal.py:427-446`). See T3.
+- ~~**[Medium]** `journal.write` sets three tab attributes from the task thread with no
+  lock on the read side (`journal.py:427-446`). See T3.~~ Built 2026-09-03.
 - **[Low]** `_MODIFIER_MAP`/`_KEY_MAP` lack GUI/super and `K_APPLICATION`
   (`imgui_backend.py:288-359`).
 
@@ -165,7 +174,8 @@ readers can disagree and still pass.
 - **[Medium]** Results-tray "Open" bypasses `asset_open.open_asset`
   (`generation_workspace.py:200`): `source_job` stays stale on a reference and a mesh
   result shows `input.png` on the Reference stage.
-- **[Medium]** `jobs_cache.measure_one` mutates `_dir_sizes` from a task (T3).
+- ~~**[Medium]** `jobs_cache.measure_one` mutates `_dir_sizes` from a task (T3).~~ Built
+  2026-09-03.
 - **[Low]** `create_stages._reached_export` imports imgui-bearing `widgets` every frame
   from a module whose docstring says it imports nothing from imgui
   (`create_stages.py:120`). Move `artifacts_for`'s table to a headless module.
@@ -249,16 +259,21 @@ refused `"submit"` is reported. Nothing pins where the reference PNG decode happ
   no selection lands at (0,0) and the clipboard records no source box.
 
 ### App-layer correctness
-- **[High]** The context-bar combine mode is overwritten by every press
-  (`inker_canvas.py:1447` vs `inker_context.py:215`): set *Add*, drag → replace.
-- **[High]** A click with a select tool leaves a 1-pixel selection instead of
-  deselecting (`inker_canvas.py:2407-2481`, floor/ceil on a zero-size rect).
+- ~~**[High]** The context-bar combine mode is overwritten by every press.~~ Built
+  2026-09-03: `sticky_combine` is what the bar shows and what an unmodified drag does;
+  `combine` is what *this* gesture does, which a held modifier still wins for.
+- ~~**[High]** A click with a select tool leaves a 1-pixel selection instead of
+  deselecting.~~ Built 2026-09-03: `is_click` asks the *pixels* whether the pointer ever
+  left the one it pressed in, which is the question `marquee_rect`'s floor/ceil corners
+  cannot answer.
 - **[High]** Regenerate selection on an empty animated cel captures the placeholder uid
   and is refused on landing with "The layer it was for is gone." (`inker_bridge.py:646`).
-- **[High]** `fg_slot` goes stale after palette move/sort/remove/ramp insert
-  (`inker_colors.py:313-425`); the next stroke lands in another colour's slot.
-- **[High]** Repeat Last Export re-opens the dialog for PNG sequences and can never
-  repeat slices (`inker_mode.py:1666-1672, 2284, 1372`).
+- ~~**[High]** `fg_slot` goes stale after palette move/sort/remove/ramp insert.~~ Built
+  2026-09-03: `InkerState.palette_moved()` at the six doors that reorder the table drops
+  the brush's slot claim (and the usage counts keyed on it), so the next stroke paints
+  the nearest slot exactly as a colour from the wheel does.
+- ~~**[High]** Repeat Last Export re-opens the dialog for PNG sequences and can never
+  repeat slices (`inker_mode.py:1666-1672, 2284, 1372`).~~ Built 2026-09-03 (T5).
 - **[High]** `_reload_linked` decodes on the frame thread (`inker_mode.py:2817`).
 - **[Medium]** Space mid-stroke kills its own pan: `clear_drag` resets `space_held`
   (`inker_state.py:2636`). Keyboard state is not gesture state.
@@ -296,15 +311,29 @@ refused `"submit"` is reported. Nothing pins where the reference PNG decode happ
   (`textstamp.py:130`) with no `pixelguard` check.
 
 ### UX parity
-- **[High]** Max zoom is 1000 % (`INKER_MAX_ZOOM = 10.0`); a 16 px sprite is 160 px wide
-  on 1440p. Aseprite: 6400 %; Plotter already has 32×.
+- ~~**[High]** Max zoom is 1000 %.~~ Built 2026-09-03: 64× (Aseprite's 6400%), with the
+  ladder extended and the wheel switching from 5% notches to one rung per notch above 8×
+  — 1,260 notches to the ceiling is not a control.
 - **[Medium]** Brush cursor is a floating ring at raw mouse coordinates, not the
-  footprint, with no mirrored twin (`inker_canvas.py:3602`).
-- **[Medium]** Grid, symmetry, layer-edge and pixel-cell lines at fractional screen
-  coordinates antialias across two pixels (`:3026, 3030, 3320-3344`).
-- **[Medium]** No chord for flip H/V, merge down, duplicate/delete layer, delete frame,
-  or Ctrl+Shift+Z redo. `SHIFT_TOOL_KEYS`/`ALT_TOOL_CHORDS` are a hand copy checked
-  against `TOOLS`, not `BINDINGS`, so a rebinding leaves the sheet wrong.
+  footprint (`inker_canvas.py:3602`). ~~with no mirrored twin~~ — the twins were built
+  2026-09-03 (`_pixel_cell` outlines every mirror through `brush.mirrors_of`, so the
+  pixels a click will also paint are drawn). The *footprint* half stands: the ring is
+  still a circle at the raw cursor for a brush wider than one pixel, and `_pixel_cell`
+  answers "which pixel" only at 4× and above.
+- ~~**[Medium]** Grid, symmetry, layer-edge and pixel-cell lines at fractional screen
+  coordinates antialias across two pixels.~~ Built 2026-09-03: `crisp` snaps an
+  axis-aligned line into one device pixel. **The symmetry guide is deliberately not
+  snapped** — a mirror axis genuinely lies on the boundary between two columns, and
+  `test_the_symmetry_guide_is_drawn_where_the_engine_reflects` pins it there after a bug
+  that had the guide and the reflection half a pixel apart.
+- ~~**[Medium]** No chord for flip H/V, merge down, duplicate layer, or Ctrl+Shift+Z
+  redo; `SHIFT_TOOL_KEYS`/`ALT_TOOL_CHORDS` a hand copy.~~ Built 2026-09-03: Shift+H /
+  Shift+V (Aseprite's own), Ctrl+Shift+M for merge down (**not** Aseprite's Ctrl+E, which
+  is Save as reference here and has no Aseprite counterpart to defer to), Ctrl+Shift+L for
+  duplicate layer, Ctrl+Shift+Z as a second binding for redo, and the chord tables are
+  read out of `inker_ops.BINDINGS`. **Delete layer and delete frame keep no chord**, which
+  is `delete_frame`'s own recorded argument: every other verb there is undone by pressing
+  it again, and a one-key drop of the thing under the cursor is worth a menu.
 - **[Medium]** Picker Hue/Saturation sliders are dead on greys and drift on dark colours
   because HSV is re-derived from 8-bit RGB per frame (`inker_picker.py:186-203`).
 - **[Low]** Onion skin on a two-frame clip draws the other frame twice; `,`/`.`/Enter
@@ -385,20 +414,30 @@ No Ctrl chord-during-drag beyond Ctrl+J and Ctrl+Z; nothing drives
 ## 7. Plotter and Packwright
 
 ### Correctness
-- **[High] Embedded XML tilesets drop presentation fields, Wang sets and `trans`.**
-  `tmx.py:615-669` builds `Tileset` without `presentation_of`, `wangsets` or
-  `colour_key`; the JSON twin reads all three. `presentation-112.tmx` reads
-  `object_alignment='unspecified'` while the `.tmj` reads `bottomleft`. This falsifies
-  several COMPAT rows. Factor `tileset_from_element` out of `read_tsx`.
-- **[High] A failed repack leaves the previous atlas on screen and exportable**
-  (`packwright_mode.py:568`, `packwright_preview.py:39`, `packwright_io.py:222`).
-- **[High] Grid packs relocate trimmed tiles to the cell's top-left**, so the `.tsx` is
-  misaligned (`packwright/layout.py:319-357`, `compose.py:53`); `trim` defaults True.
-- **[High] Dropping several files onto Packwright keeps only the first**: each drop
-  submits under the same key and the refusal is ignored (`main.py:3088`,
-  `packwright_mode.py:253`).
-- **[High]** Re-adding a changed source PNG is skipped as a duplicate
-  (`packwright_mode.py:329`), contradicting `wpack.py:16`.
+- ~~**[High] Embedded XML tilesets drop presentation fields, Wang sets and `trans`.**~~
+  Built 2026-09-03: `tsx.tileset_from_element` is the one definition both spellings go
+  through, as `tileset_from_json` already was for the JSON pair. The comparator was
+  widened *first* (below), so the fix is proved rather than asserted: reverting it fails
+  `presentation-112` and `wang-112` in `test_fixture_corpus.py`.
+- ~~**[High] A failed repack leaves the previous atlas on screen and exportable.**~~
+  Built 2026-09-03: `PackTab.pack_stale_why` says why the atlas on screen is not the one
+  the document describes; the preview marks it, both exports refuse it, and the bridge's
+  two buttons grey with that sentence as the reason. The last good picture is still
+  drawn -- it beats a blank pane -- it just no longer passes for current.
+- ~~**[High] Grid packs relocate trimmed tiles to the cell's top-left.**~~ Built
+  2026-09-03: a grid pack never trims, whatever the setting says, because the two things
+  the setting could mean there -- a smaller atlas and aligned tiles -- cannot both be had
+  and a mode whose purpose is arithmetic alignment answers to the second. MaxRects still
+  trims and its sidecar still records the box. The settings pane says so where the toggle
+  is.
+- ~~**[High] Dropping several files onto Packwright keeps only the first.**~~ Built
+  2026-09-03: the add key carries the batch (`inker-open`'s shape), so every distinct
+  drop runs and a repeat of the same one still dedupes.
+- ~~**[High]** Re-adding a changed source PNG is skipped as a duplicate
+  (`packwright_mode.py:329`), contradicting `wpack.py:16`.~~ Built 2026-09-03:
+  `PackDoc.replace_source` swaps one source's pixels in a single undo step, keeping its
+  uid and its rename, and the toast names both halves of a mixed batch. Identical pixels
+  are still a skip.
 - **[Medium]** `tileset_usage` misses grouped tile layers and tile objects, so
   `remove_tileset` can renumber painted cells (`_map_tilesets.py:104`).
 - **[Medium]** Closing the active tab carries brush/palette/terrain/selection onto the
@@ -434,8 +473,10 @@ No Ctrl chord-during-drag beyond Ctrl+J and Ctrl+Z; nothing drives
   per-cell Python; source/packed lists have no `list_clipper` at 1024 rows.
 
 ### Tests
-`_tileset_facts` blind to `tiles`, `wangsets`, presentation; written XML spellings never
-asserted; no Tiled-authored fixture despite the 2026-08-29 manual verification.
+~~`_tileset_facts` blind to `tiles`, `wangsets`, presentation~~ -- widened 2026-09-03 to
+`tiles`, `wangsets`, `phases`, the collection and the five presentation fields, which is
+what caught the embedded-reader drift above. Written XML spellings still never asserted;
+still no Tiled-authored fixture, which is `TODO.md` P7 and a human's.
 
 ---
 
@@ -443,35 +484,50 @@ asserted; no Tiled-authored fixture despite the 2026-08-29 manual verification.
 
 ### Correctness
 - ~~**[High]** Tempo/Speed/Rows sliders and name fields push a step per frame (T1).~~
-- **[High] The playhead is a row index into an imaginary single-pattern timeline**
-  (`playhead_row:858`): seconds ÷ seconds-per-row at the document tempo, ignoring the
-  order list, pattern lengths, `Fxx` and `Bxx`. With two patterns the highlight is off
-  screen at second 5 and follow mode pins the grid to the bottom. Have `_render` emit a
-  `(sample_offset, order_index, row)` map and bisect it.
+- ~~**[High] The playhead is a row index into an imaginary single-pattern timeline.**~~
+  Built 2026-09-03: `synth.render_marked` emits one `(sample offset, order index, pattern
+  uid, row)` per row *as it was actually played*, `SongTab.mark_at` bisects it, and
+  `playhead_row` is `None` while the song is in a pattern the grid is not showing. The
+  map earns its keep three more times below: follow, play-from-caret, and knowing that an
+  audition on the one channel is not the song.
 - **[Medium]** A dragged release marker can land on step 0 and silence the held note
   (`sirens_envelopes.moved:154`); a loop dragged past the release vanishes from the
   graph but stays in the document.
 - **[Medium]** Row-scoped effects (`1xx`, `2xx`, `4xy`, `Axy` last one row) differ
   silently from FamiTracker's persistent ones; the manual gives no persistence rule
   (`synth._apply_row:209`).
-- **[Medium]** The "instrument kind vs channel kind" refusal in `document.py:169` is
-  documented, not enforced. **[Low]** `read_wsng` collapses duplicate sample keys silently.
+- ~~**[Medium]** The "instrument kind vs channel kind" refusal in `document.py:169` is
+  documented, not enforced.~~ Settled 2026-09-03: the sentence went (T5). **[Low]** `read_wsng` collapses duplicate sample keys silently.
 
 ### UX (what a FamiTracker/Furnace/OpenMPT user cannot do)
-- **[High]** No delete/rename/reorder/retarget in the order list, no loop point other
-  than 0, no duplicate pattern; `remove_pattern`, `set_order`, `loop_order=N` all exist
-  in `SongDoc`. An intro-then-loop song cannot be expressed from the UI. "+ To order"
-  with the caret on a sound effect appends the effect's pattern into the song.
-- **[High]** Grid click does not pick the column (`sirens_patterns.py:258`); click on
-  `Fxx`, type, get a note.
-- **[High]** No mute/solo, no channel pan/rename/kind UI; `update_channel` has no caller
-  and `_stem_render` already shows the masked-render pattern.
-- **[Medium]** Playback cannot start from the caret, play one pattern
-  (`render_pattern` has no caller), or loop (`tab.loop` is stored, `sirens_audio.play`
-  plays once).
+- ~~**[High]** No delete/rename/reorder/retarget in the order list, no loop point other
+  than 0, no duplicate pattern.~~ Built 2026-09-03: every row carries move/retarget/delete,
+  the loop point is any entry (and follows an entry that moves under it —
+  `sirens_orders.moved_loop`), patterns rename, duplicate (`SongDoc.duplicate_pattern`,
+  one step) and delete with a confirm naming the order entries that go with them. "+ To
+  order" refuses with the effect's name when the caret is on a sound effect's pattern.
+- ~~**[High]** Grid click does not pick the column; click on `Fxx`, type, get a note.~~
+  Built 2026-09-03: `sirens_patterns.column_at` measures the cell that was drawn, and the
+  gap after a column belongs to it.
+- ~~**[High]** No mute/solo.~~ Built 2026-09-03: a header strip over the grid names every
+  channel (they had no name on screen at all) and carries mute and solo, which reach the
+  mix through `synth.render_only` — `_stem_render`'s body, now the engine's, so a stem and
+  a mute are one operation. Both are view state: a `.wsng` that remembered a mute would
+  hand somebody else a song with a missing part. **Still open: channel pan/rename/kind
+  have no UI** and `update_channel` still has no caller; the header is where they go.
+- ~~**[Medium]** Playback cannot start from the caret, play one pattern, or loop.~~
+  Built 2026-09-03: **From the caret** slices the rendered buffer at the row map's own
+  offset (and says so rather than starting from the top when the order list never reaches
+  that row); **This pattern** is `render_pattern`'s first caller, under its own key so the
+  song's buffer is never touched; **Loop playback** passes `loops=-1` and the playhead
+  wraps with it. The song's `loop_order` stays what the exported WAV's `smpl` chunk says
+  — a property of the song, not of how it is being listened to.
 - **[Medium]** No note preview on entry; no keyboard instrument selection; no
   Home/End, Insert/shift-rows, interpolate, or step increment.
-- **[Medium]** Follow mode hides the caret and edits go to an off-screen row.
+- ~~**[Medium]** Follow mode hides the caret and edits go to an off-screen row.~~ Built
+  2026-09-03: following moves the caret onto the sounding row, so what is under the
+  highlight is what a keystroke writes to — the tracker answer, and one click off for
+  anyone typing into bar 3 while bar 1 plays.
 - **[Medium]** Channels past the pane width are invisible with no scroll or marker
   (`_grid:220`); Left/Right happily move the caret into them.
 
@@ -494,14 +550,21 @@ wider than the remaining channels. None of the six Sirens panes has a test.
 ## 9. Suggested order of work
 
 1. ~~The "one gesture, one step" sweep (T1).~~ Done 2026-09-03.
-2. ~~The frame-thread sweep (T2).~~ Done 2026-09-03. Then the task-thread writes (T3).
-3. The three doc/code contradictions left in T5: each is a one-line decision.
-4. Plotter interop: embedded tileset reader, JSON zero coercion, `_tileset_facts`
-   parity, one Tiled-authored fixture. Packwright: failed-pack state, grid+trim, batch
-   drop, replace-on-readd.
-5. Sirens playback: row map, follow-mode caret, order-list editing,
-   mute/solo, play-from-caret. This is what the "Experimental" chip coming off
-   implicitly promised.
-6. Inker parity: zoom ceiling, footprint cursor, snapped overlay lines, mirror fix,
-   missing chords.
+2. ~~The frame-thread sweep (T2), then the task-thread writes (T3).~~ Done 2026-09-03.
+3. ~~The three doc/code contradictions left in T5.~~ Done 2026-09-03.
+4. ~~Plotter interop: embedded tileset reader, `_tileset_facts` parity. Packwright:
+   failed-pack state, grid+trim, batch drop, replace-on-readd.~~ Done 2026-09-03. The
+   *JSON zero coercion* was checked and is not a defect: `props.json_number` already
+   fixed the JSON side, and the XML side never had it -- an attribute is a string, so
+   `"0" or 1` is `"0"`. `tests/plotter/test_tmx.py` pins both syntaxes agreeing about a
+   stored zero. **One Tiled-authored fixture is the human's** (`TODO.md` P7).
+5. ~~Sirens playback: row map, follow-mode caret, order-list editing, mute/solo,
+   play-from-caret.~~ Done 2026-09-03. What is left in section 8 is smaller and named
+   there: channel pan/rename/kind, note preview on entry, Home/End and the row-insert
+   verbs, the channels past the pane width, and the row-scoped effects question.
+6. ~~Inker parity: zoom ceiling, snapped overlay lines, mirrored cursor, missing
+   chords~~ — done 2026-09-03, along with the three section-5 **[High]** items (combine
+   mode, the one-pixel selection, the stale `fg_slot`). The *footprint* cursor is the one
+   piece left and is named in section 5. The "mirror fix" was withdrawn on 2026-09-03 as
+   measured-and-wrong; see the top of section 5.
 7. Extractions (T7) once the behaviour above is pinned, so the moves are pure.

@@ -35,6 +35,7 @@ supports. That is what makes a re-export reproducible and it is what
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -349,8 +350,8 @@ def _render(
     speed: int,
     loop_order: int = -1,
     rate: int = SAMPLE_RATE,
-) -> tuple[np.ndarray, tuple[int, int] | None]:
-    """The shared engine. -> ``(samples (n, 2) float32, loop points or None)``."""
+) -> tuple[np.ndarray, tuple[int, int] | None, tuple[tuple[int, int, int, int], ...]]:
+    """The shared engine. -> ``(samples (n, 2) float32, loop or None, marks)``."""
     channels = doc.channels
     player = Player(
         speed=max(D.MIN_SPEED, min(D.MAX_SPEED, int(speed))),
@@ -382,6 +383,11 @@ def _render(
     # Sample offset at which each order entry was first entered at row 0 --
     # what a backward ``Bxx`` loops back to. See the jump check below.
     order_starts: dict[int, int] = {}
+    # One entry per row *as it was actually played*: where it starts in the
+    # output, which order entry it belonged to, which pattern that was, and
+    # which row. Ascending in the first field by construction, so a playhead is
+    # a bisect rather than an estimate -- see :func:`render_marked`.
+    marks: list[tuple[int, int, int, int]] = []
 
     while produced < ceiling:
         playing = 0 <= player.order_index < len(order) and not player.halted
@@ -413,6 +419,9 @@ def _render(
             if loop_start is None and looping and at_loop:
                 loop_start = produced
             if player.tick == 0:
+                marks.append(
+                    (produced, player.order_index, pattern.uid, player.row)
+                )
                 _apply_row(doc, player, pattern.cells[player.row])
 
         # How many output samples this tick is worth. Accumulated against the
@@ -469,13 +478,13 @@ def _render(
                     player.halted = True
 
     if not left:
-        return np.zeros((0, 2), dtype=np.float32), None
+        return np.zeros((0, 2), dtype=np.float32), None, ()
     out = np.stack([np.concatenate(left), np.concatenate(right)], axis=1)
     out = np.clip(out * MASTER_GAIN, -1.0, 1.0).astype(np.float32)
     loop = None
     if looping and loop_start is not None:
         loop = (loop_start, body_end if body_end is not None else out.shape[0])
-    return out, loop
+    return out, loop, tuple(marks)
 
 
 def _end_of_row(player: Player, order: list[int], rows: int) -> bool:
@@ -499,12 +508,22 @@ def _end_of_row(player: Player, order: list[int], rows: int) -> bool:
     return False
 
 
-def render(doc: D.SongDoc, *, rate: int = SAMPLE_RATE) -> tuple[np.ndarray, tuple[int, int] | None]:
-    """The whole song. -> ``(samples (n, 2) float32 in [-1, 1], loop or None)``.
+def render_marked(
+    doc: D.SongDoc, *, rate: int = SAMPLE_RATE
+) -> tuple[np.ndarray, tuple[int, int] | None, tuple[tuple[int, int, int, int], ...]]:
+    """The whole song, plus the row map. -> ``(samples, loop, marks)``.
 
-    The loop points are sample offsets into the returned array and are what
-    :func:`~.wavout.wav_bytes` writes into the file's ``smpl`` chunk -- which is
-    how a game engine is told where to loop without a sidecar nobody reads.
+    Each mark is ``(sample offset, order index, pattern uid, row)``, one per row
+    *as it was actually played* and ascending in the offset -- so "which row is
+    sounding" is a bisect of what the renderer did, rather than an estimate.
+
+    The estimate is what this replaces, and it was wrong the moment a song had
+    two patterns in it: seconds divided by the document's own seconds-per-row
+    describes a single imaginary pattern of unbounded length, ignoring the
+    order list, the patterns' own lengths, every ``Fxx`` tempo change and every
+    ``Bxx``/``Dxx`` jump. With two patterns the highlight was off the bottom of
+    the grid within five seconds and follow mode pinned the view there (the
+    2026-09-02 review, section 8).
     """
     return _render(
         doc,
@@ -516,6 +535,62 @@ def render(doc: D.SongDoc, *, rate: int = SAMPLE_RATE) -> tuple[np.ndarray, tupl
     )
 
 
+def render(doc: D.SongDoc, *, rate: int = SAMPLE_RATE) -> tuple[np.ndarray, tuple[int, int] | None]:
+    """The whole song. -> ``(samples (n, 2) float32 in [-1, 1], loop or None)``.
+
+    The two-value form, for every caller that wants audio and nothing else --
+    the exports, the tests, the WAV writer. :func:`render_marked` is the same
+    render with the row map beside it.
+
+    The loop points are sample offsets into the returned array and are what
+    :func:`~.wavout.wav_bytes` writes into the file's ``smpl`` chunk -- which is
+    how a game engine is told where to loop without a sidecar nobody reads.
+    """
+    out, loop, _marks = render_marked(doc, rate=rate)
+    return out, loop
+
+
+def render_only(
+    doc: D.SongDoc, channels: Iterable[int], *, rate: int = SAMPLE_RATE
+) -> tuple[np.ndarray, tuple[int, int] | None, tuple[tuple[int, int, int, int], ...]]:
+    """The song with every channel outside ``channels`` silenced.
+
+    **Not a second rendering path.** There is one tick loop in this build and a
+    per-channel variant of it would be a second thing to keep in step with the
+    first; what a mute *is*, is the same render of a document with the silenced
+    channels' notes taken out. So the note, instrument and volume columns are
+    blanked on a copy of each pattern's cells and the ordinary render runs
+    unchanged -- which is what a stem export has always done
+    (``sirens_io._stem_render``, whose body this now is).
+
+    **The effect column survives, and that is the whole subtlety.** ``Bxx``,
+    ``Cxx``, ``Dxx`` and ``Fxx`` are the player's rather than the voice's, and
+    any channel may carry them -- so a mix rendered with the muted channels
+    wiped clean would jump differently, halt somewhere else and run at a
+    different tempo than the mix without the mute. Left in, a muted render is
+    sample-aligned with the full one and its row map is the same map. The voice
+    effects that survive alongside them (a slide, a vibrato) act on a voice that
+    was never triggered, which is silence.
+
+    ``channels`` holds *indices*, not uids: it is the grid's own axis, and the
+    cells are indexed by it.
+    """
+    keep = {int(one) for one in channels}
+    saved = {pattern.uid: pattern.cells for pattern in doc.patterns}
+    try:
+        for pattern in doc.patterns:
+            cells = pattern.cells.copy()
+            for channel in range(pattern.channels):
+                if channel not in keep:
+                    cells[:, channel, :D.EFFECT] = notes.EMPTY
+            pattern.cells = cells
+        return render_marked(doc, rate=rate)
+    finally:
+        for pattern in doc.patterns:
+            if pattern.uid in saved:
+                pattern.cells = saved[pattern.uid]
+
+
 def render_pattern(
     doc: D.SongDoc, pattern: int, *, tempo: int | None = None, speed: int | None = None,
     rate: int = SAMPLE_RATE
@@ -523,7 +598,7 @@ def render_pattern(
     """One pattern, once. What auditioning a pattern in the editor plays."""
     if doc.pattern(pattern) is None:
         raise ValueError(D.MISSING_PATTERN)
-    out, _loop = _render(
+    out, _loop, _marks = _render(
         doc,
         [pattern],
         tempo=doc.tempo if tempo is None else tempo,

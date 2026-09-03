@@ -209,50 +209,77 @@ class JobsCache:
         headless harness. It is not dead code looking for a consumer; it is the
         synchronous half of a split whose asynchronous half the app uses.
         """
-        self.storage = self.measure()
+        self.adopt_storage(self.measure())
 
-    def measure(self) -> Any:
+    def measure(self) -> dict[str, Any]:
         """The full measurement, safe to call from a task thread.
 
-        Decomposed per job directory so :meth:`measure_one` can later fold a
-        single finished job back in without re-walking the whole tree.
+        **A reading, not a publication.** Nothing on this object is touched:
+        the walk runs on a task and ``_dir_sizes``, ``_sizes_generation`` and
+        ``storage_error`` are read on the frame thread, so the amendment is
+        :meth:`adopt_storage`'s (the review's theme T3). Decomposed per job
+        directory so :meth:`measure_one` can fold a single finished job back in
+        without re-walking the whole tree.
         """
         try:
             sizes = svc_jobs.storage_sizes(self.svc)
         except Exception as exc:
             log.exception("could not measure storage")
-            self.storage_error = str(exc)
-            return self.storage
-        self.storage_error = None
-        self._dir_sizes = sizes
-        self._sizes_generation += 1
-        return {"job_dirs": len(sizes), "bytes": sum(sizes.values())}
+            return {"error": str(exc)}
+        return {"sizes": sizes}
 
-    def measure_one(self, job_id: str) -> Any:
+    def measure_one(self, job_id: str) -> dict[str, Any]:
         """Incremental storage accounting (C33): re-measure one job directory.
 
         Sound because job directories are disjoint: only this job's entry can
         have changed when this job finished. Falls back to the full walk when
         no baseline exists yet -- adding one directory to a total that was
         never measured would present a single job as the whole workshop.
+
+        A reading, like :meth:`measure`: the fold it describes is applied by
+        :meth:`adopt_storage`, on the frame thread that reads the totals.
         """
         if not self._dir_sizes:
             return self.measure()
         try:
             path = self.svc.job_dir(job_id)
             size = dir_size(path)
-            sizes = self._dir_sizes
-            if size or path.exists():
-                sizes[path.name] = size
-            else:
-                sizes.pop(path.name, None)
         except Exception as exc:
             log.exception("could not measure job dir %s", job_id)
-            self.storage_error = str(exc)
-            return self.storage
+            return {"error": str(exc)}
+        return {"fold": (path.name, size if (size or path.exists()) else None)}
+
+    def adopt_storage(self, reading: Any) -> None:
+        """Publish a reading from :meth:`measure` / :meth:`measure_one`.
+
+        **Frame thread only**, which is the whole point: the sizes back the
+        library's size sort and ``_sizes_generation`` is in the ``visible``
+        memo's key, so a task amending them mid-frame is a list re-sorted under
+        a reader. A failed walk keeps the last good figure and says why -- a
+        stale number beats a blank one, but not silently (E45).
+        """
+        if not isinstance(reading, dict):
+            return
+        error = reading.get("error")
+        if error:
+            self.storage_error = str(error)
+            return
         self.storage_error = None
+        if "sizes" in reading:
+            self._dir_sizes = dict(reading["sizes"])
+        elif "fold" in reading:
+            name, size = reading["fold"]
+            if size is None:
+                self._dir_sizes.pop(name, None)
+            else:
+                self._dir_sizes[name] = int(size)
+        else:
+            return
         self._sizes_generation += 1
-        return {"job_dirs": len(sizes), "bytes": sum(sizes.values())}
+        self.storage = {
+            "job_dirs": len(self._dir_sizes),
+            "bytes": sum(self._dir_sizes.values()),
+        }
 
     # -- queries -----------------------------------------------------------
 

@@ -223,6 +223,106 @@ def test_class_members_are_written_in_sorted_order_in_both_spellings():
     assert [entry["name"] for entry in payload["properties"]] == ["art", "boss"]
 
 
+# --- a stored zero is a value, not a missing attribute -----------------------
+#
+# ``props.json_number`` was written against exactly this bug and the XML twin
+# kept the ``float(node.get(k, d) or d)`` spelling for another wave, so the two
+# syntaxes of one map disagreed about every field whose default is not zero
+# (the 2026-09-02 review, section 7).
+
+
+def _zeroed_tmx() -> bytes:
+    return (
+        b'<map version="1.10" orientation="orthogonal" width="1" height="1" '
+        b'tilewidth="16" tileheight="16">'
+        b'<layer id="1" name="Sky" opacity="0" parallaxx="0" parallaxy="0">'
+        b'<data encoding="csv">0</data></layer>'
+        b'<objectgroup id="2" name="Things">'
+        b'<object id="3" name="ghost" x="0" y="0" opacity="0"><point/></object>'
+        b"</objectgroup>"
+        b"</map>"
+    )
+
+
+def _zeroed_tmj() -> bytes:
+    return json.dumps(
+        {
+            "type": "map",
+            "version": "1.10",
+            "orientation": "orthogonal",
+            "renderorder": "right-down",
+            "width": 1,
+            "height": 1,
+            "tilewidth": 16,
+            "tileheight": 16,
+            "layers": [
+                {
+                    "id": 1,
+                    "type": "tilelayer",
+                    "name": "Sky",
+                    "width": 1,
+                    "height": 1,
+                    "data": [0],
+                    "opacity": 0,
+                    "parallaxx": 0,
+                    "parallaxy": 0,
+                },
+                {
+                    "id": 2,
+                    "type": "objectgroup",
+                    "name": "Things",
+                    "objects": [
+                        {
+                            "id": 3,
+                            "name": "ghost",
+                            "x": 0,
+                            "y": 0,
+                            "point": True,
+                            "opacity": 0,
+                        }
+                    ],
+                },
+            ],
+        }
+    ).encode()
+
+
+def test_a_zero_opacity_or_parallax_survives_the_xml_reader():
+    """``opacity="0"`` drew a layer the file said was invisible, and
+    ``parallaxx="0"`` -- the ordinary spelling of a sky that does not move --
+    scrolled with the camera."""
+    doc = tmx.read_tmx(_zeroed_tmx(), **_bare_loaders())
+    sky = doc.layers[0]
+
+    assert sky.opacity == 0.0
+    assert (sky.parallax_x, sky.parallax_y) == (0.0, 0.0)
+    assert doc.layers[1].objects[0].opacity == 0.0
+
+
+def test_the_two_syntaxes_agree_about_a_stored_zero():
+    from ._semantics import doc_facts
+
+    assert doc_facts(tmx.read_tmx(_zeroed_tmx(), **_bare_loaders())) == doc_facts(
+        tmx.read_tmj(_zeroed_tmj(), **_bare_loaders())
+    )
+
+
+def test_a_zero_probability_survives_the_xml_tileset_reader():
+    """Tiled's own reading: zero means never chosen at random and always
+    placeable by hand, which is how a set marks a tile that belongs to the
+    palette but not to the scatter."""
+    data = (
+        b'<tileset version="1.10" name="probs" tilewidth="16" tileheight="16" '
+        b'tilecount="4" columns="2">'
+        b'<image source="t.png" width="32" height="32"/>'
+        b'<tile id="1" probability="0"/>'
+        b"</tileset>"
+    )
+    tileset = tsx.read_tsx(data, _pixels(32, 32))
+
+    assert tileset.tiles[1].probability == 0.0
+
+
 # --- persistent ids -------------------------------------------------------
 #
 # Tiled gives every layer and object a persistent ``id`` that survives in the

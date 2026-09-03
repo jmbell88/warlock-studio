@@ -111,9 +111,16 @@ press **+ To order** to append it. The two lists are deliberately separate: addi
 put it in the order, and removing an order entry does not delete the pattern — which is what lets one
 pattern appear in the order three times.
 
-Tick **Loop at the end**. That is the difference between a track and a soundtrack: the render now
+Tick **Loop the song**. That is the difference between a track and a soundtrack: the render now
 carries loop points, and those loop points end up in the exported WAV's `smpl` chunk, so an engine
-that reads one loops at the right sample instead of restarting.
+that reads one loops at the right sample instead of restarting. The slider under it picks *which*
+entry the loop returns to — leave it at 00 for now, and set it to 01 the day the first pattern is an
+intro you only want heard once.
+
+Two things worth trying while it plays. Click a channel's name in the strip over the grid to mute
+it, and the **S** beside it to hear that one alone: that is how you find out whether the hat is too
+loud without deleting it. And press **From the caret** rather than **Play** — it starts at the row
+the caret is on, which is what you want the twentieth time you check the same bar.
 
 ## A sound effect
 
@@ -161,7 +168,8 @@ mixer and they line up.
 4. Paint a decay into the noise instrument's volume envelope and hear the hat become a hat.
 5. Drag the **release** marker left, then play the whole song through: the last chord decays
    through the tail instead of stopping dead.
-6. Second pattern, add it to the order, tick **Loop at the end**.
+6. Second pattern, add it to the order, tick **Loop the song**, and move it above the first with
+   the **▲** on its row -- the loop point follows it.
 7. Add a sound effect, write three ascending notes, raise its tempo, audition it.
 8. `Ctrl+S`, then **Export audio...** into an empty folder.
 9. Export again into a second folder and diff the two. They are identical.

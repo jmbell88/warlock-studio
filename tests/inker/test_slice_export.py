@@ -90,7 +90,13 @@ def test_each_slice_becomes_its_own_png_cropped_to_its_bounds(monkeypatch, tmp_p
     assert red_png.shape == (8, 8, 4)
     assert tuple(red_png[0, 0]) == RED
     assert tuple(blue_png[0, 0]) == BLUE
-    assert result == {"exported": tmp_path / "red.png"}
+    # ``dest`` and ``export_kind`` beside the first file written: Repeat Last
+    # Export has to know where this went and which runner to run again.
+    assert result == {
+        "exported": tmp_path / "red.png",
+        "dest": tmp_path / "sprite.png",
+        "export_kind": "slices",
+    }
 
 
 def test_duplicate_slice_names_get_a_numeric_suffix_rather_than_overwrite(

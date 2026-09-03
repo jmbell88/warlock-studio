@@ -334,3 +334,77 @@ def test_reusing_a_freed_id_cannot_collide_with_what_the_undo_stack_holds():
     assert restored is not None
     assert restored.name == original.name and restored.kind == original.kind
     assert len({one.uid for one in doc.instruments}) == len(doc.instruments)
+
+
+# --- duplicate and rename -------------------------------------------------------
+#
+# Two verbs the UI needed and the document did not have. A chorus is the verse
+# with two rows changed, and an order list is unreadable without names.
+
+
+def test_duplicating_a_pattern_copies_its_cells_in_one_step():
+    """Two steps -- an add and a write -- leaves an empty pattern behind on the
+    first Ctrl+Z, which is a state nobody asked for."""
+    doc = _song()
+    first = doc.patterns[0].uid
+    doc.set_cell(first, 0, 0, D.NOTE, 60)
+    depth = len(doc.history)
+
+    copy = doc.duplicate_pattern(first)
+
+    assert len(doc.history) == depth + 1
+    assert copy.uid != first
+    assert np.array_equal(copy.cells, doc.pattern(first).cells)
+    doc.set_cell(copy.uid, 1, 0, D.NOTE, 62)
+    assert doc.pattern(first).cells[1, 0, D.NOTE] == notes.EMPTY, "and not a view"
+
+    doc.undo()  # the note in the copy
+    doc.undo()  # the duplicate
+    assert doc.pattern(copy.uid) is None
+
+
+def test_a_copy_is_not_in_the_order_until_somebody_puts_it_there():
+    """Two lists, deliberately: a copy that started playing in the middle of
+    the song the moment it was made would be a surprise, not a shortcut."""
+    doc = _song()
+    before = list(doc.order)
+    doc.duplicate_pattern(doc.patterns[0].uid)
+    assert doc.order == before
+
+
+def test_a_copys_name_is_numbered_rather_than_repeated():
+    doc = _song()
+    first = doc.patterns[0].uid
+    doc.rename_pattern(first, "verse")
+
+    second = doc.duplicate_pattern(first)
+    third = doc.duplicate_pattern(first)
+
+    assert (second.name, third.name) == ("verse 2", "verse 3")
+
+
+def test_an_unnamed_pattern_copies_as_unnamed():
+    """The pane names an unnamed pattern by its position; inventing "  2"
+    would be a name nobody typed."""
+    doc = _song()
+    assert doc.duplicate_pattern(doc.patterns[0].uid).name == ""
+
+
+def test_renaming_a_pattern_is_one_step_and_a_no_op_when_it_changes_nothing():
+    doc = _song()
+    uid = doc.patterns[0].uid
+    assert doc.rename_pattern(uid, "intro") is True
+    assert doc.pattern(uid).name == "intro"
+    depth = len(doc.history)
+    assert doc.rename_pattern(uid, "intro") is False
+    assert len(doc.history) == depth
+
+    doc.undo()
+    assert doc.pattern(uid).name == ""
+
+
+def test_a_pattern_name_is_bounded_like_every_other_name():
+    doc = _song()
+    uid = doc.patterns[0].uid
+    doc.rename_pattern(uid, "x" * 500)
+    assert len(doc.pattern(uid).name) <= 64

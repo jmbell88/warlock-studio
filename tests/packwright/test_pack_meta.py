@@ -189,6 +189,9 @@ def test_a_rename_carries_the_metadata_through():
 
 
 def _entry(meta: SpriteMeta = EMPTY_META, **settings) -> dict:
+    # MaxRects unless a case says otherwise: trimming is that mode's, since a
+    # grid cell is addressed by arithmetic and cannot be re-registered.
+    settings.setdefault("mode", "maxrects")
     result = layout([_sprite("a", meta)], PackSettings(power_of_two=False, **settings))
     return texturepacker.tp_json(result, image_name="atlas.png")["frames"][0]
 

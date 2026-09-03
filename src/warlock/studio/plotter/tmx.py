@@ -51,7 +51,7 @@ from typing import Any
 import numpy as np
 
 from ..tilegrid import gid as gidlib
-from ..tilegrid.tileset import Tileset, TilesetRef, colour_text, compose_collection
+from ..tilegrid.tileset import Tileset, TilesetRef, colour_text
 from . import project
 from .pngio import png_bytes
 from .props import (
@@ -88,9 +88,7 @@ from .tsx import (
     check_tileset_features_json,
     collection_sources,
     collection_sources_json,
-    phases_from_properties,
-    read_tile_meta,
-    read_wangsets,
+    tileset_from_element,
     tileset_from_json,
     to_bytes,
     tsx_bytes,
@@ -590,6 +588,20 @@ def _read_tmx_tilesets(
             )
             continue
         # Embedded: the same element a .tsx holds, minus the file around it.
+        #
+        # **One definition**, shared with the external ``.tsx`` reader, exactly
+        # as the JSON pair below already share ``tileset_from_json``. This block
+        # used to spell the construction out inline and had drifted from it: no
+        # presentation fields, no foreign Wang model and no ``trans`` colour
+        # key, so ``presentation-112.tmx`` read ``object_alignment`` as
+        # "unspecified" where its own ``.tmj`` twin read "bottomleft" (the
+        # 2026-09-02 review, section 7).
+        #
+        # **The feature check runs first**, and the order is load-bearing for
+        # ``tileset_from_json``'s reason: a true image-collection tileset has
+        # per-tile images and *no* top-level one, so checking the image first
+        # would report "an embedded tileset image" for a file whose actual
+        # problem is that it is a collection.
         check_tileset_features(node)
         image = node.find("image")
         path = (image.get("source") or "").strip() if image is not None else ""
@@ -601,73 +613,13 @@ def _read_tmx_tilesets(
             raise TiledUnsupported(
                 "an embedded tileset image", "Plotter needs an <image source=...> path"
             )
-        wangsets = node.find("wangsets")
-        grid = node.find("grid")
-        transformations = node.find("transformations")
-        props = read_properties(node)
-        declared, remaining = phases_from_properties(props)
-        terrains = () if wangsets is None else (read_wangsets(wangsets, declared) or ())
-        if sources:
-            atlas, collection = compose_collection(
-                {local: image_loader(src) for local, src in sources.items()}
-            )
-        else:
-            atlas, collection = image_loader(path), None
+        pixels = (
+            {local: image_loader(src) for local, src in sources.items()}
+            if sources
+            else image_loader(path)
+        )
         refs.append(
-            TilesetRef(
-                firstgid=firstgid,
-                tileset=Tileset(
-                    name=node.get("name") or "tileset",
-                    class_name=node.get("class") or node.get("type") or "",
-                    pixels=atlas,
-                    collection=collection,
-                    tile_w=int(node.get("tilewidth", 0) or 0),
-                    tile_h=int(node.get("tileheight", 0) or 0),
-                    spacing=int(node.get("spacing", 0) or 0),
-                    margin=int(node.get("margin", 0) or 0),
-                    grid_orientation=(
-                        "orthogonal"
-                        if grid is None
-                        else grid.get("orientation", "orthogonal")
-                    ),
-                    grid_width=(
-                        int(node.get("tilewidth", 0) or 0)
-                        if grid is None
-                        else int(grid.get("width", node.get("tilewidth", 0)) or 0)
-                    ),
-                    grid_height=(
-                        int(node.get("tileheight", 0) or 0)
-                        if grid is None
-                        else int(grid.get("height", node.get("tileheight", 0)) or 0)
-                    ),
-                    transformations=(
-                        False,
-                        False,
-                        False,
-                        False,
-                    )
-                    if transformations is None
-                    else (
-                        transformations.get("hflip", "0") not in ("0", "false"),
-                        transformations.get("vflip", "0") not in ("0", "false"),
-                        transformations.get("rotate", "0") not in ("0", "false"),
-                        transformations.get("preferuntransformed", "0")
-                        not in ("0", "false"),
-                    ),
-                    # The "phases" property is structural only on a recognised
-                    # terrain set (the reader popped it; the writer re-derives
-                    # it); anywhere else it is somebody's ordinary custom
-                    # property and travels intact.
-                    properties=remaining if terrains else props,
-                    # ``check_tileset_features`` already refused an unrecognised
-                    # set; an embedded one that *is* recognised is a terrain set
-                    # and used to be accepted and then dropped, which left the
-                    # tool greyed out on a map whose atlas plainly declares it.
-                    terrains=terrains,
-                    phases=declared if terrains else 1,
-                    tiles=read_tile_meta(node),
-                ),
-            )
+            TilesetRef(firstgid=firstgid, tileset=tileset_from_element(node, pixels))
         )
     return refs
 

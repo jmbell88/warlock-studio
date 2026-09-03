@@ -137,6 +137,22 @@ class PatternRemoveEdit(Edit):
 
 
 @dataclass
+class PatternRenameEdit(Edit):
+    """A pattern's name, before and after. The cells are untouched, so this
+    costs the two strings and nothing else."""
+
+    pattern: int
+    before: str
+    after: str
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_pattern_name(self.pattern, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_pattern_name(self.pattern, self.after)
+
+
+@dataclass
 class OrderEdit(Edit):
     before: tuple[int, ...]
     after: tuple[int, ...]

@@ -224,6 +224,11 @@ def export_files(ctx: Any, tab: PackTab | None = None) -> None:
     if tab.layout is None or tab.atlas is None:
         ctx.toast("Nothing packed yet.", "error")
         return
+    if tab.pack_stale_why:
+        # An export is a file another program will believe. See
+        # ``PackTab.pack_stale_why``.
+        ctx.toast(tab.pack_stale_why, "error")
+        return
     layout, atlas = tab.layout, tab.atlas
     # Snapshotted here, with ``layout``/``atlas`` above, for the same reason
     # ``request_pack`` snapshots settings before its own task closure: a
@@ -270,6 +275,9 @@ def export_library(ctx: Any, tab: PackTab | None = None) -> None:
         return
     if tab.atlas is None:
         ctx.toast("Nothing packed yet.", "error")
+        return
+    if tab.pack_stale_why:
+        ctx.toast(tab.pack_stale_why, "error")
         return
     # Unlike :func:`export_files`, whose PNG and sidecar both derive from the
     # *landed* pack and so agree with each other, this pairs the landed atlas

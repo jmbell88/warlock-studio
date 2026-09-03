@@ -49,9 +49,6 @@ VERIFY_KEY = "verify-install"
 #: that everything else arriving unclaimed can be reported. Each is silent for
 #: its own reason, and the reasons are the point of the list:
 #:
-#: ``journal:``  an autosave copy. The writer moves the mark itself, and a copy
-#:               that landed changes nothing on screen; the *failure* is what
-#:               the user is owed, and ``_collect_tasks`` claims that half.
 #: ``open-log``  ``os.startfile``. The outcome is a window the OS opened.
 #: ``thumb:``    a card image written to disk. ``ThumbnailCache`` keys on
 #:               mtime, so the library picks it up without being told.
@@ -60,7 +57,7 @@ VERIFY_KEY = "verify-install"
 #:               the user chose no destination and "Saved to <internal path>"
 #:               is a sentence about a file they cannot find.
 #: ``wrap:``     the wrap preview. The pane re-reads the file it asked for.
-SILENT_TASK_KEYS = ("journal:", "open-log", "thumb:", "derive:", "wrap:")
+SILENT_TASK_KEYS = ("open-log", "thumb:", "derive:", "wrap:")
 
 
 def _compare_key() -> str:
@@ -1914,6 +1911,16 @@ class App:
             # task, so picking a 20 MB image never touches the frame thread.
             ctx.state.form_2d["ref_path"] = str(done.result)
             return
+        if key.startswith("journal:"):
+            # The mark, on the frame thread. A copy that landed changes nothing
+            # on screen, which is why this key was in ``SILENT_TASK_KEYS`` until
+            # the review's T3 moved the three slot attributes off the task
+            # thread -- the write still says nothing, but the slot has to be
+            # told here, beside ``drop``, rather than from the pool.
+            from . import journal
+
+            journal.on_task_done(ctx, done)
+            return
         if key.startswith("clay-"):
             from . import clay_mode
 
@@ -2018,9 +2025,11 @@ class App:
             return
         if key == "storage" or key.startswith("storage:"):
             # Both the full walk and the per-job incremental re-measure (C33)
-            # land here; each returns the whole storage dict.
-            if done.result is not None:
-                ctx.cache.storage = done.result
+            # land here, each as a *reading* -- the sizes, or the one directory
+            # to fold in, or why neither. The amendment happens here rather
+            # than in the task because the library's size sort reads those
+            # sizes and the memo key reads their generation (T3).
+            ctx.cache.adopt_storage(done.result)
             return
         if (
             key.startswith(
@@ -2192,10 +2201,17 @@ class App:
         self._check_worker()
         # Every mode, not only Inker: a crash while the user is looking at the
         # library still loses the painting. ``submit`` refuses a key already in
-        # flight, so a slow encode skips a beat rather than queuing. Imported
-        # here because ``inker_mode`` pulls the raster engine in and a session
-        # that never opens Inker should not pay for it -- the same reason
-        # ``ensure`` builds its state lazily.
+        # flight, so a slow encode skips a beat rather than queuing.
+        #
+        # **This import is eager, and the comment that called it lazy was
+        # wrong** (the review's theme T5, settled 2026-09-03 by saying so).
+        # ``_refresh`` runs every frame, so every mode module is imported on
+        # frame 1 whether or not its mode is ever opened -- and it would be
+        # even without this line, because ``journal.snapshot`` below reaches
+        # ``ensure_providers``, which imports all six to register their kinds
+        # before the first recovery scan. Gating on ``state.inker is not None``
+        # would therefore save nothing at all while adding a condition to read.
+        # What is genuinely lazy is ``ensure``'s *state*, not this import.
         from . import inker_mode, journal
 
         # Every registered document kind, not only Inker (UX-05). Importing

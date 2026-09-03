@@ -228,15 +228,22 @@ def import_tileset(ctx: Any) -> bool:
     state.tileset_import = None
     state.tileset_preview_key = None
     state.tileset_import_open = False
-    added = _add_sprites(ctx, tab, sprites)
-    ctx.toast(
-        f"Added {added} tile(s)." if added else "Those tiles are already in this atlas."
-    )
+    ctx.toast(_added_sentence(*_add_sprites(ctx, tab, sprites), noun="tile"))
     return True
 
 
 def add_source_paths(ctx: Any, paths: list[Path]) -> None:
-    """Files dropped on the window."""
+    """Files dropped on the window.
+
+    **Keyed on the batch, not on the tab.** pygame raises one ``DROPFILE`` per
+    file, so a drag of twenty PNGs reaches this twenty times in one pump; under
+    a per-tab key the runner's dedupe refused nineteen of them and the refusal
+    was thrown away, so a multi-file drop silently added the first file only
+    (the 2026-09-02 review, section 7). ``inker-open``'s shape: the paths are
+    in the key, so every distinct drop runs and a *repeated* drop of the same
+    files while one is still decoding still dedupes, which is the half of the
+    key worth keeping.
+    """
     tab = active(ctx)
     if tab is None:
         ctx.toast("Start or open an atlas first.", "error")
@@ -250,7 +257,8 @@ def add_source_paths(ctx: Any, paths: list[Path]) -> None:
             "uid": uid,
         }
 
-    ctx.submit(f"packwright-add:{uid}", run)
+    token = abs(hash(tuple(str(p) for p in wanted)))
+    ctx.submit(f"packwright-add:{uid}:{token}", run)
 
 
 def add_job_source(ctx: Any, job: Any) -> None:
@@ -283,7 +291,10 @@ def add_job_source(ctx: Any, job: Any) -> None:
         path = svc_files.job_dir_file(ctx.svc, job_id, "input.png")
         return {"sprites": [(f"job:{job_id}", str(name), _decode(Path(path)))], "uid": uid}
 
-    ctx.submit(f"packwright-add:{uid}", run)
+    # Keyed on the job for ``add_source_paths``' reason: two assets sent from
+    # the library in one gesture are two adds, and a shared key would drop the
+    # second without a word.
+    ctx.submit(f"packwright-add:{uid}:{job_id}", run)
 
 
 def add_inker_document(ctx: Any, inker_tab: Any) -> None:
@@ -312,27 +323,59 @@ def add_inker_document(ctx: Any, inker_tab: Any) -> None:
     except ValueError as exc:
         ctx.toast(f"Those frames were not added: {exc}", "error")
         return
-    added = _add_sprites(ctx, tab, sprites)
-    ctx.toast(f"Added {added} sprite(s)." if added else "Every frame is already in this atlas.")
+    ctx.toast(_added_sentence(*_add_sprites(ctx, tab, sprites)))
 
 
-def _add_sprites(ctx: Any, tab: PackTab, sprites: list[Any]) -> int:
-    """Add what is not already there, and say how many that was.
+def _add_sprites(ctx: Any, tab: PackTab, sprites: list[Any]) -> tuple[int, int]:
+    """Add what is not there and refresh what is. -> ``(added, replaced)``.
 
     A duplicate key is *skipped* rather than refused, unlike ``PackDoc``'s own
     rule: dropping twenty files of which one is already in the atlas should add
     nineteen, not fail. The document's refusal stays the authority on what may
     coexist; this is the caller deciding what to ask for.
+
+    **A key already here whose pixels have changed is a replacement**, not a
+    skip. ``wpack``'s own docstring says what a source is -- "what the document
+    records is what was packed; re-adding the source is how you pick up a
+    change" -- and until 2026-09-03 re-adding an edited PNG was silently
+    nothing at all, which made that sentence false and left the only way to
+    pick up an edit "delete the sprite first" (the 2026-09-02 review, section
+    7). Unchanged pixels are still a skip, so re-dropping a folder is not
+    twenty undo steps.
     """
-    added = 0
+    added = replaced = 0
     for sprite in sprites:
-        if tab.doc.has_key(sprite.key):
+        existing = next(
+            (one for one in tab.doc.sources if one.key == sprite.key), None
+        )
+        if existing is None:
+            tab.doc.add_source(sprite)
+            added += 1
             continue
-        tab.doc.add_source(sprite)
-        added += 1
-    if added:
+        before = tab.doc.history.head
+        tab.doc.replace_source(existing.uid, sprite)
+        if tab.doc.history.head != before:
+            replaced += 1
+    if added or replaced:
         tab.pack_dirty = True
-    return added
+    return added, replaced
+
+
+def _added_sentence(added: int, replaced: int, *, noun: str = "sprite") -> str:
+    """What ``_add_sprites`` just did, in one sentence naming both halves.
+
+    Both counts or neither: "Added 19" hides the twentieth file being the
+    edited one the user actually dropped this folder for, and "Updated 1" hides
+    the nineteen.
+    """
+    parts = []
+    if added:
+        parts.append(f"Added {added} {noun}(s)")
+    if replaced:
+        parts.append(f"updated {replaced}" if parts else f"Updated {replaced} {noun}(s)")
+    if not parts:
+        return f"Those {noun}s are already in this atlas, unchanged."
+    return ", ".join(parts) + "."
 
 
 def remove_source(ctx: Any, uid: int, tab: PackTab | None = None) -> None:
@@ -471,7 +514,10 @@ def on_task_done(ctx: Any, done: Any) -> None:
             set_mode(ctx.state, "packwright")
         return
 
-    tab = state.get(key.split(":", 1)[1]) if ":" in key else None
+    # ``split(":")[1]``, not ``split(":", 1)[1]``: an add carries a third
+    # segment (the batch token) so that several drops can be in flight at once,
+    # and a tab uid never contains a colon.
+    tab = state.get(key.split(":")[1]) if ":" in key else None
     if tab is None:
         return
 
@@ -508,10 +554,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 sprite_from_image(pixels, key=key_, name=display)
                 for key_, display, pixels in result.get("sprites", [])
             ]
-            added = _add_sprites(ctx, tab, sprites)
-            ctx.toast(
-                f"Added {added} sprite(s)." if added else "Those are already in this atlas."
-            )
+            ctx.toast(_added_sentence(*_add_sprites(ctx, tab, sprites)))
         return
 
     tab.saving = False

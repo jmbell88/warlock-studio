@@ -420,37 +420,16 @@ def oneshot_stems(doc: Any) -> list[str]:
 def _stem_render(doc: Any, index: int) -> tuple[Any, tuple[int, int] | None]:
     """The mix with every channel but ``index`` silenced. -> ``synth.render``'s pair.
 
-    **Not a second rendering path.** There is one tick loop in this build and a
-    per-channel variant of it would be a second thing to keep in step with the
-    first; what a stem is, is the same render of a document with the other
-    channels' notes taken out. So the note, instrument and volume columns are
-    blanked on a *copy* of each pattern's cells and ``synth.render`` runs
-    unchanged.
-
-    **The effect column survives, and that is the whole subtlety.** ``Bxx``,
-    ``Cxx``, ``Dxx`` and ``Fxx`` are the player's rather than the voice's, and
-    any channel may carry them -- so a stem rendered from a grid with the other
-    channels wiped clean would jump differently, halt somewhere else and run at
-    a different tempo than the mix it is supposed to line up with. Left in, the
-    stems are sample-aligned with ``song.wav`` and carry its loop points. The
-    voice effects that survive alongside them (a slide, a vibrato) act on a
-    voice that was never triggered, which is silence.
+    One line, because the masked render is the engine's now
+    (:func:`~.sirens.synth.render_only`) -- a stem and a muted channel are the
+    same operation asked for by two surfaces, and the argument for how it works
+    (the effect column survives, so a stem stays sample-aligned with the mix)
+    lives there.
     """
-    from .sirens import document as D
-    from .sirens import notes, synth
+    from .sirens import synth
 
-    saved = {pattern.uid: pattern.cells for pattern in doc.patterns}
-    try:
-        for pattern in doc.patterns:
-            cells = pattern.cells.copy()
-            for channel in range(pattern.channels):
-                if channel != index:
-                    cells[:, channel, : D.EFFECT] = notes.EMPTY
-            pattern.cells = cells
-        return synth.render(doc)
-    finally:
-        for pattern in doc.patterns:
-            pattern.cells = saved[pattern.uid]
+    samples, loop, _marks = synth.render_only(doc, {index})
+    return samples, loop
 
 
 def export_plan(doc: Any, directory: Path) -> dict[Path, bytes]:

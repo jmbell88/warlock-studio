@@ -84,7 +84,8 @@ def test_a_failed_storage_walk_says_so_and_keeps_the_last_good_figure(monkeypatc
     cache = _cache([], limit=4)
     cache.storage = {"job_dirs": 3, "bytes": 99}
 
-    assert cache.measure() == {"job_dirs": 3, "bytes": 99}
+    cache.adopt_storage(cache.measure())
+    assert cache.storage == {"job_dirs": 3, "bytes": 99}, "last hour's figure stands"
     assert "vanished" in (cache.storage_error or "")
 
 

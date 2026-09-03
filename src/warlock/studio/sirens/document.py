@@ -125,6 +125,26 @@ def reserve_uid(above: int) -> None:
     _next_uid = max(_next_uid, int(above))
 
 
+def _copy_name(name: str, taken: Any) -> str:
+    """``name`` with a number, skipping every name already in use.
+
+    ``"verse"`` becomes ``"verse 2"``, and a second copy ``"verse 3"`` rather
+    than ``"verse 2 2"``: a copy of a copy is the third one, and the eye reads
+    a run of numbers where it cannot read a run of suffixes. An empty name
+    stays empty -- the pane names an unnamed pattern by its position, and
+    inventing "  2" would be a name nobody typed.
+    """
+    if not name:
+        return ""
+    stem = name.rstrip("0123456789 ") or name
+    used = set(taken)
+    for number in range(2, MAX_PATTERNS + 2):
+        candidate = f"{stem} {number}"[: inst.MAX_NAME_LEN]
+        if candidate not in used:
+            return candidate
+    return stem[: inst.MAX_NAME_LEN]
+
+
 def _free_instrument_id(instruments: Any) -> int:
     """The lowest id in ``0..MAX_INSTRUMENTS-1`` no instrument here holds.
 
@@ -166,8 +186,21 @@ def empty_cells(rows: int, channels: int) -> np.ndarray:
 class Channel:
     """One column group of the grid, and one voice of the mix.
 
-    ``kind`` fixes what can be played here: an instrument written for the noise
-    channel on a pulse channel is a refusal rather than a surprising sound.
+    ``kind`` fixes what is played here, and it is the *channel* that decides:
+    ``synth._render`` builds each voice from this field, so an instrument
+    written for another kind still plays -- it contributes its envelopes and
+    the channel contributes the waveform, which is the tracker convention and
+    what makes one pluck envelope usable on pulse and triangle alike. The
+    docstring here claimed a refusal that nothing enforced, and enforcing it
+    would have refused a working idiom rather than a mistake (the review's
+    theme T5, settled 2026-09-03 by fixing the sentence).
+
+    The one combination with nothing to play is a non-``sample`` instrument on
+    a ``sample`` channel: the voice looks up ``instrument.sample``, finds no
+    name, and is silent. That is a *fact about the song* rather than a refusal
+    the engine could take -- the instrument may be a sample one the user has
+    not finished -- so the manual's "a typed note is silent" list names it and
+    the engine plays what it was asked to.
 
     ``pan`` is the one thing here that has no hardware ancestor and it earns its
     place: the NES was mono and two pulse channels playing a harmony line down
@@ -455,6 +488,54 @@ class SongDoc:
         self._detach_pattern(uid)
         self._apply_order(after)
         return True
+
+    def duplicate_pattern(self, uid: int) -> Pattern:
+        """A copy of one pattern, appended. One undo step.
+
+        A tracker's most-used gesture after typing a note: a chorus is the
+        verse with two rows changed. Built as a single ``PatternAddEdit``
+        carrying the copied cells rather than an add followed by a write,
+        because two steps means Ctrl+Z leaves an empty pattern behind that
+        nobody asked for.
+
+        The name is the original's with a number, not the original's: two
+        patterns called "chorus" in the order list is a list that cannot be
+        read.
+        """
+        pattern = self._require(uid, self.pattern, MISSING_PATTERN)
+        if len(self.patterns) >= MAX_PATTERNS:
+            raise ValueError(f"a song holds {MAX_PATTERNS} patterns")
+        copy = Pattern(
+            uid=new_uid(),
+            name=_copy_name(pattern.name, [one.name for one in self.patterns]),
+            cells=pattern.cells.copy(),
+        )
+        index = len(self.patterns)
+        self.history.push(E.PatternAddEdit(pattern=copy, index=index))
+        self._attach_pattern(copy, index)
+        return copy
+
+    def rename_pattern(self, uid: int, name: str) -> bool:
+        """Name one pattern. -> whether anything changed.
+
+        The order list is drawn from these names, so this is the only thing
+        that makes a song with six patterns readable -- and the list is what
+        the user navigates by, not the uids the document addresses by.
+        """
+        pattern = self._require(uid, self.pattern, MISSING_PATTERN)
+        after = str(name)[: inst.MAX_NAME_LEN]
+        if after == pattern.name:
+            return False
+        self.history.push(
+            E.PatternRenameEdit(pattern=uid, before=pattern.name, after=after)
+        )
+        self._apply_pattern_name(uid, after)
+        return True
+
+    def _apply_pattern_name(self, uid: int, name: str) -> None:
+        pattern = self.pattern(uid)
+        if pattern is not None:
+            pattern.name = name
 
     def resize_pattern(self, uid: int, rows: int) -> bool:
         pattern = self._require(uid, self.pattern, MISSING_PATTERN)

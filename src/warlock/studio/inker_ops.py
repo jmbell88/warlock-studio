@@ -1278,6 +1278,9 @@ register(
         "Flip horizontal",
         _doc("flip", "horizontal"),
         menu="Sprite",
+        # Aseprite's own, and free here: the unshifted letters are the tools,
+        # and H is not one of them.
+        key="Shift+H",
         enabled=ready,
         reason=BUSY,
         separator_before=True,
@@ -1289,6 +1292,7 @@ register(
         "Flip vertical",
         _doc("flip", "vertical"),
         menu="Sprite",
+        key="Shift+V",
         enabled=ready,
         reason=BUSY,
     )
@@ -1383,6 +1387,10 @@ register(
         "Duplicate layer",
         _doc("duplicate_layer"),
         menu="Layer",
+        # Aseprite has no default for this one; the chord is ours, and it is
+        # the shifted twin of ``Ctrl+J`` (copy to new layer) beside it, which
+        # is the same verb over a selection rather than over the whole layer.
+        key="Ctrl+Shift+L",
         enabled=ready,
         reason=BUSY,
     )
@@ -1424,6 +1432,13 @@ register(
         "Merge down",
         _doc("merge_down"),
         menu="Layer",
+        # **Not Aseprite's Ctrl+E**, which is the one place this file departs
+        # from that muscle memory on purpose: Ctrl+E is "Save as reference"
+        # here, a door into the library that has no Aseprite counterpart and
+        # that the manual and the shortcut sheet both already name. Two
+        # commands cannot have one chord, and moving the one this app invented
+        # would be moving the one its users have learned.
+        key="Ctrl+Shift+M",
         enabled=lambda state, tab: ready(state, tab) and can_merge_down(state, tab),
         reason="There is no layer under this one to merge into.",
     )
@@ -2307,9 +2322,17 @@ def _sheet_merge(ctx: Any, tab: Any, **_: Any) -> Any:
 
     The load is a decode of a whole atlas, so it goes through the task runner
     -- the frame loop never blocks. The document write lands back on the frame
-    thread, which is where every other document write happens.
+    thread, in ``inker_sheet.land_merge``, which is where every other document
+    write happens.
+
+    **Keyed on the tab, and the payload comes back through ``Done.result``.**
+    Both are the house arrangement rather than taste: the runner forwards its
+    keyword arguments to the *task function*, so a completion callback handed
+    to ``submit`` is a ``TypeError`` inside the pool and a merge that never
+    lands; and a uid key is what lets the frame-thread half find the document
+    the user pressed on when the tab has since changed.
     """
-    from . import inker_mode, inker_sheet
+    from . import inker_mode
 
     doc = getattr(tab, "doc", None)
     base = getattr(doc, "sheet_base", None)
@@ -2328,15 +2351,18 @@ def _sheet_merge(ctx: Any, tab: Any, **_: Any) -> Any:
     if not newest:
         ctx.toast("No newer sheet of this character to merge in.", "info")
         return False
+    svc = ctx.svc
 
     def work() -> Any:
-        return inker_mode.load_sheet_cells(ctx.svc, job_id, newest)
+        return {
+            "cells": inker_mode.load_sheet_cells(svc, job_id, newest),
+            "sheet": newest,
+        }
 
-    def done(cells: Any) -> None:
-        if inker_sheet.merge(ctx, tab, cells):
-            base.source["sheet"] = newest
-
-    return ctx.submit(f"inker-merge:{newest}", work, on_done=done)
+    if not ctx.submit(f"inker-merge:{tab.uid}", work):
+        ctx.toast("A re-render is already loading for this document.", "info")
+        return False
+    return True
 
 
 def _sheet_conflict_next(ctx: Any, tab: Any, **_: Any) -> Any:
@@ -2654,6 +2680,17 @@ _QUICK_TOOL_BINDINGS: tuple[Binding, ...] = (
     Binding("move", "Ctrl", "tool", "FreehandTool", "hold", 30),
 )
 
+#: Second chords for commands that already have one.
+#:
+#: ``Op.key`` holds a command's *primary* chord and the sheet reads it from
+#: there, so an alias lives here for the reason a tool's shifted letter does:
+#: one command, two ways in. Redo is the only one so far and it is the one
+#: every editor spells twice -- Ctrl+Y is Windows', Ctrl+Shift+Z is everyone
+#: else's, and a user who tries the wrong one first finds nothing happens.
+_ALIAS_COMMAND_BINDINGS: tuple[Binding, ...] = (
+    Binding("redo", "Ctrl+Shift+Z"),
+)
+
 _CONTEXT_COMMAND_BINDINGS: tuple[Binding, ...] = (
     Binding("fill_selection", "F", context="Selection", priority=20),
     Binding("stroke_selection", "S", context="Selection", priority=20),
@@ -2661,6 +2698,7 @@ _CONTEXT_COMMAND_BINDINGS: tuple[Binding, ...] = (
 
 BINDINGS: tuple[Binding, ...] = (
     *(Binding(op.name, op.key, context=op.context) for op in OPS if op.key),
+    *_ALIAS_COMMAND_BINDINGS,
     *_CONTEXT_COMMAND_BINDINGS,
     *_TOOL_BINDINGS,
     *_QUICK_TOOL_BINDINGS,

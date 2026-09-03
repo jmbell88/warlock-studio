@@ -51,6 +51,44 @@ def draw(ctx: Any) -> None:
     ):
         sirens_mode.request_rerender(ctx, tab)
 
+    # The two ways to hear less than the whole song from the top, which is what
+    # writing one actually involves: bar 40 of a three-minute track, and one
+    # pattern before it is anywhere in the order list. Both existed under the
+    # pane -- the render's row map, and ``synth.render_pattern``, which had no
+    # caller at all (the 2026-09-02 review, section 8).
+    if widgets.disabled_button(
+        f"{icons.PLAY} From the caret",
+        device,
+        (width, 0),
+        reason=sirens_audio.unavailable_reason(),
+        tooltip="Play from the row the caret is on, in the song's own timing.",
+    ):
+        sirens_mode.play_from_caret(ctx, tab)
+    imgui.same_line()
+    if widgets.disabled_button(
+        f"{icons.PLAY} This pattern",
+        device,
+        (width, 0),
+        reason=sirens_audio.unavailable_reason(),
+        tooltip=(
+            "Play the pattern the grid is editing, once, whether or not the "
+            "order list reaches it. The song's own buffer is untouched."
+        ),
+    ):
+        sirens_mode.play_pattern(ctx, tab)
+    changed, value = controls.checkbox("Loop playback", state.loop_playback)
+    if changed:
+        state.loop_playback = bool(value)
+        if playing:
+            # Applied to what is sounding rather than to the next press: a
+            # toggle that only takes effect after a stop reads as a dead
+            # control, which is the thing this pane exists not to draw.
+            sirens_mode.play(ctx, tab)
+    widgets.muted_wrapped(
+        "Repeats the rendered song. The loop *point* in the order list is what "
+        "an exported WAV tells a game engine; this is for listening."
+    )
+
     if not device:
         widgets.muted_wrapped(sirens_audio.unavailable_reason())
     elif tab.render_error:

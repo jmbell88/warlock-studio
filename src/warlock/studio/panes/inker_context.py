@@ -208,11 +208,16 @@ def _selection_bar(ctx: Any, state: Any, tab: Any) -> None:
     """
 
     imgui.same_line()
+    # ``sticky_combine``, not ``combine``: the second is what the *current*
+    # gesture is doing (a held Shift wins for its own drag), and drawing the
+    # bar from it would make the control flicker to Add while Shift is down
+    # and back afterwards -- and, before 2026-09-03, made every press
+    # overwrite what this control had set.
     changed, mode = controls.segmented_choice(
-        "inker-combine", COMBINE_LABELS, state.combine, compact=True
+        "inker-combine", COMBINE_LABELS, state.sticky_combine, compact=True
     )
     if changed:
-        state.combine = mode
+        state.sticky_combine = mode
 
 
 # --- the tool bar -----------------------------------------------------------

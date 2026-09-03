@@ -1422,6 +1422,11 @@ def export_slices(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False
     state = ctx.state.inker
     scale = max(1, int(getattr(state, "export_scale", 1) or 1))
     frame_uid = tab.frame_uid
+    # Both halves of Repeat Last Export, which this runner had neither of: it
+    # never recorded ``dest``/``export_kind``, so ``REPEATABLE``'s "slices" row
+    # could not be reached, and it ignored ``repeat``, so reaching it would
+    # have opened the dialog anyway (the review's theme T5).
+    recorded = tab.export_dest if repeat else None
     names = _slice_filenames(doc.slices)
     crops = [
         (name, entry.at(frame_uid).bounds)
@@ -1433,7 +1438,11 @@ def export_slices(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False
 
         from .inker.transform import upscale
 
-        dest = dialogs.save_file("Export slices as PNGs", f"{suggested}.png", PNG_FILTER)
+        dest = recorded or dialogs.save_file(
+            "Export slices as PNGs",
+            _suggested_dialog_name(tab, suggested, ".png"),
+            PNG_FILTER,
+        )
         if dest is None:
             return None
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1448,7 +1457,11 @@ def export_slices(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False
             atomic.save_image(out, Image.fromarray(crop, "RGBA"), "PNG")
             if first is None:
                 first = out
-        return {"exported": first}
+        # ``dest`` and ``export_kind`` for the same reason ``export_png``
+        # records them: a repeat writes where this wrote, and the crops are
+        # named from the slices rather than from the path, so the path the user
+        # picked is the whole of what has to be remembered.
+        return {"exported": first, "dest": dest, "export_kind": "slices"}
 
     _start(ctx, tab, f"inker-export:{tab.uid}", run)
 
@@ -2348,7 +2361,11 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         """
         from PIL import Image
 
-        dest = dialogs.save_file(
+        # ``export.recorded`` like the sheet and the GIF beside it: this was the
+        # one runner of the three that read the dialog unconditionally, so
+        # Repeat Last Export -- documented as "asks nothing" -- reopened the
+        # picker for a PNG sequence (the review's theme T5).
+        dest = export.recorded or dialogs.save_file(
             "Export PNG sequence", _suggested_dialog_name(tab, suggested, ".png"), PNG_FILTER
         )
         if dest is None:
@@ -2708,6 +2725,12 @@ def on_task_done(ctx: Any, done: Any) -> None:
                     action="log",
                 )
             _report_import_warnings(ctx, result.get("warnings"))
+        return
+
+    if name == "inker-merge":
+        from . import inker_sheet
+
+        inker_sheet.land_merge(ctx, state, done)
         return
 
     if name == "inker-inpaint":
@@ -3316,23 +3339,25 @@ def stamp_text(ctx: Any, state: Any, tab: InkerDoc) -> bool:
 #: where the tooltip and the manual read it from too.
 TOOL_KEYS = {letter.lower(): key for key, _label, letter in inker_state.TOOLS}
 
-#: Compatibility view of Aseprite's shifted tool bindings.
+#: How the toolbox writes a second binding, tool to the chord.
 #:
-#: Dispatch reads ``inker_ops.BINDINGS``; this view survives for the condensed
-#: Ctrl+/ sheet and older callers. The registry is the source of truth.
-SHIFT_TOOL_KEYS = {
-    "b": "spray",
-    "g": "gradient",
-    "l": "curve",
-    "u": "ellipse",
-    "d": "polygon",
-    "m": "select_ellipse",
-    "c": "slice",
+#: **Read out of the registry, not written out beside it.** This was a hand
+#: copy of seven shifted letters checked against ``inker_state.TOOLS`` -- which
+#: is the table of *tools*, not the table of *bindings* -- so a rebound tool
+#: left the Ctrl+/ sheet advertising a chord that no longer did anything, and
+#: a shifted binding added to the registry never reached the sheet at all (the
+#: 2026-09-02 review, section 5). ``TOOL_KEYS`` above already learned this
+#: lesson; this is the same lesson one table over.
+ALT_TOOL_CHORDS = {
+    binding.target: binding.chord
+    for binding in inker_ops.BINDINGS
+    if binding.kind == "tool" and binding.chord.startswith("Shift+")
 }
 
-#: How the toolbox writes a second binding, tool to the chord.
-ALT_TOOL_CHORDS = {
-    tool: f"Shift+{letter.upper()}" for letter, tool in SHIFT_TOOL_KEYS.items()
+#: Letter to tool for the shifted chords, which is ``ALT_TOOL_CHORDS`` read the
+#: other way round. Kept for the callers that ask "what does Shift+B do".
+SHIFT_TOOL_KEYS = {
+    chord.removeprefix("Shift+").lower(): tool for tool, chord in ALT_TOOL_CHORDS.items()
 }
 
 #: How far a Shift+arrow nudge moves the active layer, in pixels. Eight rather

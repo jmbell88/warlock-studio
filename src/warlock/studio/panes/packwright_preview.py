@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import inker_state, packwright_mode, theme, widgets
+from .. import icons, inker_state, packwright_mode, theme, widgets
 from ..tokens import sp
 from . import packwright_textures
 
@@ -42,6 +42,11 @@ def draw(ctx: Any) -> None:
         else:
             widgets.muted("Packing..." if tab.packing else "Add a sprite to see the atlas.")
         return
+    if tab.pack_stale_why:
+        # Above the picture rather than instead of it: the last good atlas is
+        # still worth looking at, and what it needed was a mark saying it is
+        # not the current one.
+        widgets.text_colored(theme.ERR, f"{icons.TRIANGLE_ALERT} {tab.pack_stale_why}")
 
     view = tab.view
     avail = imgui.get_content_region_avail()

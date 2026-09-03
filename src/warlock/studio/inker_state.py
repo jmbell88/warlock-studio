@@ -31,8 +31,17 @@ MAX_ZOOM = 32.0
 ZOOM_STEP = 1.15
 
 # Inker's own bounds. Separate constants rather than a change to the three
-# above, because Plotter and Packwright import those and only the *ceiling* is
-# Inker's own now: 32x is a tile map's magnifier and a drawing has a nib.
+# above, because Plotter and Packwright import those and the ceiling is Inker's
+# own.
+#
+# **The ceiling was 10x and is now 64x, and that is a reversal.** The argument
+# for 10x was that 32x is a tile map's magnifier and a drawing has a nib. What
+# it left out is the size of the thing being drawn: a 16 px sprite at 10x is
+# 160 screen pixels, which on a 1440p display is a postage stamp in the middle
+# of an empty canvas -- and 16 px is not an edge case here, it is the size this
+# whole app is for. Aseprite's ceiling is 6400% for the same reason, and
+# Plotter already went past ours at 32x. 64x puts that same sprite at 1024 px,
+# which is a pixel you can aim at (the 2026-09-02 review, section 5).
 # Every view function below takes ``lo``/``hi`` defaulting to the globals, so
 # those two callers are untouched and this pane passes its own pair.
 #
@@ -45,13 +54,22 @@ ZOOM_STEP = 1.15
 # wrong thing: nobody nibs at 5% on purpose, and the way you leave 5% is the
 # same wheel notch that got you there.
 INKER_MIN_ZOOM = 0.05
-INKER_MAX_ZOOM = 10.0
+INKER_MAX_ZOOM = 64.0
 
 # The wheel's granularity, in percent. Additive and *snapped* rather than the
 # multiplicative ``ZOOM_STEP``: a 15% ratio step from 100% lands on 115, 132.25,
 # 152.09 -- the status bar reads a different arbitrary number every notch, and
 # there is no way back to a round one. See :func:`zoom_step`.
 ZOOM_PERCENT_STEP = 5
+
+#: Where the wheel stops being additive and starts walking :data:`ZOOM_LADDER`.
+#:
+#: 5% notches are right around 1:1, where the difference between 100% and 105%
+#: is a real one -- and absurd above it: from 1x to the 64x ceiling is 1,260
+#: notches, which is not a control, it is a workout. Aseprite's wheel goes
+#: multiplicative at the top for the same reason. Above this the notch is one
+#: rung, so the ceiling is seven notches from 8x instead of 1,120.
+FINE_ZOOM_MAX = 8.0
 
 #: The keyboard's zoom ladder, as whole scales.
 #:
@@ -75,13 +93,16 @@ ZOOM_PERCENT_STEP = 5
 #: then 0.75 screen pixels -- the user asked. The ladder is *"the next honest
 #: scale"*, and putting 75% on it would walk +/- into banding unasked. A test
 #: asserts the divergence so a future tidy-up of the two tables fails loudly.
-ZOOM_LADDER = (0.05, 0.1, 0.125, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
+ZOOM_LADDER = (
+    0.05, 0.1, 0.125, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0,
+    12.0, 16.0, 24.0, 32.0, 48.0, 64.0,
+)
 
 #: What the zoom combo in the canvas footer offers, as whole scales.
 #:
 #: Aseprite's own list, and deliberately *wider* than the ladder: see the note
 #: there for why 75% belongs on exactly one of the two.
-ZOOM_PRESETS = (0.05, 0.125, 0.25, 0.5, 0.75, 1.0, 2.0, 4.0, 8.0)
+ZOOM_PRESETS = (0.05, 0.125, 0.25, 0.5, 0.75, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0)
 
 
 def zoom_key(zoom: float) -> str:
@@ -1347,9 +1368,22 @@ def zoom_step(
     The rounding is what a user coming from any paint program expects and what
     the multiplicative ratio cannot give: 100% is reachable from either side.
     """
-    percent = round(view.zoom * 100 / ZOOM_PERCENT_STEP) * ZOOM_PERCENT_STEP
-    percent += ZOOM_PERCENT_STEP * notches
-    _anchor(view, origin, mouse, clamp_zoom(percent / 100.0, lo, hi))
+    if (view.zoom >= FINE_ZOOM_MAX and notches > 0) or (
+        view.zoom > FINE_ZOOM_MAX and notches < 0
+    ):
+        # One notch, one rung. See :data:`FINE_ZOOM_MAX`: 5% of 1x is a
+        # meaningful step and 5% of 64x is a twentieth of a source pixel.
+        target = view.zoom
+        for _ in range(max(1, min(int(abs(notches)), len(ZOOM_LADDER)))):
+            moved = zoom_rung(target, 1 if notches > 0 else -1)
+            if moved == target:
+                break
+            target = moved
+    else:
+        percent = round(view.zoom * 100 / ZOOM_PERCENT_STEP) * ZOOM_PERCENT_STEP
+        percent += ZOOM_PERCENT_STEP * notches
+        target = percent / 100.0
+    _anchor(view, origin, mouse, clamp_zoom(target, lo, hi))
 
 
 def zoom_ladder_step(
@@ -2054,7 +2088,19 @@ class InkerState:
     drag_anchor: tuple[float, float] | None = None
     last_point: tuple[float, float] | None = None
     lasso: list[tuple[float, float]] = field(default_factory=list)
+    #: How *this gesture* combines with the live selection: the sticky mode
+    #: below, unless a modifier is held at the press, which wins for that
+    #: gesture alone. Decided in ``inker_canvas._press`` and read by every
+    #: selection tool from there on.
     combine: str = "replace"
+    #: The mode the context bar's segmented control is showing. **The one the
+    #: user chose**, and the reason the two fields are separate: the press used
+    #: to assign the modifier's answer straight onto ``combine``, so setting
+    #: *Add* in the bar and dragging with no modifier held silently replaced
+    #: the mask -- a control that showed one thing and did another (the
+    #: 2026-09-02 review, section 5). Shift still adds for the drag it is held
+    #: on, and the bar still says what an unmodified drag will do.
+    sticky_combine: str = "replace"
     space_held: bool = False
     # Which mouse button started the drag: 0 paints with the foreground colour,
     # 1 with the background one. Stored rather than re-read, because a gesture
@@ -2904,6 +2950,30 @@ class InkerState:
         """
         self.fg = tuple(int(c) for c in tuple(colour)[:4])  # type: ignore[assignment]
         self.fg_slot = None if slot is None else int(slot)
+
+    def palette_moved(self) -> None:
+        """The palette table changed under the brush. Drop what is now stale.
+
+        ``fg_slot`` is the claim "this colour came from slot N", and it decides
+        which of two identical swatches a stroke lands in. Every op that
+        *reorders* the table -- Remove, the two arrows, Sort, Insert ramp --
+        leaves that claim pointing at whichever colour moved into N, and
+        Recolour leaves it pointing at a slot that is no longer the colour in
+        hand. Either way the next stroke lands somewhere the user did not
+        choose, in the one document kind where the difference is invisible
+        until the file is exported (the 2026-09-02 review, section 5).
+
+        Cleared rather than followed: the *colour* in hand is still what the
+        user picked, and a brush with no claim paints the nearest slot, which is
+        exactly what a colour taken from the wheel does. Following a slot
+        through a sort would be guessing at an intention the gesture did not
+        express.
+
+        The usage counts go with it for the same reason -- they are keyed by
+        slot -- which is why this is one call rather than two at six sites.
+        """
+        self.fg_slot = None
+        self.palette_usage = None
 
     def clamp_slots(self, count: int) -> None:
         """Drop selected slots the palette no longer has.

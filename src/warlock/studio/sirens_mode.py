@@ -184,6 +184,126 @@ def caret_pattern_label(ctx: Any, tab: SongTab | None = None) -> str:
     return f"pattern {pattern.name}" if pattern.name else "song pattern"
 
 
+def oneshot_name_for_caret(ctx: Any, tab: SongTab | None = None) -> str:
+    """The sound effect the grid is editing, by name, or "".
+
+    The reverse lookup ``caret_pattern_label`` already does, as a *fact* rather
+    than a sentence, because two doors need it: the label above the grid, and
+    the "+ To order" button -- an effect's pattern is not part of the song, and
+    appending one used to put a coin pickup in the middle of it silently.
+    """
+    state = ensure(ctx)
+    tab = tab or state.active
+    if tab is None or state.pattern is None:
+        return ""
+    for one in tab.doc.oneshots:
+        if one.pattern == state.pattern:
+            return one.name or "effect"
+    return ""
+
+
+def confirm_remove_pattern(ctx: Any, tab: SongTab, uid: int, used: int) -> None:
+    """Delete a pattern, asking first when the order list refers to it.
+
+    ``remove_pattern`` drops every order entry naming the pattern in the same
+    undo step, which is right -- a song that refers to a pattern which does not
+    exist must not be one Ctrl+Z away -- and is exactly the sort of thing a
+    person should be told before the press rather than after it. A pattern
+    nothing plays is deleted without a question, because there is nothing to
+    warn about.
+    """
+    def go() -> None:
+        if tab.doc.remove_pattern(uid):
+            request_rerender(ctx, tab)
+            remaining = tab.doc.patterns
+            if remaining:
+                set_caret(ctx, pattern=remaining[0].uid)
+
+    if not used:
+        go()
+        return
+    ctx.confirms.ask(
+        dialogs.Confirm(
+            title="Delete this pattern?",
+            message=(
+                f"It is in the order list {used} time(s), and those entries go "
+                "with it. One Ctrl+Z brings both back."
+            ),
+            confirm_label="Delete",
+            cancel_label="Keep it",
+            on_confirm=go,
+        )
+    )
+
+
+def audible_channels(doc: Any, state: Any) -> tuple[int, ...]:
+    """Which channel *indices* the mix should play. Pure.
+
+    Solo wins over mute, which is every tracker's rule and the one that makes
+    the pair usable: soloing to check a bass line and then unsoloing must not
+    have to undo four mutes. A solo naming a channel the song no longer has
+    falls back to "everything", because a removed channel is not a reason for
+    silence.
+    """
+    channels = list(getattr(doc, "channels", ()))
+    solo = int(getattr(state, "solo", -1))
+    muted = set(getattr(state, "muted", ()) or ())
+    order = [one.uid for one in channels]
+    if solo >= 0 and solo in order:
+        return (order.index(solo),)
+    return tuple(index for index, uid in enumerate(order) if uid not in muted)
+
+
+def toggle_mute(ctx: Any, uid: int, tab: SongTab | None = None) -> bool:
+    """Mute or unmute one channel. -> whether it is now muted.
+
+    Re-renders, because the mute lives in the mix rather than in the document:
+    the buffer Space plays is the render, and a mute that only changed a button
+    would be a control that does nothing until the next edit.
+    """
+    state = ensure(ctx)
+    tab = tab or state.active
+    uid = int(uid)
+    if uid in state.muted:
+        state.muted.discard(uid)
+        muted = False
+    else:
+        state.muted.add(uid)
+        muted = True
+    request_rerender(ctx, tab)
+    return muted
+
+
+def toggle_solo(ctx: Any, uid: int, tab: SongTab | None = None) -> int:
+    """Solo one channel, or clear the solo when it is already this one. -> the
+    soloed uid, or ``-1``."""
+    state = ensure(ctx)
+    tab = tab or state.active
+    state.solo = -1 if state.solo == int(uid) else int(uid)
+    request_rerender(ctx, tab)
+    return state.solo
+
+
+def channel_state(ctx: Any, uid: int) -> tuple[bool, bool, bool]:
+    """``(muted, soloed, audible)`` for one channel -- what the header draws.
+
+    Three answers rather than two because "muted" and "not heard" are different
+    facts: a channel that is not the soloed one is silent without being muted,
+    and a button that lit up for both would be lying about what a click undoes.
+    """
+    state = ensure(ctx)
+    tab = state.active
+    muted = int(uid) in state.muted
+    soloed = state.solo == int(uid)
+    if tab is None:
+        return muted, soloed, not muted
+    order = [one.uid for one in tab.doc.channels]
+    if int(uid) not in order:
+        return muted, soloed, False
+    audible = order.index(int(uid)) in audible_channels(tab.doc, state)
+    return muted, soloed, audible
+
+
 def clamp_caret(ctx: Any, tab: SongTab | None = None) -> None:
     """Put the caret back inside the pattern it names.
 
@@ -765,20 +885,32 @@ def request_render(ctx: Any, tab: SongTab | None = None) -> None:
     # is where the document is safe to read.
     data = wsng.wsng_bytes(tab.doc)
 
+    # The mix's own mask, read on the frame thread with everything else the
+    # task needs: a mute is view state, so the snapshot cannot carry it.
+    keep = audible_channels(tab.doc, ensure(ctx))
+    whole = len(keep) == len(tab.doc.channels)
+
     def run() -> dict[str, Any]:
         from ..service.errors import invalid_from
         from .sirens import synth, wavout
 
         try:
             doc = wsng.read_wsng(data)
-            samples, loop = synth.render(doc)
+            samples, loop, marks = (
+                synth.render_marked(doc) if whole else synth.render_only(doc, keep)
+            )
         except ValueError as exc:
             # Framed, because only a ``ServiceError``'s text survives the task
             # classifier -- and the engine's own sentence (a song past the
             # render ceiling says so, with the ceiling in it) is the half that
             # tells the user what to do about it.
             raise invalid_from(exc, "That song did not render") from exc
-        return {"pcm": wavout.to_int16(samples), "loop": loop, "uid": uid}
+        return {
+            "pcm": wavout.to_int16(samples),
+            "loop": loop,
+            "marks": marks,
+            "uid": uid,
+        }
 
     tab.rendering = True
     if ctx.submit(f"sirens-render:{uid}", run):
@@ -794,6 +926,7 @@ def pump(ctx: Any) -> None:
     """Called from the grid pane's draw, which is the only thing that runs
     every frame in this mode -- the ``motion.py`` idiom."""
     request_render(ctx)
+    follow_playhead(ctx)
 
 
 #: The key prefix an audition carries. **Not ``sirens-render:``**, and that is
@@ -873,10 +1006,110 @@ def play(ctx: Any, tab: SongTab | None = None) -> bool:
     if tab.pcm is None:
         ctx.toast("There is nothing in the order list to play yet.", "error")
         return False
-    if not sirens_audio.play(tab.pcm):
+    state = ensure(ctx)
+    tab.play_offset = 0
+    if not sirens_audio.play(
+        tab.pcm, tag=tab.uid, loops=-1 if state.loop_playback else 0
+    ):
         ctx.toast("That song could not be played; see the log for details.", "error")
         return False
     return True
+
+
+def play_from_caret(ctx: Any, tab: SongTab | None = None) -> bool:
+    """Play from the row the caret is on. -> whether it started.
+
+    The render's own row map says where that row starts in the buffer, so this
+    is a slice rather than a second render -- which is the whole reason the map
+    exists beyond drawing a highlight. Writing bar 40 of a three-minute song
+    and having to hear the first two minutes to check it is the complaint this
+    answers.
+
+    A caret on a pattern the order list never reaches has no offset, and says
+    so rather than starting from the top: playing something else is a worse
+    answer than not playing.
+    """
+    state = ensure(ctx)
+    tab = tab or state.active
+    if tab is None or not _playable(ctx, tab):
+        return False
+    offset = None
+    for at, _order_index, pattern, row in tab.marks:
+        if pattern == state.pattern and row >= state.row:
+            offset = at
+            break
+    if offset is None:
+        ctx.toast(
+            "The song never reaches this row -- add this pattern to the order "
+            "list, or press Play to hear it from the top.",
+            "info",
+        )
+        return False
+    tab.play_offset = int(offset)
+    if not sirens_audio.play(
+        tab.pcm[int(offset) :], tag=tab.uid, loops=-1 if state.loop_playback else 0
+    ):
+        ctx.toast("That song could not be played; see the log for details.", "error")
+        return False
+    return True
+
+
+def play_pattern(ctx: Any, tab: SongTab | None = None) -> bool:
+    """Render the caret's pattern alone and play it. -> whether it started.
+
+    ``synth.render_pattern`` has existed since the engine landed with nothing
+    calling it. Auditioning one pattern is how a bar gets written -- the order
+    list is a later question -- and the sound effect audition beside this one is
+    the same shape: its own key, its own arm, and the tab's own buffer never
+    touched, so the song is still the song when this finishes.
+    """
+    state = ensure(ctx)
+    tab = tab or state.active
+    if tab is None or state.pattern is None:
+        return False
+    if not sirens_audio.available():
+        ctx.toast(sirens_audio.unavailable_reason(), "warn")
+        return False
+    from .sirens import wsng
+
+    data = wsng.wsng_bytes(tab.doc)
+    uid = int(state.pattern)
+
+    def run() -> dict[str, Any]:
+        from ..service.errors import invalid_from
+        from .sirens import synth, wavout
+
+        try:
+            doc = wsng.read_wsng(data)
+            samples = synth.render_pattern(doc, uid)
+        except ValueError as exc:
+            raise invalid_from(exc, "That pattern did not render") from exc
+        return {"pcm": wavout.to_int16(samples), "pattern": uid}
+
+    # Keyed on the *tab*, like every other ``sirens-`` key: the arm below looks
+    # a tab up from the second segment, and there is one channel anyway, so two
+    # patterns auditioning at once is not a thing to make room for.
+    return bool(ctx.submit(f"{PATTERN_PREFIX}{tab.uid}", run))
+
+
+def _playable(ctx: Any, tab: SongTab) -> bool:
+    """The three refusals :func:`play` and :func:`play_from_caret` share."""
+    if not sirens_audio.available():
+        ctx.toast(sirens_audio.unavailable_reason(), "warn")
+        return False
+    if tab.rendering or tab.render_dirty:
+        ctx.toast("Still rendering your latest edits -- try again in a moment.", "info")
+        return False
+    if tab.pcm is None:
+        ctx.toast("There is nothing in the order list to play yet.", "error")
+        return False
+    return True
+
+
+#: A pattern audition's key prefix. ``AUDITION_PREFIX``'s reasoning exactly: a
+#: key of its own, so a pattern played during a re-render is not refused, and
+#: an arm of its own, so the result never lands on ``SongTab.pcm``.
+PATTERN_PREFIX = "sirens-pattern:"
 
 
 def stop(ctx: Any) -> None:
@@ -892,22 +1125,80 @@ def toggle_play(ctx: Any, tab: SongTab | None = None) -> bool:
     return play(ctx, tab)
 
 
-def playhead_row(ctx: Any, tab: SongTab | None = None) -> int | None:
-    """Which pattern row is sounding, or ``None``.
+def playhead_mark(ctx: Any, tab: SongTab | None = None) -> tuple[int, int, int] | None:
+    """``(order index, pattern uid, row)`` that is sounding, or ``None``.
 
-    Derived from :func:`sirens_audio.position` and the document's tick rate
-    rather than tracked, because the mixer is the only thing that knows how far
-    it has got and it does not say -- see ``sirens_audio``'s playhead note. It
-    is an estimate to within a buffer and it moves a highlight; nothing depends
-    on it.
+    :func:`sirens_audio.position` says how far the mixer has got -- it is the
+    only thing that knows, and it is accurate to within a buffer -- and the
+    render's own row map says what was playing there. Bisected rather than
+    computed: the arithmetic this replaced (seconds over the document's
+    seconds-per-row) described one imaginary pattern of unbounded length, so it
+    was wrong for any song with an order list longer than one entry, and wrong
+    again after every ``Fxx``, ``Bxx`` and ``Dxx``.
     """
     tab = tab or active(ctx)
-    if tab is None or not sirens_audio.playing():
+    if tab is None or sirens_audio.tag() != tab.uid:
+        # ``tag`` and not merely ``playing``: there is one channel, so
+        # auditioning a sound effect replaces the song on it -- and a playhead
+        # bisecting the *song's* row map while a coin pickup sounds is a
+        # highlight walking rows nothing is playing.
         return None
-    seconds_per_row = tab.doc.speed / tab.doc.tick_rate
-    if seconds_per_row <= 0:
+    return tab.mark_at(sirens_audio.position(), synth_rate())
+
+
+def synth_rate() -> int:
+    """The render's sample rate. A function so the import stays lazy."""
+    from .sirens import synth
+
+    return int(synth.SAMPLE_RATE)
+
+
+def playhead_row(ctx: Any, tab: SongTab | None = None) -> int | None:
+    """Which row *of the pattern on screen* is sounding, or ``None``.
+
+    ``None`` while the song is somewhere else, which is the half the old
+    estimate could not express at all: it returned a row number whatever was
+    playing, so a two-pattern song highlighted a row of the pattern the user
+    was looking at because another pattern had reached it.
+    """
+    state = ensure(ctx)
+    mark = playhead_mark(ctx, tab)
+    if mark is None:
         return None
-    return int(sirens_audio.position() / seconds_per_row)
+    _order_index, pattern, row = mark
+    if state.pattern is not None and pattern != state.pattern:
+        return None
+    return row
+
+
+def follow_playhead(ctx: Any) -> bool:
+    """Move the caret onto the sounding row while following. -> whether it moved.
+
+    Follow mode used to scroll the *view* and leave the caret where it was, so
+    the two most ordinary things a person does while a song plays -- watch it,
+    and type the next note -- disagreed: the row under the highlight was not
+    the row a keystroke wrote to, and on a song with more than one pattern the
+    highlight was not even in the pattern being edited. The tracker answer is
+    that following moves the caret, so what is under the playhead is what is
+    being edited; ``follow`` is off with one click for anyone who wants to type
+    into bar 3 while bar 1 plays.
+    """
+    state = ensure(ctx)
+    if not state.follow:
+        return False
+    mark = playhead_mark(ctx)
+    if mark is None:
+        return False
+    _order_index, pattern, row = mark
+    if state.pattern == pattern and state.row == row:
+        return False
+    state.pattern = pattern
+    state.row = row
+    # Every other thing that moves the caret clears this; a playhead is no
+    # different, and a half-typed instrument number carried onto another row
+    # would finish itself there.
+    state.digit = 0
+    return True
 
 
 # --- task results -------------------------------------------------------------
@@ -935,9 +1226,21 @@ def on_task_done(ctx: Any, done: Any) -> None:
 
     if name == "sirens-render":
         if isinstance(result, dict):
-            tab.adopt_render(result["pcm"], result.get("loop"))
+            tab.adopt_render(
+                result["pcm"], result.get("loop"), result.get("marks") or ()
+            )
         else:
             tab.rendering = False
+        return
+
+    if name == "sirens-pattern":
+        # The caret's pattern, alone, straight to the mixer -- the audition's
+        # shape, and tagged so the song's playhead does not bisect the song's
+        # row map against a single pattern's clock.
+        if isinstance(result, dict) and not sirens_audio.play(
+            result["pcm"], tag=f"pattern:{result.get('pattern', '')}"
+        ):
+            ctx.toast("That pattern could not be played; see the log.", "error")
         return
 
     if name == "sirens-audition":
@@ -989,7 +1292,9 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         # offering one is worse than a short one.
         forget_path(ctx, done.key.split(":", 1)[1])
         return
-    if done.key.startswith(AUDITION_PREFIX) or done.key.startswith(sirens_io.SAMPLE_PREFIX):
+    if done.key.startswith(
+        (AUDITION_PREFIX, PATTERN_PREFIX, sirens_io.SAMPLE_PREFIX)
+    ):
         # A refused sample or audition has nothing to unlock: the tab was never
         # locked for either, and clearing ``saving`` here would unlock a *save*
         # that happened to be running alongside. The sentence the user is owed

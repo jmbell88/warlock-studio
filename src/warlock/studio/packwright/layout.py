@@ -1,11 +1,24 @@
 """Where every sprite lands: the two modes, and the settings that decide.
 
-**Grid** puts every sprite in a uniform cell the size of the largest trimmed
-sprite, row-major in key order. It is the mode that produces a *tileset* -- a
-regular atlas an engine can slice by arithmetic -- which is why the grid's
-geometry is spelled as Tiled's own margin and spacing: the outer border and the
-gutter are both ``padding``, so :mod:`.tsxout` can hand the numbers straight to
+**Grid** puts every sprite in a uniform cell the size of the largest sprite,
+row-major in key order. It is the mode that produces a *tileset* -- a regular
+atlas an engine can slice by arithmetic -- which is why the grid's geometry is
+spelled as Tiled's own margin and spacing: the outer border and the gutter are
+both ``padding``, so :mod:`.tsxout` can hand the numbers straight to
 ``tilegrid.tileset.Tileset`` rather than approximating them.
+
+**A grid pack never trims, whatever ``trim`` says.** Trimming moves each
+sprite's content to its own bounding box, and in a grid it was then blitted at
+the *cell's* top-left -- so a 16px tile whose art sat four pixels in came out
+four pixels up and left of where it belongs, and every tile was re-registered
+to a different origin from its neighbours. The atlas was smaller and the
+tileset was wrong: a `.tsx` slices by arithmetic and cannot know that cell 7
+was nudged. The two things the setting could mean here -- "make the atlas
+smaller" and "keep the tiles aligned" -- cannot both be had, and a mode whose
+entire purpose is arithmetic alignment answers to the second (the 2026-09-02
+review, section 7). MaxRects still trims: nothing there is addressed by
+position, and the sidecar records each frame's ``trim`` for the consumer that
+wants the original box back.
 
 **MaxRects** packs tightly and irregularly, which is what an atlas for
 individually-addressed sprites wants. Its size search is deterministic and
@@ -240,7 +253,9 @@ class _Measured:
         return self.trim[3]
 
 
-def _measure(sprites: list[Sprite], settings: PackSettings) -> list[_Measured]:
+def _measure(
+    sprites: list[Sprite], settings: PackSettings, *, trim: bool | None = None
+) -> list[_Measured]:
     """Every sprite's packing rectangle, in canonical key order.
 
     Sorted here rather than left to the caller because the *order is part of
@@ -250,6 +265,11 @@ def _measure(sprites: list[Sprite], settings: PackSettings) -> list[_Measured]:
 
     The sprite-count ceiling is asked here rather than in either packer, which
     is what makes it one door: every caller of either mode comes through this.
+
+    ``trim`` overrides the setting for a caller that has its own answer, which
+    is :func:`grid_layout` and only it: a grid is addressed by arithmetic, so
+    moving a sprite to its own bounding box would misregister the cell. The
+    module docstring carries the argument.
     """
     if len(sprites) > MAX_SPRITES:
         raise ValueError(
@@ -258,7 +278,9 @@ def _measure(sprites: list[Sprite], settings: PackSettings) -> list[_Measured]:
         )
     out = []
     for sprite in sorted(sprites, key=lambda s: s.key):
-        x, y, w, h, empty = trim_rect(sprite.pixels, enabled=settings.trim)
+        x, y, w, h, empty = trim_rect(
+            sprite.pixels, enabled=settings.trim if trim is None else trim
+        )
         out.append(_Measured(sprite=sprite, trim=(x, y, w, h), empty=empty))
     return out
 
@@ -311,7 +333,10 @@ def grid_layout(sprites: list[Sprite], settings: PackSettings) -> Layout:
     checks the two agree before it will write a ``.tsx`` -- and refuses,
     naming the mismatch, rather than emit one that slices wrong.
     """
-    entries = _measure(sprites, settings)
+    # ``trim=False``, always: see the module docstring. Passed as an override
+    # rather than read off ``settings`` so the document keeps the user's answer
+    # for the day they switch back to MaxRects.
+    entries = _measure(sprites, settings, trim=False)
     if not entries:
         raise ValueError("there is nothing to pack")
 

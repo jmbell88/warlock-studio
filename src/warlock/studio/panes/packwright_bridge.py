@@ -40,7 +40,10 @@ def draw(ctx: Any) -> None:
         packwright_mode.ask_open(ctx)
 
     ready = not tab.busy
-    packed = tab.layout is not None and tab.atlas is not None
+    # ``pack_stale_why`` and not merely "is there an atlas": a failed repack
+    # leaves the previous one in place, and exporting it writes a file about
+    # sprites this document no longer holds.
+    packed = tab.layout is not None and tab.atlas is not None and not tab.pack_stale_why
     # Two gates, and every button below is behind one or both of them. Hoisted
     # so the four of them explain the same state in the same words -- the
     # ``_VIEWPORT_WHY`` pattern.
@@ -49,7 +52,9 @@ def draw(ctx: Any) -> None:
     # from the centre pane's pump whenever ``pack_dirty`` is set. This used to
     # send the user hunting for a control that does not exist, which is the
     # worst kind of empty state -- one that reads as a working instruction.
-    packed_why = "Nothing is packed yet. Add images -- packing runs by itself."
+    packed_why = tab.pack_stale_why or (
+        "Nothing is packed yet. Add images -- packing runs by itself."
+    )
     imgui.dummy((0, 4))
     if widgets.disabled_button(
         f"{icons.SAVE} Save (Ctrl+S)", ready, (width, 0), reason=busy_why

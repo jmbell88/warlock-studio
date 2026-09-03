@@ -112,8 +112,15 @@ column.
 
 **The toolbar over the grid** carries the caret's own state rather than any setting: **Octave** is
 which octave the lower piano row plays (`-` and `=` move it), **Step** is how far the caret drops
-after each entry — set it to 4 and you are writing on the beat — and **Follow** scrolls the grid
-with the playhead instead of with the caret.
+after each entry — set it to 4 and you are writing on the beat — and **Follow** puts the caret on
+the row that is sounding, so what is under the highlight is what your next keystroke writes to.
+Turn it off to type into bar 3 while bar 1 plays.
+
+**The channel strip over the grid** names every channel and says whether the mix is playing it.
+Click a name to mute it, the **S** beside it to hear that channel alone; solo wins over every mute,
+so checking a bass line and going back does not mean undoing four mutes. Neither is part of the
+song — a `.wsng` that remembered your mutes would hand somebody else a track with a part missing —
+and both re-render, because what you hear is the render.
 
 **Selections and moving about.** Shift with the arrow keys extends a block over rows and channels;
 `Esc` drops it. `Page Up` and `Page Down` move sixteen rows, which is four beats — one bar in every
@@ -123,7 +130,8 @@ with its top-left corner at the caret — a block that runs off the bottom or th
 clipped, not refused. The clipboard belongs to the mode rather than the song, so a bar copied in one
 tab pastes into another, and a cut is one undo step.
 
-Clicking anywhere in the grid moves the caret there.
+Clicking anywhere in the grid moves the caret there, into the column you clicked: click on an
+effect's letter and the next key you press is an effect letter, not a note.
 
 ## Effects
 
@@ -164,10 +172,21 @@ The left column's lower half is two lists, and they are deliberately two.
 removing an entry from the order does not delete the pattern — the whole point of an order list is
 that a pattern can appear in it several times, or not at all.
 
-**Loop at the end** is what makes a soundtrack a soundtrack. With it on, the render carries loop
+Each order row carries its own three buttons: **▲**/**▼** move the entry, the middle one points it
+at a different pattern, and the bin takes it out. A pattern's own row has **Duplicate** — a chorus
+is usually the verse with two rows changed, and a copy is one undo step, named `verse 2` so the two
+can be told apart in the list — a name field, and **Delete**, which asks first when the order list
+plays that pattern and names how many entries go with it. All of it is one Ctrl+Z.
+
+**Loop the song** is what makes a soundtrack a soundtrack. With it on, the render carries loop
 points, and those loop points are written into the exported WAV's `smpl` chunk — so an engine that
 reads one loops the track at the right sample rather than restarting it. A loop that lives only in a
 sidecar the engine never reads is a track that does not loop.
+
+**The loop point is any entry, not only the first.** Pick it with the slider under the checkbox; the
+entry it names is marked in the list. That is how an intro that plays once works: entries 00–01 are
+the intro, the loop starts at 02, and the WAV tells the engine so. Move an entry above the loop
+point and the loop follows it rather than silently pointing at whatever landed there.
 
 An order with nothing in it plays nothing, and the transport says so rather than looking broken.
 
@@ -240,6 +259,14 @@ song. In exchange, what you hear is bit-for-bit what the exported WAV contains, 
 with no chance of a dropout because something else on the computer was busy.
 
 **Re-render** forces one; you rarely need it, because any edit re-arms the renderer by itself.
+
+**From the caret** plays from the row the caret is on, in the song's own timing — writing bar 40 of
+a three-minute track does not mean hearing the first two minutes to check it. It plays the *song*,
+so a pattern the order list never reaches says so rather than starting from the top. **This
+pattern** plays the pattern the grid is editing, once, whether or not the order reaches it; it never
+touches the song's own buffer, so pressing Play afterwards plays the song. **Loop playback** repeats
+what was rendered — the loop *point* in the order list is what an exported WAV tells a game engine,
+while this is for listening.
 
 **Tempo** and **Speed** in the transport belong to the song rather than to the transport: they are
 undoable and they re-arm the renderer. A tempo change you cannot take back is the one edit in a
@@ -337,10 +364,16 @@ And one limit of the current build, stated plainly rather than left to be discov
 The sentence beside the button says so. Writing, saving and exporting are unaffected — you can
 compose here and listen elsewhere.
 
-**A typed note is silent.** Three usual causes, in order of likelihood: there is no instrument
+**A typed note is silent.** Four usual causes, in order of likelihood: there is no instrument
 selected, so nothing was stamped into the instrument column; the instrument named is a `sample` one
-whose sample has been removed; or the pattern you are typing into is not in the order list, so the
-song never reaches it.
+whose sample has been removed; the row is on the **Sample** channel and the instrument named is not
+a `sample` one, so there is no recording to play; or the pattern you are typing into is not in the
+order list, so the song never reaches it.
+
+The channel decides the voice and the instrument brings its envelopes, so an instrument of one kind
+on a channel of another is not refused and is usually what you want — a pluck written on pulse works
+on triangle unchanged. The sample channel is the exception above, because a recording is the one
+thing an envelope cannot stand in for.
 
 **Nothing happens when I type in the effect column.** That letter is not one the engine has an
 effect for, and a letter it cannot play is refused rather than written. The [Effects](#effects) table

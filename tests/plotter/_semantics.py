@@ -85,6 +85,52 @@ def _terrain_facts(spec: Any) -> list[Any]:
     return [spec.name, list(spec.fill), list(spec.outline)]
 
 
+def _tile_meta_facts(meta: Any) -> dict[str, Any]:
+    """One tile's metadata: class, properties, weight, animation, collision."""
+    return {
+        "class_name": meta.class_name,
+        "properties": _props(meta.properties),
+        "probability": _num(meta.probability),
+        "animation": [
+            [int(frame.local_id), int(frame.duration_ms)] for frame in meta.animation
+        ],
+        "collision": [_geometry_facts(shape) for shape in meta.collision],
+    }
+
+
+def _wangset_facts(wangset: Any) -> dict[str, Any]:
+    """One *foreign* Wang set -- the model kept when the blob preset was not
+    recognised, which is every corner set a Tiled user authored by hand."""
+    return {
+        "name": wangset.name,
+        "kind": wangset.kind,
+        "colours": [
+            [colour.name, colour.colour, _num(colour.probability)]
+            for colour in wangset.colours
+        ],
+        "tiles": {
+            str(local): list(wangset.tiles[local]) for local in sorted(wangset.tiles)
+        },
+    }
+
+
+def _collection_facts(collection: Any) -> Any:
+    """An image collection's own facts, or None for a sliced atlas.
+
+    The composed atlas is already digested beside this; what composition cannot
+    say is which ids exist (a collection permits gaps) and how big each tile
+    really is, which is exactly what ``ids`` and ``sizes`` are for.
+    """
+    if collection is None:
+        return None
+    return {
+        "ids": [int(one) for one in collection.ids],
+        "sizes": [[int(w), int(h)] for w, h in collection.sizes],
+        "columns": int(collection.columns),
+        "cell": [int(collection.cell_w), int(collection.cell_h)],
+    }
+
+
 def _tileset_facts(ref: Any) -> dict[str, Any]:
     tileset = ref.tileset
     return {
@@ -116,6 +162,27 @@ def _tileset_facts(ref: Any) -> dict[str, Any]:
         "image": _digest(tileset.pixels),
         "properties": _props(tileset.properties),
         "terrains": [_terrain_facts(spec) for spec in tileset.terrains],
+        # Everything below was a blind spot until 2026-09-03, and the blind
+        # spot was load-bearing: the embedded-XML tileset reader in ``tmx.py``
+        # had drifted from ``read_tsx`` -- no presentation fields, no foreign
+        # Wang model, no ``trans`` colour key -- and every round trip through
+        # this comparator passed anyway, which is what let several
+        # ``docs/COMPAT.md`` rows say more than the code did (the 2026-09-02
+        # review, section 7).
+        "phases": int(tileset.phases),
+        "tiles": {
+            str(local): _tile_meta_facts(tileset.tiles[local])
+            for local in sorted(tileset.tiles)
+        },
+        "wangsets": [_wangset_facts(one) for one in tileset.wangsets],
+        "collection": _collection_facts(tileset.collection),
+        "presentation": {
+            "offset": [int(tileset.offset_x), int(tileset.offset_y)],
+            "object_alignment": tileset.object_alignment,
+            "render_size": tileset.render_size,
+            "fill_mode": tileset.fill_mode,
+            "background": tileset.background,
+        },
     }
 
 

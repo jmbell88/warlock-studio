@@ -79,6 +79,25 @@ class PackTab:
         return self.saving
 
     @property
+    def pack_stale_why(self) -> str:
+        """Why the atlas on screen is not the one this document describes.
+
+        Empty when it is. A *failed* pack clears ``packing`` and records
+        ``pack_error``, but leaves ``layout``/``atlas`` at the last pack that
+        worked -- deliberately, because a picture the user can still look at
+        beats a blank pane. What was missing is that nothing said so: the
+        preview drew the old atlas with no mark on it and both exports wrote
+        it, so a pack that could not fit produced a file describing sprites the
+        document no longer holds (the 2026-09-02 review, section 7).
+        """
+        if not self.pack_error or self.atlas is None:
+            return ""
+        return (
+            "The last pack failed, so this is the atlas from before it: "
+            f"{self.pack_error}"
+        )
+
+    @property
     def dirty(self) -> bool:
         return self.doc.dirty
 

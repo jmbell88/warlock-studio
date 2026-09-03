@@ -424,7 +424,7 @@ def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -
     with _drop_lock:
         gen = _drop_gen.get(name, 0)
 
-    def run() -> None:
+    def run() -> Any:
         # This name's lock is held across the whole write, so a ``drop`` for
         # this document waits for the pair to be on disk before it unlinks --
         # and only a drop for *this* document does; see the tombstone comment.
@@ -434,15 +434,16 @@ def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -
                     # Dropped between submit and execution: the document was
                     # saved or closed, and writing now would resurrect the
                     # deleted pair.
-                    return
+                    return None
             _write_pair(payload, data, meta)
-            with _drop_lock:
-                # The head, and only now that the pair is really on disk. The
-                # generation is re-read under the same lock ``drop`` resets the
-                # mark under, so a drop that ran while this write was queued
-                # cannot have its reset overwritten from here.
-                if _drop_gen.get(name, 0) == gen:
-                    set_mark(slot, Mark(name=name, head=head, at=stamp))
+        # **The mark is handed back, not written here** (the review's theme
+        # T3). This is a task thread and the three attributes are UI state on
+        # a slot the frame loop reads sixty times a second, unlocked: a reader
+        # could see the new ``head`` beside the old ``name``, which is a slot
+        # claiming a copy under a filename that holds a different one.
+        # ``on_task_done`` applies it, and it applies it where ``drop`` also
+        # runs, so the two can no longer interleave at all.
+        return {"slot": slot, "gen": gen, "mark": Mark(name=name, head=head, at=stamp)}
 
     if not ctx.submit(f"journal:{provider.kind}:{provider.uid_of(slot)}", run):
         return False
@@ -450,16 +451,35 @@ def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -
     # See the docstring: this is what makes a failed write retry instead of
     # reading as a copy that exists.
     #
-    # **Under the same lock the task takes, and only if the task has not
-    # already been and gone.** ``submit`` may run ``run`` to completion before
-    # returning (a synchronous runner, and every test), and on a small document
-    # -- a pose, a profile -- so may a real task thread. This line then lowered
-    # ``head`` back to the pre-write value, the next tick saw the document as
-    # unwritten, and an *idle* document re-encoded itself every
-    # ``JOURNAL_SECONDS`` for the life of the session.
+    # **Only if the completion has not already been and gone.** A runner that
+    # runs ``run`` to completion before returning *and* delivers its result
+    # inline -- a synchronous one, and the fakes in the tests -- has already
+    # advanced ``head`` through ``on_task_done`` by the time this line runs.
+    # Unconditionally, it lowered ``head`` back to the pre-write value, the
+    # next tick saw the document as unwritten, and an *idle* document
+    # re-encoded itself every ``JOURNAL_SECONDS`` for the life of the session.
+    if mark_of(slot).head == mark.head:
+        set_mark(slot, Mark(name=name, head=mark.head, at=stamp))
+    return True
+
+
+def on_task_done(ctx: Any, done: Any) -> bool:
+    """Adopt a finished journal write. Frame thread; ``write``'s other half.
+
+    The generation is re-checked *here* rather than in the task, and that is
+    the stronger place for it: ``drop`` runs on the frame thread too, so a
+    document saved or closed while its copy was in flight cannot have its
+    reset overwritten by a mark landing a moment later.
+    """
+    result = getattr(done, "result", None)
+    if not isinstance(result, dict):
+        return False
+    mark = result["mark"]
     with _drop_lock:
-        if mark_of(slot).head == mark.head:
-            set_mark(slot, Mark(name=name, head=mark.head, at=stamp))
+        stale = _drop_gen.get(mark.name, 0) != result["gen"]
+    if stale:
+        return False
+    set_mark(result["slot"], mark)
     return True
 
 
