@@ -98,7 +98,49 @@ generated an asset. The build half is done; the half that matters is not. Until
 a machine without `uv`, Python or a CUDA toolkit has installed this and made
 something, the project has no shippable artifact, whatever the tree says.
 
-## P2. Purge `examples/` from git history before the repository goes public
+## P2. ~~Purge `examples/` from git history before the repository goes public~~
+
+**Done 2026-09-03, and verified from what GitHub serves rather than from the
+local repository.** `git filter-repo --path examples/ --invert-paths`, then the
+remote was **deleted and recreated** rather than force-pushed, because a force
+push does not delete anything on GitHub: unreachable objects stay fetchable by
+SHA until it garbage-collects, which it only does on request. Recreating cost
+nothing measurable -- the repository was private with no releases, no issues,
+no pull requests and no stars.
+
+A mirror clone taken immediately before the rewrite is at
+`D:/Projects/_archive/warlock-pre-purge.git`, with a README beside it saying
+what it still contains and why it must never be pushed. **Delete it once you
+have worked in the rewritten repository long enough to be satisfied** -- keeping
+it indefinitely means keeping the problem indefinitely.
+
+| | Before | After |
+|---|---|---|
+| `git log --all -- examples/` | 7 add-commits | **empty** |
+| Reachable `examples/` objects | 23 | **0** |
+| Commits | 963 | 963 |
+| Tags | 2 | 2 |
+| Pack size | 96.7 MiB | 71.6 MiB |
+| `master` tree hash | `b2bcdb40...` | `b2bcdb40...` |
+
+Three things the rehearsal and the run turned up that the plain command does
+not mention, kept because the next rewrite will meet them again:
+
+- **`filter-repo` deletes the `origin` remote**, by design, so a rewritten
+  history cannot be pushed back by reflex.
+- **It migrates remote-tracking refs into local branches and rewrites those
+  too.** `origin/claude/sirens-audio-mode-planning-gbyypk` existed only on the
+  remote and carried eight commits touching `examples/`; a rehearsal in a clone
+  with no GitHub remote-tracking refs could not show this, and predicted the
+  branch would be left behind. It was not -- it arrived rewritten, and was then
+  deleted outright as it held nothing not already in `master`.
+- **`gh repo delete` needs the `delete_repo` scope**, which is not in a default
+  `gh` token: `gh auth refresh -h github.com -s delete_repo`. That grant also
+  brings `workflow`, which turns out to be required anyway to push changes to
+  anything under `.github/workflows/`.
+
+The original entry follows for the record.
+
 
 **Why it is yours:** it rewrites every commit SHA and needs a force-push, and
 the moment is yours to pick — **before** publishing, never after; a public
