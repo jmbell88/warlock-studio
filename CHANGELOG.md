@@ -19,8 +19,14 @@ the release you are actually running.
 ## 0.0.31 — 2026-09-03
 
 - **Beta-readiness pass: CI could not go green, and three Settings controls did nothing.** The wheel
-  smoke test asserted `len(modes.KEYS) == 11` against a twelve-mode tree, so *every* push failed on
-  a hardcoded number rather than on a packaging mistake; the assertion is deleted rather than
+  smoke test asserted `len(modes.KEYS) == 11` against a twelve-mode tree, so that step could only ever
+  fail once anything reached it — on a hardcoded number rather than on a packaging mistake, and it
+  rarely did reach it, because the suite step above dies first on a GitHub runner: `addopts` pins
+  `-n 8` for a 63.5 GB workstation and `windows-latest` is 4 vCPU with 16 GB, so xdist replaced
+  killed workers and then indexed a scheduler table the replacements were never in
+  (`INTERNALERROR> KeyError: <WorkerController gw9>` — with eight workers there is no gw9 until two
+  have already been replaced). CI now passes the runner's own worker count and a timeout sized for a
+  shared machine. The mode-count assertion is deleted rather than
   bumped, because `tests/manual/test_docs.py` and `tests/test_studio_state.py` already derive the
   count from `modes.MODES` and both run earlier in the same workflow. Alongside it, the three
   layout doors in **Settings → Advanced** that all had the same shape — a control that redraws,
