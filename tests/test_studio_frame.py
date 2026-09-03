@@ -356,10 +356,13 @@ def _viewer_app(svc, *, mode="create", stage="mesh", job=None, accept=True):
         def clear(self) -> None:
             self.reference = None
 
-        def load_reference(self, path):
-            # The reference path is taken inline (it is a PNG, not a mesh),
-            # which is the branch the Reference stage takes.
-            self.reference = path
+        def parse_reference(self, path):
+            # Decoded on a task like the mesh (T2), adopted when it lands.
+            self.parsed.append(path)
+            return f"reference:{path.name}"
+
+        def adopt_reference(self, parsed):
+            self.reference = parsed
 
         def parse_model(self, path):
             self.parsed.append(path)
@@ -480,7 +483,8 @@ def test_the_stage_decides_which_file_the_viewport_wants(svc):
     job = {"id": "a" * 12, "files": ["model.glb", "input.png"]}
     app = _viewer_app(svc, job=job, stage="reference")
     main.App._sync_viewer(app)
-    assert app.viewer.path == svc.job_dir(job["id"]) / "input.png"
+    assert app.viewer.pending == svc.job_dir(job["id"]) / "input.png"
+    assert app.submitted[-1] == (main.VIEWER_KEY, app.viewer.pending)
 
     app.app_ctx.state.create_stage = "mesh"
     main.App._sync_viewer(app)

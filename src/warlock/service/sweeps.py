@@ -511,10 +511,29 @@ def _validate(svc: WarlockService, plan: SweepPlan, units: list[UnitPlan]) -> No
 # --- the operations ----------------------------------------------------------
 
 
-def create_sweep(svc: WarlockService, plan: SweepPlan) -> dict[str, Any]:
-    """Validate every unit, then queue them all under one sweep row."""
+def validate_sweep(svc: WarlockService, plan: SweepPlan) -> list[UnitPlan]:
+    """Expand and validate a plan without queueing it. -> the units.
+
+    Pure checks, cheap enough for the frame thread -- which is where the
+    Studio calls it, so a refusal lands on the press with its ``field``
+    while the inserts themselves (``create_sweep``) run as a task.
+    """
     units = expand(plan)
     _validate(svc, plan, units)
+    return units
+
+
+def create_sweep(
+    svc: WarlockService, plan: SweepPlan, *, units: list[UnitPlan] | None = None
+) -> dict[str, Any]:
+    """Validate every unit, then queue them all under one sweep row.
+
+    ``units`` is ``validate_sweep``'s answer when the caller already has it;
+    the validation is otherwise repeated here, so a script that calls this
+    alone is still all-or-nothing.
+    """
+    if units is None:
+        units = validate_sweep(svc, plan)
 
     spec = {
         "base": dict(plan.base),

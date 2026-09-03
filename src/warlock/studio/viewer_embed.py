@@ -180,16 +180,33 @@ class Viewer(PoseOps):
             self.gpu.release()
         self.gpu = None
 
-    def load_reference(self, path: Path) -> None:
-        """Show a 2D reference image instead of a mesh."""
+    @staticmethod
+    def parse_reference(path: Path) -> tuple[tuple[int, int], bytes]:
+        """The blocking half of showing a picture: decode it. -> (size, RGBA).
+
+        ``parse_model``'s split, for the same reason: ``_sync_viewer`` reaches
+        this on a timer, on the frame a job finishes, and a 1024-square PNG
+        decode is a visible hitch at exactly the moment the card is meant to
+        show the job finishing. No GL, no viewer state.
+        """
         from PIL import Image
 
-        self.clear_reference()
         with Image.open(path) as im:
             rgba = im.convert("RGBA")
-            texture = self.ctx.texture((rgba.width, rgba.height), 4, rgba.tobytes())
+            return (rgba.width, rgba.height), rgba.tobytes()
+
+    def adopt_reference(self, parsed: tuple[tuple[int, int], bytes]) -> None:
+        """The frame-thread half: upload the decoded picture."""
+        size, data = parsed
+        self.clear_reference()
+        texture = self.ctx.texture(size, 4, data)
         texture.filter = (self.ctx.LINEAR, self.ctx.LINEAR)
         self.reference = texture
+
+    def load_reference(self, path: Path) -> None:
+        """Show a 2D reference image instead of a mesh. Both halves, blocking
+        -- for the callers where the user just pressed something."""
+        self.adopt_reference(self.parse_reference(path))
 
     def clear_reference(self) -> None:
         if self.reference is not None:

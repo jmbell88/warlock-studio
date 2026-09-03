@@ -2599,11 +2599,23 @@ def revert(ctx: Any, tab: InkerDoc | None = None) -> None:
     if tab is None or not tab.linked or not tab.has_original or tab.saving:
         return
     job_id = tab.job_id
+    path = tab.path
 
     def run() -> dict[str, Any]:
+        from . import inker
+
         svc_files.revert_reference(ctx.svc, job_id)
         svc_files.discard_inker_working(ctx.svc, job_id)
-        return {"reverted": True, "job_id": job_id}
+        # Decoded here rather than in ``_reload_linked``: the revert has
+        # already happened on disk by this line, and a decode that failed
+        # must still report the revert -- so it is a field, not a raise.
+        result: dict[str, Any] = {"reverted": True, "job_id": job_id, "doc": None}
+        if path is not None:
+            try:
+                result["doc"] = inker.Document.load(path)
+            except Exception as exc:
+                result["load_error"] = str(exc)
+        return result
 
     def go() -> None:
         _start(ctx, tab, f"inker-revert:{tab.uid}", run)
@@ -2827,7 +2839,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
         ctx.toast(f"Exported to {result['exported']}")
         return
     if result.get("reverted"):
-        _reload_linked(ctx, tab)
+        _reload_linked(ctx, tab, result.get("doc"), result.get("load_error"))
         return
 
     tab.mark_saved(result.get("rev"))
@@ -2874,16 +2886,16 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         tab.saving = False
 
 
-def _reload_linked(ctx: Any, tab: InkerDoc) -> None:
-    """Re-decode a linked document after a revert replaced its file."""
-    from . import inker
+def _reload_linked(ctx: Any, tab: InkerDoc, doc: Any, load_error: str | None = None) -> None:
+    """Swap in the re-decoded document after a revert replaced its file.
 
+    ``doc`` was decoded by the revert task; this is the frame-thread half,
+    which owns the textures and the tab.
+    """
     if tab.path is None:
         return
-    try:
-        doc = inker.Document.load(tab.path)
-    except Exception as exc:
-        ctx.toast(f"Reverted, but the image could not be reopened ({exc}).", "error")
+    if doc is None:
+        ctx.toast(f"Reverted, but the image could not be reopened ({load_error}).", "error")
         return
     from .panes import inker_textures
 

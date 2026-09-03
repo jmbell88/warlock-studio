@@ -487,6 +487,16 @@ def on_task_done(ctx: Any, done: Any) -> None:
             _enter_clay(ctx)
         return
 
+    if name == "clay-recover":
+        if isinstance(result, dict):
+            tab = adopt(ctx, result["doc"], path=None, title=result.get("title"))
+            # Dirty from the moment it opens, and it owns the file it came
+            # from: saving or closing it is what clears the crash copy.
+            tab.saved_head = -1
+            tab.journal_name = Path(result["autosave"]).name
+            _enter_clay(ctx)
+        return
+
     if name == "clay-import":
         # No path: an imported document has no file of its own, so Ctrl+S asks
         # where to put it rather than overwriting the asset it came from.
@@ -1053,22 +1063,31 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
     disk with its own contents, and adopting the path would arm Ctrl+S to
     overwrite something the user has not looked at.
     """
+    ensure(ctx)
+    # Read and parsed on a task, ``inker_mode``'s ``inker-recover`` shape: a
+    # recovered model is read on the first frame of the session, which is
+    # the frame the Home pane is meant to appear on, and a ``.wblk`` is as
+    # large as the model it holds. True means "submitted", the same answer the
+    # Inker provider gives; ``on_task_done`` does the adopting.
+    ctx.submit(f"clay-recover:{abs(hash(str(path)))}", _load_recovery, Path(path), dict(meta))
+    return True
+
+
+def _load_recovery(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
+    """The task-thread half of a crash recovery: bytes to document."""
+    from ..service.errors import invalid_from
     from .clay import serialize
 
-    ensure(ctx)
     try:
-        doc = serialize.read_wblk(_within_ceiling(Path(path)).read_bytes())
-    except Exception:
+        doc = serialize.read_wblk(_within_ceiling(path).read_bytes())
+    except Exception as exc:
         log.exception("could not reopen the recovered model at %s", path)
-        ctx.toast("A recovered model could not be reopened.", "warn", action="log")
-        return False
-    title = f"{meta.get('title') or Path(path).stem} (recovered)"
-    tab = adopt(ctx, doc, path=None, title=title)
-    # Dirty from the moment it opens, and it owns the file it came from:
-    # saving or closing it is what clears the crash copy.
-    tab.saved_head = -1
-    tab.journal_name = Path(path).name
-    return True
+        raise invalid_from(exc, "A recovered model could not be reopened") from exc
+    return {
+        "doc": doc,
+        "title": f"{meta.get('title') or path.stem} (recovered)",
+        "autosave": str(path),
+    }
 
 
 JOURNAL = journal.register(

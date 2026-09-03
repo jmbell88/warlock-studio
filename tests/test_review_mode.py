@@ -85,12 +85,19 @@ class _Settings:
 
 
 class _Done:
-    def __init__(self, key: str, result: Any = None, tag: Any = None) -> None:
+    def __init__(
+        self, key: str, result: Any = None, tag: Any = None, error: Any = None
+    ) -> None:
         self.key = key
         self.result = result
         # The real ``Done`` carries one, and the cleanup toast names the sweep
         # off it -- a fake without the field would make that branch untestable.
         self.tag = tag
+        self.error = error
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
 
 
 @pytest.fixture(autouse=True)
@@ -1001,6 +1008,12 @@ def test_launching_queues_a_sweep_and_opens_it(ctx, svc):
 
     assert review_mode.preview_units(ctx.state.review) == 6
     assert review_mode.launch(ctx) is True
+    # The insert batch is a task (T2): the form is locked until it lands, and
+    # the selection moves only when it does.
+    assert ctx.state.review.form.submitting is True
+    assert ctx.submitted[-1] == review_mode.LAUNCH_KEY
+    review_mode.on_task_done(ctx, _Done(review_mode.LAUNCH_KEY, ctx.result))
+    assert ctx.state.review.form.submitting is False
 
     sweeps = svc.store.list_sweeps()
     assert len(sweeps) == 1
@@ -1353,6 +1366,7 @@ class _FakeViewer:
 
     def __init__(self) -> None:
         self.path: Path | None = None
+        self.pending: Path | None = None
         self.model: Any = None
         self.pose_mode = False
         self.loads: list[Path] = []
@@ -1362,28 +1376,49 @@ class _FakeViewer:
     def has_model(self) -> bool:
         return self.model is not None
 
-    def load_model(self, path: Path) -> None:
+    def parse_model(self, path: Path) -> Any:
+        """The task-thread half; ``loads`` counts parses, which is what a
+        decode-per-frame regression would inflate."""
         self.loads.append(Path(path))
+        return ("parsed", Path(path))
+
+    def adopt_model(self, model: Any, path: Path) -> None:
+        self.pending = None
         self.path = Path(path)
-        self.model = object()
+        self.model = model
+
+    def load_model(self, path: Path) -> None:
+        self.adopt_model(self.parse_model(path), path)
 
     def clear(self) -> None:
         self.cleared += 1
         self.model = None
         self.path = None
+        self.pending = None
 
 
 class _FakeApp:
     """``_review_load`` unbound, over a fake viewer -- the whole decision it
-    makes is which path to hand the viewer, which needs no window."""
+    makes is which path to hand the viewer, which needs no window. ``show``
+    is one frame plus the task landing: the parse is submitted from the draw
+    and adopted when it returns (T2), and the fake ctx runs it inline."""
 
     from warlock.studio import main as _main
 
     _review_load = _main.App._review_load
+    _adopt_review_model = _main.App._adopt_review_model
 
     def __init__(self, ctx: Any) -> None:
         self.viewer = _FakeViewer()
         self.app_ctx = ctx
+
+    def show(self, unit: Any) -> None:
+        before = len(self.app_ctx.submitted)
+        self._review_load(unit, review_mode)
+        if len(self.app_ctx.submitted) > before:
+            key = self.app_ctx.submitted[-1]
+            assert key == self._main.REVIEW_MESH_KEY
+            self._adopt_review_model(_Done(key, self.app_ctx.result, tag=self.app_ctx.tags[-1]))
 
 
 def test_switching_sweeps_reloads_the_unit(ctx, svc):
@@ -1393,9 +1428,9 @@ def test_switching_sweeps_reloads_the_unit(ctx, svc):
     app = _FakeApp(ctx)
 
     review_mode.open_sweep(ctx, first)
-    app._review_load(review_mode.current(state), review_mode)
+    app.show(review_mode.current(state))
     review_mode.open_sweep(ctx, second)
-    app._review_load(review_mode.current(state), review_mode)
+    app.show(review_mode.current(state))
 
     assert len(app.viewer.loads) == 2
     assert app.viewer.loads[0] != app.viewer.loads[1]
@@ -1410,9 +1445,9 @@ def test_coming_back_from_3d_reloads_the_unit_that_is_still_selected(ctx, svc):
     app = _FakeApp(ctx)
     unit = review_mode.current(state)
 
-    app._review_load(unit, review_mode)
+    app.show(unit)
     app.viewer.load_model(Path(svc.config.data_dir) / "some-job" / "model.glb")
-    app._review_load(unit, review_mode)
+    app.show(unit)
 
     assert app.viewer.path == review_mode.model_path(unit)
 
@@ -1424,8 +1459,23 @@ def test_showing_the_same_unit_again_does_not_reload_it(ctx, svc):
     app = _FakeApp(ctx)
 
     for _ in range(3):
-        app._review_load(review_mode.current(state), review_mode)
+        app.show(review_mode.current(state))
     assert len(app.viewer.loads) == 1
+
+
+def test_a_unit_whose_parse_is_in_flight_is_not_submitted_again(ctx, svc):
+    """Between the submit and the landing the draw runs every frame; the
+    ``pending`` marker is what keeps those frames from re-parsing."""
+    _mesh(svc, "a chest")
+    state = _scanned(ctx)
+    app = _FakeApp(ctx)
+    unit = review_mode.current(state)
+
+    for _ in range(3):
+        app._review_load(unit, review_mode)
+    assert len(app.viewer.loads) == 1
+    assert app.viewer.pending == review_mode.model_path(unit)
+    assert app.viewer.has_model is False
 
 
 def test_a_unit_with_no_mesh_is_attempted_once_not_every_frame(ctx, svc):
@@ -1450,15 +1500,15 @@ def test_a_mesh_that_will_not_open_is_reported_once(ctx, svc):
     unit = review_mode.current(state)
     app = _FakeApp(ctx)
 
-    def boom(path):
-        raise ValueError("not a GLB")
-
-    app.viewer.load_model = boom
+    app._review_load(unit, review_mode)
+    key = ctx.submitted[-1]
+    app._adopt_review_model(_Done(key, tag=ctx.tags[-1], error=ValueError("not a GLB")))
     for _ in range(3):
         app._review_load(unit, review_mode)
 
     assert len(ctx.toasts) == 1
     assert ctx.toasts[0][1] == "error"
+    assert len(app.viewer.loads) == 1, "tried once"
 
 
 # --- the judge, wired in -----------------------------------------------------

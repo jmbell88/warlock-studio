@@ -964,6 +964,7 @@ def goto(ctx: Any, direction: str, frame: int) -> None:
 def release_texture(ctx: Any) -> None:
     """Forget-then-release the cached atlas texture. Also called at teardown."""
     ctx.state.preview.pop("troupe_texture:key", None)
+    ctx.state.preview.pop("troupe_texture:failed", None)
     cached = ctx.state.preview.pop("troupe_texture", None)
     if cached is None:
         return
@@ -975,43 +976,69 @@ def release_texture(ctx: Any) -> None:
     cached.release()
 
 
+def atlas_key(job_id: str, sheet_id: str) -> str:
+    return f"troupe-atlas:{job_id}:{sheet_id}"
+
+
+def _decode_atlas(path: Path) -> tuple[tuple[int, int], bytes]:
+    """The task-thread half: the PNG as RGBA bytes. No GL, no state."""
+    from PIL import Image
+
+    with Image.open(path) as opened:
+        opened.load()
+        atlas = opened.convert("RGBA")
+        return atlas.size, atlas.tobytes()
+
+
 def atlas_texture(ctx: Any) -> Any:
-    """The selected sheet's atlas, uploaded once. ``None`` when there is none.
+    """The selected sheet's atlas, uploaded once. ``None`` when there is none
+    -- or not yet: the decode is a task, and the frames it takes show the
+    empty state rather than a hitch.
 
     Keyed on ``(job, sheet)`` rather than on the file's mtime: a published
     sheet is write-once under a fresh id -- the worker stages the pixel-art
     atlas onto the served name and the sidecar is what marks it complete -- so
-    a stale texture cannot exist for a key that has not changed.
+    a stale texture cannot exist for a key that has not changed. The decode
+    used to happen here, on the frame thread, and an atlas is up to 1024 by
+    8192 RGBA: a hitch on every sheet change, and the read-and-convert of a
+    12-direction sheet is the longest frame the mode drew. ``_adopt_atlas``
+    is the other half; the upload stays here because the texture is GL.
     """
-    from PIL import Image
-
     from .. import rigging
 
     state = ensure(ctx)
     if ctx.viewer is None or not (state.job_id and state.sheet_id):
         return None
     key = (state.job_id, state.sheet_id)
-    if ctx.state.preview.get("troupe_texture:key") == key:
-        return ctx.state.preview.get("troupe_texture")
-
+    preview = ctx.state.preview
+    if preview.get("troupe_texture:key") == key:
+        return preview.get("troupe_texture")
+    # Tried once: a sheet that would not decode is logged, not re-read on
+    # every frame (``on_task_failed`` marks it).
+    if preview.get("troupe_texture:failed") == key:
+        return None
+    task = atlas_key(*key)
+    if ctx.busy(task):
+        return None
     path = rigging.sheet_png_path(ctx.job_dir(state.job_id), state.sheet_id)
     if not path.exists():
         return None
+    ctx.submit(task, _decode_atlas, path, tag=key)
+    return None
+
+
+def _adopt_atlas(ctx: Any, done: Any) -> None:
+    """Upload a decoded atlas, if it is still the sheet on screen."""
+    state = ensure(ctx)
+    key = getattr(done, "tag", None)
+    if key != (state.job_id, state.sheet_id) or ctx.viewer is None:
+        return
+    size, data = done.result
     release_texture(ctx)
-    try:
-        with Image.open(path) as opened:
-            opened.load()
-            atlas = opened.convert("RGBA")
-    except Exception:
-        # Logged as well as swallowed: an unreadable atlas leaves nothing in
-        # warlock.log otherwise, and a blank preview is not a diagnosis.
-        log.exception("could not read the character sheet %s", path)
-        return None
-    texture = ctx.viewer.ctx.texture(atlas.size, 4, atlas.tobytes())
+    texture = ctx.viewer.ctx.texture(size, 4, data)
     texture.filter = (ctx.viewer.ctx.NEAREST, ctx.viewer.ctx.NEAREST)
     ctx.state.preview["troupe_texture"] = texture
     ctx.state.preview["troupe_texture:key"] = key
-    return texture
 
 
 # --- the two doors ----------------------------------------------------------
@@ -1181,6 +1208,9 @@ def on_task_done(ctx: Any, done: Any) -> None:
     (``in_progress`` finds them by kind and source, so the id is not kept).
     """
     state = ensure(ctx)
+    if str(done.key).startswith("troupe-atlas:"):
+        _adopt_atlas(ctx, done)
+        return
     if str(done.key).startswith("troupe-qa:"):
         # Adopted only if it is still the sheet on screen -- the matte
         # preview's "moved on" rule -- and with no toast: a score is a thing
@@ -1231,6 +1261,12 @@ def on_task_done(ctx: Any, done: Any) -> None:
 
 def on_task_failed(ctx: Any, done: Any) -> None:
     """A refused request, said once and in the pane's own words."""
+    if str(getattr(done, "key", "")).startswith("troupe-atlas:"):
+        # Logged as well as marked: an unreadable atlas leaves nothing in
+        # warlock.log otherwise, and a blank preview is not a diagnosis.
+        ctx.state.preview["troupe_texture:failed"] = getattr(done, "tag", None)
+        log.warning("could not read the character sheet: %s", getattr(done, "error", ""))
+        return
     if str(getattr(done, "key", "")).startswith("troupe-qa:"):
         # A sheet that cannot be scored is a log line, not a refusal: the
         # preview still plays it. Latched so it is asked once.

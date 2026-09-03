@@ -105,6 +105,7 @@ FINDINGS_KEY = "review-findings"
 LABELS_KEY = "review-labels"
 TRAIN_KEY = "review-train"
 SCORE_KEY = "review-scores"
+LAUNCH_KEY = "review-launch"
 
 # What this reviewer is called. A free string by design -- verdicts are keyed
 # on (job_id, source), so a future judge writing "ai:<model>" sits beside a
@@ -699,6 +700,13 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
     if done.key == FINDINGS_KEY:
         return
+    if done.key == LAUNCH_KEY:
+        state.form.submitting = False
+        result = done.result if isinstance(done.result, dict) else {}
+        ctx.toast(f"Queued {result.get('units', 0)} unit(s).")
+        state.sweep_id = result.get("id")
+        scan(ctx)
+        return
     if done.key == SCORE_KEY:
         adopt_scores(state, done.result if isinstance(done.result, dict) else {})
         return
@@ -770,6 +778,8 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         return
     if done.key == SCAN_KEY:
         state.scanning = False
+    if done.key == LAUNCH_KEY:
+        state.form.submitting = False
     if done.key == DELETE_KEY:
         ctx.toast("Could not delete that sweep.", "error")
     if done.key == CLEANUP_KEY:
@@ -1453,11 +1463,18 @@ def build_plan(state: ReviewState) -> Any:
 
 
 def launch(ctx: Any) -> bool:
-    """Validate and queue the form's sweep. -> whether anything was queued.
+    """Validate and queue the form's sweep. -> whether it was submitted.
 
-    Inline on the frame thread, like ``settings_2d._submit``: it is N validated
-    inserts against the same store the panes already write to, and the
-    validation pass is what makes the whole thing all-or-nothing.
+    The plan is built and validated here, on the frame thread, because it
+    reads the form and a refusal wants its ``field`` ringed on the press;
+    ``create_sweep`` runs as a task. It used to run inline, like
+    ``settings_2d._submit`` -- but a sweep is twenty to forty ``create_job``
+    calls, each with its own VRAM admission check (an NVML read) and directory
+    write, and the frame froze for the whole batch on the press. The form's
+    ``submitting`` flag stays up until the task lands and gates the button
+    meanwhile; ``on_task_done`` toasts the count and selects the sweep, and
+    ``on_task_failed`` lowers the flag -- the runner has already toasted the
+    failure.
     """
     from ..service import sweeps as sweeps_mod
     from ..service.errors import ServiceError
@@ -1475,21 +1492,15 @@ def launch(ctx: Any) -> bool:
         # the only place the rest of the story is.
         ctx.toast(f"That sweep could not be planned: {exc}", "error", action="log")
         return False
-    state.form.submitting = True
     try:
-        result = sweeps_mod.create_sweep(ctx.svc, plan)
+        units = sweeps_mod.validate_sweep(ctx.svc, plan)
     except ServiceError as exc:
         ctx.toast(exc.message, "error")
         return False
-    except Exception:
-        log.exception("could not launch the sweep")
-        ctx.toast("Could not launch that sweep.", "error")
-        return False
-    finally:
+    state.form.submitting = True
+    if not ctx.submit(LAUNCH_KEY, sweeps_mod.create_sweep, ctx.svc, plan, units=units):
         state.form.submitting = False
-    ctx.toast(f"Queued {result['units']} unit(s).")
-    state.sweep_id = result["id"]
-    scan(ctx)
+        return False
     return True
 
 

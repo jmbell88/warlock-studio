@@ -39,6 +39,7 @@ MEMORY_TICK_SECONDS = 30.0
 # retried on the next tick, and a landed result is checked against
 # ``viewer.pending`` before it is adopted.
 VIEWER_KEY = "viewer-load"
+REVIEW_MESH_KEY = "viewer-review"
 # The post-download re-probe. Its own key rather than "health"'s, so a slow
 # forced verification cannot be mistaken for the periodic poll and dropped by
 # key-dedupe while the user is watching for it (UX-09).
@@ -1627,7 +1628,14 @@ class App:
         from . import vibrancy
 
         vibrancy.capture(self.ctx, io.display_size)
-        self.app_ctx.settings.tick()
+        # Not while a button is held: the debounced flush is a JSON encode of
+        # the whole settings document plus an atomic file write, and a splitter
+        # drag dirties the layout on every frame it moves -- so the write
+        # landed once a second *inside* the drag, on the frame thread, as a
+        # hitch under the pointer. Deferred to release, where the same flush
+        # happens once. ``flush`` on exit covers a drag that ends the session.
+        if not imgui.is_any_mouse_down():
+            self.app_ctx.settings.tick()
         # One toast per problem, polled rather than pushed: ``Settings`` is a
         # plain file object with no way to reach the UI, and both of the things
         # it has to report -- a file that could not be read at startup, and one
@@ -1746,6 +1754,17 @@ class App:
                     # out of the way before it deletes it, so a failure part
                     # way through has already made the model absent.
                     self._refresh_model_answers()
+                elif done.key == REVIEW_MESH_KEY:
+                    self._adopt_review_model(done)
+                elif done.key == VIEWER_KEY:
+                    # ``pending`` still names the file, so nothing would retry
+                    # it; that is the intent (the parse would fail again), but
+                    # the flag has to come down or the next *different* asset
+                    # is refused as a duplicate of this one.
+                    if self.viewer.pending == done.tag:
+                        self.viewer.pending = None
+                        self.viewer.clear()
+                        self.viewer.path = done.tag
                 elif done.key.startswith("review-"):
                     from . import review_mode
 
@@ -2065,6 +2084,9 @@ class App:
             return
         if key == VIEWER_KEY:
             self._adopt_model(done)
+            return
+        if key == REVIEW_MESH_KEY:
+            self._adopt_review_model(done)
             return
         if key == _compare_key():
             self._adopt_compare(done)
@@ -2416,23 +2438,15 @@ class App:
             wanted = job_dir / "model.glb"
         if wanted is None or self.viewer.path == wanted or self.viewer.pending == wanted:
             return
-        if wanted.suffix == ".png":
-            try:
-                self.viewer.clear()
-                self.viewer.load_reference(wanted)
-                self.viewer.path = wanted
-            except Exception:
-                log.exception("could not open %s", wanted)
-                ctx.toast("Could not open that asset.", "error")
-            self._refresh_rig_side_data()
-            return
-        # A GLB is parsed off-thread and adopted when it lands. This runs on a
-        # *timer*, on the frame a job transitions to done -- which is when the
-        # file is largest and coldest -- so doing the parse and the texture
-        # decode here froze the frame that was meant to show the job finishing.
-        # The GPU upload stays on the frame thread; see ``_adopt_model``.
+        # Both kinds are decoded off-thread and adopted when they land. This
+        # runs on a *timer*, on the frame a job transitions to done -- which is
+        # when the file is largest and coldest -- so doing the parse and the
+        # texture decode here froze the frame that was meant to show the job
+        # finishing. The GPU upload stays on the frame thread; see
+        # ``_adopt_model``, which tells the two apart by the tag's suffix.
+        parse = self.viewer.parse_reference if wanted.suffix == ".png" else self.viewer.parse_model
         self.viewer.pending = wanted
-        if not ctx.submit(VIEWER_KEY, self.viewer.parse_model, wanted, tag=wanted):
+        if not ctx.submit(VIEWER_KEY, parse, wanted, tag=wanted):
             # Another load is already in flight. Its result is checked against
             # ``pending`` before it is adopted, so this one is simply retried
             # on the next tick rather than queued.
@@ -2483,6 +2497,12 @@ class App:
             return
         self.viewer.pending = None
         try:
+            if wanted.suffix == ".png":
+                self.viewer.clear()
+                self.viewer.adopt_reference(done.result)
+                self.viewer.path = wanted
+                self._refresh_rig_side_data()
+                return
             self.viewer.adopt_model(done.result, wanted)
         except Exception:
             log.exception("could not open %s", wanted)
@@ -5225,16 +5245,40 @@ class App:
         ``viewer.path`` is set even when there is nothing to show, so a unit
         whose job errored (or whose GLB will not open) is tried once rather
         than re-attempted -- and re-toasted -- on every frame.
+
+        Parsed off-thread, ``_sync_viewer``'s split under its own key: this is
+        reached from the draw of the Review pane, so a blocking load here was
+        a frozen frame per arrow press through a pass -- and a judging pass is
+        forty arrow presses. ``_adopt_review_model`` is the other half.
         """
         wanted = None if unit is None else review_mode.model_path(unit)
-        if self.viewer.path == wanted:
+        if self.viewer.path == wanted or self.viewer.pending == wanted:
             return
         if wanted is None or not wanted.exists():
             self.viewer.clear()
             self.viewer.path = wanted
             return
+        self.viewer.pending = wanted
+        if not self.app_ctx.submit(REVIEW_MESH_KEY, self.viewer.parse_model, wanted, tag=wanted):
+            self.viewer.pending = None
+
+    def _adopt_review_model(self, done: Any) -> None:
+        """Take a parsed sweep-unit mesh. Frame thread only.
+
+        ``_adopt_model``'s shape without its thumbnail capture, which is the
+        Create selection's and would stamp this mesh onto whichever job that
+        is. A parse that failed still sets ``viewer.path`` to what was wanted,
+        which is the "tried once" rule above.
+        """
+        wanted = done.tag
+        if wanted is None or self.viewer.pending != wanted:
+            self.viewer.pending = None
+            return
+        self.viewer.pending = None
         try:
-            self.viewer.load_model(wanted)
+            if not done.ok:
+                raise RuntimeError(str(done.error))
+            self.viewer.adopt_model(done.result, wanted)
         except Exception:
             log.exception("could not open %s", wanted)
             self.viewer.clear()

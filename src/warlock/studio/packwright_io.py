@@ -150,10 +150,12 @@ def save_to(ctx: Any, tab: PackTab, path: Path) -> None:
 
     path = Path(path)
     head = tab.doc.history.head
-    data = wpack.wpack_bytes(tab.doc)
+    # The snapshot is the frame thread's; the PNG encode inside
+    # ``snapshot_bytes`` is the task's. See ``wpack.Snapshot``.
+    snap = wpack.snapshot(tab.doc)
 
     def run() -> dict[str, Any]:
-        _write({path: data})
+        _write({path: wpack.snapshot_bytes(snap)})
         return {"head": head, "path": str(path), "retitle": True}
 
     _start(ctx, tab, f"packwright-save:{tab.uid}", run)
@@ -176,7 +178,7 @@ def save_as(ctx: Any, tab: PackTab | None = None) -> None:
     if tab is None or tab.saving:
         return
     head = tab.doc.history.head
-    data = wpack.wpack_bytes(tab.doc)
+    snap = wpack.snapshot(tab.doc)
     stem = Path(tab.title).stem or "atlas"
 
     def run() -> dict[str, Any] | None:
@@ -186,7 +188,7 @@ def save_as(ctx: Any, tab: PackTab | None = None) -> None:
         if path is None:
             return None
         path = path.with_suffix(packwright_state.WPACK_SUFFIX)
-        _write({path: data})
+        _write({path: wpack.snapshot_bytes(snap)})
         return {"head": head, "path": str(path), "retitle": True}
 
     _start(ctx, tab, f"packwright-saveas:{tab.uid}", run)
@@ -279,14 +281,19 @@ def export_library(ctx: Any, tab: PackTab | None = None) -> None:
     if tab.pack_dirty or tab.packing:
         ctx.toast("Still packing your latest edits -- try again in a moment.", "error")
         return
-    png = composelib.png_bytes(tab.atlas)
-    source = wpack.wpack_bytes(tab.doc)
+    # The atlas is the pack task's result and is replaced wholesale, never
+    # written in place, so the reference is safe to encode off-thread --
+    # ``export_files`` already relies on that. The document is snapshotted.
+    atlas = tab.atlas
+    snap = wpack.snapshot(tab.doc)
     title = tab.title
 
     def run() -> dict[str, Any]:
         from ..service import files as svc_files
         from ..service import jobs as svc_jobs
 
+        png = composelib.png_bytes(atlas)
+        source = wpack.snapshot_bytes(snap)
         result = svc_jobs.import_reference(
             ctx.svc, png, name=title, prompt=title, authored="packwright"
         )

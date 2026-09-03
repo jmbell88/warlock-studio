@@ -144,6 +144,35 @@ def manifest_json(doc: D.SongDoc) -> str:
     return json.dumps(payload, indent=1)
 
 
+#: ``id(array) -> (array, wav)``. The array is held so its id cannot be
+#: recycled under the entry. Bounded at twice the sample ceiling: a document's
+#: worth plus the one it replaced.
+_WAV_CACHE: dict[int, tuple[np.ndarray, bytes]] = {}
+_WAV_CACHE_MAX = 2 * D.MAX_SAMPLES
+
+
+def _wav_of(pcm: np.ndarray) -> bytes:
+    """A sample's WAV bytes, encoded once per array.
+
+    ``wsng_bytes`` is the render snapshot *and* the journal encode, both on the
+    frame thread, and both fire on every accepted edit -- so every sample was
+    re-encoded to int16 WAV on every keystroke that reached the synthesiser,
+    which at eight seconds of 44.1 kHz per sample is the longest thing the
+    mode did per frame. Samples are replaced, never written in place
+    (``SongDoc.set_sample`` stores a fresh contiguous copy), so identity is
+    the cache key. Keyed on the object, not its bytes: hashing the array
+    would cost what the encode does.
+    """
+    hit = _WAV_CACHE.get(id(pcm))
+    if hit is not None and hit[0] is pcm:
+        return hit[1]
+    data = wavout.wav_bytes(pcm, synth.SAMPLE_RATE)
+    if len(_WAV_CACHE) >= _WAV_CACHE_MAX:
+        _WAV_CACHE.pop(next(iter(_WAV_CACHE)))
+    _WAV_CACHE[id(pcm)] = (pcm, data)
+    return data
+
+
 def wsng_bytes(doc: D.SongDoc) -> bytes:
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -157,7 +186,7 @@ def wsng_bytes(doc: D.SongDoc) -> bytes:
         for index, key in enumerate(sorted(doc.samples)):
             zf.writestr(
                 zipfile.ZipInfo(f"{SAMPLE_DIR}/{index}.wav", _EPOCH),
-                wavout.wav_bytes(doc.samples[key], synth.SAMPLE_RATE),
+                _wav_of(doc.samples[key]),
             )
     return out.getvalue()
 

@@ -33,24 +33,16 @@ These recur in more than one mode and are cheaper to fix once.
 `commit=True` on the two Sirens name fields, the rule in `docs/INVARIANTS.md` and a
 test per door in `tests/test_undo_gesture_doors.py`.
 
-**T2. Blocking work on the frame thread.** Review's `create_sweep` (20–40 `create_job`
-calls with NVML reads, `review_mode.py:1455-1493`); Review mesh loads
-(`main.py:5200-5215`); the reference PNG decode on job completion
-(`viewer_embed.load_reference:183-192`); Clay crash-recovery decode
-(`clay_mode.py:1047`); Troupe atlas decode+upload (`troupe_mode.py:827-836`, up to
-1024×8192 RGBA); Inker `_reload_linked` (`inker_mode.py:2817`); Packwright save/export
-PNG encode (`packwright_io.py:153, 179, 282`); Sirens re-encoding every sample to WAV
-per render snapshot and per journal tick (`sirens_mode.py:729` → `wsng_bytes`);
-settings JSON encode + write during splitter drags (`main.py:1616`, `settings.py:267-298`).
-Each has a sibling in the tree that already does it right (GLB parse/adopt split,
-`inker-recover:` task). Add a perf-lane test that fails when these run on the frame
-thread.
+**T2. ~~Blocking work on the frame thread.~~** Built 2026-09-03: all nine sites are
+task-thread halves with a frame-thread adopt, the rule in `docs/INVARIANTS.md` (the
+three-threads paragraph) and a worker-thread guard per door in
+`tests/test_frame_thread_doors.py`.
 
 **T3. Task-thread writes into UI state.** `journal.write` sets tab marks from the task
 closure (`journal.py:427-446`); `jobs_cache.measure_one` mutates `_dir_sizes`
-(`jobs_cache.py:244-248`); Clay `reserve_uid` races `new_uid` on an unlocked
-`itertools.count` (`clay/document.py:123`, called from `serialize.read_wblk` on a
-task). Hand results back through `Done.result` and apply on the frame thread.
+(`jobs_cache.py:244-248`); ~~Clay `reserve_uid` races `new_uid` on an unlocked
+`itertools.count`~~ (locked 2026-09-03, with the recovery decode joining the task
+path). Hand results back through `Done.result` and apply on the frame thread.
 
 **T4. Greyed controls with no or wrong reason.** Progress-card Cancel
 (`panes/overlay.py:367`), Plotter layer menu passing `BUSY` for an `active`/`many` gate
@@ -153,8 +145,8 @@ readers can disagree and still pass.
   `sp(430)`, `sp(320)`, `sp(210)`, `landing.py:469-470`.
 
 ### Performance
-- **[Medium]** Menu bar spec rebuild per frame (T6). **[Medium]** Settings flush on the
-  frame thread during drags (T2). **[Low]** `ctypes.string_at` copies vertex/index
+- **[Medium]** Menu bar spec rebuild per frame (T6). ~~**[Medium]** Settings flush on the
+  frame thread during drags (T2).~~ **[Low]** `ctypes.string_at` copies vertex/index
   buffers per command list per frame (`imgui_backend.py:239, 281`);
   `(c_ubyte * size).from_address` is zero-copy. **[Low]** `guard.enter` allocates an
   `ErrorRecoveryState` per pane per frame (`guard.py:164-188`).
@@ -435,7 +427,7 @@ No Ctrl chord-during-drag beyond Ctrl+J and Ctrl+Z; nothing drives
 ### Structure / performance
 - **[Low]** `tileset_from_inker` bypasses `land_tileset`; `_shift_layer` duplicates
   `shift_layer`.
-- **[Medium]** Save/Export encode on the frame thread (T2). **[Medium]** Per-visible-cell
+- ~~**[Medium]** Save/Export encode on the frame thread (T2).~~ **[Medium]** Per-visible-cell
   Python in the canvas rebuilding an 11-field `Lattice` per call, with no LOD, so zooming
   out is the worst case (`plotter_canvas.py:1037-1071`, `_map_project.py:35`); same on
   the export path (`render.py:302`). **[Low]** Objects drawn without culling; Wang fill is
@@ -488,8 +480,8 @@ asserted; no Tiled-authored fixture despite the 2026-08-29 manual verification.
   keeping the re-export block as the compatibility surface.
 - **[Low]** The envelope editor's pure half (`span`, `painted`, `moved`, `toggled`,
   `grabbed`) lives in an imgui-importing pane; move it under `studio/sirens/`.
-- **[Medium]** Every accepted render and every journal tick re-encodes every sample to
-  WAV on the frame thread (T2). **[Low]** `_cell_text` re-imports `synth` per cell
+- ~~**[Medium]** Every accepted render and every journal tick re-encodes every sample to
+  WAV on the frame thread (T2).~~ **[Low]** `_cell_text` re-imports `synth` per cell
   (`sirens_patterns.py:133`).
 
 ### Tests
@@ -502,7 +494,7 @@ wider than the remaining channels. None of the six Sirens panes has a test.
 ## 9. Suggested order of work
 
 1. ~~The "one gesture, one step" sweep (T1).~~ Done 2026-09-03.
-2. The frame-thread sweep (T2) with a perf-lane guard, then the task-thread writes (T3).
+2. ~~The frame-thread sweep (T2).~~ Done 2026-09-03. Then the task-thread writes (T3).
 3. The three doc/code contradictions left in T5: each is a one-line decision.
 4. Plotter interop: embedded tileset reader, JSON zero coercion, `_tileset_facts`
    parity, one Tiled-authored fixture. Packwright: failed-pack state, grid+trim, batch

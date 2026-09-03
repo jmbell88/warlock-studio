@@ -128,18 +128,47 @@ def manifest_json(doc: PackDoc) -> str:
     return json.dumps(payload, sort_keys=True, indent=2)
 
 
-def wpack_bytes(doc: PackDoc) -> bytes:
+class Snapshot:
+    """What a ``.wpack`` is written from, taken while the document is still.
+
+    The manifest is a string and the sprite arrays are read-only (``Sprite``
+    freezes them), so holding references is enough: the document can go on
+    being edited on the frame thread -- sources added, renamed, removed --
+    while a task encodes this. The PNG encode is the expensive half by two
+    orders of magnitude, and it used to run on the frame thread on every
+    save.
+    """
+
+    __slots__ = ("manifest", "sprites")
+
+    def __init__(self, manifest: str, sprites: tuple[np.ndarray, ...]) -> None:
+        self.manifest = manifest
+        self.sprites = sprites
+
+
+def snapshot(doc: PackDoc) -> Snapshot:
+    """The frame-thread half of a save: cheap, and reads the document once."""
+    return Snapshot(manifest_json(doc), tuple(source.sprite.pixels for source in doc.sources))
+
+
+def snapshot_bytes(snap: Snapshot) -> bytes:
+    """The task-thread half: encode a :func:`snapshot`."""
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(zipfile.ZipInfo(MANIFEST, _EPOCH), manifest_json(doc))
-        for index, source in enumerate(doc.sources):
+        zf.writestr(zipfile.ZipInfo(MANIFEST, _EPOCH), snap.manifest)
+        for index, pixels in enumerate(snap.sprites):
             # Stored, not deflated: a PNG is already compressed.
             zf.writestr(
                 zipfile.ZipInfo(f"{SOURCE_DIR}/{index}.png", _EPOCH),
-                png_bytes(source.sprite.pixels),
+                png_bytes(pixels),
                 zipfile.ZIP_STORED,
             )
     return out.getvalue()
+
+
+def wpack_bytes(doc: PackDoc) -> bytes:
+    """Both halves at once, for the callers that are already off-thread."""
+    return snapshot_bytes(snapshot(doc))
 
 
 def read_wpack(data: bytes) -> PackDoc:

@@ -66,6 +66,7 @@ looked at a different object.
 from __future__ import annotations
 
 import itertools
+import threading
 import weakref
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, fields
@@ -92,6 +93,11 @@ from .edits import (  # noqa: F401
 )
 
 _uids = itertools.count(1)
+#: ``reserve_uid`` runs on a task thread -- ``serialize.read_wblk`` is how an
+#: open and a crash recovery both arrive -- while ``new_uid`` runs on the frame
+#: thread. Swapping the counter out from under a ``next`` is the race this
+#: closes; it is the one lock in the package and it is held for one line.
+_uid_lock = threading.Lock()
 
 
 def new_uid() -> int:
@@ -103,7 +109,8 @@ def new_uid() -> int:
     process-wide counter rather than a per-document one, so the same rule holds
     across a document that was closed and reopened in the same session.
     """
-    return next(_uids)
+    with _uid_lock:
+        return next(_uids)
 
 
 def reserve_uid(uid: int) -> None:
@@ -120,7 +127,8 @@ def reserve_uid(uid: int) -> None:
     one cannot undo the protection the large one bought.
     """
     global _uids
-    _uids = itertools.count(max(int(uid) + 1, next(_uids)))
+    with _uid_lock:
+        _uids = itertools.count(max(int(uid) + 1, next(_uids)))
 
 
 def default_material(name: str = "Material") -> gltf.Material:
