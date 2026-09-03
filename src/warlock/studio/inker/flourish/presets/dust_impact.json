@@ -1,0 +1,121 @@
+{
+  "name": "Dust impact",
+  "seed": 59,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "hit",
+      "frames": 3
+    },
+    {
+      "name": "cloud",
+      "frames": 12
+    }
+  ],
+  "layers": [
+    {
+      "kind": "ring",
+      "name": "Ground ring",
+      "params": {
+        "y": 20,
+        "radius": {
+          "keys": [
+            [
+              0,
+              4
+            ],
+            [
+              1,
+              50
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              8
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        },
+        "alpha": {
+          "keys": [
+            [
+              0,
+              0.7
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "color": "#D8C8A0",
+        "squash": 0.35,
+        "softness": 0.9
+      }
+    },
+    {
+      "kind": "particles",
+      "name": "Debris",
+      "params": {
+        "y": 20,
+        "count": 24,
+        "speed": 70,
+        "gravity": 260,
+        "direction": -90,
+        "spread": 140,
+        "size": 2,
+        "size_jitter": 0.8,
+        "softness": 0.1,
+        "lifetime": 0.6,
+        "color_start": "#A08860",
+        "color_end": "#605030"
+      }
+    },
+    {
+      "kind": "smoke",
+      "name": "Dust",
+      "params": {
+        "y": 18,
+        "count": 16,
+        "emission": "burst",
+        "size": 9,
+        "expand": 3,
+        "rise": 18,
+        "drift": 30,
+        "spawn_radius": 14,
+        "color": "#C8B890",
+        "darken": 0.15,
+        "lifetime": 0.9,
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.15,
+              0.7
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -480,6 +480,83 @@ reference layer opens hidden, which is what exporting from Aseprite would do wit
 The full list of what comes across, what is only a message, and what a save back out to `.aseprite`
 drops in turn, is kept in `docs/COMPAT.md`.
 
+## Effects
+
+**Flourish → Insert effect...** puts a procedural effect — a fireball, a shockwave, a heal, a
+portal, one of about thirty — into the document as a **layer group** above the active layer, with
+one **tag per phase** (*cast*, *projectile*, *impact*, *explosion*, *dissipate*, or whatever the
+effect's phases are called). Pick the effect, whether it should look **painterly** (soft, many
+colours, one layer per ingredient: core, flame, glow, sparks, smoke, trail, heat) or like **pixel
+art** (hard alpha, one palette across every frame, one layer holding the finished composite), and
+how many **facings** it should be rendered in. With four or eight facings the simulation itself is
+turned — a spark stream that fires right fires down at 90° with the same spread, the same gravity —
+and each phase gets a tag per facing, `impact/E`, `impact/S` and so on. Frames are added to the
+timeline if the effect needs more than the document has.
+
+Nothing about an effect is a picture until it is rendered, and everything about it is a number you
+can change. With a layer of the effect active, the **inspector** appears under the timeline's
+transport: the seed, the frame rate, the look, the frames and loop flag of every phase, and — for
+whichever of the effect's layers you pick — every parameter its ingredient has: colours, radii,
+counts, speeds, turbulence, gravity, lifetimes. A parameter that animates across a phase shows two
+sliders, what it starts at and what it ends at. Change anything and the effect renders again in
+the background a moment after you stop dragging; the timeline updates when it lands, and the whole
+render is **one undo step**. The frame loop never waits on a render.
+
+**Nothing you painted is overwritten silently.** Every render remembers what it put in each cel.
+When a regenerate arrives, a cel that still holds the last render takes the new one; a cel you have
+painted on keeps your paint and is **flagged**, and the inspector says how many. **Keep painted
+cels** clears the flags and leaves your work; **Replace painted cels** renders over them. This is
+the same three-way rule a re-rendered character sheet is merged with, for the same reason: a cel
+wrongly kept is one click to re-take, and a cel wrongly taken is an afternoon gone.
+
+**Detach effect** forgets the recipe and leaves the layers as ordinary layers. The pixels do not
+change; only the ability to regenerate goes. An effect's recipe is saved in the `.ora` beside the
+group it belongs to and comes back when the file is opened, so a regenerate is still possible next
+week; a save to `.aseprite` keeps the layers and tags and drops the recipe, because that format has
+nowhere to hold one — see `docs/COMPAT.md`.
+
+The inspector's **prompt field** takes words — *colder, more sparks, no smoke, green flames,
+bigger, faster, brighter, longer* — and turns them into parameter changes; **Apply words** or
+Enter. Two things can be reading them, and the label beside the field says which. **keywords**
+is a fixed vocabulary of colour names, kind names (sparks, smoke, flames, core, ring, trail,
+glow, heat) and adjectives, deterministic and offline, and it names in the toast every word it
+acted on. **model** is a small local instruct model, used when one has been placed in the
+`text-instruct` directory under the model root (doctor's *text model* row says whether it was
+found); it is asked for a list of parameter changes and *only* that, and whatever it answers goes
+through the same clamp every slider goes through — an unknown layer or parameter is dropped and
+named, a value outside its range is pulled inside it — so the model can narrow what is already
+legal and never widen it. If it answers nonsense or takes too long the words fall back to the
+vocabulary, and the toast says so. Either way the change is a pending edit rendered like any
+other: one undo step, nothing painted overwritten.
+
+Two ingredients are pictures rather than arithmetic: a **sprite** layer stamps a texture (scaled,
+turned, faded, flickering), and **particles** stamp one instead of a disc when given one. A texture
+is an *asset* of the effect, held beside its recipe and saved with the `.ora`. **Flourish → Use
+selection as texture** makes one from the selected pixels of the active layer — draw an ember or a
+rune, select it, and the layer the inspector is showing takes it if it can. **Generate texture...**
+asks the image model for a single centred ingredient on black from a few words, keys the black out
+into alpha (through the matting model when the machine has one), and lands it the same way; it needs
+an SDXL-family model like every generation, and one runs at a time per document. A layer whose
+texture is missing renders nothing rather than a placeholder.
+
+**Restyle keyframes...** is the third and least reliable AI door, and it says so. It sends a few
+frames of one phase — the effect's own composite — through the image model as img2img with your
+words and a strength, and fills the frames between by crossfading the returned keyframes under the
+effect's own motion field, so the blend has a direction rather than a ghost. The result lands as a
+**new layer inside the group** with the procedural layers left in place; a regenerate leaves it
+alone, because what the image model painted is not the recipe's to redo. Opt-in, one undo step,
+and unmeasured: judge it against the procedural frames before you keep it.
+
+**Flourish → Export effect sheets...** writes one sprite sheet per phase — it is the per-tag export
+([Exporting part of a clip](#exporting-part-of-a-clip)), since a phase is a tag — each with its
+sidecar. **Engine snippet...** shows the few lines that load one exported phase in Pygame-CE, Godot,
+Unity or Phaser, with a Copy button; it assumes the export's filenames and an origin at the canvas
+centre, which is where an effect is placed.
+
+An effect is deterministic: the same recipe with the same seed renders the same bytes on any
+machine, so a preset you tune and save renders the same after an upgrade. Change the **seed** for a
+different arrangement of the same sparks.
+
 ## Slices on an animated document
 
 [Slices](28-inker.md#slices) are the same rectangles they are on a still drawing, and by default one

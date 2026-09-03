@@ -1,0 +1,51 @@
+{
+  "name": "Smoke puff",
+  "seed": 67,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "puff",
+      "frames": 14
+    }
+  ],
+  "layers": [
+    {
+      "kind": "smoke",
+      "name": "Puff",
+      "params": {
+        "count": 12,
+        "emission": "burst",
+        "size": 10,
+        "expand": 3.2,
+        "rise": 20,
+        "drift": 16,
+        "spawn_radius": 8,
+        "color": "#B8B8B8",
+        "darken": 0.2,
+        "lifetime": 0.8,
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0.2
+            ],
+            [
+              0.15,
+              0.8
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

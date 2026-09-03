@@ -1,0 +1,80 @@
+{
+  "name": "Poison cloud",
+  "seed": 9,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 14,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "loop",
+      "frames": 16,
+      "loop": true
+    }
+  ],
+  "layers": [
+    {
+      "kind": "smoke",
+      "name": "Cloud",
+      "params": {
+        "count": 26,
+        "emission": "continuous",
+        "size": 12,
+        "expand": 1.8,
+        "lifetime": 1.6,
+        "rise": 8,
+        "drift": 14,
+        "spawn_radius": 24,
+        "color": "#5A9A28",
+        "darken": 0.35,
+        "raggedness": 0.8,
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.2,
+              0.6
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "kind": "particles",
+      "name": "Bubbles",
+      "params": {
+        "count": 20,
+        "emission": "continuous",
+        "speed": 18,
+        "gravity": -30,
+        "direction": -90,
+        "spread": 120,
+        "spawn_radius": 26,
+        "size": 1.8,
+        "lifetime": 0.9,
+        "color_start": "#C0FF80",
+        "color_end": "#60A040",
+        "softness": 0.2
+      }
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 8,
+        "strength": 0.5,
+        "tint": "#A0FF60"
+      }
+    }
+  ]
+}

@@ -2644,6 +2644,8 @@ def revert(ctx: Any, tab: InkerDoc | None = None) -> None:
 
 def on_task_done(ctx: Any, done: Any) -> None:
     """Called from App._on_task_done for every ``inker-`` key."""
+    from . import inker_flourish
+
     state = ensure(ctx)
     key, result = done.key, done.result
     name = key.split(":", 1)[0]
@@ -2657,6 +2659,25 @@ def on_task_done(ctx: Any, done: Any) -> None:
             inker_bridge.land_inpaint(ctx, result["pending"], result["pixels"])
         else:
             ctx.toast("The regeneration produced no picture.", "warn")
+        return
+
+    if name in (inker_flourish.RENDER_KEY, inker_flourish.INSERT_KEY):
+        inker_flourish.land(ctx, state, done, now=inker_flourish.clock())
+        return
+    if name == inker_flourish.TEXTURE_KEY:
+        inker_flourish.on_texture_queued(ctx, state, done)
+        return
+    if name == inker_flourish.TEXTURE_LAND_KEY:
+        inker_flourish.land_texture(ctx, state, done)
+        return
+    if name == inker_flourish.PROMPT_KEY:
+        inker_flourish.land_prompt(ctx, state, done, now=inker_flourish.clock())
+        return
+    if name == inker_flourish.RESTYLE_KEY:
+        inker_flourish.on_restyle_queued(ctx, state, done)
+        return
+    if name == inker_flourish.RESTYLE_LAND_KEY:
+        inker_flourish.land_restyle(ctx, state, done)
         return
 
     if name in ("inker-open",):
@@ -4543,3 +4564,226 @@ def _load_recovery(path: Path, meta: dict[str, Any] | None = None) -> dict[str, 
         "format": "ora",
         "autosave": str(path),
     }
+
+
+# -- Flourish -----------------------------------------------------------------------
+
+
+def flourish_insert(
+    ctx: Any,
+    tab: Any,
+    *,
+    preset: str = "fireball",
+    mode: str = "painterly",
+    directions: int = 1,
+    **_: Any,
+) -> bool:
+    """Bake a preset off-thread and land it as a new effect group.
+
+    The bake runs in a task -- a 128px effect is a few seconds of numpy -- and
+    ``on_task_done`` puts it on the document through ``insert_flourish`` as
+    one undo step. The recipe is sized to the document when the document is
+    smaller than the preset's canvas, so a 64px sprite gets a 64px fireball.
+    """
+    from dataclasses import replace as _replace
+
+    from . import inker_flourish
+    from .inker.flourish import presets
+
+    tab = tab or active(ctx)
+    if tab is None or tab.busy:
+        return False
+    try:
+        recipe = presets.load(preset)
+    except (KeyError, ValueError) as exc:
+        ctx.toast(f"No such effect: {exc}", "error")
+        return False
+    width, height = tab.doc.size
+    side = min(recipe.width, width, recipe.height, height)
+    if side < recipe.width or side < recipe.height:
+        scale = side / max(recipe.width, recipe.height)
+        recipe = _scaled(recipe, scale)
+    recipe = _replace(
+        recipe,
+        mode=mode if mode in ("painterly", "pixel") else "painterly",
+        directions=max(1, int(directions)),
+    )
+    if not inker_flourish.submit_insert(ctx, tab, recipe):
+        ctx.toast("An effect is already being inserted into this document.", "info")
+        return False
+    ctx.toast(f"Rendering {recipe.name}...")
+    return True
+
+
+def _scaled(recipe: Any, scale: float) -> Any:
+    """The recipe on a smaller canvas, its geometry scaled with it."""
+    from dataclasses import replace as _replace
+
+    from .inker.flourish import curves as flourish_curves
+    from .inker.flourish import prims
+    from .inker.flourish import recipe as flourish_recipe
+
+    spatial = {"x", "y", "radius", "width", "height", "size", "spawn_radius", "speed",
+               "gravity", "thickness", "scale", "noise_scale", "strength", "rise", "drift"}
+    layers = []
+    for layer in recipe.layers:
+        params = dict(layer.params)
+        for name, spec in prims.params_of(layer.kind).items():
+            if name not in spatial or name not in params:
+                continue
+            value = params[name]
+            if spec.kind == "float":
+                params[name] = float(value) * scale
+            elif spec.kind == "curve":
+                curve = flourish_curves.Curve.from_json(value)
+                params[name] = flourish_curves.Curve(
+                    tuple((t, v * scale) for t, v in curve.keys), curve.easing
+                ).to_json()
+        layers.append(_replace(layer, params=params))
+    return flourish_recipe.clamp(
+        _replace(
+            recipe,
+            width=max(8, int(round(recipe.width * scale))),
+            height=max(8, int(round(recipe.height * scale))),
+            layers=tuple(layers),
+        )
+    )
+
+
+def flourish_regenerate(ctx: Any, tab: Any, *, force: bool = False, **_: Any) -> bool:
+    """Render the active effect again, now, with whatever the inspector holds."""
+    from . import inker_flourish
+
+    state = ensure(ctx)
+    tab = tab or active(ctx)
+    if tab is None or tab.busy:
+        return False
+    group = inker_flourish.active_group(state, tab)
+    if group is None:
+        state.say(inker_flourish.NO_EFFECT)
+        return False
+    recipe = inker_flourish.current_recipe(state, tab, group)
+    if recipe is None:
+        return False
+    state.flourish_due.pop(group, None)
+    if not inker_flourish.submit_render(ctx, tab, group, recipe, force=force):
+        state.say(inker_flourish.RENDERING)
+        return False
+    return True
+
+
+def flourish_keep_edits(ctx: Any, tab: Any, **_: Any) -> bool:
+    """Clear every conflict flag on the active effect: the paint stands."""
+    from . import inker_flourish
+
+    state = ensure(ctx)
+    tab = tab or active(ctx)
+    if tab is None:
+        return False
+    group = inker_flourish.active_group(state, tab)
+    if group is None:
+        return False
+    flagged = tab.doc.flourish_conflicts(group)
+    if not flagged:
+        state.say(inker_flourish.NO_CONFLICTS)
+        return False
+    return tab.doc.resolve_flourish(group, flagged)
+
+
+def flourish_detach(ctx: Any, tab: Any, **_: Any) -> bool:
+    """Forget the recipe; the layers stay as ordinary layers."""
+    from . import inker_flourish
+
+    state = ensure(ctx)
+    tab = tab or active(ctx)
+    if tab is None:
+        return False
+    group = inker_flourish.active_group(state, tab)
+    if group is None:
+        return False
+    state.flourish_pending.pop(group, None)
+    state.flourish_due.pop(group, None)
+    if tab.doc.detach_flourish(group):
+        ctx.toast("Detached: the layers are yours, the recipe is gone.", "info")
+        return True
+    return False
+
+
+def flourish_export(ctx: Any, tab: Any, **_: Any) -> bool:
+    """One sheet per phase: the per-tag export, which is exactly what a phase
+    is. Nothing Flourish-specific is written -- a phase sheet is the file
+    exporting that tag on its own would write, sidecar and all."""
+    from . import inker_flourish
+
+    state = ensure(ctx)
+    tab = tab or active(ctx)
+    if not inker_flourish.can_export(state, tab):
+        state.say(inker_flourish.export_reason(state, tab))
+        return False
+    export_per_tag(ctx, tab, "sheet")
+    return True
+
+
+def flourish_texture_selection(ctx: Any, tab: Any, **_: Any) -> bool:
+    """The selection becomes a texture of the active effect."""
+    from . import inker_flourish
+
+    state = ensure(ctx)
+    tab = tab or active(ctx)
+    if tab is None:
+        return False
+    return inker_flourish.texture_from_selection(ctx, state, tab) is not None
+
+
+def flourish_texture_generate(ctx: Any, tab: Any, *, subject: str = "", **_: Any) -> bool:
+    """Queue a texture for the active effect from a few words."""
+    from . import inker_flourish
+
+    state = ensure(ctx)
+    tab = tab or active(ctx)
+    if tab is None:
+        return False
+    return inker_flourish.submit_texture(ctx, state, tab, subject)
+
+
+def flourish_prompt(ctx: Any, tab: Any, *, text: str | None = None, **_: Any) -> bool:
+    """The words in the inspector's field (or ``text``) become a recipe change."""
+    from . import inker_flourish
+
+    state = ensure(ctx)
+    tab = tab or active(ctx)
+    if tab is None:
+        return False
+    words = state.flourish_prompt_text if text is None else text
+    return inker_flourish.submit_prompt(ctx, state, tab, words)
+
+
+def flourish_restyle(
+    ctx: Any,
+    tab: Any,
+    *,
+    phase: str = "",
+    subject: str = "",
+    strength: float = 0.55,
+    anchors: int = 3,
+    **_: Any,
+) -> bool:
+    """A few frames of one phase through the image model; the rest interpolated."""
+    from . import inker_flourish
+
+    state = ensure(ctx)
+    tab = tab or active(ctx)
+    if tab is None:
+        return False
+    names = inker_flourish.phase_names(state, tab)
+    if not names:
+        return False
+    return inker_flourish.submit_restyle(
+        ctx,
+        state,
+        tab,
+        phase=phase or names[0],
+        subject=subject,
+        strength=strength,
+        anchors=anchors,
+    )

@@ -1,0 +1,159 @@
+{
+  "name": "Debuff",
+  "seed": 73,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 16,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "fall",
+      "frames": 12
+    },
+    {
+      "name": "hold",
+      "frames": 8
+    }
+  ],
+  "layers": [
+    {
+      "kind": "core",
+      "name": "Gloom",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              6
+            ],
+            [
+              1,
+              30
+            ]
+          ]
+        },
+        "intensity": {
+          "keys": [
+            [
+              0,
+              0.9
+            ],
+            [
+              1,
+              0.3
+            ]
+          ]
+        },
+        "color_inner": "#60308080",
+        "color_outer": "#20104000",
+        "softness": 1.0,
+        "noise": 0.3,
+        "pulse": 0
+      }
+    },
+    {
+      "kind": "ring",
+      "name": "Sinking ring",
+      "params": {
+        "y": {
+          "keys": [
+            [
+              0,
+              -40
+            ],
+            [
+              1,
+              40
+            ]
+          ]
+        },
+        "radius": 30,
+        "thickness": 5,
+        "alpha": {
+          "keys": [
+            [
+              0,
+              0.8
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "color": "#A060FF",
+        "squash": 0.35,
+        "softness": 0.7
+      },
+      "phases": [
+        "fall"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Drips",
+      "params": {
+        "count": 30,
+        "emission": "continuous",
+        "speed": 20,
+        "gravity": 90,
+        "direction": 90,
+        "spread": 40,
+        "spawn_radius": 22,
+        "size": 1.8,
+        "lifetime": 0.9,
+        "color_start": "#C080FF",
+        "color_end": "#401060",
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.2,
+              1
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "kind": "smoke",
+      "name": "Miasma",
+      "params": {
+        "count": 8,
+        "emission": "continuous",
+        "size": 8,
+        "expand": 2,
+        "rise": -10,
+        "color": "#301848",
+        "darken": 0.3,
+        "lifetime": 1.2,
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.2,
+              0.5
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

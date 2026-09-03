@@ -781,7 +781,107 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
         block = base.payload(frames)
         if block is not None:
             payload["sheet"] = block
+    effects = _flourish_payload(doc, tracks, frames)
+    if effects:
+        # Additive, version stays 1, written only when held: ``sheet``'s
+        # reason a third time. Groups are numbered as ``_groups_payload``
+        # numbers them, so the reader pairs a recipe with its folder by the
+        # same walk and never by a uid.
+        payload["flourish"] = effects
     return json.dumps(payload, indent=2).encode("utf-8")
+
+
+def _group_order(doc, tracks: dict[int, int]) -> list[int]:
+    """Group uids in the order ``_groups_payload`` numbers them."""
+    from . import groups as gp
+
+    order: list[int] = []
+    for track_uid in tracks:
+        for guid in reversed(gp.ancestry(doc.group_of, track_uid)):
+            if guid in doc.groups and guid not in order:
+                order.append(guid)
+    return order
+
+
+def _flourish_payload(doc, tracks: dict[int, int], frames: dict[int, int]) -> list | None:
+    """Every effect group as ``{group, recipe, tracks, digests, offset}``,
+    with tracks and frames as indices for ``_animation_json``'s reason."""
+    held = getattr(doc, "flourish", None)
+    if not held:
+        return None
+    from .flourish import recipe as flourish_recipe
+
+    order = _group_order(doc, tracks)
+    index_of = {guid: i for i, guid in enumerate(order)}
+    out = []
+    for guid, state in held.items():
+        if guid not in index_of:
+            continue
+        out.append(
+            {
+                "group": index_of[guid],
+                "recipe": flourish_recipe.to_dict(state.recipe),
+                "tracks": {
+                    str(key): tracks[track_uid]
+                    for key, track_uid in state.tracks.items()
+                    if track_uid in tracks
+                },
+                "digests": [
+                    [tracks[t], frames[f], digest]
+                    for (t, f), digest in state.digests.items()
+                    if t in tracks and f in frames
+                ],
+                "conflicts": [
+                    [tracks[t], frames[f]]
+                    for (t, f) in state.conflicts
+                    if t in tracks and f in frames
+                ],
+                "offset": list(state.offset),
+                # Member names are a function of the group's number and the
+                # asset id, so the writer and the reader agree with no table.
+                "assets": {
+                    asset_id: _flourish_member(index_of[guid], asset_id)
+                    for asset_id in state.assets
+                },
+            }
+        )
+    return out or None
+
+
+def _flourish_member(group_index: int, asset_id: str) -> str:
+    return f"data/flourish{group_index}_{asset_id}.png"
+
+
+def _write_flourish_assets(zf: zipfile.ZipFile, doc, tracks: dict[int, int]) -> None:
+    """Every effect texture as its own PNG member, named as the payload says."""
+    held = getattr(doc, "flourish", None)
+    if not held:
+        return
+    order = _group_order(doc, tracks)
+    index_of = {guid: i for i, guid in enumerate(order)}
+    for guid, state in held.items():
+        if guid not in index_of:
+            continue
+        for asset_id, pixels in state.assets.items():
+            zf.writestr(_member(_flourish_member(index_of[guid], asset_id)), _png(pixels))
+
+
+def _read_flourish_assets(doc, zf: zipfile.ZipFile) -> None:
+    """Decode the members ``_read_flourish`` noted. A member that is missing
+    or will not decode costs that one texture -- the layer that named it
+    renders nothing on the next regenerate -- and never the document."""
+    for state in getattr(doc, "flourish", {}).values():
+        pending = getattr(state, "_asset_members", None) or {}
+        for asset_id, member in pending.items():
+            try:
+                data = zf.read(member)
+                with pixelguard.opened(io.BytesIO(data), "an effect texture") as im:
+                    im.load()
+                    state.assets[asset_id] = np.asarray(im.convert("RGBA"), dtype=np.uint8).copy()
+            except (KeyError, OSError, ValueError) as exc:
+                log.warning("ignoring effect texture %s: %s", member, exc)
+        if hasattr(state, "_asset_members"):
+            del state._asset_members
 
 
 def _tile_refs_names(doc, anim) -> dict[int, str]:
@@ -1113,6 +1213,11 @@ def write_ora(doc, path: Path) -> None:
             # tilesets existed, which is what the determinism suite pins.
             if getattr(doc, "tilesets", None):
                 _write_tiles(zf, doc, anim, names)
+            # Same bargain: only an effect with a texture adds members.
+            if anim is not None and getattr(doc, "flourish", None):
+                _write_flourish_assets(
+                    zf, doc, {track.uid: i for i, track in enumerate(anim.tracks)}
+                )
             if getattr(doc, "palette", None):
                 zf.writestr(_member(PALETTE_MEMBER), gpl.dumps(doc.palette).encode("utf-8"))
             # Only when there are slices *or* a colour mode to record. A plain RGB
@@ -1563,6 +1668,50 @@ def _read_groups(doc, payload: dict) -> None:
         log.warning("ignoring animation.json groups: %s", exc)
         return
     _install_groups(doc, ({node.uid: node for node in nodes}, {}), group_of)
+    _read_flourish(doc, payload, nodes)
+
+
+def _read_flourish(doc, payload: dict, nodes: list) -> None:
+    """Rebuild the effect records, or leave the document with none.
+
+    Guarded like ``sheet``: a recipe is metadata about cels that are already
+    whole, so a block we cannot read costs the document its *regenerate* --
+    the layers stay, as if the effect had been detached -- and never a pixel.
+    A recipe of a newer schema, a group index off the end, a track that is
+    not in the grid: each logs and is skipped on its own.
+    """
+    raw = payload.get("flourish")
+    if not raw or doc.anim is None:
+        return
+    from ._doc_flourish import FlourishState
+    from .flourish import recipe as flourish_recipe
+
+    tracks = doc.anim.tracks
+    frames = doc.anim.frames
+    for entry in raw:
+        try:
+            node = nodes[int(entry["group"])]
+            if node.uid not in doc.groups:
+                continue
+            recipe = flourish_recipe.from_dict(entry["recipe"])
+            flourish_recipe.reserve_uids(recipe)
+            state = FlourishState(recipe=recipe)
+            for key, ti in dict(entry.get("tracks") or {}).items():
+                state.tracks[int(key)] = tracks[int(ti)].uid
+            for ti, fi, digest in entry.get("digests") or []:
+                state.digests[(tracks[int(ti)].uid, frames[int(fi)].uid)] = str(digest)
+            for ti, fi in entry.get("conflicts") or []:
+                state.conflicts.add((tracks[int(ti)].uid, frames[int(fi)].uid))
+            offset = entry.get("offset") or [0, 0]
+            state.offset = (int(offset[0]), int(offset[1]))
+            members = entry.get("assets") or {}
+            state._asset_members = {  # noqa: SLF001 -- consumed by _read_flourish_assets
+                str(k): str(v) for k, v in dict(members).items() if str(v).startswith("data/")
+            }
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
+            log.warning("ignoring an animation.json flourish entry: %s", exc)
+            continue
+        doc.flourish[node.uid] = state
 
 
 def _read_palette(zf) -> list | None:
@@ -2037,6 +2186,7 @@ def read_ora(path: Path, *, budget: int | None = None):
                 slices=found_slices,
             )
             _read_groups(doc, grid_payload)
+            _read_flourish_assets(doc, zf)
             _read_sheet_base(doc, grid_payload)
             _read_matte(doc, root)
             doc.file_format = "ora"

@@ -1,0 +1,196 @@
+{
+  "name": "Teleport",
+  "seed": 37,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "gather",
+      "frames": 8
+    },
+    {
+      "name": "flash",
+      "frames": 3
+    },
+    {
+      "name": "fade",
+      "frames": 8
+    }
+  ],
+  "layers": [
+    {
+      "kind": "ring",
+      "name": "Collapse",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              60
+            ],
+            [
+              1,
+              2
+            ]
+          ],
+          "easing": "ease_in"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              3
+            ],
+            [
+              1,
+              10
+            ]
+          ]
+        },
+        "alpha": {
+          "keys": [
+            [
+              0,
+              0.3
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        },
+        "color": "#C0E0FF"
+      },
+      "phases": [
+        "gather"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Streaks",
+      "params": {
+        "y": 40,
+        "count": 40,
+        "emission": "continuous",
+        "speed": 140,
+        "direction": -90,
+        "spread": 20,
+        "gravity": 0,
+        "size": 1.5,
+        "streak": 1,
+        "lifetime": 0.5,
+        "spawn_radius": 20,
+        "color_start": "#FFFFFF",
+        "color_end": "#60A0FF"
+      },
+      "phases": [
+        "gather"
+      ]
+    },
+    {
+      "kind": "flash",
+      "name": "Flash",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              30
+            ],
+            [
+              1,
+              60
+            ]
+          ]
+        },
+        "color": "#F0F8FF"
+      },
+      "phases": [
+        "flash"
+      ]
+    },
+    {
+      "kind": "flame",
+      "name": "Pillar",
+      "params": {
+        "y": 50,
+        "width": {
+          "keys": [
+            [
+              0,
+              30
+            ],
+            [
+              1,
+              4
+            ]
+          ]
+        },
+        "height": 100,
+        "rise": -90,
+        "color_base": "#FFFFFF",
+        "color_tip": "#80C0FF00",
+        "turbulence": 0.4,
+        "speed": 6,
+        "opacity": {
+          "keys": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "phases": [
+        "flash",
+        "fade"
+      ]
+    },
+    {
+      "kind": "smoke",
+      "name": "Mist",
+      "params": {
+        "count": 10,
+        "emission": "burst",
+        "size": 10,
+        "expand": 3,
+        "color": "#C0D8FF",
+        "darken": 0,
+        "lifetime": 0.7,
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0.5
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "phases": [
+        "fade"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 12,
+        "strength": 1.0,
+        "tint": "#A0C8FF"
+      }
+    }
+  ]
+}

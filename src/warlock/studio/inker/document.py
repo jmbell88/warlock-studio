@@ -41,6 +41,7 @@ from . import filters  # noqa: F401
 from . import index_plane as ixp
 from . import indexed as ix
 from ._doc_anim import AnimOps
+from ._doc_flourish import FlourishOps
 from ._doc_geometry import GeometryOps
 from ._doc_history import HistoryOps
 from ._doc_indexed import IndexedOps
@@ -138,6 +139,7 @@ class Document(
     TileOps,
     RangeOps,
     SheetOps,
+    FlourishOps,
 ):
     stack: LayerStack
     matte: RGBA | None = None
@@ -208,6 +210,12 @@ class Document(
     #: :mod:`.sheetmerge` for what a digest is over and why the merge needs a
     #: third picture at all.
     sheet_base: Any | None = None
+    #: Every Flourish effect this document holds, keyed by the uid of the layer
+    #: group that *is* the effect: the recipe, which track each recipe layer
+    #: became, and a digest per cel of what the last render put there. Empty on
+    #: every ordinary document, for ``sheet_base``'s reason. Typed ``Any`` so
+    #: :mod:`._doc_flourish`'s import stays out of this module.
+    flourish: dict[int, Any] = field(default_factory=dict)
     #: Every tileset this document owns, in insertion order. Document-level
     #: rather than per-track because tilesets are shared -- two tracks may
     #: bind the same slot -- and ``Track.tileset_uid`` is what names one of

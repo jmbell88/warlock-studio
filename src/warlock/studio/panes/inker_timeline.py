@@ -63,6 +63,7 @@ from .. import anchors, controls, icons, inker_mode, theme, toolbar, widgets
 from ..inker import animation, sheetout
 from ..manual import render as manual_render
 from ..tokens import sp
+from . import inker_flourish as inker_flourish_pane
 from . import inker_sheet as inker_sheet_pane
 
 #: The strip's height in design pixels, reserved out of the centre column.
@@ -424,6 +425,9 @@ def draw(ctx: Any) -> None:
         # the strip is about the cells the grid shows, and an ordinary
         # animation has no scope for it to offer.
         inker_sheet_pane.draw_strip(ctx, tab)
+        # And, only on an effect group: the recipe's inspector. Same reason,
+        # one door over -- an ordinary animation has no recipe to show.
+        inker_flourish_pane.draw_inspector(ctx, tab)
     _grid(ctx, tab)
 
 

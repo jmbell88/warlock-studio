@@ -1,0 +1,161 @@
+{
+  "name": "Summoning circle",
+  "seed": 79,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 16,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "draw",
+      "frames": 8
+    },
+    {
+      "name": "active",
+      "frames": 16,
+      "loop": true
+    }
+  ],
+  "layers": [
+    {
+      "kind": "ring",
+      "name": "Outer",
+      "params": {
+        "y": 16,
+        "radius": {
+          "keys": [
+            [
+              0,
+              2
+            ],
+            [
+              1,
+              50
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": 3,
+        "alpha": {
+          "keys": [
+            [
+              0,
+              0.6
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        },
+        "color": "#FF4060",
+        "squash": 0.45,
+        "softness": 0.4
+      }
+    },
+    {
+      "kind": "ring",
+      "name": "Inner",
+      "params": {
+        "y": 16,
+        "radius": {
+          "keys": [
+            [
+              0,
+              2
+            ],
+            [
+              1,
+              34
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": 2,
+        "alpha": {
+          "keys": [
+            [
+              0,
+              0.6
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        },
+        "color": "#FF8090",
+        "squash": 0.45,
+        "softness": 0.4
+      }
+    },
+    {
+      "kind": "core",
+      "name": "Sigil glow",
+      "params": {
+        "y": 16,
+        "radius": 42,
+        "color_inner": "#FF406040",
+        "color_outer": "#FF406000",
+        "softness": 1.0,
+        "noise": 0.4,
+        "noise_scale": 8,
+        "pulse": 0.05,
+        "pulse_hz": 1.5,
+        "intensity": 0.8
+      },
+      "phases": [
+        "active"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Embers",
+      "params": {
+        "y": 16,
+        "count": 30,
+        "emission": "continuous",
+        "speed": 25,
+        "gravity": -50,
+        "direction": -90,
+        "spread": 30,
+        "spawn_radius": 40,
+        "size": 1.5,
+        "lifetime": 1.2,
+        "color_start": "#FFC0C0",
+        "color_end": "#FF2040",
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.2,
+              1
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "phases": [
+        "active"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 8,
+        "strength": 0.8,
+        "tint": "#FF6080"
+      }
+    }
+  ]
+}

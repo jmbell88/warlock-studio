@@ -649,3 +649,38 @@ class ReplayEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         self.replay(doc)
+
+
+@dataclass
+class FlourishEdit(Edit):
+    """One effect group's recipe and render record, before and after.
+
+    ``SheetBaseEdit``'s shape and its reason: a regenerate advances the
+    digests to the incoming render for every cel, so they are part of what the
+    step changed, and a render undone without them would leave the document
+    believing the renderer last gave it pixels it has just taken away -- the
+    next regenerate would then read every restored cel as untouched and take
+    the render over it. So the state rides in the same ``one_step`` as the cel
+    patches. ``None`` on either side is "no effect here": an insert has no
+    before, a detach has no after.
+
+    Snapshots at both ends, ``FramePaletteEdit``'s rule. The recipe itself is
+    a frozen dataclass and shares freely; the digests are copied.
+    """
+
+    group_uid: int
+    before: Any | None
+    after: Any | None
+
+    def __post_init__(self) -> None:
+        self.before = None if self.before is None else self.before.copy()
+        self.after = None if self.after is None else self.after.copy()
+        self.cost = 40 * sum(
+            len(state.digests) for state in (self.before, self.after) if state is not None
+        )
+
+    def undo(self, doc: Any) -> None:
+        doc._set_flourish(self.group_uid, None if self.before is None else self.before.copy())
+
+    def redo(self, doc: Any) -> None:
+        doc._set_flourish(self.group_uid, None if self.after is None else self.after.copy())

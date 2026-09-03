@@ -26,6 +26,7 @@ Part IV explains how it is built.
 - [Tuning what you get](12-tuning-what-you-get.md) — seeds, LoRAs and conditioning.
 - [Putting it in a game](13-putting-it-in-a-game.md) — exports, engines, and the interop caveats.
 - [Making a soundtrack](14-making-a-soundtrack.md) — Sirens: a bassline, an envelope, a sound effect, a WAV.
+- [Casting a spell](15-casting-a-spell.md) — Flourish: a fireball from a recipe, a colour changed, a painted cell kept through a re-render.
 
 ## Using Warlock Studio
 

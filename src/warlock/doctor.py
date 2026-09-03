@@ -103,6 +103,7 @@ def static_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         _cuda_check(probe=probe_slow),
         *_t2i_checks(config),
         *_matting_checks(config, probe_slow=probe_slow),
+        *_text_checks(config),
         *_pose_checks(config, probe_slow=probe_slow),
         blender_check(probe=probe_slow),
     ]
@@ -990,3 +991,42 @@ def _matting_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         # to tell which download the row is asking for.
         checks.append(Check(fetch.check_name("matting", spec.label), ok, detail, fatal=False))
     return checks
+
+
+_TEXT_IMPORTS = ("torch", "transformers")
+
+
+def _text_checks(config: Config) -> list[Check]:
+    """The local text model behind the Flourish prompt field, non-fatal.
+
+    **Not a registry row.** Every entry in ``models`` carries a fetch pinned to
+    a revision, and the pin comes from the measurement that picks the model --
+    which has not been run (it is on the human's list). Until it has, the field probes one
+    directory by name (``inker_flourish.TEXT_MODEL_DIR``) and this row says
+    what it found there. Missing, the field still works:
+    ``inker/flourish/keywords`` maps a fixed vocabulary of colours and
+    adjectives, deterministically. What the model adds is the sentence the
+    vocabulary does not cover, so the row says which of the two the field is
+    using rather than "broken".
+    """
+    from .studio import inker_flourish
+
+    path = inker_flourish.text_model_dir(config)
+    missing = _missing_modules(_TEXT_IMPORTS)
+    if inker_flourish.text_model_present(config):
+        ok = not missing
+        detail = f"weights present at {path} -- the Flourish prompt uses the model"
+        if missing:
+            detail += (
+                "; cannot import " + ", ".join(missing) + " -- the prompt falls back to "
+                "the keyword mapper; install with:\n  uv sync --extra text2image"
+            )
+    else:
+        ok = True
+        detail = (
+            f"not found at {path} -- the Flourish prompt uses the keyword mapper. "
+            "No download is offered yet: the model is chosen and its revision pinned "
+            "by a measurement still owed; to try one, place an instruct "
+            f"model's config.json and safetensors in {path}"
+        )
+    return [Check("text model: Flourish prompt", ok, detail, fatal=False)]

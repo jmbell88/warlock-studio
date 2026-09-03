@@ -1,0 +1,250 @@
+{
+  "name": "Chain lightning",
+  "seed": 5,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "first",
+      "frames": 4
+    },
+    {
+      "name": "second",
+      "frames": 4
+    },
+    {
+      "name": "third",
+      "frames": 4
+    },
+    {
+      "name": "fade",
+      "frames": 4
+    }
+  ],
+  "layers": [
+    {
+      "kind": "trail",
+      "name": "Bolt 1",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -55
+            ],
+            [
+              0.3,
+              -40
+            ],
+            [
+              0.6,
+              -25
+            ],
+            [
+              1,
+              -10
+            ]
+          ]
+        },
+        "y": {
+          "keys": [
+            [
+              0,
+              30
+            ],
+            [
+              0.3,
+              -10
+            ],
+            [
+              0.6,
+              5
+            ],
+            [
+              1,
+              -20
+            ]
+          ]
+        },
+        "radius": 2.5,
+        "taper": 0,
+        "length": 0.4,
+        "samples": 64,
+        "softness": 0.3,
+        "color_head": "#FFFFFF",
+        "color_tail": "#A0D0FF"
+      },
+      "phases": [
+        "first",
+        "second"
+      ]
+    },
+    {
+      "kind": "trail",
+      "name": "Bolt 2",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -10
+            ],
+            [
+              0.3,
+              5
+            ],
+            [
+              0.6,
+              12
+            ],
+            [
+              1,
+              25
+            ]
+          ]
+        },
+        "y": {
+          "keys": [
+            [
+              0,
+              -20
+            ],
+            [
+              0.3,
+              10
+            ],
+            [
+              0.6,
+              -5
+            ],
+            [
+              1,
+              15
+            ]
+          ]
+        },
+        "radius": 2.5,
+        "taper": 0,
+        "length": 0.4,
+        "samples": 64,
+        "softness": 0.3,
+        "color_head": "#FFFFFF",
+        "color_tail": "#A0D0FF"
+      },
+      "phases": [
+        "second",
+        "third"
+      ]
+    },
+    {
+      "kind": "trail",
+      "name": "Bolt 3",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              25
+            ],
+            [
+              0.3,
+              40
+            ],
+            [
+              0.6,
+              35
+            ],
+            [
+              1,
+              55
+            ]
+          ]
+        },
+        "y": {
+          "keys": [
+            [
+              0,
+              15
+            ],
+            [
+              0.3,
+              -15
+            ],
+            [
+              0.6,
+              0
+            ],
+            [
+              1,
+              -30
+            ]
+          ]
+        },
+        "radius": 2.5,
+        "taper": 0,
+        "length": 0.4,
+        "samples": 64,
+        "softness": 0.3,
+        "color_head": "#FFFFFF",
+        "color_tail": "#A0D0FF"
+      },
+      "phases": [
+        "third",
+        "fade"
+      ]
+    },
+    {
+      "kind": "flash",
+      "name": "Hit 1",
+      "params": {
+        "x": -10,
+        "y": -20,
+        "radius": 14,
+        "color": "#E0F0FF"
+      },
+      "phases": [
+        "first"
+      ]
+    },
+    {
+      "kind": "flash",
+      "name": "Hit 2",
+      "params": {
+        "x": 25,
+        "y": 15,
+        "radius": 14,
+        "color": "#E0F0FF"
+      },
+      "phases": [
+        "second"
+      ]
+    },
+    {
+      "kind": "flash",
+      "name": "Hit 3",
+      "params": {
+        "x": 55,
+        "y": -30,
+        "radius": 14,
+        "color": "#E0F0FF"
+      },
+      "phases": [
+        "third"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 6,
+        "strength": 1.0,
+        "tint": "#80B0FF"
+      }
+    }
+  ]
+}

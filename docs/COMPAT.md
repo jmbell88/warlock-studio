@@ -293,6 +293,7 @@ settle the first question in a minute.
 
 | What | State | Divergence | Notes |
 |---|---|---|---|
+| Flourish recipe | dropped | — | An effect group's recipe, track map and per-cel render digests (`animation.json`'s `flourish` key) have no chunk to live in. The layers, the group and the tags all travel; what is lost is the ability to *regenerate* — the document opens as if the effect had been detached (`manual/29-inker-animation.md#effects`). |
 | Cel opacity | round-trips | #1 (retired 2026-08-30) | ~~Opacity is a track/layer property here; every cel writes at 255.~~ A cel's own opacity is written from `Animation.cel_opacity`, keyed by *slot* -- so the two chunks of a linked cel carry two independent bytes, exactly as the format allows. A slot nobody dimmed still writes 255, which is what keeps an undimmed document byte-for-byte the file it was. |
 | Cel z-index | round-trips | #12 (retired 2026-08-30) | ~~This build has none — track order *is* stack order, so there is nothing to write per cel.~~ A cel's own z-index is written from `Animation.cel_z`, keyed by *slot* — so the two chunks of a linked cel carry two independent offsets, exactly as the format allows. A slot nobody moved still writes 0, which is what keeps an unmoved document byte-for-byte the file it was. |
 | User data (layer/cel/tileset/tile) | dropped | #14 | Not modeled; nothing is written to the `0x2020` chunk this format offers for it. |

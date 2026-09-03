@@ -2090,6 +2090,33 @@ class InkerState:
     #: wrote to disk and called clean. See ``inker_mode.end_filter_session``.
     #: Empty means no session.
     filter_uid: str = ""
+    #: Flourish. ``flourish_pending`` is the recipe the inspector is editing
+    #: for a group, ahead of the render that will land it: a slider reports on
+    #: every frame of a drag, and the document is written once, when the
+    #: render for the gesture's final value comes back -- one gesture, one
+    #: step. Keyed by group uid (unique per process, so one dict serves every
+    #: tab). ``flourish_due`` is the frame-clock time a debounced render is
+    #: owed at, ``flourish_layer`` the recipe layer the inspector is showing,
+    #: and ``flourish_preset`` what the insert popup has picked.
+    flourish_pending: dict[int, Any] = field(default_factory=dict)
+    flourish_due: dict[int, float] = field(default_factory=dict)
+    flourish_layer: dict[int, int] = field(default_factory=dict)
+    flourish_preset: str = "fireball"
+    flourish_mode: str = "painterly"
+    flourish_directions: int = 1
+    flourish_snippet_tag: str = ""
+    flourish_snippet_engine: str = "pygame-ce"
+    #: A texture generation in flight (``inker_flourish.submit_texture``):
+    #: the job id polled, the tab, the group and the layer it lands on. One
+    #: at a time, ``inpaint_pending``'s rule.
+    flourish_texture_pending: dict[str, Any] | None = None
+    flourish_texture_subject: str = ""
+    flourish_prompt_text: str = ""
+    flourish_restyle_pending: dict[str, Any] | None = None
+    flourish_restyle_subject: str = ""
+    flourish_restyle_phase: str = ""
+    flourish_restyle_strength: float = 0.55
+    flourish_restyle_anchors: int = 3
     #: A regeneration in flight: the job id the bridge polls, the tab and layer
     #: it lands in, the box and the selection weight it was asked with. One at
     #: a time; the popup refuses a second while one is pending.

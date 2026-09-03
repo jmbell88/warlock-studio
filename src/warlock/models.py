@@ -1628,3 +1628,4 @@ def catalog() -> dict[str, Any]:
             if c.preprocessor
         ],
     }
+

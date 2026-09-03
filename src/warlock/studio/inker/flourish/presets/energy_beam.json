@@ -1,0 +1,140 @@
+{
+  "name": "Energy beam",
+  "seed": 23,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "charge",
+      "frames": 6
+    },
+    {
+      "name": "beam",
+      "frames": 12,
+      "loop": true
+    },
+    {
+      "name": "fade",
+      "frames": 5
+    }
+  ],
+  "layers": [
+    {
+      "kind": "core",
+      "name": "Charge",
+      "params": {
+        "x": -52,
+        "radius": {
+          "keys": [
+            [
+              0,
+              2
+            ],
+            [
+              1,
+              12
+            ]
+          ],
+          "easing": "ease_in"
+        },
+        "color_inner": "#FFFFFF",
+        "color_outer": "#40E0FF",
+        "noise": 0.2
+      },
+      "phases": [
+        "charge"
+      ]
+    },
+    {
+      "kind": "flame",
+      "name": "Beam",
+      "params": {
+        "x": -52,
+        "width": 14,
+        "height": 112,
+        "rise": 0,
+        "color_base": "#FFFFFF",
+        "color_tip": "#20C0FF",
+        "turbulence": 0.35,
+        "speed": 4,
+        "scale": 8,
+        "spikiness": 0,
+        "opacity": {
+          "keys": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        }
+      },
+      "phases": [
+        "beam",
+        "fade"
+      ]
+    },
+    {
+      "kind": "core",
+      "name": "Muzzle",
+      "params": {
+        "x": -52,
+        "radius": 12,
+        "color_inner": "#FFFFFF",
+        "color_outer": "#40E0FF",
+        "pulse": 0.2,
+        "pulse_hz": 12
+      },
+      "phases": [
+        "beam"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Spray",
+      "params": {
+        "x": 56,
+        "count": 40,
+        "emission": "continuous",
+        "speed": 80,
+        "direction": 180,
+        "spread": 90,
+        "gravity": 40,
+        "size": 1.5,
+        "lifetime": 0.35,
+        "color_start": "#FFFFFF",
+        "color_end": "#20C0FF"
+      },
+      "phases": [
+        "beam"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 10,
+        "strength": 1.0,
+        "tint": "#80E0FF"
+      }
+    },
+    {
+      "kind": "distortion",
+      "name": "Shimmer",
+      "params": {
+        "radius": 0,
+        "strength": 1.5,
+        "scale": 6,
+        "speed": 6
+      }
+    }
+  ]
+}

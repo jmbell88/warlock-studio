@@ -325,7 +325,7 @@ def test_health_reports_the_worker_and_the_doctor_checks(svc, worker):
     # hardcoded past that, so adding a model does not fail an assertion about
     # something else.
     assert len(body["checks"]) == (
-        15
+        16
         + len(models.BASE_MODELS)
         + len(models.STYLE_LORAS)
         + len(models.IP_ADAPTERS)

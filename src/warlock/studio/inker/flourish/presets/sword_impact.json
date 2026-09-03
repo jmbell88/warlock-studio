@@ -1,0 +1,122 @@
+{
+  "name": "Sword impact",
+  "seed": 47,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 24,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "hit",
+      "frames": 3
+    },
+    {
+      "name": "sparks",
+      "frames": 7
+    }
+  ],
+  "layers": [
+    {
+      "kind": "flash",
+      "name": "Clang",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              6
+            ],
+            [
+              1,
+              26
+            ]
+          ]
+        },
+        "alpha": {
+          "keys": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              0.3
+            ]
+          ]
+        },
+        "color": "#FFFFF0",
+        "softness": 0.5
+      },
+      "phases": [
+        "hit"
+      ]
+    },
+    {
+      "kind": "ring",
+      "name": "Shock",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              2
+            ],
+            [
+              1,
+              30
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              4
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        },
+        "color": "#FFFFFF"
+      },
+      "phases": [
+        "hit",
+        "sparks"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Sparks",
+      "params": {
+        "count": 36,
+        "speed": 150,
+        "gravity": 240,
+        "size": 1.4,
+        "streak": 0.8,
+        "lifetime": 0.4,
+        "color_start": "#FFFFE0",
+        "color_end": "#FF8020",
+        "drag": 2
+      },
+      "phases": [
+        "hit",
+        "sparks"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 6,
+        "strength": 0.8,
+        "tint": "#FFE0A0"
+      }
+    }
+  ]
+}

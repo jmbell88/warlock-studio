@@ -1,0 +1,167 @@
+{
+  "name": "Water splash",
+  "seed": 61,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 20,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "hit",
+      "frames": 3
+    },
+    {
+      "name": "splash",
+      "frames": 12
+    }
+  ],
+  "layers": [
+    {
+      "kind": "ring",
+      "name": "Ripple",
+      "params": {
+        "y": 22,
+        "radius": {
+          "keys": [
+            [
+              0,
+              4
+            ],
+            [
+              1,
+              54
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              5
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        },
+        "alpha": {
+          "keys": [
+            [
+              0,
+              0.9
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "color": "#C0E8FF",
+        "squash": 0.3,
+        "softness": 0.6
+      }
+    },
+    {
+      "kind": "ring",
+      "name": "Ripple 2",
+      "params": {
+        "y": 22,
+        "radius": {
+          "keys": [
+            [
+              0,
+              2
+            ],
+            [
+              1,
+              40
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              4
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        },
+        "alpha": {
+          "keys": [
+            [
+              0,
+              0.7
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "color": "#FFFFFF",
+        "squash": 0.3,
+        "softness": 0.6
+      },
+      "phases": [
+        "splash"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Droplets",
+      "params": {
+        "y": 20,
+        "count": 50,
+        "speed": 130,
+        "gravity": 300,
+        "direction": -90,
+        "spread": 70,
+        "size": 2.4,
+        "size_jitter": 0.6,
+        "streak": 0.5,
+        "softness": 0.3,
+        "lifetime": 0.6,
+        "color_start": "#FFFFFF",
+        "color_end": "#60B0FF",
+        "drag": 1.2
+      }
+    },
+    {
+      "kind": "smoke",
+      "name": "Spray",
+      "params": {
+        "y": 16,
+        "count": 8,
+        "emission": "burst",
+        "size": 8,
+        "expand": 2.5,
+        "rise": 30,
+        "color": "#D0ECFF",
+        "darken": 0,
+        "lifetime": 0.5,
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0.5
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

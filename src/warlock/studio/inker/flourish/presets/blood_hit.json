@@ -1,0 +1,121 @@
+{
+  "name": "Blood hit",
+  "seed": 53,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 20,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "hit",
+      "frames": 3
+    },
+    {
+      "name": "spray",
+      "frames": 9
+    }
+  ],
+  "layers": [
+    {
+      "kind": "particles",
+      "name": "Droplets",
+      "params": {
+        "count": 50,
+        "speed": 110,
+        "gravity": 320,
+        "direction": -60,
+        "spread": 110,
+        "size": 2.2,
+        "size_jitter": 0.7,
+        "streak": 0.4,
+        "softness": 0.2,
+        "lifetime": 0.55,
+        "color_start": "#C01020",
+        "color_end": "#600810",
+        "drag": 1.5,
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              1
+            ],
+            [
+              0.8,
+              1
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "kind": "smoke",
+      "name": "Mist",
+      "params": {
+        "count": 8,
+        "emission": "burst",
+        "size": 6,
+        "expand": 2.5,
+        "color": "#801018",
+        "darken": 0.3,
+        "lifetime": 0.5,
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0.6
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "phases": [
+        "hit",
+        "spray"
+      ]
+    },
+    {
+      "kind": "flash",
+      "name": "Hit",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              4
+            ],
+            [
+              1,
+              14
+            ]
+          ]
+        },
+        "alpha": {
+          "keys": [
+            [
+              0,
+              0.8
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "color": "#FF4050"
+      },
+      "phases": [
+        "hit"
+      ]
+    }
+  ]
+}

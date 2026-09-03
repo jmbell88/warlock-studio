@@ -1,0 +1,181 @@
+{
+  "name": "Dark burst",
+  "seed": 89,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "impact",
+      "frames": 3
+    },
+    {
+      "name": "burst",
+      "frames": 9
+    },
+    {
+      "name": "dissipate",
+      "frames": 8
+    }
+  ],
+  "layers": [
+    {
+      "kind": "core",
+      "name": "Void",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              6
+            ],
+            [
+              0.4,
+              44
+            ],
+            [
+              1,
+              40
+            ]
+          ]
+        },
+        "intensity": {
+          "keys": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              0.4
+            ]
+          ]
+        },
+        "color_inner": "#180828",
+        "color_outer": "#40106080",
+        "softness": 0.5,
+        "noise": 0.6,
+        "noise_scale": 10,
+        "pulse": 0
+      },
+      "phases": [
+        "impact",
+        "burst"
+      ]
+    },
+    {
+      "kind": "ring",
+      "name": "Wave",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              6
+            ],
+            [
+              1,
+              74
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              10
+            ],
+            [
+              1,
+              2
+            ]
+          ]
+        },
+        "color": "#8030C0",
+        "softness": 0.7,
+        "unevenness": 0.6
+      },
+      "phases": [
+        "burst"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Shards",
+      "params": {
+        "count": 50,
+        "speed": 130,
+        "gravity": 0,
+        "size": 2.2,
+        "streak": 0.7,
+        "softness": 0.3,
+        "lifetime": 0.6,
+        "color_start": "#C060FF",
+        "color_end": "#100018",
+        "drag": 2
+      },
+      "phases": [
+        "burst",
+        "dissipate"
+      ]
+    },
+    {
+      "kind": "smoke",
+      "name": "Shadow",
+      "params": {
+        "count": 16,
+        "emission": "burst",
+        "size": 12,
+        "expand": 3,
+        "color": "#0A0410",
+        "darken": 0,
+        "lifetime": 1.0,
+        "rise": 10,
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.2,
+              0.8
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "phases": [
+        "burst",
+        "dissipate"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 10,
+        "strength": 0.6,
+        "tint": "#A040FF"
+      }
+    },
+    {
+      "kind": "distortion",
+      "name": "Warp",
+      "params": {
+        "radius": 60,
+        "strength": 3.5,
+        "scale": 9,
+        "speed": 3
+      }
+    }
+  ]
+}

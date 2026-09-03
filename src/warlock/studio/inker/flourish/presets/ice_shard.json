@@ -1,0 +1,194 @@
+{
+  "name": "Ice shard",
+  "seed": 13,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "cast",
+      "frames": 5
+    },
+    {
+      "name": "projectile",
+      "frames": 10,
+      "loop": true
+    },
+    {
+      "name": "impact",
+      "frames": 3
+    },
+    {
+      "name": "explosion",
+      "frames": 8
+    },
+    {
+      "name": "dissipate",
+      "frames": 7
+    }
+  ],
+  "layers": [
+    {
+      "kind": "trail",
+      "name": "Vapour",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -44
+            ],
+            [
+              1,
+              44
+            ]
+          ]
+        },
+        "radius": 6,
+        "taper": 0.9,
+        "length": 0.3,
+        "color_head": "#D0F4FF",
+        "color_tail": "#60A0FF40"
+      },
+      "phases": [
+        "projectile"
+      ]
+    },
+    {
+      "kind": "core",
+      "name": "Shard",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -44
+            ],
+            [
+              1,
+              44
+            ]
+          ]
+        },
+        "radius": 9,
+        "color_inner": "#FFFFFF",
+        "color_outer": "#60B0FF",
+        "softness": 0.2,
+        "noise": 0.5,
+        "noise_scale": 5,
+        "pulse": 0
+      },
+      "phases": [
+        "projectile"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Frost",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -44
+            ],
+            [
+              1,
+              44
+            ]
+          ]
+        },
+        "count": 24,
+        "emission": "continuous",
+        "speed": 20,
+        "gravity": 15,
+        "size": 1.2,
+        "lifetime": 0.5,
+        "color_start": "#FFFFFF",
+        "color_end": "#80C0FF"
+      },
+      "phases": [
+        "projectile"
+      ]
+    },
+    {
+      "kind": "flash",
+      "name": "Shatter",
+      "params": {
+        "x": 44,
+        "radius": 22,
+        "color": "#E0F8FF"
+      },
+      "phases": [
+        "impact"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Shards",
+      "params": {
+        "x": 44,
+        "count": 40,
+        "speed": 120,
+        "gravity": 220,
+        "size": 2.5,
+        "streak": 0.8,
+        "softness": 0.1,
+        "lifetime": 0.6,
+        "color_start": "#FFFFFF",
+        "color_end": "#80C0FF"
+      },
+      "phases": [
+        "explosion",
+        "dissipate"
+      ]
+    },
+    {
+      "kind": "smoke",
+      "name": "Mist",
+      "params": {
+        "x": 44,
+        "count": 10,
+        "emission": "burst",
+        "size": 10,
+        "expand": 3,
+        "color": "#C0E8FF",
+        "darken": 0,
+        "lifetime": 0.8,
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.2,
+              0.4
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "phases": [
+        "explosion",
+        "dissipate"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 8,
+        "strength": 0.7,
+        "tint": "#A0D8FF"
+      }
+    }
+  ]
+}

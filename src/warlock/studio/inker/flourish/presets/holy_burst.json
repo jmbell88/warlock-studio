@@ -1,0 +1,169 @@
+{
+  "name": "Holy burst",
+  "seed": 83,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "impact",
+      "frames": 3
+    },
+    {
+      "name": "burst",
+      "frames": 9
+    },
+    {
+      "name": "dissipate",
+      "frames": 8
+    }
+  ],
+  "layers": [
+    {
+      "kind": "flash",
+      "name": "Flash",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              20
+            ],
+            [
+              1,
+              70
+            ]
+          ]
+        },
+        "alpha": {
+          "keys": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              0.3
+            ]
+          ]
+        },
+        "color": "#FFFFF0"
+      },
+      "phases": [
+        "impact"
+      ]
+    },
+    {
+      "kind": "core",
+      "name": "Radiance",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              20
+            ],
+            [
+              0.5,
+              48
+            ],
+            [
+              1,
+              40
+            ]
+          ]
+        },
+        "intensity": {
+          "keys": [
+            [
+              0,
+              1.4
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "color_inner": "#FFFFFF",
+        "color_outer": "#FFE080",
+        "softness": 1.0,
+        "noise": 0.15,
+        "pulse": 0
+      },
+      "phases": [
+        "burst",
+        "dissipate"
+      ]
+    },
+    {
+      "kind": "ring",
+      "name": "Halo",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              6
+            ],
+            [
+              1,
+              70
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              10
+            ],
+            [
+              1,
+              2
+            ]
+          ]
+        },
+        "color": "#FFF0B0",
+        "softness": 0.8
+      },
+      "phases": [
+        "burst"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Rays",
+      "params": {
+        "count": 48,
+        "speed": 130,
+        "gravity": -20,
+        "size": 2.5,
+        "streak": 1,
+        "softness": 0.6,
+        "lifetime": 0.6,
+        "color_start": "#FFFFFF",
+        "color_end": "#FFD060",
+        "drag": 2
+      },
+      "phases": [
+        "burst",
+        "dissipate"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 14,
+        "strength": 1.0,
+        "tint": "#FFE8A0"
+      }
+    }
+  ]
+}

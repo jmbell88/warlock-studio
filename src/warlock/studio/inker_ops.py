@@ -70,6 +70,7 @@ MENUS: tuple[str, ...] = (
     "Layer",
     "Frame",
     "Sheet",
+    "Flourish",
     "Select",
     "View",
 )
@@ -2742,3 +2743,185 @@ def manifest() -> dict[str, Any]:
             "metadata",
         ],
     }
+
+
+# -- Flourish ------------------------------------------------------------------------
+
+
+def _fl_pred(name: str) -> Callable[[Any, Any], bool]:
+    def _enabled(state: Any, tab: Any) -> bool:
+        from . import inker_flourish
+
+        return bool(getattr(inker_flourish, name)(state, tab))
+
+    return _enabled
+
+
+def _fl_reason(name: str) -> Callable[[Any, Any], str]:
+    def _reason(state: Any, tab: Any) -> str:
+        from . import inker_flourish
+
+        return str(getattr(inker_flourish, name)(state, tab))
+
+    return _reason
+
+
+register(
+    Op(
+        "flourish_insert",
+        "Insert effect...",
+        dialog("inker-flourish-insert"),
+        menu="Flourish",
+        enabled=_fl_pred("can_insert"),
+        reason=_fl_reason("insert_reason"),
+        hint=(
+            "A procedural effect -- a fireball, a shockwave, a heal -- rendered "
+            "from a recipe into a layer group above the active layer, one tag "
+            "per phase. Every parameter stays editable under the timeline."
+        ),
+    )
+)
+register(
+    Op(
+        "flourish_regenerate",
+        "Regenerate effect",
+        _mode("flourish_regenerate"),
+        menu="Flourish",
+        enabled=_fl_pred("can_regenerate"),
+        reason=_fl_reason("regenerate_reason"),
+        hint=(
+            "Renders the active effect again from its recipe. Cells you have "
+            "painted on keep your paint and are flagged; nothing is overwritten "
+            "silently. One undo step."
+        ),
+    )
+)
+register(
+    Op(
+        "flourish_regenerate_all",
+        "Regenerate, replacing painted cells",
+        _mode("flourish_regenerate", force=True),
+        menu="Flourish",
+        enabled=_fl_pred("can_regenerate"),
+        reason=_fl_reason("regenerate_reason"),
+        hint="The same render, but painted cells are replaced too. One undo step.",
+    )
+)
+register(
+    Op(
+        "flourish_keep_edits",
+        "Keep painted cells",
+        _mode("flourish_keep_edits"),
+        menu="Flourish",
+        enabled=_fl_pred("has_conflicts"),
+        reason=_fl_reason("conflicts_reason"),
+        hint="Clears the flags a regenerate left: what you painted is what stays.",
+    )
+)
+register(
+    Op(
+        "flourish_detach",
+        "Detach effect (keep layers)",
+        _mode("flourish_detach"),
+        menu="Flourish",
+        separator_before=True,
+        enabled=_fl_pred("has_effect"),
+        reason=_fl_reason("regenerate_reason"),
+        hint=(
+            "Forgets the recipe and leaves the layers as ordinary layers. The "
+            "pixels do not change; only the ability to regenerate goes."
+        ),
+    )
+)
+register(
+    Op(
+        "flourish_export",
+        "Export effect sheets...",
+        _mode("flourish_export"),
+        menu="Flourish",
+        separator_before=True,
+        enabled=_fl_pred("can_export"),
+        reason=_fl_reason("export_reason"),
+        hint=(
+            "One sprite sheet per phase -- the per-tag export, since a phase is a "
+            "tag -- each with its JSON sidecar: frame size, count, timing, loop."
+        ),
+    )
+)
+register(
+    Op(
+        "flourish_snippet",
+        "Engine snippet...",
+        dialog("inker-flourish-snippet"),
+        menu="Flourish",
+        enabled=_fl_pred("can_export"),
+        reason=_fl_reason("export_reason"),
+        hint=(
+            "The few lines that load one exported phase in Pygame-CE, Godot, "
+            "Unity or Phaser, ready to copy."
+        ),
+    )
+)
+register(
+    Op(
+        "flourish_texture_selection",
+        "Use selection as texture",
+        _mode("flourish_texture_selection"),
+        menu="Flourish",
+        separator_before=True,
+        enabled=_fl_pred("can_texture_selection"),
+        reason=_fl_reason("texture_selection_reason"),
+        hint=(
+            "The selected pixels of the active layer become a texture the "
+            "effect can stamp -- a sprite layer, or textured particles. "
+            "Offline, one step."
+        ),
+    )
+)
+register(
+    Op(
+        "flourish_texture_generate",
+        "Generate texture...",
+        dialog("inker-flourish-texture"),
+        menu="Flourish",
+        enabled=_fl_pred("can_texture_generate"),
+        reason=_fl_reason("texture_generate_reason"),
+        hint=(
+            "Asks the image model for a single centred ingredient on black -- a "
+            "rune, a skull, a flame -- and keys it out into a texture of the "
+            "effect. Needs an SDXL-family model, like every generation."
+        ),
+    )
+)
+register(
+    Op(
+        "flourish_prompt",
+        "Apply the prompt",
+        _mode("flourish_prompt"),
+        menu="Flourish",
+        enabled=_fl_pred("can_prompt"),
+        reason=_fl_reason("prompt_reason"),
+        hint=(
+            "Reads the words in the inspector's prompt field -- \"colder, more "
+            "sparks, no smoke\" -- into parameter changes: through the local text "
+            "model when one is downloaded, a fixed vocabulary otherwise. The "
+            "render that follows is one undo step."
+        ),
+    )
+)
+register(
+    Op(
+        "flourish_restyle",
+        "Restyle keyframes...",
+        dialog("inker-flourish-restyle"),
+        menu="Flourish",
+        enabled=_fl_pred("can_restyle"),
+        reason=_fl_reason("restyle_reason"),
+        hint=(
+            "Sends a few frames of one phase through the image model as img2img "
+            "and fills the frames between by crossfading under the effect's own "
+            "motion, as a new layer inside the group. Opt-in and unmeasured: keep "
+            "the procedural layers until you have judged it."
+        ),
+    )
+)

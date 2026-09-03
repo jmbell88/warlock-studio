@@ -634,6 +634,89 @@ branch.
 
 ---
 
+## P19. Measure the generated Flourish texture against the procedural one
+
+**Why it is yours:** a GPU afternoon, and a judgement.
+
+The texture door is built (`inker_flourish.submit_texture` → a reference job →
+`key_out_black`, or the matting model when present → an asset of the effect),
+and it defaults to *nothing*: every preset is procedural and no layer names a
+generated texture until you give it one. Whether a generated flame or ember
+*beats* the procedural core at 128 px, and again after the pixel pass, is a
+measurement, not a design decision, and the earlier prompt expander was deleted
+for shipping without one.
+
+- Generate five textures with the shipped prompt template (a flame, an ember, a
+  rune, a skull, a shard) and put each on the fireball's *Sparks* and on a
+  *sprite* layer at 128 px, painterly and pixel.
+- Judge beside the procedural version, and write
+  a new document under `docs/measurements/` with the verdict, the
+  prompts, and whether the black key or the matting model made the better
+  cutout.
+- If a texture wins, the preset that wants it gets it as a *file* under
+  `studio/inker/flourish/presets/` textures beside the JSON -- the recipe
+  format already names assets by id -- and the door stays opt-in either way.
+
+**Expected outcome:** one measurement document; presets changed only if it says
+so.
+
+## P20. Pick the Flourish prompt's text model, measure it, pin it
+
+**Why it is yours:** a CPU afternoon and a judgement, and the one entry in this
+programme that touches the offline invariant's stated exception.
+
+The door is built and gated on a *directory*, not a registry row:
+`inker_flourish.TEXT_MODEL_DIR` (`<model root>/text-instruct/`), probed for
+`config.json` plus safetensors, read by `pipelines/recipe_worker.py` in a
+one-shot child in the kill-on-close job, its answer landed only through
+`keywords.apply_diff` (every value clamped, every unknown name dropped and
+reported). Without weights the field uses `keywords.apply`, deterministic and
+pinned by tests. It is not in `models.py` because every entry there carries a
+fetch pinned to a revision (`tests/test_fetch.py`) and the pin comes from the
+measurement below -- the prompt expander of v0.0.30 shipped without one and
+was deleted for it.
+
+- Candidates: Qwen2.5-0.5B-Instruct and 1.5B-Instruct, SmolLM2-1.7B-Instruct.
+  Place one at a time in `text-instruct/`; doctor's row goes green.
+- The fixed prompt set: twenty sentences, half inside the keyword vocabulary
+  ("colder, more sparks"), half outside it ("make it look like it is
+  underwater", "the kind of fire a necromancer would cast"). For each, the
+  `[model]` toast versus the `[keywords]` toast, and whether the rendered
+  effect did what the sentence said. Time per prompt on the CPU.
+- Write a new document under `docs/measurements/`. If a model
+  beats the vocabulary on the outside half without losing the inside half,
+  add a `TextModel` table to `models.py` with a **pinned revision** and a
+  `fetch.Kind("text", ...)`, and switch `text_model_dir` to read it; if none
+  does, delete `recipe_worker.py` and the door, and keep the vocabulary --
+  the v0.0.30 rule, applied before shipping rather than after.
+
+**Expected outcome:** one measurement document and one of the two edits.
+
+## P21. Judge restyled keyframes against the procedural frames
+
+**Why it is yours:** a GPU afternoon, and the judgement the plan deferred.
+
+`Flourish -> Restyle keyframes...` is built and opt-in: N anchor frames of one
+phase go through the image model as img2img (`inker_flourish.submit_restyle`,
+one reference job each), and `flourish/keyframes.interpolate` fills the span by
+crossfading under the recipe's own displacement field, landing as a snapshot
+track inside the group (`Document.insert_flourish_track`). Whether that is
+ever better than the procedural frames -- for a painted look, a woodcut, a
+portal the primitives cannot make -- is the question, and a crossfade of two
+diffusion frames is exactly where the plan expected it to fail.
+
+- The fireball's *explosion* and the portal's *loop*, three and five
+  keyframes, strengths 0.4 and 0.7, two subjects each ("oil painting", "ink
+  woodcut"). Play them beside the procedural layer.
+- Write a new document under `docs/measurements/`: does the
+  in-between read as motion or as a fade; does the model keep the silhouette
+  at 0.4; is five keyframes enough for a twelve-frame phase.
+- If it never reads as motion, the door goes: delete `keyframes.py`, the
+  restyle door and its popup, and this entry. If it does for some phases,
+  the manual says which, and the measurement says why.
+
+**Expected outcome:** one measurement document and one of the two edits.
+
 ## Also owed, smaller
 
 - **Tutorial sample assets** (art): a 32×32 `.ora` sprite with a few layers

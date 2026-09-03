@@ -1,0 +1,87 @@
+{
+  "name": "Shield",
+  "seed": 29,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 16,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "loop",
+      "frames": 16,
+      "loop": true
+    }
+  ],
+  "layers": [
+    {
+      "kind": "core",
+      "name": "Field",
+      "params": {
+        "radius": 40,
+        "color_inner": "#4080FF20",
+        "color_outer": "#4080FF80",
+        "softness": 0.15,
+        "noise": 0.08,
+        "noise_scale": 16,
+        "pulse": 0.03,
+        "pulse_hz": 1.5,
+        "intensity": 0.5
+      }
+    },
+    {
+      "kind": "ring",
+      "name": "Rim",
+      "params": {
+        "radius": 40,
+        "thickness": 5,
+        "alpha": 0.9,
+        "color": "#A0D0FF",
+        "unevenness": 0.15,
+        "softness": 0.6
+      }
+    },
+    {
+      "kind": "particles",
+      "name": "Motes",
+      "params": {
+        "count": 20,
+        "emission": "continuous",
+        "speed": 12,
+        "gravity": -15,
+        "spawn_radius": 36,
+        "size": 1.5,
+        "lifetime": 1.2,
+        "color_start": "#FFFFFF",
+        "color_end": "#80B0FF",
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.3,
+              0.8
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 8,
+        "strength": 0.6,
+        "tint": "#80B0FF"
+      }
+    }
+  ]
+}

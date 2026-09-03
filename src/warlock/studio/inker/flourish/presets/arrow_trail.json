@@ -1,0 +1,70 @@
+{
+  "name": "Arrow trail",
+  "seed": 101,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 24,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "flight",
+      "frames": 8,
+      "loop": true
+    }
+  ],
+  "layers": [
+    {
+      "kind": "trail",
+      "name": "Trail",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -50
+            ],
+            [
+              1,
+              50
+            ]
+          ]
+        },
+        "radius": 2,
+        "taper": 0.6,
+        "length": 0.25,
+        "samples": 40,
+        "color_head": "#FFFFFF",
+        "color_tail": "#C0C0C000"
+      }
+    },
+    {
+      "kind": "particles",
+      "name": "Wisps",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -50
+            ],
+            [
+              1,
+              50
+            ]
+          ]
+        },
+        "count": 12,
+        "emission": "continuous",
+        "speed": 12,
+        "gravity": 10,
+        "size": 1,
+        "lifetime": 0.3,
+        "color_start": "#FFFFFF",
+        "color_end": "#A0A0A0"
+      }
+    }
+  ]
+}

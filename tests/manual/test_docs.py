@@ -26,6 +26,7 @@ EXPECTED_KEYS = [
     "12-tuning-what-you-get",
     "13-putting-it-in-a-game",
     "14-making-a-soundtrack",
+    "15-casting-a-spell",
     "20-overview",
     "21-home",
     "22-generating-references",

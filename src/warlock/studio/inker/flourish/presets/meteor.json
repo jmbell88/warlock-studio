@@ -1,0 +1,318 @@
+{
+  "name": "Meteor",
+  "seed": 97,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "fall",
+      "frames": 10
+    },
+    {
+      "name": "impact",
+      "frames": 3
+    },
+    {
+      "name": "explosion",
+      "frames": 9
+    },
+    {
+      "name": "dissipate",
+      "frames": 8
+    }
+  ],
+  "layers": [
+    {
+      "kind": "smoke",
+      "name": "Trail smoke",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -56
+            ],
+            [
+              1,
+              24
+            ]
+          ]
+        },
+        "y": {
+          "keys": [
+            [
+              0,
+              -60
+            ],
+            [
+              1,
+              20
+            ]
+          ]
+        },
+        "count": 14,
+        "emission": "continuous",
+        "size": 6,
+        "expand": 2.5,
+        "rise": 20,
+        "rise_direction": -135,
+        "color": "#2A2020",
+        "lifetime": 0.5
+      },
+      "phases": [
+        "fall"
+      ]
+    },
+    {
+      "kind": "flame",
+      "name": "Tail",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -56
+            ],
+            [
+              1,
+              24
+            ]
+          ]
+        },
+        "y": {
+          "keys": [
+            [
+              0,
+              -60
+            ],
+            [
+              1,
+              20
+            ]
+          ]
+        },
+        "width": 22,
+        "height": 60,
+        "rise": -135,
+        "color_base": "#FFD060",
+        "color_tip": "#D82A10",
+        "turbulence": 0.7
+      },
+      "phases": [
+        "fall"
+      ]
+    },
+    {
+      "kind": "core",
+      "name": "Rock",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -56
+            ],
+            [
+              1,
+              24
+            ]
+          ]
+        },
+        "y": {
+          "keys": [
+            [
+              0,
+              -60
+            ],
+            [
+              1,
+              20
+            ]
+          ]
+        },
+        "radius": 11,
+        "color_inner": "#FFE0A0",
+        "color_outer": "#803010",
+        "softness": 0.3,
+        "noise": 0.4,
+        "noise_scale": 5
+      },
+      "phases": [
+        "fall"
+      ]
+    },
+    {
+      "kind": "flash",
+      "name": "Flash",
+      "params": {
+        "x": 24,
+        "y": 20,
+        "radius": {
+          "keys": [
+            [
+              0,
+              20
+            ],
+            [
+              1,
+              50
+            ]
+          ]
+        }
+      },
+      "phases": [
+        "impact"
+      ]
+    },
+    {
+      "kind": "ring",
+      "name": "Ground wave",
+      "params": {
+        "x": 24,
+        "y": 22,
+        "radius": {
+          "keys": [
+            [
+              0,
+              6
+            ],
+            [
+              1,
+              80
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              12
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        },
+        "squash": 0.4,
+        "softness": 0.8,
+        "color": "#FFD0A0"
+      },
+      "phases": [
+        "impact",
+        "explosion"
+      ]
+    },
+    {
+      "kind": "core",
+      "name": "Fire burst",
+      "params": {
+        "x": 24,
+        "y": 16,
+        "radius": {
+          "keys": [
+            [
+              0,
+              12
+            ],
+            [
+              0.4,
+              40
+            ],
+            [
+              1,
+              44
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "intensity": {
+          "keys": [
+            [
+              0,
+              1.4
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "noise": 0.7,
+        "softness": 0.85,
+        "pulse": 0,
+        "color_outer": "#E03A10"
+      },
+      "phases": [
+        "explosion"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Debris",
+      "params": {
+        "x": 24,
+        "y": 20,
+        "count": 40,
+        "speed": 130,
+        "gravity": 280,
+        "direction": -90,
+        "spread": 150,
+        "size": 2.5,
+        "size_jitter": 0.8,
+        "softness": 0.1,
+        "lifetime": 0.8,
+        "color_start": "#705040",
+        "color_end": "#301810"
+      },
+      "phases": [
+        "explosion",
+        "dissipate"
+      ]
+    },
+    {
+      "kind": "smoke",
+      "name": "Smoke",
+      "params": {
+        "x": 24,
+        "y": 16,
+        "count": 18,
+        "emission": "burst",
+        "size": 14,
+        "expand": 3.5,
+        "color": "#1E1616",
+        "lifetime": 1.1,
+        "rise": 25
+      },
+      "phases": [
+        "explosion",
+        "dissipate"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 12,
+        "strength": 0.9,
+        "tint": "#FF9040"
+      }
+    },
+    {
+      "kind": "distortion",
+      "name": "Heat",
+      "params": {
+        "x": 24,
+        "y": 16,
+        "radius": 60,
+        "strength": 2.5
+      }
+    }
+  ]
+}

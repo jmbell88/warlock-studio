@@ -89,9 +89,11 @@ def test_run_checks_returns_every_check(tmp_path):
     # machine with 24 GiB of RAM free. The fifteenth is "job database": the
     # store is the app's single point of total failure, and until it had a row
     # a malformed image was the generic startup box on every launch with
-    # nothing anywhere naming the file.
+    # nothing anywhere naming the file. The sixteenth is "text model": the
+    # Flourish prompt's directory probe, a row with no registry entry behind
+    # it until the measurement that picks the model pins a revision.
     expected = (
-        15
+        16
         + len(model_registry.BASE_MODELS)
         + len(model_registry.STYLE_LORAS)
         + len(model_registry.IP_ADAPTERS)

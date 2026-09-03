@@ -1,0 +1,138 @@
+{
+  "name": "Buff",
+  "seed": 71,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 16,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "rise",
+      "frames": 12
+    },
+    {
+      "name": "hold",
+      "frames": 8
+    }
+  ],
+  "layers": [
+    {
+      "kind": "core",
+      "name": "Glow",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              6
+            ],
+            [
+              1,
+              30
+            ]
+          ]
+        },
+        "intensity": {
+          "keys": [
+            [
+              0,
+              0.8
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "color_inner": "#FFF8E0",
+        "color_outer": "#FFB020",
+        "softness": 1.0,
+        "noise": 0.2,
+        "pulse": 0
+      }
+    },
+    {
+      "kind": "ring",
+      "name": "Rising ring",
+      "params": {
+        "y": {
+          "keys": [
+            [
+              0,
+              40
+            ],
+            [
+              1,
+              -40
+            ]
+          ]
+        },
+        "radius": 30,
+        "thickness": 5,
+        "alpha": {
+          "keys": [
+            [
+              0,
+              0.9
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "color": "#FFE080",
+        "squash": 0.35,
+        "softness": 0.7
+      },
+      "phases": [
+        "rise"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Sparkles",
+      "params": {
+        "count": 36,
+        "emission": "continuous",
+        "speed": 30,
+        "gravity": -80,
+        "direction": -90,
+        "spread": 40,
+        "spawn_radius": 22,
+        "size": 1.8,
+        "lifetime": 0.9,
+        "color_start": "#FFFFFF",
+        "color_end": "#FFC040",
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.2,
+              1
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 10,
+        "strength": 0.8,
+        "tint": "#FFD080"
+      }
+    }
+  ]
+}

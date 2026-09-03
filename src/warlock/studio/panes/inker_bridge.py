@@ -29,6 +29,7 @@ from ..inker import transform
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_colors
+from . import inker_flourish as inker_flourish_pane
 
 
 def _busy_why(tab: Any) -> str:
@@ -85,6 +86,14 @@ def popups(ctx: Any) -> None:
             open_convert(ctx, tab)
         elif wanted == CONVERT_MODE_POPUP:
             open_convert(ctx, tab, to_mode="indexed")
+        elif wanted == inker_flourish_pane.FLOURISH_POPUP:
+            inker_flourish_pane.open_popup(ctx, tab)
+        elif wanted == inker_flourish_pane.SNIPPET_POPUP:
+            inker_flourish_pane.open_snippet_popup(ctx, tab)
+        elif wanted == inker_flourish_pane.TEXTURE_POPUP:
+            inker_flourish_pane.open_texture_popup(ctx, tab)
+        elif wanted == inker_flourish_pane.RESTYLE_POPUP:
+            inker_flourish_pane.open_restyle_popup(ctx, tab)
         elif wanted:
             # Not this module's popup -- hand it back for whoever owns it
             # (the canvas's New, the menu strip's layer properties). Rewritten
@@ -104,6 +113,10 @@ def popups(ctx: Any) -> None:
     _canvas_dialog(ctx, tab, opening=(wanted == "inker-resize"))
     _filter_popup(ctx, tab)
     _inpaint_popup(ctx, tab)
+    inker_flourish_pane.popup(ctx, tab)
+    inker_flourish_pane.snippet_popup(ctx, tab)
+    inker_flourish_pane.texture_popup(ctx, tab)
+    inker_flourish_pane.restyle_popup(ctx, tab)
     poll_inpaint(ctx)
 
 

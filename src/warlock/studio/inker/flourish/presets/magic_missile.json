@@ -1,0 +1,225 @@
+{
+  "name": "Magic missile",
+  "seed": 17,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "cast",
+      "frames": 5
+    },
+    {
+      "name": "projectile",
+      "frames": 10,
+      "loop": true
+    },
+    {
+      "name": "impact",
+      "frames": 3
+    },
+    {
+      "name": "explosion",
+      "frames": 8
+    },
+    {
+      "name": "dissipate",
+      "frames": 7
+    }
+  ],
+  "layers": [
+    {
+      "kind": "trail",
+      "name": "Trail",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -44
+            ],
+            [
+              1,
+              44
+            ]
+          ]
+        },
+        "y": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.5,
+              -6
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "radius": 6,
+        "length": 0.35,
+        "color_head": "#E0B0FF",
+        "color_tail": "#6020C040"
+      },
+      "phases": [
+        "projectile"
+      ]
+    },
+    {
+      "kind": "core",
+      "name": "Bolt",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -44
+            ],
+            [
+              1,
+              44
+            ]
+          ]
+        },
+        "y": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.5,
+              -6
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "radius": 8,
+        "color_inner": "#FFFFFF",
+        "color_outer": "#A040FF",
+        "noise": 0.25,
+        "pulse": 0.2,
+        "pulse_hz": 9
+      },
+      "phases": [
+        "projectile"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Sparkle",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -44
+            ],
+            [
+              1,
+              44
+            ]
+          ]
+        },
+        "count": 30,
+        "emission": "continuous",
+        "speed": 25,
+        "gravity": 0,
+        "size": 1.3,
+        "lifetime": 0.4,
+        "color_start": "#FFFFFF",
+        "color_end": "#C080FF"
+      },
+      "phases": [
+        "projectile"
+      ]
+    },
+    {
+      "kind": "flash",
+      "name": "Hit",
+      "params": {
+        "x": 44,
+        "radius": 24,
+        "color": "#F0E0FF"
+      },
+      "phases": [
+        "impact"
+      ]
+    },
+    {
+      "kind": "ring",
+      "name": "Ripple",
+      "params": {
+        "x": 44,
+        "radius": {
+          "keys": [
+            [
+              0,
+              4
+            ],
+            [
+              1,
+              44
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              6
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        },
+        "color": "#D0A0FF"
+      },
+      "phases": [
+        "impact",
+        "explosion"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Burst",
+      "params": {
+        "x": 44,
+        "count": 40,
+        "speed": 100,
+        "gravity": 60,
+        "size": 2,
+        "lifetime": 0.5,
+        "color_start": "#FFFFFF",
+        "color_end": "#8040FF"
+      },
+      "phases": [
+        "explosion",
+        "dissipate"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 10,
+        "strength": 1.0,
+        "tint": "#C090FF"
+      }
+    }
+  ]
+}

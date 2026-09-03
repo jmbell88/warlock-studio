@@ -1,0 +1,150 @@
+{
+  "name": "Heal",
+  "seed": 3,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 16,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "rise",
+      "frames": 14
+    },
+    {
+      "name": "settle",
+      "frames": 8
+    }
+  ],
+  "layers": [
+    {
+      "kind": "core",
+      "name": "Warmth",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              10
+            ],
+            [
+              1,
+              34
+            ]
+          ]
+        },
+        "intensity": {
+          "keys": [
+            [
+              0,
+              0.6
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "color_inner": "#E8FFE0",
+        "color_outer": "#40C060",
+        "softness": 1.0,
+        "noise": 0.2,
+        "pulse": 0.08,
+        "pulse_hz": 2
+      }
+    },
+    {
+      "kind": "particles",
+      "name": "Motes",
+      "params": {
+        "count": 36,
+        "emission": "continuous",
+        "speed": 40,
+        "gravity": -70,
+        "direction": -90,
+        "spread": 50,
+        "spawn_radius": 22,
+        "size": 2.2,
+        "lifetime": 1.0,
+        "color_start": "#F0FFE8",
+        "color_end": "#40D070",
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.2,
+              1
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "drag": 0.5
+      }
+    },
+    {
+      "kind": "ring",
+      "name": "Bloom",
+      "params": {
+        "radius": {
+          "keys": [
+            [
+              0,
+              4
+            ],
+            [
+              1,
+              40
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              6
+            ],
+            [
+              1,
+              2
+            ]
+          ]
+        },
+        "alpha": {
+          "keys": [
+            [
+              0,
+              0.8
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "color": "#B0FFC0",
+        "softness": 0.9
+      },
+      "phases": [
+        "rise"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 10,
+        "strength": 0.8,
+        "tint": "#90FFB0"
+      }
+    }
+  ]
+}

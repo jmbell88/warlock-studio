@@ -1,0 +1,289 @@
+{
+  "name": "Fireball",
+  "seed": 7,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "cast",
+      "frames": 5
+    },
+    {
+      "name": "projectile",
+      "frames": 10,
+      "loop": true
+    },
+    {
+      "name": "impact",
+      "frames": 3
+    },
+    {
+      "name": "explosion",
+      "frames": 8
+    },
+    {
+      "name": "dissipate",
+      "frames": 7
+    }
+  ],
+  "layers": [
+    {
+      "kind": "smoke",
+      "name": "Smoke",
+      "params": {
+        "count": 12,
+        "size": 7,
+        "color": "#2A2020",
+        "rise": 30
+      }
+    },
+    {
+      "kind": "trail",
+      "name": "Trail",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -44
+            ],
+            [
+              1,
+              44
+            ]
+          ]
+        },
+        "radius": 8,
+        "color_head": "#FFB040",
+        "color_tail": "#8A200080",
+        "length": 0.3
+      },
+      "phases": [
+        "projectile"
+      ]
+    },
+    {
+      "kind": "flame",
+      "name": "Outer flame",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -44
+            ],
+            [
+              1,
+              44
+            ]
+          ]
+        },
+        "width": 26,
+        "height": 44,
+        "rise": 180,
+        "color_base": "#FFD060",
+        "color_tip": "#D82A10",
+        "turbulence": 0.7
+      },
+      "phases": [
+        "projectile"
+      ]
+    },
+    {
+      "kind": "core",
+      "name": "Core",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -44
+            ],
+            [
+              1,
+              44
+            ]
+          ]
+        },
+        "radius": 13,
+        "noise": 0.3
+      },
+      "phases": [
+        "projectile"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Embers",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              -44
+            ],
+            [
+              1,
+              44
+            ]
+          ]
+        },
+        "count": 30,
+        "emission": "continuous",
+        "speed": 30,
+        "gravity": -20,
+        "size": 1.5,
+        "lifetime": 0.4,
+        "color_start": "#FFE0A0",
+        "color_end": "#FF4000"
+      },
+      "phases": [
+        "projectile"
+      ]
+    },
+    {
+      "kind": "ring",
+      "name": "Shockwave",
+      "params": {
+        "x": 44,
+        "radius": {
+          "keys": [
+            [
+              0,
+              6
+            ],
+            [
+              1,
+              70
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "thickness": {
+          "keys": [
+            [
+              0,
+              10
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        }
+      },
+      "phases": [
+        "impact",
+        "explosion"
+      ]
+    },
+    {
+      "kind": "flash",
+      "name": "Flash",
+      "params": {
+        "x": 44,
+        "radius": 30
+      },
+      "phases": [
+        "impact"
+      ]
+    },
+    {
+      "kind": "core",
+      "name": "Fire burst",
+      "params": {
+        "x": 44,
+        "radius": {
+          "keys": [
+            [
+              0,
+              10
+            ],
+            [
+              0.4,
+              40
+            ],
+            [
+              1,
+              46
+            ]
+          ],
+          "easing": "ease_out"
+        },
+        "intensity": {
+          "keys": [
+            [
+              0,
+              1.4
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "noise": 0.6,
+        "softness": 0.8,
+        "pulse": 0
+      },
+      "phases": [
+        "explosion"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Sparks",
+      "params": {
+        "x": 44,
+        "count": 60,
+        "speed": 140,
+        "gravity": 160,
+        "size": 2,
+        "streak": 0.6,
+        "lifetime": 0.45
+      },
+      "phases": [
+        "explosion"
+      ]
+    },
+    {
+      "kind": "smoke",
+      "name": "Ash",
+      "params": {
+        "x": 44,
+        "count": 14,
+        "emission": "burst",
+        "size": 12,
+        "expand": 3,
+        "color": "#1A1414",
+        "lifetime": 0.9
+      },
+      "phases": [
+        "explosion",
+        "dissipate"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 10,
+        "strength": 0.9,
+        "tint": "#FF9040"
+      }
+    },
+    {
+      "kind": "distortion",
+      "name": "Heat",
+      "params": {
+        "radius": 50,
+        "strength": 2.5
+      }
+    }
+  ]
+}

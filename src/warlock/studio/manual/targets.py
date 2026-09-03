@@ -33,6 +33,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # The sheet-correction strip under the transport, which exists only on a
     # Troupe character sheet and is the phase-6 cleanup loop.
     "inker-sheet": ("29-inker-animation", "sheet-corrections"),
+    "inker-flourish": ("29-inker-animation", "effects"),
     # Found by the O118 coverage sweep: two panes a user reads and neither had
     # a way into the chapter that describes it.
     "inker-colors": ("28-inker", "colour"),

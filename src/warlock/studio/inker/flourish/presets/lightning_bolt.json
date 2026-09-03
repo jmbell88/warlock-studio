@@ -1,0 +1,148 @@
+{
+  "name": "Lightning bolt",
+  "seed": 11,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 18,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "strike",
+      "frames": 4
+    },
+    {
+      "name": "flicker",
+      "frames": 5
+    },
+    {
+      "name": "fade",
+      "frames": 4
+    }
+  ],
+  "layers": [
+    {
+      "kind": "trail",
+      "name": "Bolt",
+      "params": {
+        "x": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.2,
+              9
+            ],
+            [
+              0.4,
+              -7
+            ],
+            [
+              0.6,
+              11
+            ],
+            [
+              0.8,
+              -5
+            ],
+            [
+              1,
+              2
+            ]
+          ]
+        },
+        "y": {
+          "keys": [
+            [
+              0,
+              -60
+            ],
+            [
+              1,
+              50
+            ]
+          ]
+        },
+        "radius": 3,
+        "taper": 0.1,
+        "length": 0.5,
+        "samples": 80,
+        "softness": 0.3,
+        "color_head": "#FFFFFF",
+        "color_tail": "#A0D0FF"
+      },
+      "phases": [
+        "strike",
+        "flicker"
+      ]
+    },
+    {
+      "kind": "flash",
+      "name": "Strike flash",
+      "params": {
+        "y": 50,
+        "radius": {
+          "keys": [
+            [
+              0,
+              10
+            ],
+            [
+              1,
+              36
+            ]
+          ]
+        },
+        "color": "#E0F0FF"
+      },
+      "phases": [
+        "strike"
+      ]
+    },
+    {
+      "kind": "particles",
+      "name": "Sparks",
+      "params": {
+        "y": 50,
+        "count": 30,
+        "speed": 110,
+        "gravity": 200,
+        "size": 1.5,
+        "streak": 0.5,
+        "color_start": "#FFFFFF",
+        "color_end": "#60A0FF",
+        "lifetime": 0.35,
+        "direction": -90,
+        "spread": 160
+      },
+      "phases": [
+        "flicker",
+        "fade"
+      ]
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 8,
+        "strength": {
+          "keys": [
+            [
+              0,
+              1.2
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "tint": "#80B0FF"
+      }
+    }
+  ]
+}

@@ -1,0 +1,110 @@
+{
+  "name": "Portal",
+  "seed": 41,
+  "size": [
+    128,
+    128
+  ],
+  "supersample": 4,
+  "fps": 16,
+  "mode": "painterly",
+  "phases": [
+    {
+      "name": "loop",
+      "frames": 16,
+      "loop": true
+    }
+  ],
+  "layers": [
+    {
+      "kind": "core",
+      "name": "Void",
+      "params": {
+        "radius": 34,
+        "color_inner": "#100020",
+        "color_outer": "#3A1060",
+        "softness": 0.25,
+        "noise": 0.15,
+        "noise_scale": 12,
+        "noise_speed": 1,
+        "pulse": 0.02,
+        "pulse_hz": 0.8,
+        "intensity": 1.0
+      }
+    },
+    {
+      "kind": "ring",
+      "name": "Rim",
+      "params": {
+        "radius": 36,
+        "thickness": 8,
+        "alpha": 1,
+        "color": "#C060FF",
+        "unevenness": 0.5,
+        "softness": 0.7
+      }
+    },
+    {
+      "kind": "ring",
+      "name": "Inner rim",
+      "params": {
+        "radius": 26,
+        "thickness": 4,
+        "alpha": 0.6,
+        "color": "#FFFFFF",
+        "unevenness": 0.7,
+        "softness": 0.9
+      }
+    },
+    {
+      "kind": "particles",
+      "name": "Motes",
+      "params": {
+        "count": 40,
+        "emission": "continuous",
+        "speed": 25,
+        "gravity": 0,
+        "spawn_radius": 36,
+        "size": 1.4,
+        "lifetime": 1.0,
+        "color_start": "#FFFFFF",
+        "color_end": "#A040FF",
+        "alpha_over_life": {
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              0.3,
+              0.9
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "kind": "glow",
+      "name": "Glow",
+      "params": {
+        "radius": 10,
+        "strength": 0.8,
+        "tint": "#C080FF"
+      }
+    },
+    {
+      "kind": "distortion",
+      "name": "Warp",
+      "params": {
+        "radius": 44,
+        "strength": 2.5,
+        "scale": 8,
+        "speed": 2
+      }
+    }
+  ]
+}
