@@ -12,9 +12,9 @@ known-bad tree.
 
 Four checks, in the order that fails cheapest first:
 
-1. **Version lockstep**, read directly rather than through pytest -- it is the
-   one failure that has actually happened, and it should be the first line of
-   output rather than one assertion inside a six-minute run.
+1. **Version lockstep** across four files, read directly rather than through
+   pytest -- it is the one failure that has actually happened, and it should be
+   the first line of output rather than one assertion inside a six-minute run.
 2. **ruff**, seconds.
 3. **The non-GPU suite**, which includes the docs and manual gates.
 4. A reminder about the **GPU lane**, which is opt-in and cannot run
@@ -49,11 +49,18 @@ def _ok(what: str, detail: str = "") -> bool:
 
 
 def check_versions() -> bool:
-    """The three places a version is written, and they must agree.
+    """The four places a version is written, and they must agree.
 
     Read with regexes rather than by importing the package: this has to work
     before an install, and the failure it guards is *textual* -- one file edited
-    and two forgotten.
+    and three forgotten.
+
+    ``INSTALL.md`` is the fourth and it was added late, on 2026-09-03, after it
+    had sat two releases behind: it names the installer by filename
+    (``WarlockSetup-vN.N.N.exe``) twice, and being prose rather than a manifest
+    it was outside every check here and in the suite. The other three surfaces
+    are bumped by the release commit; that one was not, and a download link to a
+    release asset that does not exist is the most user-visible drift of the four.
     """
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     found = re.search(r'^version = "([^"]+)"', pyproject, re.MULTILINE)
@@ -71,10 +78,21 @@ def check_versions() -> bool:
     if heading is None:
         return _fail("version lockstep", "no version heading in CHANGELOG.md")
 
+    install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
+    named = re.findall(r"WarlockSetup-v([\d.]+)\.exe", install)
+    if not named:
+        return _fail("version lockstep", "no WarlockSetup-vN.N.N.exe in INSTALL.md")
+    if len(set(named)) != 1:
+        return _fail(
+            "version lockstep",
+            f"INSTALL.md names {len(set(named))} installer versions: {sorted(set(named))}",
+        )
+
     versions = {
         "pyproject.toml": declared,
         "src/warlock/__init__.py": runtime.group(1),
         "CHANGELOG.md": heading.group(1),
+        "INSTALL.md": named[0],
     }
     if len(set(versions.values())) != 1:
         return _fail(

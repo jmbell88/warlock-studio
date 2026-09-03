@@ -52,7 +52,17 @@ and none of it has been seen on a machine that is not this one.
   cu128, so the first `uv pip sync` always fails and the pinned-index retry is
   load-bearing rather than a fallback. `iscc` was not on PATH (it is under
   `%LOCALAPPDATA%\Programs\Inno Setup 6`), so `-Iscc` was needed. **2.91 GB
-  payload, 855 s compile, 6.16 GB installed.**
+  payload, 855 s compile, 6.16 GB installed.** **Rebuilt at 0.0.31 on
+  2026-09-03** — the first build since, and the only thing that had gone stale
+  in eight days was the artefact itself: the version lockstep, `uv.lock`, the
+  runtime manifest against the vendored Trellis 0.6.0 binaries and both
+  `verify_runtime` passes were all already correct, and nothing in `build.ps1`
+  or `warlock.iss` needed touching, because both take whole directories rather
+  than a file list. Every finding above reproduced exactly: `-Iscc` still
+  needed, and the cu128 retry taken again — twice now, so it is the path, not
+  an edge case. **2.91 GB payload (2,914,492,749 bytes), 797 s compile, 6.61 GB
+  staged.** The installed footprint has grown 0.45 GB since 0.0.29;
+  `INSTALL.md`'s two size figures were moved to match.
 - ~~Settle single-exe versus disk spanning.~~ **Decided 2026-08-26: single
   exe.** The ~4 GB payload compresses to one 2.91 GB executable, so
   `DiskSpanning=no`. `DiskSliceSize` stays in `warlock.iss`, inert, so the

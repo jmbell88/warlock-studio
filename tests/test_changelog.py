@@ -1,12 +1,14 @@
 """The changelog reader Home's "What's new" block draws.
 
-Pure and stdlib-only, so all of this runs without a window. The one test that
-is not about parsing is the lockstep assertion at the bottom: the file is
-hand-written, which is exactly why a release bump can leave it behind.
+Pure and stdlib-only, so all of this runs without a window. The tests that are
+not about parsing are the two lockstep assertions below it: this file and
+``INSTALL.md`` are both hand-written, which is exactly why a release bump can
+leave either behind -- and both have.
 """
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -98,6 +100,25 @@ def test_the_shipped_file_parses_and_leads_with_this_version():
     assert releases, "the repo's CHANGELOG.md must parse to at least one release"
     assert releases[0].version == version
     assert releases[0].bullets
+
+
+def test_install_md_names_the_installer_this_version_actually_builds():
+    """``INSTALL.md`` tells a user to download ``WarlockSetup-vN.N.N.exe`` from
+    the Releases page, and ``installer/warlock.iss`` derives that filename from
+    the same version this file leads with (``OutputBaseFilename``). Nothing
+    derived one from the other, and by 2026-09-03 the prose sat two releases
+    behind the tree -- a download link to an asset no release carries.
+
+    Asserted here as well as in ``scripts/preflight.py`` for the reason that
+    script's own docstring gives about REL-01: a guard nobody runs is not a
+    guard, and CI runs the suite rather than the release gate."""
+    version = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    version = version["project"]["version"]
+    named = re.findall(
+        r"WarlockSetup-v([\d.]+)\.exe", (REPO / "INSTALL.md").read_text(encoding="utf-8")
+    )
+    assert named, "INSTALL.md must name the installer it tells the user to download"
+    assert set(named) == {version}
 
 
 def test_the_reader_finds_the_repo_copy_in_a_dev_checkout():

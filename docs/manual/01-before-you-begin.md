@@ -49,7 +49,9 @@ go looking for a bug.
 
 A Windows installer lives in the repository and produces the same layout — Warlock requires a
 *checkout-shaped* root either way, which is why nothing in it needs an installed-only code path. It
-has not yet been run end to end on real hardware, so the checkout above is the path to trust.
+has been built and installed, and the app launched from its Start Menu shortcut, but only ever on
+the machine it was written on: it has not yet been seen on a computer that is not that one. So the
+checkout above is still the path to trust.
 
 ## The first launch
 

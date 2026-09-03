@@ -144,7 +144,6 @@ def test_a_layer_without_a_texture_slot_gets_the_asset_but_no_edit(tmp_path):
 
 def test_textures_travel_with_the_render(tmp_path, monkeypatch):
     ctx, tab, group = _scene(tmp_path)
-    state = ctx.state.inker
     tex = np.zeros((4, 4, 4), dtype=np.uint8)
     tex[..., :3] = 255
     tex[..., 3] = 255
