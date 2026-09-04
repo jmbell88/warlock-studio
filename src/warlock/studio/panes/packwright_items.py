@@ -64,20 +64,35 @@ def draw(ctx: Any) -> None:
 
     imgui.dummy((0, 6))
     by_key = {source.key: source for source in tab.doc.sources}
-    for frame in layout.frames:
-        source = by_key.get(frame.key)
-        uid = source.uid if source is not None else None
-        selected = uid is not None and state.selected == uid
-        imgui.push_id(frame.key)
-        if controls.selectable(f"{frame.name}##item", selected)[0] and uid is not None:
-            state.selected = None if selected else uid
-        if imgui.is_item_hovered():
-            trimmed = " (trimmed)" if frame.trimmed else ""
-            imgui.set_tooltip(
-                f"{frame.w} x {frame.h} at {frame.x}, {frame.y}{trimmed}\n"
-                f"source {frame.source_w} x {frame.source_h}"
-            )
-        if frame.empty:
-            imgui.same_line()
-            widgets.muted("(blank)")
-        imgui.pop_id()
+    # Clipped for ``packwright_sources``' reason: a packed atlas has one row per
+    # sprite and a thousand-sprite atlas is ordinary, while the pane shows
+    # twenty. Every row here *is* the same height, so this is the
+    # straightforward case.
+    clipper = imgui.ListClipper()
+    clipper.begin(len(layout.frames))
+    while clipper.step():
+        for index in range(clipper.display_start, clipper.display_end):
+            _item_row(state, layout.frames[index], by_key)
+    clipper.end()
+
+
+def _item_row(state: Any, frame: Any, by_key: dict) -> None:
+    """One packed frame's row. Lifted out of the loop so it can be clipped."""
+    from imgui_bundle import imgui
+
+    source = by_key.get(frame.key)
+    uid = source.uid if source is not None else None
+    selected = uid is not None and state.selected == uid
+    imgui.push_id(frame.key)
+    if controls.selectable(f"{frame.name}##item", selected)[0] and uid is not None:
+        state.selected = None if selected else uid
+    if imgui.is_item_hovered():
+        trimmed = " (trimmed)" if frame.trimmed else ""
+        imgui.set_tooltip(
+            f"{frame.w} x {frame.h} at {frame.x}, {frame.y}{trimmed}\n"
+            f"source {frame.source_w} x {frame.source_h}"
+        )
+    if frame.empty:
+        imgui.same_line()
+        widgets.muted("(blank)")
+    imgui.pop_id()

@@ -453,14 +453,21 @@ def paint_wang_cells(
 
     work = np.array(data, dtype=gidlib.DTYPE)
     value = gidlib.DTYPE(ref.firstgid + local)
-    for x, y in inside:
-        work[y, x] = value
+    # One fancy-index write rather than a Python loop: a *fill* asserts every
+    # cell of a flooded region, which on a large map is tens of thousands of
+    # them, and the write is the one part of this op that is not sequential.
+    if inside:
+        xs, ys = zip(*inside, strict=True)
+        work[np.asarray(ys), np.asarray(xs)] = value
     asserted = set(inside)
     x0, y0, x1, y1 = box
     # One field closure and one match cache for the whole box, rather than a
-    # fresh pair per cell. The re-fit is unavoidably sequential -- each cell
-    # reads neighbours the loop may already have re-chosen -- so this is the
-    # part that can be shared, and it is the expensive part.
+    # fresh pair per cell. The re-fit **is** unavoidably sequential -- each cell
+    # reads neighbours the loop may already have re-chosen, so there is no pass
+    # that computes them all at once and gets the same answer -- so what is
+    # shared here is everything that can be, and it is the expensive part. The
+    # 2026-09-02 review filed the remaining per-cell Python as a cost; it is
+    # the algorithm rather than the implementation.
     field = wang_field(work, ref, wangset)
     cache: dict[tuple[tuple[int, int], ...], list[int]] = {}
     for y in range(y0, y1):

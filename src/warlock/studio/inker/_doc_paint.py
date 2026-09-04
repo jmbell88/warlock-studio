@@ -428,6 +428,7 @@ class PaintOps:
         layer = self.stack.active
         self._filter = (box, layer.pixels[y0:y1, x0:x1].copy(), layer.uid)
         self._filter_memo = None
+        self._filter_written = None
         return box
 
     def _filter_layer(self: Document) -> Layer | None:
@@ -464,6 +465,7 @@ class PaintOps:
         cel this session brought into existence has to go with it."""
         self._filter = None
         self._filter_memo = None
+        self._filter_written = None
         self._discard_pending_cel()
         return False
 
@@ -494,6 +496,15 @@ class PaintOps:
         box, before, _uid = self._filter
         x0, y0, x1, y1 = box
         key = (name, tuple(sorted(params.items())))
+        # **And the write is skipped too.** The memo below stops the filter
+        # being recomputed; without this the blend, the invalidate and the
+        # texture upload behind them still ran on every frame the popup was
+        # open, which at 2048 square is 16 MB of upload for a picture that has
+        # not changed. The signature is everything the blend reads except the
+        # mask, which is dropped at its own writer (``select``).
+        written = (key, layer.uid, bool(layer.alpha_lock))
+        if self._filter_written == written:
+            return True
         if self._filter_memo is not None and self._filter_memo[0] == key:
             filtered = self._filter_memo[1]
         else:
@@ -509,6 +520,7 @@ class PaintOps:
             None if self.mask is None else self.mask.mask[y0:y1, x0:x1],
             alpha_lock=layer.alpha_lock,
         )
+        self._filter_written = written
         self.invalidate(box, layer_uid=layer.uid)
         return True
 
@@ -522,6 +534,7 @@ class PaintOps:
         box, before, _uid = self._filter
         self._filter = None
         self._filter_memo = None
+        self._filter_written = None
         # ``_commit_patch`` compares before against after and pushes nothing
         # when they match, which is what makes opening a filter, moving nothing
         # and pressing Apply a no-op rather than a step that dirties the file.
@@ -538,6 +551,7 @@ class PaintOps:
         box, before, _uid = self._filter
         self._filter = None
         self._filter_memo = None
+        self._filter_written = None
         x0, y0, x1, y1 = box
         layer.pixels[y0:y1, x0:x1] = before
         self._discard_pending_cel()
@@ -593,7 +607,19 @@ class PaintOps:
         self.commit_floating()
         self._ensure_active_cel()
         layer = self.stack.active
-        self._move = (layer.pixels.copy(), layer.uid)
+        # The index plane is snapshotted beside the pixels, because the move
+        # *permutes* it: a slot must arrive at its new position still being
+        # that slot. Re-resolving it from the moved colours -- which is what
+        # the ordinary patch funnel does -- collapses two palette entries that
+        # hold the same colour into whichever the nearest-match happens to
+        # pick, so dragging a layer silently repainted it in another slot's
+        # name. ``offset_layer`` has always done it this way; this is the same
+        # operation with a mouse on it.
+        self._move = (
+            layer.pixels.copy(),
+            layer.uid,
+            None if layer.indices is None else layer.indices.copy(),
+        )
         return True
 
     def _move_layer(self: Document) -> Layer | None:
@@ -631,11 +657,13 @@ class PaintOps:
         layer = self._move_layer()
         if layer is None:
             return self._abandon_move()
-        source, _uid = self._move
+        source, _uid, plane = self._move
         # In place, so a cel linked across several frames stays *one object*
         # and the move shows on every frame it appears in. Rebinding
         # ``layer.pixels`` would silently break every link in the row.
         layer.pixels[:] = _translated(source, int(dx), int(dy))
+        if plane is not None and layer.indices is not None:
+            layer.indices[:] = _translated(plane, int(dx), int(dy))
         width, height = self.size
         self.invalidate((0, 0, width, height), layer_uid=layer.uid)
         return True
@@ -654,7 +682,7 @@ class PaintOps:
         layer = self._move_layer()
         if layer is None:
             return self._abandon_move()
-        source, _uid = self._move
+        source, _uid, plane = self._move
         self._move = None
         box = _union(_content_box(source), _content_box(layer.pixels))
         if box is None:
@@ -662,6 +690,12 @@ class PaintOps:
             self._discard_pending_cel()
             return False
         x0, y0, x1, y1 = box
+        if plane is not None and layer.indices is not None:
+            # ``offset_layer``'s door: the plane has already moved, so the
+            # funnel's "re-resolve after from the colours" contract does not
+            # hold and the caller hands its own ``before`` crop over.
+            self._commit_permuted_indices(layer, box, plane[y0:y1, x0:x1])
+            return True
         self._commit_patch(layer, box, source[y0:y1, x0:x1])
         return True
 
@@ -680,9 +714,11 @@ class PaintOps:
         layer = self._move_layer()
         if layer is None:
             return self._abandon_move()
-        source, _uid = self._move
+        source, _uid, plane = self._move
         self._move = None
         layer.pixels[:] = source
+        if plane is not None and layer.indices is not None:
+            layer.indices[:] = plane
         self._discard_pending_cel()
         width, height = self.size
         self.invalidate((0, 0, width, height), layer_uid=layer.uid)
@@ -934,6 +970,18 @@ class PaintOps:
             return False
         self._ensure_active_cel()
         layer = self.stack.active
+        # **One full-plane copy per press, and it is measured rather than
+        # assumed.** The 2026-09-02 review called this two copies -- this one
+        # and ``StrokeState.coverage`` -- and only one of them is real:
+        # ``np.zeros`` for the coverage plane is 0.012 ms at 2048 square
+        # because the pages are mapped lazily and a stroke touches a few of
+        # them, while this copy is 6.8 ms (measured 2026-09-03). At the sizes
+        # documents are actually drawn at it is nothing: 0.1 ms at 256 square,
+        # and 2048 is the ceiling ``pixelguard`` allows rather than a normal
+        # canvas. It is kept because the alternative is a copy-on-write tile
+        # ledger inside the blend, which is the hottest and most delicate loop
+        # in the engine and the one where a mistake corrupts undo rather than
+        # dropping a frame -- a bad trade for half a frame on a press.
         self._stroke = StrokeState(
             layer_uid=layer.uid,
             size=self.size,

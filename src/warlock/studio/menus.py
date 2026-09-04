@@ -66,7 +66,7 @@ def _checked(ctx: Any, key: str) -> bool:
     }.get(key, False)
 
 
-def _command_specs(ctx: Any) -> list[MenuSpec]:
+def _command_specs(ctx: Any, *, evaluate: bool = True) -> list[MenuSpec]:
     from . import modes, palette
 
     out: list[MenuSpec] = []
@@ -88,15 +88,14 @@ def _command_specs(ctx: Any) -> list[MenuSpec]:
                 path = (label,)
             else:
                 continue
-        enabled = bool(command.enabled(ctx))
         out.append(
             MenuSpec(
                 identity=f"command:{command.key}",
                 path=path,
                 order=index,
                 label=command.label,
-                enabled=enabled,
-                checked=_checked(ctx, command.key),
+                enabled=bool(command.enabled(ctx)) if evaluate else True,
+                checked=_checked(ctx, command.key) if evaluate else False,
                 shortcut=command.hint,
                 disabled_reason=command.why,
                 callback=lambda command=command: command.run(ctx),
@@ -105,7 +104,7 @@ def _command_specs(ctx: Any) -> list[MenuSpec]:
     return out
 
 
-def _inker_specs(ctx: Any) -> list[MenuSpec]:
+def _inker_specs(ctx: Any, *, evaluate: bool = True) -> list[MenuSpec]:
     if ctx.state.mode != "inker":
         return []
     from . import inker_mode, inker_ops
@@ -123,12 +122,14 @@ def _inker_specs(ctx: Any) -> list[MenuSpec]:
                 path=(op.menu,),
                 order=index,
                 label=op.label,
-                enabled=bool(op.enabled(state, tab)),
-                checked=bool(op.checked(state, tab)) if op.checked else False,
+                enabled=bool(op.enabled(state, tab)) if evaluate else True,
+                checked=(
+                    bool(op.checked(state, tab)) if evaluate and op.checked else False
+                ),
                 shortcut=inker_ops.shortcut_for(
                     "command", op.name, state.shortcut_overrides
                 ),
-                disabled_reason=inker_ops.reason_for(op, state, tab),
+                disabled_reason=inker_ops.reason_for(op, state, tab) if evaluate else "",
                 callback=lambda op=op: inker_menu.activate(ctx, op),
                 separator_before=bool(op.separator_before),
             )
@@ -136,10 +137,20 @@ def _inker_specs(ctx: Any) -> list[MenuSpec]:
     return out
 
 
-def specs(ctx: Any, layout: Any = None) -> list[MenuSpec]:
-    """The current menu tree as data, rebuilt so state never goes stale."""
+def specs(ctx: Any, layout: Any = None, *, evaluate: bool = True) -> list[MenuSpec]:
+    """The current menu tree as data, rebuilt so state never goes stale.
 
-    rows = _command_specs(ctx) + _inker_specs(ctx)
+    ``evaluate=False`` skips every ``enabled``/``checked``/reason call and
+    reports the shape alone. It exists for :func:`draw`, which needs the *root
+    names* on every frame and the row states only inside a menu that is open:
+    evaluating them unconditionally ran every command's gate -- including a
+    scan of the whole job cache for "Empty the trash" -- sixty times a second
+    at a bar nobody had clicked. Nothing is memoised, so an open menu is still
+    rebuilt from live state every frame, which is the freshness this docstring
+    has always promised.
+    """
+
+    rows = _command_specs(ctx, evaluate=evaluate) + _inker_specs(ctx, evaluate=evaluate)
     if layout is not None:
         rows.append(
             MenuSpec(
@@ -177,19 +188,22 @@ def draw(ctx: Any, layout: Any = None) -> None:
 
     from . import controls, tokens
 
-    rows = specs(ctx, layout)
+    shape = specs(ctx, layout, evaluate=False)
+    live: list[MenuSpec] | None = None
     imgui.push_style_var(imgui.StyleVar_.frame_padding.value, (tokens.sp(8), tokens.sp(6)))
     opened = imgui.begin_menu_bar()
     imgui.pop_style_var()
     if not opened:
         return
     try:
-        for root in roots(rows):
+        for root in roots(shape):
             with controls.menu(root) as menu_open:
                 if not menu_open:
                     continue
+                if live is None:
+                    live = specs(ctx, layout)
                 for row in sorted(
-                    (one for one in rows if one.path and one.path[0] == root),
+                    (one for one in live if one.path and one.path[0] == root),
                     key=lambda one: one.order,
                 ):
                     if row.separator_before:

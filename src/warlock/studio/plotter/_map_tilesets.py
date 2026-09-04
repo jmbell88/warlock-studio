@@ -91,8 +91,17 @@ class TilesetOps:
         reuses the range, and recalling that stamp paints the *new* tileset's
         tiles with no sign anything happened. A stamp is named as its own place
         rather than as a layer, because it is not on one.
+
+        **Every layer, not the top level, and tile objects too.** This walked
+        ``self.layers``, which is the *root* list: a tile layer inside a group
+        was invisible to it, so a tileset painted only inside a folder counted
+        zero and ``remove_tileset`` renumbered every one of those cells. A tile
+        **object** holds a gid exactly as a cell does (``TileShape``), so an
+        object layer full of them is a use this could not see at all.
         """
         import numpy as np
+
+        from ._map_model import ObjectLayer, TileShape
 
         if index < 0 or index >= len(self.tilesets):
             return (0, "")
@@ -101,7 +110,19 @@ class TilesetOps:
         high = int(ref.last_gid)
         worst_count, worst_name = 0, ""
         total = 0
-        for layer in self.layers:
+        for layer in self.all_layers():
+            if isinstance(layer, ObjectLayer):
+                held = 0
+                for entry in layer.objects:
+                    shape = getattr(entry, "shape", None)
+                    if not isinstance(shape, TileShape):
+                        continue
+                    if low <= (int(shape.gid) & gidlib.GID_MASK) <= high:
+                        held += 1
+                total += held
+                if held > worst_count:
+                    worst_count, worst_name = held, layer.name
+                continue
             data = getattr(layer, "data", None)
             if data is None:
                 continue

@@ -85,11 +85,11 @@ class _Lines:
 
 
 @pytest.fixture
-def guide(monkeypatch):
+def guide(monkeypatch, patch_canvas):
     """``_symmetry`` with its one imgui call stubbed. ``_u32`` reaches into a
     live context and takes the process down without one, which is the whole
     reason this pane's drawing was untested."""
-    monkeypatch.setattr(inker_canvas, "_u32", lambda colour, alpha=1.0: 0)
+    patch_canvas("_u32", lambda colour, alpha=1.0: 0)
 
     def draw_guide(symmetry, size, axis=None, ways=6):
         state = SimpleNamespace(symmetry=symmetry, symmetry_axis=axis, radial_count=ways)

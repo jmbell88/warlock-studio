@@ -95,6 +95,10 @@ class Viewer(PoseOps):
         # Set every frame by the pane so input can be mapped into the image.
         self._rect = (0.0, 0.0, 1.0, 1.0)
         self._grab: str | None = None  # "orbit" | "pan" | "gizmo" | "marker"
+        #: Whether the press in hand would deselect if it turns out to be a
+        #: click. Set when a left press in pose mode hits no marker; cleared by
+        #: anything that starts a real drag. See ``_press``.
+        self._deselect_on_click = False
         # The open ``editor.record()`` for a live gizmo gesture, or None. One
         # undo step per *gesture*, not per frame: ``rotate_selected`` and
         # ``move_handle`` are called on every motion event, so recording each
@@ -202,6 +206,18 @@ class Viewer(PoseOps):
         texture = self.ctx.texture(size, 4, data)
         texture.filter = (self.ctx.LINEAR, self.ctx.LINEAR)
         self.reference = texture
+
+    @property
+    def dragging(self) -> bool:
+        """Whether a pointer gesture is in progress.
+
+        The public spelling of ``_grab``, because the router that has to know
+        is ``App`` and it was reaching into the private attribute of two
+        different viewers to ask. What the grab *is* stays private -- the
+        router only ever needed to know that there is one.
+        """
+
+        return self._grab is not None
 
     def load_reference(self, path: Path) -> None:
         """Show a 2D reference image instead of a mesh. Both halves, blocking
@@ -493,17 +509,23 @@ class Viewer(PoseOps):
         """
         import pygame
 
-        # Any event that reaches the viewer can move the picture: a press
-        # starts a drag, motion orbits or re-hovers a gizmo, a wheel dollies.
-        self._render_dirty = True
         local = self._local(event)
+        # **Not every event moves the picture, and this used to assume they
+        # all did.** A press, a wheel and a drag do; a bare mouse *motion* over
+        # the viewport does not, unless it changed which gizmo handle is
+        # hovered -- and marking the scene dirty for it re-rendered the whole
+        # MSAA target on every mouse move across the pane, whether or not
+        # anything in it had changed. ``_motion`` decides that for itself now.
         if event.type == pygame.MOUSEBUTTONDOWN and hovered:
+            self._render_dirty = True
             return self._press(event.button, local)
         if event.type == pygame.MOUSEBUTTONUP:
+            self._render_dirty = True
             return self._release(event.button)
         if event.type == pygame.MOUSEMOTION:
             return self._motion(local)
         if event.type == pygame.MOUSEWHEEL and hovered:
+            self._render_dirty = True
             self.camera.dolly(event.y)
             return True
         return False
@@ -538,6 +560,13 @@ class Viewer(PoseOps):
                 self.editor.selected = hit
                 self._grab = "marker"
                 return True
+            # **A click on empty space deselects**, which is what every 3D
+            # editor does and what this one made you press Esc for -- an
+            # undocumented key on a gizmo the user is looking straight at. The
+            # orbit below still starts, so a *drag* from empty space turns the
+            # model as it always did; only a press that hits nothing and moves
+            # nowhere clears the selection, which ``_release`` decides.
+            self._deselect_on_click = self.editor.selected is not None
         if button == 3 and self.pose_mode:
             # **Button 2 pans; button 3 asks what can be done here** (B7). The
             # right button was a second pan in this viewport and a context menu
@@ -552,14 +581,35 @@ class Viewer(PoseOps):
             # exists.
             self.menu_request = local
             return True
-        self._grab = "pan" if button == 2 else "orbit"
+        # **Alt+drag pans**, as well as the middle button. A trackpad and most
+        # pen tablets have no middle button at all, so panning was unreachable
+        # on the hardware this app is most likely to be drawn with -- and Alt
+        # is what Maya, Blender and every DCC before them use for exactly this.
+        import pygame
+
+        alt = bool(pygame.key.get_mods() & pygame.KMOD_ALT)
+        self._grab = "pan" if button == 2 or (button == 1 and alt) else "orbit"
         return True
 
     def _release(self, button: int) -> bool:
+        # A left press that hit no marker still starts an orbit -- a drag from
+        # empty space must turn the model, as it always did -- so the deselect
+        # is decided *here*, on the release, and only if the orbit never
+        # actually turned anything. ``_motion`` clears the flag on the first
+        # movement, which is what tells a click from a drag.
+        pending, self._deselect_on_click = self._deselect_on_click, False
         if self._grab is None:
+            if button == 1 and pending:
+                self.editor.selected = None
+                self._render_dirty = True
+                return True
             return False
         was = self._grab
         self._grab = None
+        if button == 1 and pending and was == "orbit":
+            self.editor.selected = None
+            self._render_dirty = True
+            return True
         if was == "gizmo":
             gizmo = self._active_gizmo()
             if gizmo is not None:
@@ -594,13 +644,25 @@ class Viewer(PoseOps):
         dy = local[1] - self._last_mouse[1]
         self._last_mouse = local
         height = int(max(self._rect[3], 1))
+        # The first real movement makes this a drag rather than a click, which
+        # is what decides the deselect at the release. A threshold rather than
+        # any motion at all: a pen reports sub-pixel jitter on a tap, and a
+        # click that happened to wobble must still deselect.
+        if dx * dx + dy * dy > 4:
+            self._deselect_on_click = False
         if self._grab is None:
             if self.pose_mode and self.editor.selected is not None:
                 origin, direction = self._ray(local)
                 gizmo = self._active_gizmo()
                 if gizmo is not None:
-                    gizmo.hover = gizmo.hit(origin, direction)
+                    was, gizmo.hover = gizmo.hover, gizmo.hit(origin, direction)
+                    # Only when it *changed*: the highlight is the whole of
+                    # what a hover draws, so an unchanged one is a re-render of
+                    # an identical picture.
+                    if gizmo.hover != was:
+                        self._render_dirty = True
             return False
+        self._render_dirty = True
         if self._grab == "orbit":
             self.camera.orbit(dx, dy, height)
         elif self._grab == "pan":
@@ -652,3 +714,32 @@ class Viewer(PoseOps):
             self._forget(self.compare_viewport.texture)
             self.compare_viewport.release()
         self.renderer.release()
+
+
+#: The task key every viewport load is submitted under, and the one
+#: ``App._adopt_model`` lands. One key, so a selection moving faster than the
+#: disk cannot pile up loads. Named here rather than in the frame loop because
+#: a mode module that wants a picture shown must not import ``main``.
+LOAD_KEY = "viewer-load"
+
+
+def request_reference(ctx: Any, path: Path) -> bool:
+    """Show a picture, decoded off the frame thread. -> was it submitted?
+
+    ``Viewer.load_reference``'s off-thread spelling, and the one a mode should
+    reach for: the blocking version froze the frame at exactly the moment the
+    user had pressed something. The result lands through ``App._adopt_model``,
+    which checks ``pending`` and tells a picture from a mesh by the suffix.
+    """
+
+    viewer = getattr(ctx, "viewer", None)
+    if viewer is None:
+        return False
+    viewer.pending = path
+    if not ctx.submit(LOAD_KEY, viewer.parse_reference, path, tag=path):
+        # Another load is in flight; its result is checked against ``pending``
+        # before it is adopted, so this one is simply dropped rather than
+        # queued -- ``_sync_viewer``'s own rule.
+        viewer.pending = None
+        return False
+    return True

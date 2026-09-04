@@ -76,7 +76,7 @@ class _Mouse:
 
 
 @pytest.fixture
-def scene(monkeypatch):
+def scene(monkeypatch, patch_canvas):
     """The poly lasso in hand, at an identity view so screen == image.
 
     ``click`` drives the real ``_input`` -- press frame then release frame --
@@ -85,7 +85,7 @@ def scene(monkeypatch):
     that is applied to the point *before* the tool ever sees it.
     """
     mouse = _Mouse()
-    monkeypatch.setattr(inker_canvas, "imgui", mouse.module())
+    patch_canvas("imgui", mouse.module())
     tab = _tab(zoom=1.0, pan=(0.0, 0.0), fitted=True)
     state = inker_state.InkerState(tool="lasso_poly")
     state.add(tab)
@@ -262,12 +262,12 @@ def test_the_vertices_snap_to_the_grid_when_snapping_is_on(scene):
 # --- the press guard (C12d) ---------------------------------------------------
 
 
-def test_the_press_guard_does_not_eat_the_second_click(monkeypatch):
+def test_the_press_guard_does_not_eat_the_second_click(monkeypatch, patch_canvas):
     """Driven through the real ``_input``, one frame per call: the guard refuses
     a press while a gesture owns the mouse, and a click sequence is not a held
     button -- so every click must reach ``_press``."""
     mouse = _Mouse()
-    monkeypatch.setattr(inker_canvas, "imgui", mouse.module())
+    patch_canvas("imgui", mouse.module())
     tab = _tab(zoom=1.0, pan=(0.0, 0.0), fitted=True)
     state = inker_state.InkerState(tool="lasso_poly")
     state.add(tab)
@@ -322,12 +322,12 @@ def test_a_tab_switch_drops_the_polygon(scene):
     assert state.gesture_pts == []
 
 
-def test_the_tab_going_busy_drops_the_polygon(monkeypatch):
+def test_the_tab_going_busy_drops_the_polygon(monkeypatch, patch_canvas):
     """Its next click cannot be delivered while ``_input`` returns early, so
     leaving the vertices up would finish the polygon against whatever the
     document looked like whenever the tab came back."""
     mouse = _Mouse()
-    monkeypatch.setattr(inker_canvas, "imgui", mouse.module())
+    patch_canvas("imgui", mouse.module())
     tab = _tab(zoom=1.0, pan=(0.0, 0.0), fitted=True)
     state = inker_state.InkerState(tool="lasso_poly")
     state.add(tab)
@@ -404,10 +404,10 @@ class _Lines:
 
 
 @pytest.fixture
-def overlay(monkeypatch):
-    monkeypatch.setattr(inker_canvas, "_u32", lambda colour, alpha=1.0: 0)
+def overlay(monkeypatch, patch_canvas):
+    patch_canvas("_u32", lambda colour, alpha=1.0: 0)
     mouse = _Mouse()
-    monkeypatch.setattr(inker_canvas, "imgui", mouse.module())
+    patch_canvas("imgui", mouse.module())
     return mouse
 
 

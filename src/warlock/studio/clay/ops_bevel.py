@@ -407,15 +407,37 @@ def bevel_edges(
         return [one(in_edge, back), one(out_edge, fore)]
 
     # --- rewrite every face -------------------------------------------------
+    #
+    # **A face the bevel does not touch is copied whole.** This walked every
+    # corner of every face in Python -- so bevelling one edge of a 200k-face
+    # sculpt did 200k iterations of the branch below for an answer that is
+    # "unchanged" in all but a handful of them. The interesting faces still go
+    # corner by corner, because which corners they grow depends on which of
+    # their two edges are beveled and that is genuinely per corner.
     new_loops: list[int] = []
     new_uv: list[np.ndarray] = []
     counts: list[int] = []
     starts = mesh.starts.astype("i8")
-    for face in range(face_count(mesh)):
+    faces = face_count(mesh)
+    hit = np.isin(loops, np.fromiter(touched, dtype="i8", count=len(touched)))
+    per_face = (
+        np.maximum.reduceat(hit.astype("i1"), starts[:-1]) > 0
+        if faces
+        else np.zeros(0, dtype=bool)
+    )
+    loop_list = loops.tolist()
+    for face in range(faces):
+        first, last = int(starts[face]), int(starts[face + 1])
+        if not per_face[face]:
+            new_loops.extend(loop_list[first:last])
+            if corner_uv is not None:
+                new_uv.extend(corner_uv[first:last])
+            counts.append(last - first)
+            continue
         size = 0
-        for corner in range(int(starts[face]), int(starts[face + 1])):
-            if int(loops[corner]) not in touched:
-                new_loops.append(int(loops[corner]))
+        for corner in range(first, last):
+            if not hit[corner]:
+                new_loops.append(loop_list[corner])
                 if corner_uv is not None:
                     new_uv.append(corner_uv[corner])
                 size += 1

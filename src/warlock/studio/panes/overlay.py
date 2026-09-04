@@ -246,7 +246,7 @@ def fps_meter(ctx: Any, meter: Any) -> None:
         imgui.Cond_.always.value,
         (0.0, 1.0),
     )
-    imgui.set_next_window_size((sp(210), 0))
+    imgui.set_next_window_size((sp(tokens.SURFACE_W_TIP), 0))
     imgui.set_next_window_bg_alpha(0.85)
     imgui.push_style_color(imgui.Col_.window_bg.value, imgui.ImVec4(*theme.rgba(theme.ELEV_2)))
     flags = (
@@ -325,7 +325,7 @@ def progress_card(ctx: Any, eta: Any) -> None:
         imgui.Cond_.always.value,
         (0.5, 1.0),
     )
-    imgui.set_next_window_size((sp(430), 0))
+    imgui.set_next_window_size((sp(tokens.SURFACE_W_CARD), 0))
     imgui.set_next_window_bg_alpha(0.94 * present)
     imgui.push_style_color(imgui.Col_.window_bg.value, imgui.ImVec4(*theme.rgba(theme.ELEV_2)))
     imgui.push_style_var(imgui.StyleVar_.alpha.value, present)
@@ -364,7 +364,10 @@ def progress_card(ctx: Any, eta: Any) -> None:
             line += f" - about {format_duration(remaining)} left"
         widgets.muted(line)
 
-        if widgets.disabled_button("Cancel", live and not ctx.busy(f"cancel:{job_id}")):
+        cancelling = ctx.busy(f"cancel:{job_id}")
+        if widgets.disabled_button(
+            "Cancel", live and not cancelling, reason=cancel_reason(live, cancelling)
+        ):
             # No confirmation: this button says exactly what it does, sits on
             # the thing it acts on, and a blocking dialog would freeze the very
             # bar behind it.
@@ -372,6 +375,21 @@ def progress_card(ctx: Any, eta: Any) -> None:
     imgui.end()
     imgui.pop_style_var()
     imgui.pop_style_color()
+
+
+def cancel_reason(live: bool, cancelling: bool) -> str:
+    """Why the progress card's Cancel is greyed.
+
+    The card outlives the job by a fade, and it greys twice for two different
+    reasons -- the cancel is already in flight, or there is nothing left to
+    cancel. A disabled control explains itself, and this one explained neither.
+    """
+
+    if cancelling:
+        return "Cancelling..."
+    if not live:
+        return "This job has already stopped; the card is fading out."
+    return ""
 
 
 def doctor_summary(errors: list[str]) -> tuple[str, str]:

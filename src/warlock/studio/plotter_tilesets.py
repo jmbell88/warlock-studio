@@ -649,15 +649,25 @@ def tileset_from_inker(ctx: Any, doc: Any, *, index: int | None = None) -> None:
     # checkerboard the editor draws under a document is not part of the art.
     pixels = doc.flatten(matte=False)
     if index is None:
-        tab.doc.add_tileset(
-            Tileset(
-                name=doc.title or "Atlas",
-                pixels=pixels,
-                tile_w=tab.doc.tile_w,
-                tile_h=tab.doc.tile_h,
-            )
+        # Through ``land_tileset``, not a bare ``add_tileset``: that function is
+        # "the whole tail of the arrival" and this was a hand copy of the first
+        # line of it -- so a drawing brought over from Inker landed in the map
+        # without selecting itself in the palette, without clearing the stale
+        # brush, without arming its terrain if it had one, and without
+        # refitting the view. Its docstring names that last trap by name.
+        land_tileset(
+            ctx,
+            ensure(ctx),
+            tab,
+            {
+                "tileset": Tileset(
+                    name=doc.title or "Atlas",
+                    pixels=pixels,
+                    tile_w=tab.doc.tile_w,
+                    tile_h=tab.doc.tile_h,
+                )
+            },
         )
-        ctx.toast("Tileset added.")
         return
     repaint_tileset(ctx, tab, index, pixels, verb="repainted")
 

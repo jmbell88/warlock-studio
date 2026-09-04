@@ -37,6 +37,35 @@ MENUS: tuple[str, ...] = ("Map", "View", "Layer", "Tileset")
 
 BUSY = "This map is being written; the rows come back when it lands."
 NO_TILESET = "This map has no tileset yet, so there is nothing to write."
+NO_MAP = "Open or create a map first."
+NO_LAYER = "Select a layer first."
+ONE_LAYER = "A map keeps at least one layer."
+
+
+def _layer_reason(
+    tab: Any,
+    *,
+    active: Any = None,
+    need_active: bool = False,
+    need_many: bool = False,
+    many: bool = True,
+) -> str:
+    """Why a Layer row is greyed -- the *first* gate that actually fails.
+
+    A disabled control explains itself, and passing ``BUSY`` for an
+    ``active``/``many`` gate says the wrong thing: the map is not busy, it has
+    no layer selected, or it has only the one it must keep.
+    """
+
+    if tab is None:
+        return NO_MAP
+    if tab.busy:
+        return BUSY
+    if need_active and active is None:
+        return NO_LAYER
+    if need_many and not many:
+        return ONE_LAYER
+    return ""
 
 
 def draw(ctx: Any) -> None:
@@ -142,33 +171,47 @@ def _layer_rows(ctx: Any, state: Any, tab: Any) -> None:
     ready = tab is not None and not tab.busy
     active = None if doc is None else doc.active_layer
     many = doc is not None and len(doc.layers) > 1
-    if _row("New tile layer", enabled=ready, reason=BUSY):
+    if _row("New tile layer", enabled=ready, reason=_layer_reason(tab)):
         doc.add_tile_layer()
-    if _row("New object layer", enabled=ready, reason=BUSY):
+    if _row("New object layer", enabled=ready, reason=_layer_reason(tab)):
         doc.add_object_layer()
-    if _row("New group", enabled=ready, reason=BUSY):
+    if _row("New group", enabled=ready, reason=_layer_reason(tab)):
         doc.add_group_layer()
-    if _row("Duplicate layer", enabled=ready and active is not None, reason=BUSY):
+    if _row(
+        "Duplicate layer",
+        enabled=ready and active is not None,
+        reason=_layer_reason(tab, active=active, need_active=True),
+    ):
         doc.duplicate_layer(active)
     if _row(
         "Delete layer",
         enabled=ready and many and active is not None,
-        reason="A map keeps at least one layer." if ready else BUSY,
+        reason=_layer_reason(
+            tab, active=active, need_active=True, need_many=True, many=many
+        ),
     ):
         doc.remove_layer(active)
+        # An object selection is by uid and a layer takes its objects with it,
+        # so the set was left naming objects that no longer exist -- every
+        # single-object verb then did nothing, with no reason given.
+        plotter_mode._prune_object_selection(ctx, tab)
     controls.menu_separator()
     if _row(
         "Raise layer",
         "Ctrl+Shift+Up",
         enabled=ready and many and active is not None,
-        reason=BUSY,
+        reason=_layer_reason(
+            tab, active=active, need_active=True, need_many=True, many=many
+        ),
     ):
         plotter_mode.shift_layer(doc, active, 1)
     if _row(
         "Lower layer",
         "Ctrl+Shift+Down",
         enabled=ready and many and active is not None,
-        reason=BUSY,
+        reason=_layer_reason(
+            tab, active=active, need_active=True, need_many=True, many=many
+        ),
     ):
         plotter_mode.shift_layer(doc, active, -1)
 
@@ -199,3 +242,15 @@ def _tileset_rows(ctx: Any, state: Any, tab: Any) -> None:
         # The sheet over the centre pane; see ``plotter_tileset_editor``. The
         # palette's own footer opens the same one through the same door.
         plotter_mode.edit_tileset(ctx)
+    controls.menu_separator()
+    if _row(
+        "Remove this tileset",
+        enabled=ready and tilesets,
+        reason=BUSY if not ready else NO_TILESET,
+    ):
+        # ``MapDoc.remove_tileset`` was modelled, refused-when-in-use and
+        # undoable, and had no way in from the app at all: a tileset imported
+        # by mistake stayed in the map for the life of the document. The
+        # refusal is the model's and it names the count and the layer, so the
+        # toast is worth nothing more than passing it on.
+        plotter_mode.remove_tileset(ctx, max(0, state.tileset_index))

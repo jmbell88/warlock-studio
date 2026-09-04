@@ -8,6 +8,19 @@ show with ``imgui.image`` -- not a separate surface -- which is what makes
 The frame is always the same six steps: collect finished tasks, refresh the job
 cache, pump events, build the UI, render the viewport, present. Nothing in
 those six may block.
+
+**The function-local imports here are deliberate and they are not lazy.**
+There are about 150 of them, and by frame 1 they buy nothing: ``journal``'s
+``ensure_providers`` imports all six mode modules to register their document
+kinds, so every module a ``from . import`` in this file names is already in
+``sys.modules`` before the first frame draws. What they buy is *import order* --
+this module is imported by the entry point before pygame has a display, and a
+mode module pulled in at its top would drag imgui, moderngl and its own pane
+tree into that moment. So they stay, and they are read as "imported at the
+first call" rather than as a claim that the module might never load. The
+alternative the review offered -- gating on ``state.inker is not None`` -- would
+make the import conditional on state that says nothing about whether the module
+is loaded, which is a worse lie than the one being replaced.
 """
 
 from __future__ import annotations
@@ -25,8 +38,22 @@ from pathlib import Path
 from typing import Any
 
 from .. import memlog, winjob
-from . import anchors, create_brief, filetypes, guard, probe, resources
+from . import anchors, create_brief, filetypes, guard, probe, resources, tokens, viewer_embed
 from . import fps as fps_mod
+
+# The Ctrl+/ sheet's contents and its filter, in a file of their own since
+# 2026-09-04 and named here where every caller already looks. See
+# ``studio/shortcuts.py``.
+from .clay_viewport import ClayViewport
+
+# ``modal_open`` lives in ``dialogs`` now and is re-exported here, where every
+# existing caller (and ``tests/test_mode_keys.py``) names it: the tour needs the
+# same predicate, and a pane importing the frame loop for it is how a leaf comes
+# to depend on the shell.
+from .dialogs import modal_open
+from .poser_viewport import PoserViewport
+from .review_panes import ReviewPanes
+from .shortcuts import filter_shortcuts, shortcut_sections
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +65,10 @@ MEMORY_TICK_SECONDS = 30.0
 # moving faster than the disk cannot pile up loads: a refused submit is simply
 # retried on the next tick, and a landed result is checked against
 # ``viewer.pending`` before it is adopted.
-VIEWER_KEY = "viewer-load"
+#: ``viewer_embed.LOAD_KEY``, named here where the frame loop's three readers
+#: already look. It moved so a mode module can ask for a picture without
+#: importing the shell (``viewer_embed.request_reference``).
+VIEWER_KEY = viewer_embed.LOAD_KEY
 REVIEW_MESH_KEY = "viewer-review"
 # The post-download re-probe. Its own key rather than "health"'s, so a slow
 # forced verification cannot be mistaken for the periodic poll and dropped by
@@ -213,33 +243,18 @@ def _window_size(
     return (max(size[0], 1), max(size[1], 1))
 
 
-def modal_open(ctx: Any) -> bool:
-    """Whether *any* modal is on screen and owns the keyboard.
+def _takes_pointer(target: Any, hovered: bool) -> bool:
+    """The one hover/grab rule, for all three viewports.
 
-    It used to know about exactly two: the confirm queue and the prompt queue.
-    The matte preview is a third -- a real modal, drawn in front of the
-    promotion, with its own Accept and Cancel -- and every global shortcut
-    leaked straight through it (UX-08). Ctrl+K opened the palette behind it;
-    Ctrl+Enter submitted the form the modal was a *question about*; a mode key
-    left the app somewhere else with the modal still up. Ownership is a
-    property of "a modal is up", not of which queue happens to hold it, so the
-    predicate asks all four.
-
-    A module function with ``App._modal_open`` delegating to it, because the
-    guided tour needs the same question and is deliberately *not* one of the
-    answers: ``panes/tour.py`` suspends its scrim while a modal is up, and a
-    second copy of this list would be a copy that stopped agreeing the next
-    time a modal was added.
+    A viewport sees the mouse while the pointer is over it, and a gesture
+    already in progress keeps it wherever the cursor goes -- so crossing onto
+    a panel mid-orbit does not drop the drag. Written three times (the asset
+    viewer, Clay's and Poser's) it drifted: only Clay's carried the
+    ``tab.saving`` press gate, which is a *different* rule and stays where it
+    is, beside the document it is about.
     """
-    from . import matte_preview
-    from .panes import first_run
 
-    return (
-        ctx.confirms.pending is not None
-        or ctx.prompts.pending is not None
-        or matte_preview.is_open(ctx)
-        or first_run.is_open(ctx)
-    )
+    return bool(hovered or (target is not None and target.dragging))
 
 
 def _ui_scale(settings: Any) -> float:
@@ -252,342 +267,6 @@ def _ui_scale(settings: Any) -> float:
     except (TypeError, ValueError):
         return 1.0
     return min(max(value, lo), hi)
-
-
-def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
-    """Every binding the Ctrl+/ sheet lists, as data.
-
-    Module-level and imgui-free so ``tests/manual/test_shortcuts.py`` can
-    compare it against chapter 16 -- which is the gate that did not exist
-    while the popup drifted into saying "F1 -- Switch to the Manual" and
-    "thirteen modes" against a tree with ten and no such mode.
-    Every group's rows are gathered before anything is drawn because the
-    query decides which *groups* survive: a heading over nothing is a section
-    that looks broken.
-    """
-    sections: list[tuple[str, list[tuple[str, str]]]] = []
-
-    def table(title: str, rows: list[tuple[str, str]]) -> None:
-        sections.append((title, rows))
-
-    table(
-        "Everywhere",
-        [
-            # No per-mode digit: ten modes against ten digits reads as a
-            # promise of a stable mapping that the next mode breaks, and
-            # the palette is the keyboard route to all of them.
-            ("Ctrl+K", "Command palette -- switch mode, or open an asset"),
-            ("Ctrl+/", "This list"),
-            ("F1", "Open the manual over whatever is on screen"),
-            (
-                "Esc",
-                "Close the topmost thing: the manual, then a running tour, "
-                "then a mode you passed through",
-            ),
-            ("F10", "Toggle the frame-rate readout"),
-        ],
-    )
-    # One heading, because there is one mode (the UI redesign, wave 5). The
-    # rows that used to be split "2D" from "3D" are the same keys either
-    # way -- what changed is which stage of Create you are standing on,
-    # and the stage rail is a click rather than a shortcut, so there is
-    # nothing here to key.
-    table(
-        "Create",
-        [
-            ("Ctrl+Enter", "Run the stage: Generate, or Make 3D"),
-            ("Tab / Shift+Tab", "Move between the form's controls"),
-            ("Enter", "Press the stage's button when it is the one focused"),
-            ("Up / Down", "Previous / next asset in the library"),
-            ("Right-click a card", "Its actions menu"),
-            ("F", "Frame the model"),
-            ("W", "Toggle wireframe"),
-            ("S", "Toggle turntable"),
-            ("Esc", "Exit comparison / pose edit"),
-        ],
-    )
-    table(
-        "Review",
-        [
-            ("1 - 5", "Grade the mesh +1 to +5 (+3 is usable)"),
-            ("R then 1 - 5", "Grade it -1 to -5"),
-            ("0", "Grade it 0 - no opinion either way"),
-            ("Ctrl + 1-5", "Toggle a good tag for the next grade"),
-            ("Shift + 1-5", "Toggle a bad tag for the next grade"),
-            ("S", "Skip to the next unverdicted unit"),
-            ("Left / Right", "Previous / next unit"),
-            ("Esc", "Clear the pending sign and tags"),
-        ],
-    )
-    table(
-        "Review - a judging pass",
-        [
-            ("A", "Accept - files +3"),
-            ("R", "Reject - files -3, rather than arming a negative"),
-            ("S", "Skip, staying in the pass"),
-            ("Esc", "End the pass and show its report"),
-        ],
-    )
-    from . import inker_state
-    from .clay_mode import TOOL_KEYS as CLAY_KEYS
-    from .inker_mode import ALT_TOOL_CHORDS
-
-    table(
-        "Clay",
-        [
-            (
-                " / ".join(k.upper() for k in CLAY_KEYS),
-                # Capitalised here rather than in ``TOOL_KEYS``: those
-                # values are the tool *ids* ``state.tool`` is compared
-                # against and the saved documents carry, and this is the
-                # one place they are read as English. Joined lowercase
-                # they were the only row in the popup that did not start
-                # with a capital, one line above "Vertex / edge / face".
-                " / ".join(CLAY_KEYS.values()).capitalize(),
-            ),
-            ("1 / 2 / 3 / 4", "Vertex / edge / face / object mode"),
-            ("E", "Extrude (with faces selected)"),
-            # The keyboard's half of a drag. G and S rather than G, R and S:
-            # R is the Scale tool's letter and E is Rotate's, both taken long
-            # before this, so rotate is reached mid-drag instead.
-            ("G / S", "Move / scale the selection -- no handle to grab"),
-            ("L", "Select everything joined to the selection"),
-            ("Ctrl+= / Ctrl+-", "Grow / shrink the selection by one ring"),
-            ("Alt+click", "Select the edge loop; Ctrl+Alt+click takes the ring"),
-            ("G / R / S", "Switch the transform while a drag is under way"),
-            ("F", "Frame the selection"),
-            ("Delete", "Delete -- faces in an element mode, objects otherwise"),
-            ("Ctrl+J", "Duplicate (object mode)"),
-            ("Ctrl+M / Ctrl+Shift+M", "Merge / union the selection (object mode)"),
-            ("Ctrl+D", "Deselect"),
-            ("Ctrl+A", "Select all, in the current mode"),
-            ("Ctrl+Shift+I", "Invert the selection"),
-            ("Right-click", "Context menu"),
-            ("Alt+drag", "Orbit, in any mode"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
-            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-            # "Ctrl+N / O / W", matching Inker's row below rather than
-            # stopping at O: Clay closes a document with Ctrl+W like every
-            # other document mode, and the popup simply never said so
-            # (UX-13). The axis views were missing from both this popup and
-            # the manual's "full list", which made six of them
-            # undiscoverable.
-            ("Ctrl+N / O / W", "New / open / close"),
-            ("Ctrl+E", "Export to the library"),
-            ("Ctrl+Tab", "Next document"),
-            ("Ctrl+1 / 3 / 7", "Look along front / right / top"),
-            ("Ctrl+Shift+1 / 3 / 7", "The opposite view: back / left / bottom"),
-            ("Ctrl+5", "Orthographic / perspective"),
-        ],
-    )
-    # **The letters, named, six to a row.** This was one squashed row
-    # reading "A, B, C, D, E, ..." with the note "hover a tool for its
-    # letter" -- which is a shortcut sheet declining to be one, and the
-    # only mode's table that did. Six per row keeps the two columns
-    # readable, and the order is the toolbox's, so the pairs that sit
-    # together there (brush/spray, line/curve, the two lassos) sit
-    # together here.
-    tool_rows = []
-    band = list(inker_state.TOOLS)
-    for start in range(0, len(band), 6):
-        chunk = band[start : start + 6]
-        tool_rows.append(
-            (
-                " / ".join(letter for _key, _label, letter in chunk),
-                " / ".join(label for _key, label, _letter in chunk),
-            )
-        )
-    # Aseprite files these two-to-a-slot and cycles with Shift; here they
-    # are second bindings beside the plain letters, so they are listed
-    # rather than left to the tooltips.
-    alt = " / ".join(
-        f"{chord} {inker_state.tool_label(tool)}" for tool, chord in ALT_TOOL_CHORDS.items()
-    )
-    table(
-        "Inker",
-        [
-            *tool_rows,
-            (alt, "The same tools on Aseprite's shifted letters"),
-            ("X", "Swap colours"),
-            ("1 - 0", "Brush opacity, 10% to 100%"),
-            ("Alt+1 - 9", "Recall a numbered custom brush"),
-            ("Alt+Shift+1 - 9", "Store the captured brush in that slot"),
-            ("Ctrl+Shift+N", "New layer"),
-            ("Ctrl+Alt+I / Ctrl+Alt+C", "Image size / canvas size"),
-            ("Alt+S", "Solo the active layer, and again to bring the rest back"),
-            ("Ctrl+Shift+Up / Down", "Move the layer up / down the stack"),
-            ("[ / ]", "Brush size (Shift: hardness)"),
-            ("Shift+click", "Paint a line from where the last stroke ended"),
-            ("+ / -", "Zoom in / out, by whole scales"),
-            ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
-            ("Space / middle drag", "Pan"),
-            ("Shift+wheel", "Scroll sideways (the wheel alone scrolls up and down)"),
-            ("Ctrl+wheel", "Zoom in 5% steps"),
-            ("Ctrl+4 / Ctrl+5", "Rotate the view a quarter turn / flip it"),
-            ("Arrows", "Nudge a pixel (Shift: eight)"),
-            ("Delete", "Delete what is selected"),
-            ("Esc", "Cancel -- a move, playback, a float, then the selection"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
-            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-            ("Ctrl+E", "Save as a reference in the library"),
-            ("Ctrl+Shift+E", "Export PNG"),
-            ("Ctrl+Shift+X", "Repeat the last export -- same file, no dialog"),
-            ("Ctrl+N / O / W", "New / open / close"),
-            ("Ctrl+A / D", "Select all / deselect"),
-            ("Ctrl+Shift+D", "Reselect what was last dismissed"),
-            ("Ctrl+C / X / V", "Copy / cut / paste"),
-            ("Ctrl+Shift+V", "Paste as a layer"),
-            ("Ctrl+Shift+C", "Copy merged -- what is visible in the selection"),
-            ("Ctrl+J / Ctrl+Shift+J", "Copy / move the selection to its own layer"),
-            ("Ctrl+Shift+I", "Invert the selection"),
-            ("Ctrl+T", "Free transform"),
-            ("Ctrl+B", "Capture the selection as an image brush"),
-            ("Ctrl+Tab", "Next tab"),
-            (", / .", "Previous / next frame (animated)"),
-            ("Enter", "Play or pause (animated)"),
-        ],
-    )
-    from .plotter_state import TOOLS as PLOTTER_TOOLS
-
-    table(
-        "Plotter",
-        [
-            ("1 - 9", "Recall a numbered stamp"),
-            ("Ctrl+Shift+1 - 9", "Store the stamp in hand in that slot"),
-            ("Right-drag", "Capture a block off the map, keeping the tool"),
-            ("Right-click an object", "Duplicate, raise, lower or delete it"),
-            ("H", "Highlight the current layer"),
-            ("+ / -", "Zoom in / out, by whole scales"),
-            ("Ctrl+Shift+I", "Invert the selection"),
-            (
-                " / ".join(letter for _k, _l, letter in PLOTTER_TOOLS),
-                " / ".join(label for _k, label, _letter in PLOTTER_TOOLS),
-            ),
-            ("X / Y / Z", "Flip the brush across, down; turn it (Shift turns back)"),
-            ("Shift+click", "Stamp a line from the last cell painted"),
-            ("Pick drag", "Capture a block off the map as the brush"),
-            ("Wand Ctrl+click", "Select every cell of that tile, map-wide"),
-            ("Shift / Alt", "Add to / subtract from the selection (Wand and marquee)"),
-            ("Ctrl+A / Ctrl+D", "Select all / deselect (Ctrl+Shift+A also)"),
-            ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste as the brush"),
-            ("Ctrl+J", "Duplicate the selected object"),
-            ("Ctrl+click / Alt+click", "Insert / remove a polygon vertex"),
-            ("Delete", "Clear the selection, or remove the object"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
-            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-            ("Ctrl+E", "Export to the library"),
-            ("Ctrl+Shift+E", "Export a Tiled .tmx"),
-            ("Ctrl+N / O / W", "New / open / close"),
-            ("Ctrl+G", "Toggle the grid"),
-            ("Ctrl+Tab", "Next map"),
-            ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
-            ("Space / middle drag", "Pan (wheel zooms)"),
-            ("Esc", "Cancel a drag, then the object, then the selection"),
-        ],
-    )
-    table(
-        "Poser",
-        [
-            # The mode is otherwise mouse-shaped -- joints are clicked and
-            # gizmos are dragged -- which is why two rows are the whole group
-            # and not a sign that the rest were forgotten.
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo (Ctrl+Shift+Z also redoes)"),
-            ("Esc", "Deselect the joint"),
-        ],
-    )
-    table(
-        "Packwright",
-        [
-            ("R", "Repack now"),
-            ("Delete", "Remove the selected source"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
-            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-            ("Ctrl+E", "Export to the library"),
-            ("Ctrl+Shift+E", "Export the atlas and its JSON"),
-            ("Ctrl+N / O / W", "New / open / close"),
-            ("Ctrl+Tab", "Next atlas"),
-            ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
-            # Middle drag alone, not "Space / middle drag" as Plotter's row
-            # says: there is no space-pan in this mode to advertise.
-            ("Middle drag", "Pan (wheel zooms)"),
-        ],
-    )
-    table(
-        "Troupe",
-        [
-            ("Space", "Play / pause the preview"),
-            # Stepping pauses, which is why the two rows are not "step" alone:
-            # the binding does two things and a sheet that named one of them
-            # would be describing a different control.
-            ("Left / Right", "Step one frame, and pause"),
-            ("Up / Down", "Turn the character one direction, holding the frame"),
-            ("PageUp / PageDown", "Previous / next animation"),
-            ("Home / End", "First / last frame of the run, and pause"),
-        ],
-    )
-    table(
-        "Sirens",
-        [
-            ("Space", "Play the song, or stop it if it is sounding"),
-            # The two piano rows as one row rather than twenty-four, and spelled
-            # exactly as the chapter spells them: they are a *layout* rather
-            # than twenty-four bindings, and a sheet that listed each letter
-            # would be a sheet nobody could read past.
-            ("zsxdcvgbhnjm / q2w3er5t6y7u", "The two piano rows, in the note column"),
-            ("Backtick / Shift+Backtick", "Note-off (cuts) / release (plays the tail)"),
-            # The three key cells below are deliberately prose. Which hex digit
-            # or which letter is not a binding -- the *column the caret is in*
-            # is what decides what the key means, and a sheet listing sixteen
-            # digits twice would be a sheet nobody reads past.
-            ("Hex digits", "Instrument and parameter: two digits. Volume: one"),
-            ("An effect's letter", "The effect column -- only letters the engine has"),
-            ("- / =", "Octave down / up"),
-            ("Shift+1 / Shift+2", "Transpose the selection down / up a semitone"),
-            ("Page Up / Page Down", "Move sixteen rows -- four beats"),
-            ("Delete", "Clear the column under the caret, or the whole selection"),
-            ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste a block at the caret"),
-            ("Esc", "Drop the selection"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
-            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-            ("Ctrl+N / O / W", "New song / open a file / close the tab"),
-            ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous song"),
-        ],
-    )
-    return sections
-
-
-def filter_shortcuts(
-    sections: list[tuple[str, list[tuple[str, str]]]], query: str
-) -> list[tuple[str, list[tuple[str, str]]]]:
-    """The shortcut list narrowed by ``query`` (UX.md Phase 4).
-
-    Pure, and through ``palette.match`` rather than a substring test, because
-    the popup and the command palette are two lists of the same kind of thing
-    and a second matcher is a second answer to "does 'ctz' find Ctrl+Z".
-
-    A row matches on its keys, its description **or its group's name**, which is
-    the rule that makes "clay" list Clay's fifteen bindings rather than the two
-    whose text happens to say the word. A group whose heading matched keeps all
-    of its rows for the same reason; a group with no surviving row is dropped
-    entirely, because a heading over nothing reads as a section that broke.
-
-    Rows are deliberately *not* re-ordered by score: within a group they are in
-    a hand-chosen order, and a filter that also reshuffles is two changes to
-    read at once.
-    """
-    from . import palette
-
-    if not query.strip():
-        return list(sections)
-    out = []
-    for title, rows in sections:
-        if palette.match(query, title) is not None:
-            out.append((title, list(rows)))
-            continue
-        kept = [row for row in rows if palette.match(query, f"{row[0]} {row[1]}") is not None]
-        if kept:
-            out.append((title, kept))
-    return out
 
 
 def _split_column(
@@ -773,7 +452,7 @@ class StartupRefused(Exception):
         super().__init__(f"{title}: {body}")
 
 
-class App:
+class App(ClayViewport, PoserViewport, ReviewPanes):
     def __init__(self, runtime: Any) -> None:
         self.runtime = runtime
         self.svc = None
@@ -798,6 +477,9 @@ class App:
         # A dead worker is reported once. The banner is dismissible, and
         # re-raising it every frame would make it impossible to dismiss.
         self._fatal_reported = False
+        #: The caption's current state, so only a change is sent to the window
+        #: manager. ``None`` until the first sync, which therefore always runs.
+        self._title_marked: bool | None = None
         # The mode the last frame was built in, so a change into a viewport
         # mode can resync the viewer -- a mode change is not something the
         # job cache announces.
@@ -1545,6 +1227,11 @@ class App:
 
         from . import imgui_backend, modes
 
+        self.app_ctx.state.frame_index += 1
+        # The caption tracks every unsaved document, not only a pose, so it is
+        # sampled per frame rather than pushed from one callback. Cheap: it
+        # returns immediately unless the answer changed.
+        self._sync_title()
         self.app_ctx.textures.begin_frame()
         # Here rather than in ``_tick``: every path that draws a frame goes
         # through this method, and ``_tick`` belongs to the run loop alone --
@@ -1676,6 +1363,13 @@ class App:
                             # cost the user the button as well as the number.
                             log.exception("could not size a refusal's install")
                     ctx.state.note_field_error(named, done.message or "", rows, gib)
+                elif done.key == "submit":
+                    # A refusal with no control to point at -- the VRAM door is
+                    # the one of these, by its own recorded argument. It is
+                    # kept so the plan block can say it, because a toast cannot
+                    # hold ``vram.shortfall_message``'s list of remedies and
+                    # the block was going on saying "Ready to generate."
+                    ctx.state.submit_refusal = done.message or ""
                 message = done.message or "That did not work."
                 action = done.action
                 if done.key.startswith("journal:"):
@@ -1981,6 +1675,9 @@ class App:
             matte_preview.on_task_done(ctx, done)
             return
         if key == "submit":
+            # The press was taken, so whatever the last one was refused for is
+            # no longer the state of things.
+            ctx.state.submit_refusal = ""
             ctx.cache.invalidate()
             # Say where in line it landed: five rapid submits used to produce
             # five identical "Queued." toasts and no sense of depth.
@@ -2332,13 +2029,31 @@ class App:
     def _sync_title(self) -> None:
         """The window caption, marked while something is unsaved.
 
+        **Every kind of unsaved, not only a pose.** The mark used to be
+        ``pose_dirty`` alone, so a dirty drawing, sculpt, map, atlas or song
+        left the caption clean -- the one place in the app that answers "have I
+        saved this" at a glance, saying no to five of the six things it could
+        be about. Derived from the quit-guard predicate
+        (``docmodes.any_unsaved``), so the caption and the question asked on
+        the way out cannot disagree.
+
         Swallows its own failure: a caption is not worth taking a frame down
         for, and this is reachable from a viewer callback that knows nothing
         about whether a display still exists (teardown releases the viewer
         after pygame has quit).
         """
-        state = self.app_ctx.state if self.app_ctx is not None else None
-        marked = bool(state is not None and state.pose_dirty)
+        from . import docmodes
+
+        ctx = self.app_ctx
+        state = ctx.state if ctx is not None else None
+        marked = bool(
+            state is not None and (state.pose_dirty or docmodes.any_unsaved(ctx))
+        )
+        # Called once a frame now that it tracks five more things; setting the
+        # caption is a window-manager round trip, so only a *change* is sent.
+        if marked == self._title_marked:
+            return
+        self._title_marked = marked
         try:
             import pygame
 
@@ -2656,7 +2371,7 @@ class App:
                 continue
             # The viewer sees the mouse when it is over the viewport image, and
             # a drag already in progress keeps it wherever the cursor goes.
-            if self._viewport_hovered or self.viewer._grab is not None:
+            if _takes_pointer(self.viewer, self._viewport_hovered):
                 self.viewer.handle_event(event, hovered=self._viewport_hovered)
 
     def _build_event(self, event: Any) -> None:
@@ -2681,7 +2396,7 @@ class App:
         if tab.saving and event.type == pygame.MOUSEBUTTONDOWN:
             return
         hovered = self._build_hovered
-        if hovered or self.clay_view._grab is not None:
+        if _takes_pointer(self.clay_view, hovered):
             self.clay_view.handle_event(tab.doc, event, hovered)
 
     def _poser_event(self, event: Any) -> None:
@@ -2693,7 +2408,7 @@ class App:
         viewer = self.poser_viewer
         if viewer is None:
             return
-        if self._poser_hovered or viewer._grab is not None:
+        if _takes_pointer(viewer, self._poser_hovered):
             viewer.handle_event(event, hovered=self._poser_hovered)
 
     @staticmethod
@@ -2808,6 +2523,15 @@ class App:
 
             palette.toggle(ctx)
             return
+        # **The palette owns the keyboard while it is up**, Esc included: its
+        # query box holds the imgui focus and it reads its own Escape, Enter
+        # and arrows there (``panes/palette.py``). Only Ctrl+K, above, is
+        # exempt, because it is the way out. Without this the chords leaked
+        # straight through -- ``palette_open`` was never one of
+        # ``modal_open``'s answers, so Ctrl+Enter with the palette open in
+        # Create queued a generation behind it.
+        if event.type == pygame.KEYDOWN and ctx.state.palette_open:
+            return
         # Beside Ctrl+K and for its reason: this is the second binding that
         # has to work in every mode, and the workspace modes below each consume
         # whatever reaches them. Slash rather than a letter because every
@@ -2826,6 +2550,18 @@ class App:
             from .manual import render as manual_render
 
             manual_render.toggle(ctx)
+            return
+        # **And the Manual owns it too.** It covers the app, and the workspace
+        # arms below consume whatever they are handed against a pane the reader
+        # cannot see: Delete in Create trashed the selected asset unconfirmed,
+        # and a bare tool letter switched Inker's tool under the overlay. Esc
+        # passes because the branch immediately below is what answers it, and
+        # Ctrl+K/Ctrl+//F1 are above for the reason they always are.
+        if (
+            event.type == pygame.KEYDOWN
+            and ctx.state.manual.open
+            and event.key != pygame.K_ESCAPE
+        ):
             return
         # Esc closes the Manual before anything else looks at it, and that
         # ordering is the whole of why this sits here rather than in
@@ -2897,6 +2633,14 @@ class App:
                     library.select_grid(ctx, -1 if event.key == pygame.K_LEFT else 1, 0)
                 elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     library.open_selected(ctx)
+                elif event.key == pygame.K_DELETE and ctx.state.selected:
+                    # The same binding the Create sidebar's library has, and
+                    # the same reasoning: delete-to-trash is confirm-free here
+                    # because the trash *is* the confirmation. The shortcuts
+                    # sheet advertised it in both places and only one had it,
+                    # which is a sheet that lies about the mode whose whole
+                    # subject is the library.
+                    library.delete_asset(ctx, ctx.state.selected)
             return
         if ctx.state.mode == "clay":
             from . import clay_mode
@@ -3477,12 +3221,27 @@ class App:
         # window that opens it, so they communicate through one-shot requests.
         if rail.take("layouts"):
             imgui.open_popup("layouts")
-        self._layouts_popup(ctx)
+        # Under ``guard`` like every other surface: these three draw at host
+        # scope, so a raise inside one took the whole frame down rather than
+        # one pane's worth of it -- and the layouts popup is where finding 1 of
+        # this review's section 2 shipped from.
+        guard.run(
+            "shell/layouts",
+            self._layouts_popup,
+            ctx,
+            title="Workspace layout",
+            draw_placeholder=False,
+        )
         # Kept behind an explicit developer environment flag; normal installs
         # never gain a design-system destination in their navigation.
         from . import component_gallery
 
-        component_gallery.draw()
+        guard.run(
+            "shell/gallery",
+            component_gallery.draw,
+            title="Component gallery",
+            draw_placeholder=False,
+        )
         # Ctrl+/ and the palette's "Keyboard shortcuts" both set this flag,
         # because neither a key handler nor a palette command is inside the
         # window the popup is registered in. It was consumed by the header's
@@ -3495,7 +3254,12 @@ class App:
             # list that had lost most of its rows.
             self._shortcuts_query = ""
             imgui.open_popup("shortcuts")
-        self._shortcuts_popup()
+        guard.run(
+            "shell/shortcuts",
+            self._shortcuts_popup,
+            title="Keyboard shortcuts",
+            draw_placeholder=False,
+        )
         imgui.same_line()
         # Treat the workspace and its status as one vertical item beside the
         # full-height rail. Without this group imgui advances below the taller
@@ -3674,151 +3438,6 @@ class App:
             self.app_ctx.clay_view = self.clay_view
         return self.clay_view
 
-    def _poser_workspace(self) -> None:
-        """The sidebar / centre / sidebar skeleton, Poser's way:
-
-            [ poser_library + poser_clips ]  viewport  [ poser_controls ]
-
-        One pane per side rather than Clay's stacked pairs: the library and the
-        controls are each one scroller, and an empty half-pane would be chrome.
-        The clip editor is a *section* inside the left scroller for that same
-        reason -- a skeleton with no clips shows one collapsed heading, where a
-        split pane would show an empty half.
-        """
-        from imgui_bundle import imgui
-
-        from . import layout as layout_mod
-        from .panes import poser_clips, poser_controls, poser_library
-
-        ctx = self.app_ctx
-        left_w = layout_mod.sidebar_width("left")
-        right_w = layout_mod.sidebar_width("right")
-        with layout_mod.pane(
-            "poser-library",
-            (left_w, 0),
-            layout_mod.PaneRole.SIDEBAR,
-            edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                poser_library.draw(ctx)
-                # Under the pose library rather than in a mode of its own: a
-                # clip is a *library* of the same kind of thing, and the right
-                # sidebar has to stay free for the joint controls, which are
-                # the actual editing surface for a key.
-                poser_clips.draw(ctx)
-
-        _column_boundary(self.layouts, "poser", "left")
-        width = layout_mod.centre_width()
-        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        with layout_mod.pane(
-            "poser-centre",
-            (width, 0),
-            layout_mod.PaneRole.CONTENT,
-            window_flags=flags,
-        ) as visible:
-            if visible:
-                self._poser_viewport(ctx)
-
-        _column_boundary(self.layouts, "poser", "right")
-        with layout_mod.pane(
-            "poser-controls",
-            (right_w, 0),
-            layout_mod.PaneRole.INSPECTOR,
-            edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                poser_controls.draw(ctx)
-
-    def _poser_viewport(self, ctx: Any) -> None:
-        from imgui_bundle import imgui
-
-        from . import icons, poser_mode, widgets
-        from .panes import overlay
-
-        self._poser_hovered = False
-        state = poser_mode.ensure(ctx)
-        if not ctx.rigging_available:
-            overlay.placeholder(ctx)
-            return
-        viewer = self._ensure_poser_viewer()
-        showing = poser_mode.sync_preview(ctx, viewer)
-        if not showing:
-            # Both branches through ``centred_empty``, the shape every other
-            # workspace's empty viewport takes. These two were the app's one
-            # pair of top-left muted lines where nine centred cards go.
-            if state.building:
-                overlay.centred_empty(
-                    icons.PERSON_STANDING,
-                    "Building the skeleton preview",
-                    "The armature is built by Blender once per skeleton and "
-                    "cached; the first open of a template takes a moment.",
-                )
-            elif state.error:
-                overlay.centred_empty(
-                    icons.TRIANGLE_ALERT, "The skeleton did not build", state.error
-                )
-            else:
-                overlay.placeholder(ctx)
-            return
-        avail = imgui.get_content_region_avail()
-        rect = (
-            imgui.get_cursor_screen_pos().x,
-            imgui.get_cursor_screen_pos().y,
-            max(avail.x, 1.0),
-            max(avail.y, 1.0),
-        )
-        texture = viewer.render(rect, 1.0 / TARGET_FPS)
-        imgui.image(widgets.texture_ref(texture), (rect[2], rect[3]), (0, 1), (1, 0))
-        self._poser_hovered = imgui.is_item_hovered()
-        self._poser_menu(ctx, viewer)
-
-    def _poser_menu(self, ctx: Any, viewer: Any) -> None:
-        """The joint's right-click menu (B7).
-
-        Drawn here rather than in a pane because a popup belongs to the window
-        that begins it and this is that window -- the same reason
-        ``clay_menu`` is called from Clay's viewport. The viewer records
-        ``menu_request`` and knows nothing about imgui.
-        """
-        from imgui_bundle import imgui
-
-        from . import controls, widgets
-
-        popup = "poser-joint-menu"
-        if viewer.menu_request is not None:
-            viewer.menu_request = None
-            imgui.open_popup(popup)
-        if not imgui.begin_popup(popup):
-            return
-        widgets.popup_chrome(_imgui=imgui)
-        selected = viewer.editor.selected
-        if selected is None:
-            widgets.secondary("No joint selected")
-        else:
-            widgets.secondary(str(selected))
-            imgui.separator()
-            # Through the *viewer*, never the editor: every one of these has a
-            # ``_after_pose_change`` behind it that re-skins the preview, which
-            # is exactly the step a direct editor call would skip.
-            if controls.menu_item_simple("Clear this joint's rotation"):
-                viewer.reset_bone()
-            if controls.menu_item_simple("Deselect"):
-                viewer.editor.selected = None
-        imgui.separator()
-        if controls.menu_item_simple("Reset the whole pose"):
-            viewer.reset_all()
-        imgui.end_popup()
-
-    def _ensure_poser_viewer(self) -> Any:
-        """Poser's own Viewer, built on first use for ClayView's reason -- and
-        mirrored onto the ctx so poser_mode's guard can reach the editor."""
-        from .viewer_embed import Viewer
-
-        if self.poser_viewer is None:
-            self.poser_viewer = Viewer(self.ctx)
-            self.app_ctx.poser_viewer = self.poser_viewer
-        return self.poser_viewer
-
     def _frame_clay_selection(self) -> None:
         """F, in Clay. Frames the selection, or the whole document."""
         from . import clay_mode
@@ -3913,241 +3532,6 @@ class App:
             return capture.png_bytes(target)
         finally:
             target.release()
-
-    def _clay_workspace(self) -> None:
-        """The same sidebar / centre / sidebar skeleton every other mode uses:
-
-            [ clay-tools ]  the header    [ clay-outliner ]
-            [            ]  the viewport  [ clay-props    ]
-            [            ]  the hint      [ clay-bridge   ]
-
-        Both sidebars are ``skeletons.clay``, which is where the argument for
-        that arrangement is written down. It was the last sidebar-shaped
-        workspace composed by hand here, which is to say the last one a saved
-        layout could not permute.
-        """
-        from imgui_bundle import imgui
-
-        from . import clay_mode, skeletons, widgets
-        from . import layout as layout_mod
-
-        ctx = self.app_ctx
-        lay = self.layout
-        left_w = layout_mod.sidebar_width("left")
-        right_w = layout_mod.sidebar_width("right")
-        columns = skeletons.for_mode(ctx, "clay")
-
-        layout_mod.column(
-            ctx,
-            lay,
-            skeletons.ordered(ctx, self.layouts, "clay", columns["left"]),
-            width=left_w,
-            handle_length=left_w,
-        )
-
-        _column_boundary(self.layouts, "clay", "left")
-        width = layout_mod.centre_width()
-        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        with layout_mod.pane(
-            "clay-centre",
-            (width, 0),
-            layout_mod.PaneRole.CONTENT,
-            window_flags=flags,
-        ) as visible:
-            if visible:
-                self._clay_viewport(ctx, clay_mode, widgets)
-
-        _column_boundary(self.layouts, "clay", "right")
-        layout_mod.column(
-            ctx,
-            lay,
-            skeletons.ordered(ctx, self.layouts, "clay", columns["right"]),
-            width=right_w,
-            handle_length=right_w,
-        )
-
-    def _clay_viewport(self, ctx: Any, clay_mode: Any, widgets: Any) -> None:
-        from imgui_bundle import imgui
-
-        from . import tokens
-        from .panes import clay_header, clay_hud, clay_menu
-
-        self._clay_tabs(ctx, clay_mode)
-        tab = clay_mode.active(ctx)
-        if tab is None:
-            self._clay_empty(ctx, clay_mode)
-            return
-        # The header, between the tabs and the image. Before the content region
-        # is read, exactly as Inker's context bar and Plotter's toolbar are: the
-        # viewport sizes itself from what is left, so a strip drawn after the
-        # measurement is a strip drawn over the render.
-        clay_header.draw(ctx, getattr(ctx, "clay_view", None))
-        avail = imgui.get_content_region_avail()
-        # And the hint line's own row, reserved rather than drawn over: a line
-        # the viewport has already claimed the height for is a line clipped away
-        # at the bottom of the pane, which is where every status row in this app
-        # has gone wrong at least once.
-        hint_h = float(tokens.sp(clay_hud.HINT_H))
-        rect = (
-            imgui.get_cursor_screen_pos().x,
-            imgui.get_cursor_screen_pos().y,
-            max(avail.x, 1.0),
-            max(avail.y - hint_h, 1.0),
-        )
-        state = clay_mode.ensure(ctx)
-        if state.frame_pending:
-            # The other half of ``F``: the mode recorded the intent and this is
-            # the only place that has the viewport to act on it (B6).
-            state.frame_pending = False
-            self._frame_clay_selection()
-        view = self._ensure_build_view()
-        # One viewport, many tabs: the camera belongs to the *document*, so it
-        # is snapshotted off the live one on the way out of a tab and put back
-        # on the way in. Done here rather than in ``ClayState.activate`` because
-        # this is the only place that has the viewport -- and it is keyed on
-        # what is being drawn rather than on the switch, so a tab restored from
-        # a ``.wblk`` or closed out from under the pointer lands correctly too.
-        if self._clay_camera_tab != tab.uid:
-            clay_mode.remember_camera(ctx, state.get(self._clay_camera_tab))
-            clay_mode.apply_camera(ctx, tab)
-            self._clay_camera_tab = tab.uid
-        # The shading mode decides two of the renderer's three switches and the
-        # overlay decides the third: *Wire* is the surface replaced by its
-        # edges, *Solid* is the surface drawn unlit, and the Wireframe overlay
-        # is edges drawn over whichever of those is showing.
-        view.wireframe = state.shading == "wireframe"
-        view.flat = state.shading == "solid"
-        view.wire_overlay = bool(state.overlays.get("wire", False))
-        view.xray = bool(state.xray)
-        view.show_grid = state.grid
-        texture = view.draw(tab.doc, rect, 1.0 / TARGET_FPS)
-        imgui.image(widgets.texture_ref(texture), (rect[2], rect[3]), (0, 1), (1, 0))
-        self._build_hovered = imgui.is_item_hovered()
-        self._clay_marquee(imgui, view, rect)
-        self._clay_drag_hud(imgui, widgets, view, rect)
-        # Over the render and inside the same clip: the widget is a control you
-        # reach for without looking away from what you are turning, which is the
-        # whole of why it is in the corner rather than in a pane.
-        # Clears ``_build_hovered``: the flag was recorded off the render image
-        # above, which cannot know a control has since been drawn over it, and
-        # ``_clay_event`` routes the pygame press on it -- so a click on a ball
-        # turned the camera and picked the mesh behind it in one gesture.
-        if clay_hud.axis_widget(ctx, view, rect):
-            self._build_hovered = False
-        # Opposite corner from the widget: two readouts in one corner is one of
-        # them unreadable.
-        clay_hud.stats_overlay(ctx, rect)
-        clay_menu.draw(ctx, view)
-        # Last, and under the image: read when you are stuck, and a line over
-        # the model covers the thing you are stuck on.
-        imgui.set_cursor_screen_pos((rect[0], rect[1] + rect[3]))
-        clay_hud.hint_line(ctx)
-
-    def _clay_tabs(self, ctx: Any, clay_mode: Any) -> None:
-        """Clay's open documents, which nothing has ever drawn.
-
-        The document model was all there -- ``docs``, ``active``, ``activate``,
-        ``cycle``, ``close`` -- and the only thing missing was the bar: Ctrl+Tab
-        switched between documents with nothing on screen to say there was more
-        than one, and ``close`` had no caller at all.
-
-        Drawn above ``_clay_empty`` as well as above the viewport, because the
-        last tab closing is exactly when the bar disappears and the empty state
-        has to be what is underneath it.
-
-        ``unsaved_document`` rather than a ``"* "`` prefix, which is Inker's
-        rule and the right one: the title is half of the tab's identity.
-        """
-        from imgui_bundle import imgui
-
-        state = clay_mode.ensure(ctx)
-        if not state.docs:
-            return
-        # ``auto_select_new_tabs`` for ``inker_canvas``'s reason: without it, a
-        # second opened document lands behind the first and "Open" looks inert.
-        flags = imgui.TabBarFlags_.reorderable.value | imgui.TabBarFlags_.auto_select_new_tabs.value
-        if not imgui.begin_tab_bar("clay-tabs", flags):
-            return
-        for tab in list(state.docs):
-            item_flags = imgui.TabItemFlags_.unsaved_document.value if tab.dirty else 0
-            opened, keep = imgui.begin_tab_item(tab.label, True, item_flags)
-            if opened:
-                state.activate(tab.uid)
-                imgui.end_tab_item()
-            if not keep:
-                clay_mode.close_tab(ctx, tab.uid)
-        imgui.end_tab_bar()
-
-    def _clay_empty(self, ctx: Any, clay_mode: Any) -> None:
-        """What Clay shows with nothing open, mirroring the raster editor's.
-
-        Buttons rather than a sentence: ``new_document`` was reachable only
-        through Ctrl+N, so the empty state told the user to "start a document"
-        and offered no way to.
-        """
-
-        from . import widgets
-
-        # This was written as a copy of ``inker_canvas._empty`` and the copy
-        # dropped the ``sp()`` scaling, so at 150 % the raster editor's empty
-        # state grew with the text while Clay's kept 240-*physical*-pixel
-        # buttons under 1.5x labels -- which is where a label stops fitting its
-        # button. Both are one function now (the UI redesign, wave 2), which is the
-        # only fix that also holds for the next copy.
-        widgets.nothing_open(
-            "Start a model, open a document, or drop a .wblk on the window.",
-            [
-                ("New model", lambda: clay_mode.new_document(ctx)),
-                ("Open a file...", lambda: clay_mode.ask_open(ctx)),
-            ],
-            # No recent list here: it is the bridge panel's, on both of its
-            # branches, which is where Plotter and Packwright keep theirs (B5).
-        )
-
-    def _clay_marquee(self, imgui: Any, view: Any, rect: Any) -> None:
-        """The selection rectangle, drawn in imgui rather than in GL.
-
-        It is a two-dimensional screen decoration with no depth and no place in
-        the scene, so putting it through the renderer would mean a vertex
-        buffer rebuilt every mouse-move for four corners. The draw list is
-        already there and already clipped to this window.
-        """
-        box = getattr(view, "marquee", None)
-        if box is None:
-            return
-        draw = imgui.get_window_draw_list()
-        x0, y0 = rect[0] + min(box[0], box[2]), rect[1] + min(box[1], box[3])
-        x1, y1 = rect[0] + max(box[0], box[2]), rect[1] + max(box[1], box[3])
-        draw.add_rect_filled((x0, y0), (x1, y1), imgui.get_color_u32((1, 1, 1, 0.08)))
-        draw.add_rect((x0, y0), (x1, y1), imgui.get_color_u32((1, 1, 1, 0.55)))
-
-    def _clay_drag_hud(self, imgui: Any, widgets: Any, view: Any, rect: Any) -> None:
-        """What the live drag currently amounts to, above the cursor.
-
-        In the draw list for ``_clay_marquee``'s reason, and *near the cursor*
-        rather than in a corner: the number answers a question the user is
-        asking with their hand, and a readout they have to look away to find is
-        one they stop looking at. It draws only while a drag is live, so an idle
-        viewport is unchanged.
-        """
-        text = getattr(view, "drag_hud", "")
-        if not text or not getattr(view, "dragging", False):
-            return
-        from . import theme
-        from .tokens import sp
-
-        mouse = imgui.get_mouse_pos()
-        x, y = mouse.x + sp(18), mouse.y - sp(28)
-        draw = imgui.get_window_draw_list()
-        size = imgui.calc_text_size(text)
-        pad = sp(6)
-        draw.add_rect_filled(
-            (x - pad, y - pad),
-            (x + size.x + pad, y + size.y + pad),
-            imgui.get_color_u32(theme.rgba(theme.ELEV_2, 0.92)),
-            sp(4),
-        )
-        draw.add_text((x, y), imgui.get_color_u32(theme.rgba(theme.TEXT)), text)
 
     def _inker_workspace(self) -> None:
         """Colour / canvas / tools, with the timeline along the bottom.
@@ -4525,937 +3909,6 @@ class App:
             bottom=("packwright-bridge", layout_mod.PaneRole.INSPECTOR, packwright_bridge.draw),
         )
 
-    def _review_workspace(self) -> None:
-        """The same sidebar / centre / sidebar skeleton every other mode uses:
-
-            [ review-runs  ]              [ review-verdict ]
-            [ review-units ]  the mesh    [ the reference  ]
-
-        The centre borrows the *shared* asset viewer rather than a second one:
-        one GL context, one framebuffer, and a sweep unit's model.glb is an
-        ordinary GLB. Leaving Review needs no cleanup because ``_sync_viewer``
-        compares ``viewer.path`` against what the selection implies and reloads
-        the moment 3D is on screen again.
-        """
-        from imgui_bundle import imgui
-
-        from . import layout as layout_mod
-        from . import review_mode
-
-        ctx = self.app_ctx
-        state = review_mode.ensure(ctx)
-        lay = self.layout
-        left_w = layout_mod.sidebar_width("left")
-        right_w = layout_mod.sidebar_width("right")
-
-        _split_column(
-            ctx,
-            lay,
-            split_id="review-runs",
-            handle_length=left_w,
-            width=left_w,
-            edge=layout_mod.PaneEdge.RIGHT,
-            top=(
-                "review-runs",
-                layout_mod.PaneRole.SIDEBAR,
-                lambda _ctx: self._review_runs(ctx, state, review_mode),
-            ),
-            bottom=(
-                "review-units",
-                layout_mod.PaneRole.SIDEBAR,
-                lambda _ctx: self._review_units(state, review_mode),
-            ),
-        )
-
-        _column_boundary(self.layouts, "review", "left")
-        width = layout_mod.centre_width()
-        # The labelling grid replaces the viewport rather than sitting beside it:
-        # a mesh on screen under a question about a *picture* is the mismatch that
-        # files an accept about the wrong artifact. It also scrolls, so it must
-        # not inherit the viewport's no-scroll flag.
-        labelling = state.labels is not None
-        flags = 0 if labelling else imgui.WindowFlags_.no_scroll_with_mouse.value
-        with layout_mod.pane(
-            "review-centre",
-            (width, 0),
-            layout_mod.PaneRole.CONTENT,
-            window_flags=flags,
-        ) as visible:
-            if visible:
-                if labelling:
-                    self._review_labels(ctx, state, review_mode)
-                else:
-                    self._review_viewport(state, review_mode, width)
-
-        _column_boundary(self.layouts, "review", "right")
-        with layout_mod.pane(
-            "review-verdict",
-            (right_w, 0),
-            layout_mod.PaneRole.INSPECTOR,
-            edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                if labelling:
-                    self._review_label_panel(ctx, state, review_mode)
-                else:
-                    self._review_verdict(ctx, state, review_mode)
-
-    # How wide a labelling cell is, in design px. Big enough to judge a
-    # composition by -- which is the whole question -- and small enough that a
-    # sidebar-width column still fits three across at 100% scale.
-    _LABEL_CELL = 132
-
-    def _review_labels(self, ctx: Any, state: Any, review_mode: Any) -> None:
-        """The labelling grid: images, two keys, no reason step.
-
-        **One thumbnail upload per frame.** ``review_mode.next_thumbnail`` hands
-        back at most one row per call, and the rest draw a placeholder until
-        their turn comes -- ``viewer/sheet.StripRender``'s rule at a larger scale,
-        because a synchronous upload per cell over a hundred cells is a freeze
-        measured in seconds rather than frames.
-        """
-        from imgui_bundle import imgui
-
-        from . import icons, theme, widgets
-        from .tokens import sp
-
-        labels = state.labels
-        widgets.section(_LABEL_TITLES.get(labels.stage, labels.stage))
-        widgets.hint_text(_LABEL_QUESTIONS.get(labels.stage, ""))
-        if labels.loading:
-            widgets.muted("Reading...")
-            return
-        if not labels.rows:
-            widgets.empty_state(
-                icons.CHECK,
-                "Nothing left to label",
-                "Every image has an answer for this question.",
-            )
-            return
-
-        # Exactly one upload admitted per frame, claimed before the loop so which
-        # cell gets it does not depend on where the scroll happens to be.
-        review_mode.next_thumbnail(labels)
-        side = float(sp(self._LABEL_CELL))
-        per_row = max(int(imgui.get_content_region_avail().x // (side + sp(8))), 1)
-        for i, row in enumerate(labels.rows):
-            if i % per_row:
-                imgui.same_line()
-            imgui.begin_group()
-            texture = None
-            # ``ctx.textures`` is None until a GL context exists (app_ctx
-            # defaults it), which is the state a headless or pre-init draw is
-            # in -- every pane guards it and these three Review sites did not.
-            if i < labels.uploaded and ctx.textures is not None:
-                texture = ctx.textures.get(review_mode.cache_id_for_label(row), row["image"])
-            if texture is not None:
-                imgui.image(widgets.texture_ref(texture), (side, side))
-            else:
-                # A placeholder rather than nothing: the grid must not reflow as
-                # the uploads land, or a click lands on a cell that moved.
-                imgui.dummy((side, side))
-            if imgui.is_item_clicked():
-                labels.index = i
-            mark = {"accept": icons.CHECK, "reject": icons.X}.get(row["verdict"] or "", "")
-            colour = theme.ACCENT if i == labels.index else theme.MUTED
-            widgets.text_colored(colour, f"{mark} {i + 1}")
-            imgui.end_group()
-
-    def _review_label_panel(self, ctx: Any, state: Any, review_mode: Any) -> None:
-        """What is being labelled, and what the probe knows so far."""
-        from imgui_bundle import imgui
-
-        from . import controls, widgets
-
-        labels = state.labels
-        row = review_mode.current_label(state)
-        widgets.section("Label")
-        if row is None:
-            widgets.muted("Nothing selected.")
-        else:
-            widgets.muted(str(row["prompt"])[:120])
-            if row.get("status") == "error":
-                # The most informative negatives in the corpus, and worth saying
-                # so: this image was refused at the composition gate.
-                widgets.hint_text("This job was refused; the picture is still judgeable.")
-            texture = (
-                None
-                if ctx.textures is None
-                else ctx.textures.get(review_mode.cache_id_for_label(row), row["image"])
-            )
-            if texture is not None:
-                side = min(imgui.get_content_region_avail().x, 220.0)
-                imgui.image(widgets.texture_ref(texture), (side, side))
-        imgui.separator()
-        # One sentence for the three of them: they share a gate, and three
-        # spellings of "there is nothing on screen to judge" would read as
-        # three different problems. The ``_VIEWPORT_WHY`` pattern.
-        no_row = "There is nothing left to label in this pass."
-        if widgets.primary_button("Good (A)", enabled=row is not None):
-            review_mode.record_label(ctx, "accept")
-        imgui.same_line()
-        if widgets.disabled_button("Bad (R)", row is not None, reason=no_row):
-            review_mode.record_label(ctx, "reject")
-        imgui.same_line()
-        if widgets.disabled_button("Skip (S)", row is not None, reason=no_row):
-            review_mode.advance_labels(labels)
-        if controls.button("Done", role=controls.ButtonRole.GHOST):
-            review_mode.close_labels(ctx)
-
-        # The snapshot the listing task read, kept current by ``record_label``.
-        # Never a live ``judge.status`` call: that is a whole-table scan plus a
-        # stat, and this panel draws every frame.
-        status = labels.status
-        imgui.separator()
-        widgets.section("The probe")
-        answered = sum(1 for r in labels.rows if r["verdict"])
-        widgets.muted(f"{answered} labelled this session")
-        widgets.muted(
-            f"{status.get('positives', 0)} good / {status.get('negatives', 0)} bad, "
-            f"{status.get('needed', 0)} of each needed"
-        )
-        if status.get("trained"):
-            widgets.muted(f"trained on {status.get('trained_labels', 0)} label(s)")
-        else:
-            widgets.muted("no probe yet")
-        widgets.hint_text(
-            "Advisory only. A trained probe scores each unit and sorts the "
-            "review best-first; it never hides, refuses or deletes anything, "
-            "and it files no verdict of its own yet."
-        )
-
-    def _review_runs(self, ctx: Any, state: Any, review_mode: Any) -> None:
-        """The sweep list, and the form that launches a new one."""
-        from imgui_bundle import imgui
-
-        from . import controls, icons, widgets
-        from .manual import render as manual_render
-
-        self._review_judging_card(ctx, state, review_mode)
-        widgets.section("Sweeps")
-        manual_render.help_button(ctx, "review")
-        if widgets.disabled_button(
-            f"{icons.REFRESH} Rescan",
-            not state.scanning,
-            reason="A scan is already running.",
-        ):
-            review_mode.scan(ctx)
-        if state.scanning:
-            imgui.same_line()
-            widgets.muted("Reading...")
-        # Blinding is a session control rather than a per-sweep one, and it is
-        # here because it belongs beside the list it re-presents. It renames and
-        # *reorders*: see review_mode's docstring on why hiding the label alone
-        # blinds nothing.
-        changed, blind = widgets.toggle("Blind", state.blind, tag="review-blind")
-        if changed:
-            review_mode.set_blind(ctx, blind)
-        widgets.hint_text("Hides which settings each unit ran, and the order.")
-        if not state.sweeps and not state.scanning:
-            # H73. An empty Sweeps heading with a Rescan button under it says
-            # nothing about *why* -- and the two reasons (no sweep has ever run
-            # here, versus the bench directory is somewhere else) want different
-            # responses.
-            widgets.empty_state(
-                icons.LIST,
-                "No sweep runs found",
-                "Launch one below, or check that the bench directory is where you expect.",
-            )
-        # **Above the filter on purpose.** Below it, a button naming a count
-        # sitting under a search box reads as "remove the ones I have filtered
-        # to", which it is not -- and the confirm says so in as many words.
-        self._review_remove_reviewed(ctx, state, review_mode)
-        # J86: a bench directory accumulates a run per experiment and nothing
-        # ever removes one, so this is the panel list that grows fastest.
-        needle = widgets.list_filter(ctx, "sweeps", len(state.sweeps))
-        shown = 0
-        for sweep in state.sweeps:
-            if needle and needle not in str(sweep["label"]).lower():
-                continue
-            shown += 1
-            todo = sweep["todo"]
-            total = len(sweep["units"])
-            selected = sweep["id"] == state.sweep_id
-            if controls.selectable(f"{sweep['label']}##sweep-{sweep['id']}", selected)[0]:
-                # Picking a sweep by hand leaves the pass: the pass is a walk
-                # over every outstanding bucket in a stated order, and a user
-                # who jumps out of that order is no longer on the walk its
-                # header is counting. Cleared here rather than inside
-                # ``open_sweep``, which the pass itself calls.
-                state.judging = None
-                review_mode.open_sweep(ctx, sweep["id"])
-            if not total and sweep["id"] != review_mode.RECENT_ID:
-                # "0/0 reviewed" is a sentence about nothing. A sweep whose
-                # units went through the ordinary job lifecycle keeps its row
-                # for ever -- nothing but ``_remove_units``' tail ever deletes
-                # one -- so this is a common state and not an odd one.
-                widgets.muted("   no units left")
-            else:
-                widgets.muted(f"   {total - todo}/{total} reviewed")
-            # What the run actually varied, under the name the user typed for
-            # it at the time -- which is routinely "test2" by the time anyone
-            # comes back to judge it.
-            summary = review_mode.spec_summary(sweep.get("spec"))
-            if summary:
-                widgets.muted(f"   {summary}")
-            if selected and sweep["id"] != review_mode.RECENT_ID:
-                self._review_delete_button(ctx, state, review_mode, sweep)
-        widgets.no_matches(needle, shown)
-        imgui.separator()
-        # The labelling passes, beside the sweep list rather than in a mode of
-        # their own: the judge is meant to improve as the corpus is reviewed,
-        # which is the whole reason the loop lives here.
-        widgets.section("Teach the judge")
-        for stage, title in _LABEL_TITLES.items():
-            open_here = state.labels is not None and state.labels.stage == stage
-            if controls.selectable(f"{title}##label-{stage}", open_here)[0]:
-                if open_here:
-                    review_mode.close_labels(ctx)
-                else:
-                    review_mode.open_labels(ctx, stage)
-        imgui.separator()
-        self._review_form(ctx, state, review_mode)
-
-    def _review_judging_card(self, ctx: Any, state: Any, review_mode: Any) -> None:
-        """The offer to start a guided pass, or the report from the last one.
-
-        A card at the top of the column rather than a modal, deliberately: the
-        pass is a *convenience* over the loop that is already on screen, and a
-        dialog in front of Review would make judging feel like something you
-        have to commit to before you can look at anything.
-        """
-        from imgui_bundle import imgui
-
-        from . import widgets
-
-        if state.judging_report is not None:
-            self._review_judging_report(ctx, state, review_mode)
-            return
-        if state.judging is not None or state.scanning:
-            # Nothing to offer: the pass is running (its controls are in the
-            # verdict pane, beside the mesh they are about) or the list is still
-            # being read and its counts are not yet true.
-            return
-        outstanding = review_mode.todo_total(state)
-        if outstanding <= 0:
-            return
-        widgets.section("Judging")
-        widgets.muted(f"{outstanding} unit(s) across every bucket have no verdict.")
-        if widgets.primary_button("Start judging", (-1, 0)):
-            review_mode.start_judging(ctx)
-        # The up-front warning, and the only one there is. The user chose no
-        # dialog, so this sentence is carrying the whole of the notice that a
-        # judged sweep's files are about to go -- which is why it says what
-        # survives as well as what does not.
-        widgets.hint_text(
-            "One at a time, Accept or Reject. Once every unit of a sweep has "
-            "been judged its images and meshes are removed automatically; the "
-            "verdicts and findings they produced are kept."
-        )
-        imgui.separator()
-
-    def _review_judging_report(self, ctx: Any, state: Any, review_mode: Any) -> None:
-        """What the pass that just ended did.
-
-        Drawn from the stored dict and never recomputed: the numbers were
-        tallied once, in memory, at the moment the pass ended -- recomputing
-        per frame would be a table scan behind the one serialized connection,
-        every frame, for a card that says the same thing each time.
-        """
-        from imgui_bundle import imgui
-
-        from . import controls, widgets
-
-        report = state.judging_report
-        widgets.section("Judging pass")
-        # Wrapped, not ``muted``: these are sentences with a sweep's own name in
-        # them, in a 300 px sidebar, and the unwrapped form clipped both the
-        # average grade off the end of every row and the word "do" off the
-        # overall line -- so the two numbers the card exists to report were the
-        # two the reader could not see.
-        for row in report["sweeps"]:
-            line = (
-                f"{row['label']}: {row['accepted']} accepted / "
-                f"{row['rejected']} rejected of {row['total']}"
-            )
-            if row["mean_grade"] is not None:
-                line += f", avg {row['mean_grade']:+.1f}"
-            widgets.muted_wrapped(line)
-        widgets.muted_wrapped(
-            f"{report['filed']} filed this pass - {report['accepted']} accepted, "
-            f"{report['rejected']} rejected, {report['remaining']} still to do."
-        )
-        if controls.button("Dismiss", role=controls.ButtonRole.GHOST):
-            review_mode.dismiss_report(ctx)
-        imgui.separator()
-
-    def _retention_tick(self, ctx: Any, state: Any, retained: int) -> Any:
-        """The ``Confirm.body`` for a removal that could override retention.
-
-        ``None`` when there is nothing retained to override -- a checkbox that
-        would change nothing teaches the reader that the checkbox does nothing.
-
-        The hint says what those pixels *are*, which is the whole burden this
-        one control carries. ``retained_job_ids`` guards accepted meshes
-        because ``tiercheck`` and the mesh probe are measured against them, and
-        labelled images of **both** classes because ``judge.fit`` embeds pixels
-        and refuses below ``MIN_PER_CLASS`` of each. On 2026-08-09 a bulk
-        button whose confirmation truthfully promised the verdicts would be
-        kept left 100 of 117 verdicts naming directories that no longer
-        existed; they were kept, and the pixels three blocked items needed were
-        not. So this says which promise is being broken, ``ask_clean``'s rule.
-        """
-        from . import controls, widgets
-
-        if not retained:
-            return None
-
-        def body() -> None:
-            changed, value = controls.checkbox(
-                f"Also delete the {retained} unit(s) I accepted or labelled",
-                state.drop_retained,
-            )
-            if changed:
-                state.drop_retained = bool(value)
-            widgets.hint_text(
-                "This is the one rule the app otherwise keeps for you. Those "
-                "pictures are what the quality judge and the tier checks are "
-                "measured against; the verdict rows survive with nothing "
-                "behind them."
-            )
-
-        return body
-
-    def _review_remove_reviewed(self, ctx: Any, state: Any, review_mode: Any) -> None:
-        """Clear out every sweep there is nothing left to judge in.
-
-        The complaint this answers is about a *class* of rows rather than one
-        row, which is why it is a list-level control and not a tidier trash
-        button: a Review list only ever grew, because ``store.delete_sweep`` is
-        reached from exactly one place and the lifecycle paths that actually
-        take a sweep's units never look at the ``sweeps`` table.
-        """
-        from . import dialogs, icons, widgets
-
-        ids = review_mode.removable_ids(state)
-        if not ids:
-            return
-        plan = review_mode.removal_plan(state, ids)
-        if not widgets.disabled_button(
-            f"{icons.TRASH} Remove {len(ids)} reviewed sweep(s)...",
-            not state.scanning,
-            (-1, 0),
-            reason="A scan is already running.",
-            tooltip="Clear out the sweeps you have finished judging.",
-        ):
-            return
-        state.drop_retained = False
-        retained = int(plan["retained"])
-        shown = plan["labels"][:6]
-        listing = "\n".join(f"  {name}" for name in shown)
-        if len(plan["labels"]) > len(shown):
-            listing += f"\n  and {len(plan['labels']) - len(shown)} more"
-        dialogs.ask_delete(
-            ctx,
-            title="Remove the sweeps you have finished with?",
-            message=(
-                f"{plan['sweeps']} sweep(s) with nothing left to judge go from "
-                f"this list, along with {plan['units']} job(s), their meshes "
-                "and their reference images. The filter above does not narrow "
-                "this.\n\n"
-                f"{listing}\n\n"
-                "Every verdict and observation they produced is kept, and so "
-                "is every finding computed from them: each row carries its own "
-                "copy of the settings it judged and does not need its sweep to "
-                "be found again.\n\n"
-                "A sweep with a unit you have not judged yet is left alone. A "
-                "unit that errored or was cancelled can never be judged, so it "
-                "does not hold its sweep back."
-            ),
-            body=self._retention_tick(ctx, state, retained),
-            on_confirm=lambda: review_mode.remove_reviewed(
-                ctx, ids, drop_retained=state.drop_retained
-            ),
-        )
-
-    def _review_delete_button(self, ctx: Any, state: Any, review_mode: Any, sweep: Any) -> None:
-        """Delete a sweep's jobs and meshes, keeping what they taught.
-
-        Behind the same confirm an asset delete goes through
-        (``panes/library.py``), because it is the same kind of act. What the
-        message has to say is the part that is *not* obvious: the verdicts and
-        the findings they feed survive, because each verdict carries its own
-        snapshot of the settings it was filed against.
-        """
-        from imgui_bundle import imgui
-
-        from . import dialogs, icons, widgets
-
-        sweep_id = sweep["id"]
-        units = len(sweep.get("units") or ())
-        # ``.get``: ``test_studio_smoke``'s harness builds these dicts by hand
-        # and a scan from before this field existed has no key either.
-        retained = int(sweep.get("retained") or 0)
-        if widgets.icon_button(
-            f"{icons.TRASH}##delete-{sweep_id}",
-            "Delete this sweep's jobs and meshes",
-            danger=True,
-            enabled=not state.scanning,
-        ):
-            state.drop_retained = False
-            if not units:
-                # The common case for an old row, and "its 0 job(s) ... are
-                # deleted" is a sentence that reads as a bug.
-                message = (
-                    f"{sweep['label']}: its jobs and meshes are already gone "
-                    "-- only the list entry is left.\n\n"
-                    "The verdicts and observations it produced stay exactly "
-                    "where they are. Nothing that feeds findings lives in this "
-                    "row."
-                )
-            else:
-                message = (
-                    f"{sweep['label']}: its {units} job(s), their meshes "
-                    "and their reference images are deleted.\n\n"
-                    "The verdicts you recorded are kept, and so are the findings "
-                    "they feed -- each one carries its own copy of the settings it "
-                    "was filed against."
-                )
-                if retained:
-                    message += (
-                        "\n\nUnits you accepted, and any image you labelled, are "
-                        "kept with their files unless you say otherwise below: a "
-                        "verdict's copy of the settings cannot stand in for the "
-                        "picture it was filed against."
-                    )
-            dialogs.ask_delete(
-                ctx,
-                title="Delete this sweep?",
-                message=message,
-                body=self._retention_tick(ctx, state, retained),
-                on_confirm=lambda: review_mode.delete(
-                    ctx, sweep_id, drop_retained=state.drop_retained
-                ),
-            )
-        imgui.dummy((0, 0))
-
-    def _review_form(self, ctx: Any, state: Any, review_mode: Any) -> None:
-        """New sweep: a prompt, a baseline captured from the generate forms,
-        seeds, and the axes to vary."""
-        from imgui_bundle import imgui
-
-        from ..service import sweeps as sweeps_mod
-        from . import controls, widgets
-
-        # The label table for every guidance field, which is where a param's
-        # human name already lives. Resolved here rather than in ``review_mode``
-        # for that module's own rule: it may not import a pane.
-        from .panes import settings_2d
-
-        if not widgets.header("New sweep", default_open=False):
-            return
-        form = state.form
-        widgets.field_label("prompt")
-        form.prompt = widgets.multiline("##sweep-prompt", form.prompt, 60, 1000)
-        widgets.field_label("name")
-        form.label = widgets.input_text("##sweep-label", form.label, max_length=120)
-        widgets.field_label("seeds")
-        form.seeds = widgets.input_text("##sweep-seeds", form.seeds, max_length=120)
-
-        if controls.button("Start from current 2D/3D settings"):
-            form.base = review_mode.capture_base(ctx)
-            form.base_note = f"{len(form.base)} setting(s) captured"
-            ctx.toast("Captured the current settings as this sweep's baseline.")
-        widgets.muted(
-            form.base_note
-            # Names the button, because "the defaults" is a fact about a sweep
-            # that is unreproducible rather than merely unconfigured -- and the
-            # remedy is one control away and was not being pointed at.
-            or "No baseline captured; units use the defaults. Press "
-            '"Start from current 2D/3D settings" above to use your own.'
-        )
-
-        # "what to vary", not "vary": the old label was a verb with no object,
-        # over a combo of thirty raw param names.
-        widgets.field_label("what to vary")
-        rows = {row["param"]: row for row in review_mode.axis_options(ctx)}
-        options = [("", "-")] + [(p, settings_2d.field_label(p)) for p in sweeps_mod.axis_params()]
-        for i, row in enumerate(form.axes):
-            imgui.push_id(f"axis-{i}")
-            row["param"] = widgets.combo("##param", row.get("param", ""), options, width=-1)
-            self._review_axis_values(row, rows.get(row.get("param") or ""))
-            imgui.pop_id()
-        if controls.button("Add axis"):
-            form.axes.append({"param": "", "values": ""})
-        if len(form.axes) > 1:
-            imgui.same_line()
-            if controls.button("Remove axis", role=controls.ButtonRole.GHOST):
-                form.axes.pop()
-
-        planned = review_mode.preview_units(state)
-        if planned < 0:
-            widgets.muted("Fill in the prompt and one axis.")
-        else:
-            labels = {p: settings_2d.field_label(p) for p in rows}
-            widgets.muted_wrapped(review_mode.preview_line(state, labels))
-            widgets.muted(f"Roughly two minutes of GPU each - {planned * 2} minutes in all.")
-        enabled = planned > 0 and not form.submitting and not state.scanning
-        if widgets.primary_button("Launch sweep", (-1, 0), enabled=enabled):
-            review_mode.launch(ctx)
-
-    def _review_axis_values(self, row: dict[str, Any], spec: Any) -> None:
-        """One axis row's values, drawn as whatever the param actually accepts.
-
-        **Every kind writes back the same comma-separated string.** That is the
-        whole design: ``build_plan`` and ``_coerce`` parse one representation
-        and are untouched, so this is a better *control* over the existing
-        field rather than a second way of storing an axis -- and a param the
-        catalog cannot resolve falls back to the free-text field the row has
-        always been, which is why an unknown param is less discoverable rather
-        than broken.
-        """
-        from . import controls, widgets
-
-        kind = (spec or {}).get("kind", "text")
-        if spec and spec.get("help"):
-            widgets.help_marker(spec["help"])
-        if kind in ("options", "bool"):
-            entries = (
-                spec["options"]
-                if kind == "options"
-                else [{"key": "true", "label": "on"}, {"key": "false", "label": "off"}]
-            )
-            chosen = [v.strip() for v in (row.get("values") or "").split(",") if v.strip()]
-            for entry in entries:
-                key = entry["key"]
-                changed, _ticked = controls.checkbox(f"{entry['label']}##{key}", key in chosen)
-                if changed:
-                    # Rebuilt from the *entry order* rather than by appending, so
-                    # the string the user sees back is stable however they
-                    # clicked -- and so a value typed by hand and then unticked
-                    # cannot leave a duplicate behind.
-                    picked = set(chosen) ^ {key}
-                    chosen = [e["key"] for e in entries if e["key"] in picked]
-                    row["values"] = ", ".join(chosen)
-            return
-        hint = "comma-separated"
-        if kind == "number" and spec.get("range"):
-            low, high = spec["range"]
-            default = spec.get("default")
-            hint = f"{low}-{high}" + (f", e.g. {default}" if default is not None else "")
-        row["values"] = widgets.input_text(
-            "##values", row.get("values", ""), max_length=200, hint=hint
-        )
-
-    def _review_units(self, state: Any, review_mode: Any) -> None:
-        from . import controls, icons, widgets
-
-        widgets.section("Units")
-        if not state.units:
-            widgets.muted("Nothing to review here.")
-            return
-        for i, unit in enumerate(state.units):
-            # The grade, which says more than the tick it replaces -- but a
-            # unit judged before migration 10, or by an older build, has a
-            # verdict and no grade, so the icons stay as the fallback rather
-            # than that row going blank.
-            mark = review_mode.grade_text(unit.get("grade")) or {
-                "accept": icons.CHECK,
-                "reject": icons.X,
-            }.get(unit["verdict"] or "", " ")
-            if controls.selectable(
-                f"{mark} {review_mode.label(state, unit)}##unit-{unit['job_id']}",
-                i == state.index,
-            )[0]:
-                review_mode.step(state, i - state.index)
-
-    def _review_judging_controls(
-        self, ctx: Any, state: Any, review_mode: Any, enabled: bool
-    ) -> None:
-        """Accept / Reject / Finish, for a pass that is running.
-
-        The keys are named on the buttons, which is the whole of what licenses
-        binding ``A`` again: the objection was never to the key, it was to a
-        *silent* remap onto a grade the reviewer had not chosen. A button
-        labelled "Accept (A)" in a mode entered on purpose says exactly what it
-        files.
-        """
-        from imgui_bundle import imgui
-
-        from ..vectors import BINARY_GRADES
-        from . import controls, widgets
-
-        reason = "A scan is running; the queue is being rebuilt."
-        if widgets.disabled_button("Accept (A)", enabled, reason=reason):
-            review_mode.record(ctx, BINARY_GRADES["accept"], state.pending_tags)
-        imgui.same_line()
-        if widgets.disabled_button("Reject (R)", enabled, reason=reason):
-            review_mode.record(ctx, BINARY_GRADES["reject"], state.pending_tags)
-        imgui.same_line()
-        if controls.button("Finish", role=controls.ButtonRole.GHOST):
-            review_mode.end_judging(ctx)
-        widgets.hint_text(
-            f"Files {BINARY_GRADES['accept']:+d} or {BINARY_GRADES['reject']:+d}. "
-            "Use the grades below to say more; Esc ends the pass."
-        )
-
-    def _review_viewport(self, state: Any, review_mode: Any, width: float) -> None:
-        """The unit's mesh, in the shared viewer.
-
-        **What decides whether to load is ``viewer.path``, not a remembered
-        unit key** -- the same comparison ``_sync_viewer`` makes, and for a
-        stronger reason here. Unit keys repeat across runs of one sweep spec,
-        so a key-keyed marker said "already showing that" when the mesh on
-        screen belonged to a *different run*, and a verdict was then filed
-        against a mesh nobody had looked at. The same marker also survived a
-        trip through 3D, which loads a library asset into this same viewer, so
-        coming back drew that asset under Review's verdict buttons. Comparing
-        paths fixes both, structurally, and needs no reset anywhere.
-        """
-        from imgui_bundle import imgui
-
-        from . import widgets
-        from .panes import overlay
-
-        ctx = self.app_ctx
-        if ctx.state.comparing:
-            # 3D's Escape handler does exactly this pair (main.py's
-            # ``_shortcut``), but Review draws no compare UI of its own and
-            # its Escape branch returns before that handler runs -- so a
-            # split entered in 3D and never exited stays armed forever once
-            # the mode switches. ``_draw_viewport_image`` halves the width
-            # for any mode whenever ``comparing`` is set, so without this a
-            # sweep unit's mesh renders next to a stale compare texture.
-            # Checked every frame Review draws (not just on entry), so it
-            # also covers 3D -> Review -> 3D -> Review re-entry.
-            ctx.state.comparing = None
-            self.viewer.exit_compare()
-
-        unit = review_mode.current(state)
-        if self.viewer.pose_mode:
-            # The pose editor owns the viewer and holds unsaved rotations;
-            # loading over it would discard them without the confirm every
-            # other exit goes through (``pose_panel.guard``). ``_sync_viewer``
-            # refuses on exactly this condition -- this is the same refusal.
-            widgets.muted("Finish or close the pose editor to review a mesh.")
-            return
-
-        self._review_load(unit, review_mode)
-
-        image_pos = imgui.get_cursor_screen_pos()
-        avail = imgui.get_content_region_avail()
-        height = max(avail.y, 64)
-        if unit is None:
-            # Before ``has_model``: arriving from 3D leaves an asset loaded,
-            # and asking the viewer first drew that asset with no unit selected
-            # -- a mesh on screen that no button on the right refers to.
-            overlay.placeholder(self.app_ctx)
-        elif self.viewer.has_model:
-            self._draw_viewport_image(image_pos, width, height)
-        else:
-            widgets.muted(f"No mesh for this unit (status: {unit['status']}).")
-
-    def _review_load(self, unit: Any, review_mode: Any) -> None:
-        """Show the unit's mesh if the viewer is not already showing it.
-
-        ``viewer.path`` is set even when there is nothing to show, so a unit
-        whose job errored (or whose GLB will not open) is tried once rather
-        than re-attempted -- and re-toasted -- on every frame.
-
-        Parsed off-thread, ``_sync_viewer``'s split under its own key: this is
-        reached from the draw of the Review pane, so a blocking load here was
-        a frozen frame per arrow press through a pass -- and a judging pass is
-        forty arrow presses. ``_adopt_review_model`` is the other half.
-        """
-        wanted = None if unit is None else review_mode.model_path(unit)
-        if self.viewer.path == wanted or self.viewer.pending == wanted:
-            return
-        if wanted is None or not wanted.exists():
-            self.viewer.clear()
-            self.viewer.path = wanted
-            return
-        self.viewer.pending = wanted
-        if not self.app_ctx.submit(REVIEW_MESH_KEY, self.viewer.parse_model, wanted, tag=wanted):
-            self.viewer.pending = None
-
-    def _adopt_review_model(self, done: Any) -> None:
-        """Take a parsed sweep-unit mesh. Frame thread only.
-
-        ``_adopt_model``'s shape without its thumbnail capture, which is the
-        Create selection's and would stamp this mesh onto whichever job that
-        is. A parse that failed still sets ``viewer.path`` to what was wanted,
-        which is the "tried once" rule above.
-        """
-        wanted = done.tag
-        if wanted is None or self.viewer.pending != wanted:
-            self.viewer.pending = None
-            return
-        self.viewer.pending = None
-        try:
-            if not done.ok:
-                raise RuntimeError(str(done.error))
-            self.viewer.adopt_model(done.result, wanted)
-        except Exception:
-            log.exception("could not open %s", wanted)
-            self.viewer.clear()
-            self.viewer.path = wanted
-            self.app_ctx.toast("Could not open that sweep unit's mesh.", "error")
-
-    def _review_verdict(self, ctx: Any, state: Any, review_mode: Any) -> None:
-        from imgui_bundle import imgui
-
-        from . import forms, widgets
-
-        unit = review_mode.current(state)
-        if unit is None:
-            widgets.muted("Pick a sweep on the left.")
-            self._review_findings(ctx)
-            return
-
-        if state.judging is not None:
-            # The pass's own position, above the unit's. It counts *filed*
-            # against the total outstanding when the pass started, which is a
-            # different question from "where in this sweep am I" -- and the one
-            # a reviewer who has agreed to do twenty of these is asking.
-            widgets.section(f"Judging {state.judging.filed + 1} of {state.judging.total}")
-            widgets.muted(review_mode.label(state, unit))
-        else:
-            widgets.section(review_mode.label(state, unit))
-        widgets.muted(f"{state.index + 1} of {len(state.units)}  -  {unit['job_id']}")
-
-        reference = review_mode.reference_path(unit)
-        if reference is not None and ctx.textures is not None:
-            texture = ctx.textures.get(review_mode.cache_id(unit), reference)
-            if texture is not None:
-                side = min(imgui.get_content_region_avail().x, 220.0)
-                imgui.image(widgets.texture_ref(texture), (side, side))
-
-        for line in review_mode.mesh_lines(unit):
-            widgets.muted(line)
-
-        # Below the measurements and named as a judgement, because it is one and
-        # the measurements are not. Empty when there is no probe, when the judge
-        # had nothing to say about this row, and always under blinding.
-        judged = review_mode.score_line(state, unit)
-        if judged:
-            widgets.muted(judged)
-
-        imgui.separator()
-        enabled = not state.scanning
-
-        if state.pending_negative:
-            # R is a *sign*, held until the next digit, and nothing on screen
-            # said it was held: the reviewer who pressed R and then walked
-            # away came back and pressed 4 expecting +4. Warn-coloured because
-            # the consequence of not noticing is the opposite verdict, and it
-            # says how to drop it -- Esc, which ``_disarm`` already answers.
-            from . import theme
-
-            widgets.text_colored(
-                theme.WARN, "Negative armed: the next digit files a minus. Esc drops it."
-            )
-
-        if state.judging is not None:
-            # Above the grade row, not instead of it. The binary pair is the
-            # fast path; the eleven-point scale below is the power path and
-            # keeps working, files a grade and advances the pass exactly as
-            # these two do.
-            self._review_judging_controls(ctx, state, review_mode, enabled)
-
-        with forms.Form("review-verdict") as form_ui:
-            with form_ui.field(
-                "grade",
-                "Grade",
-                help_text="A digit grades; press R first for a negative grade.",
-                helper="+5 ships as-is, +3 is usable, and -5 is unusable.",
-            ):
-                grade = widgets.grade_buttons("review", enabled)
-            if grade is not None:
-                review_mode.record(ctx, grade, state.pending_tags)
-
-            with form_ui.field("tags", "Tags", helper="Optional; S skips without filing a grade."):
-                tag = widgets.tag_toggles("review", state.pending_tags, enabled)
-            if tag is not None:
-                review_mode.toggle_tag(state, tag)
-
-            if widgets.disabled_button(
-                "Skip (S)",
-                enabled,
-                reason="A scan is running; the queue is being rebuilt.",
-            ):
-                review_mode.advance(state)
-
-        if unit["verdict"]:
-            # ``grade_text`` rather than the verdict word: the word is the
-            # derived cut and the grade is what was actually said, so showing
-            # the word here would answer a coarser question than the one the
-            # buttons above ask.
-            recorded = review_mode.grade_text(unit.get("grade")) or unit["verdict"]
-            if unit.get("tags"):
-                recorded += " - " + ", ".join(unit["tags"])
-            widgets.muted(f"Recorded: {recorded}")
-
-        self._review_findings(ctx)
-
-    def _review_findings(self, ctx: Any) -> None:
-        """What the verdicts add up to, and the one-click way to reuse it.
-
-        Two answers, most conclusive first. Axis verdicts are matched pairs
-        recovered from sweep structure -- same prompt, same seed, one param
-        differing -- the only all-else-equal comparison in the pool. The
-        ranked vectors are whole configurations ordered by their Wilson lower
-        bound (the "floor" percentage), because the per-parameter marginals
-        are confounded and a raw rate lets a lucky 5/5 outrank a 19/20.
-        """
-        from imgui_bundle import imgui
-
-        from ..bench import findings as findings_lib
-        from ..service import findings as svc_findings
-        from . import controls, review_mode, widgets
-
-        imgui.separator()
-        if not widgets.header("What works", default_open=False):
-            return
-        # Everything below the header guard (B21), the load included: it is
-        # mtime-cached but still a stat per frame, for a section that is
-        # closed by default -- and the lines are formatted from scratch.
-        doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
-        top = svc_findings.presets(doc or {})
-        axis_lines = findings_lib.comparison_lines(doc)
-        if axis_lines:
-            widgets.muted("Axis verdicts (matched pairs, all else equal):")
-            for line in axis_lines:
-                if line.startswith("    "):
-                    widgets.muted(line)
-                else:
-                    imgui.text_wrapped(line)
-            imgui.separator()
-        if not top:
-            widgets.muted(
-                f"No whole configuration has {svc_findings.PRESET_MIN_N} verdicts yet."
-                if axis_lines
-                else (
-                    f"Nothing yet: a configuration needs "
-                    f"{svc_findings.PRESET_MIN_N} verdicts to rank, and axis "
-                    "verdicts need matched pairs from sweeps sharing seeds."
-                )
-            )
-            return
-        for entry in top[:5]:
-            summary = review_mode.describe_vector(entry["vector"])
-            imgui.text_wrapped(f"{findings_lib.vector_line(entry)}  -  {summary}")
-            measured = findings_lib.metrics_line(entry.get("metrics"))
-            if measured:
-                widgets.muted(measured)
-            tagged = findings_lib.tag_line(entry)
-            if tagged:
-                widgets.muted(tagged)
-            vector = entry["vector"]
-            if controls.button(f"Apply to forms##apply-{entry['key']}"):
-                review_mode.apply_vector(ctx.state, vector)
-                ctx.toast("Applied those settings to the 2D and 3D forms.")
-            imgui.separator()
-
     def _overlays(self, viewport: Any) -> None:
         """Toasts and modals, drawn over whichever layout ran.
 
@@ -5640,8 +4093,8 @@ class App:
         from .tokens import sp
 
         viewport = imgui.get_main_viewport()
-        popup_width = min(sp(520), viewport.work_size.x - sp(32))
-        popup_height = min(sp(720), viewport.work_size.y - sp(64))
+        popup_width = min(sp(tokens.SURFACE_W_SHEET), viewport.work_size.x - sp(32))
+        popup_height = min(sp(tokens.SURFACE_H_SHEET), viewport.work_size.y - sp(64))
         imgui.set_next_window_pos(
             (
                 viewport.work_pos.x + viewport.work_size.x - sp(16),
@@ -6071,15 +4524,15 @@ def _utc_now() -> str:
 
 
 def _version() -> str:
-    """The installed version, falling back to the packaged constant."""
-    from importlib.metadata import PackageNotFoundError, version
+    """The installed version, falling back to the packaged constant.
 
-    try:
-        return version("warlock")
-    except PackageNotFoundError:
-        from .. import __version__
+    A thin alias now: the implementation is ``warlock.installed_version``,
+    because Home asked this module for it and a pane has no other business
+    importing the frame loop.
+    """
+    from .. import installed_version
 
-        return __version__
+    return installed_version()
 
 
 def _install_excepthooks() -> None:

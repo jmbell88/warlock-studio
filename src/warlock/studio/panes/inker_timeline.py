@@ -1535,8 +1535,8 @@ def _group_row(ctx: Any, tab: Any, doc: Any, entry: RowEntry) -> None:
     if imgui.begin_drag_drop_target():
         payload = imgui.accept_drag_drop_payload_py_id("inker-layer")
         if payload is not None and not tab.busy:
-            source = int(payload.data_id)
-            if 0 <= source < len(doc.stack):
+            source = _row_of_uid(doc, int(payload.data_id))
+            if source is not None:
                 doc.move_into_group(source, entry.uid)
         imgui.end_drag_drop_target()
     if imgui.is_item_hovered():
@@ -1703,12 +1703,30 @@ def _end_eye_drag(state: Any, tab: Any = None) -> None:
         tab.doc.set_layers_props(sorted(was), was=was, visible=painted)
 
 
+def _row_of_uid(doc: Any, uid: int) -> int | None:
+    """Where the layer with ``uid`` sits in the stack right now, or None.
+
+    Undo is addressed by uid and never by index (the package's rule); a drag
+    that spans frames has to follow it, because the stack can be restructured
+    between the pick-up and the drop.
+    """
+
+    for position, layer in enumerate(doc.stack):
+        if layer.uid == uid:
+            return position
+    return None
+
+
 def _reorder(ctx: Any, tab: Any, doc: Any, index: int) -> None:
     """Drag a layer's name onto another row to move it there.
 
-    imgui's drag-and-drop payload carries the *index*, and the drop reads the
-    stack again -- so a reorder mid-drag cannot make the drop land on a
-    different layer than the one under the cursor.
+    imgui's drag-and-drop payload carries the dragged layer's **uid**, not its
+    index. A drag spans frames, and an index is a *position*: an undo, a
+    duplicate or another reorder landing while the button is held leaves the
+    number naming whichever layer has since moved into that slot, and the
+    bounds check that used to guard it cannot tell the two apart. The uid is
+    resolved back to a position at the drop, so the layer that moves is the
+    one that was picked up or nothing moves at all.
 
     Refused outright while the tab is busy rather than drawn disabled: a
     reorder is the exact write ``ora.py``'s two passes over ``doc.stack``
@@ -1734,14 +1752,14 @@ def _reorder(ctx: Any, tab: Any, doc: Any, index: int) -> None:
         | imgui.DragDropFlags_.source_allow_null_id.value
     )
     if imgui.begin_drag_drop_source(flags):
-        imgui.set_drag_drop_payload_py_id("inker-layer", index)
+        imgui.set_drag_drop_payload_py_id("inker-layer", doc.stack[index].uid)
         imgui.text(doc.stack[index].name)
         imgui.end_drag_drop_source()
     if imgui.begin_drag_drop_target():
         payload = imgui.accept_drag_drop_payload_py_id("inker-layer")
         if payload is not None:
-            source = int(payload.data_id)
-            if 0 <= source < len(doc.stack) and source != index:
+            source = _row_of_uid(doc, int(payload.data_id))
+            if source is not None and source != index:
                 doc.move_layer(source, index)
         imgui.end_drag_drop_target()
 
@@ -1830,13 +1848,21 @@ def _ask_rename(ctx: Any, doc: Any, index: int) -> None:
     from .. import dialogs
 
     layer = doc.stack[index]
+    # By **uid**, resolved when the answer comes back: a prompt is a modal the
+    # user can leave up, and everything that restructures the stack -- an undo,
+    # a new layer, a reorder -- keeps working behind it. The captured index
+    # then names whichever layer has since moved into that slot, and renames
+    # that one instead. Undo is addressed by uid and never by index (the
+    # package's rule); a deferred callback is the same problem one level up.
+    uid = layer.uid
+
+    def accept(text: str) -> None:
+        row = _row_of_uid(doc, uid)
+        if row is not None:
+            doc.set_layer_props(row, name=text[:60])
+
     ctx.prompts.ask(
-        dialogs.Prompt(
-            title="Rename layer",
-            label="Name",
-            value=layer.name,
-            on_accept=lambda text: doc.set_layer_props(index, name=text[:60]),
-        )
+        dialogs.Prompt(title="Rename layer", label="Name", value=layer.name, on_accept=accept)
     )
 
 

@@ -219,10 +219,16 @@ def test_help_button_call_sites_match_help_targets():
     # scan that missed it would call the viewport's (?) dead data.
     pattern = re.compile(r'help_button(?:_inline)?\(\s*ctx\s*,\s*"([^"]+)"\s*\)')
     found: set[str] = set()
-    # main.py joins the scan because Review's workspace panes are drawn there
-    # rather than in panes/ -- its (?) would otherwise be invisible to this
-    # test in both directions.
-    for path in [*(studio_dir / "panes").glob("*.py"), studio_dir / "main.py"]:
+    # ``main.py`` and ``review_panes.py`` join the scan because Review's and the
+    # shell's own workspace panes are drawn there rather than in ``panes/`` --
+    # their (?) would otherwise be invisible to this test in both directions.
+    # Review's moved out of ``main`` on 2026-09-04 (T7), and this list moved
+    # with it rather than the gate quietly losing a file.
+    for path in [
+        *(studio_dir / "panes").glob("*.py"),
+        studio_dir / "main.py",
+        studio_dir / "review_panes.py",
+    ]:
         found.update(pattern.findall(path.read_text(encoding="utf-8")))
     assert found == HELP_TARGETS.keys()
 

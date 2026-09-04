@@ -724,6 +724,13 @@ class PlotterState:
             # The neighbour, not the first: closing a tab should leave you next
             # to where you were rather than at the far end of the bar.
             self.active_uid = self.docs[min(index, len(self.docs) - 1)].uid if self.docs else ""
+            # ``add`` and ``activate`` both call this and ``close`` did not, so
+            # closing the front tab carried the brush, the palette index, the
+            # terrain and the object selection onto the neighbour -- all of
+            # them naming things the map you land on does not have. Only when
+            # the *active* tab went: closing a background tab is not arriving
+            # anywhere.
+            self._forget_document_state()
         self.clear_drag()
         return True
 

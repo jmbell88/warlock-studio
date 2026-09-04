@@ -921,7 +921,7 @@ def switch(
     draw.add_circle_filled(
         (knob_x, top + track_h * 0.5),
         radius,
-        imgui.get_color_u32(theme.rgba(0xFFFFFF)),
+        imgui.get_color_u32(theme.rgba(theme.KNOB)),
         24,
     )
     if label:

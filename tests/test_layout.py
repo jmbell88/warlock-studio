@@ -190,9 +190,22 @@ def test_migration_never_overwrites_a_split_the_user_has_already_moved():
 
 
 def _main_source() -> str:
-    from warlock.studio import main as main_mod
+    """The shell's drawing, as source. **Two files since 2026-09-04.**
 
-    return pathlib.Path(main_mod.__file__).read_text(encoding="utf-8")
+    Review's nine hundred lines of pane drawing moved to
+    ``studio/review_panes.py`` as a mixin on ``App`` (T7 of the 2026-09-02
+    review), and it draws splits and handles like every other workspace -- so a
+    scan of ``main.py`` alone would stop seeing them and this gate would go
+    quietly green over a workspace it no longer reads.
+    """
+    from warlock.studio import main as main_mod
+    from warlock.studio import review_panes
+
+    sources = [
+        pathlib.Path(module.__file__).read_text(encoding="utf-8")
+        for module in (main_mod, review_panes)
+    ]
+    return "".join(sources)
 
 
 def _share_literals() -> list[str]:

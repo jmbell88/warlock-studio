@@ -882,7 +882,7 @@ def _overflow(ctx: Any, job: Any) -> None:
         )
     copyable = bool(job.get("params"))
     if copyable and controls.menu_item("Copy settings to form", "", False)[0]:
-        _copy_settings(ctx, job)
+        copy_settings(ctx, job)
     if job["status"] in ("done", "error", "cancelled"):
         # A hand-made reference has no generator behind it, so there is nothing
         # a new seed could change; the service refuses it, and offering the
@@ -1157,13 +1157,16 @@ def open_selected(ctx: Any) -> None:
     asset_open.open_asset(ctx, job)
 
 
-def _copy_settings(ctx: Any, job: Any) -> None:
+def copy_settings(ctx: Any, job: Any) -> None:
     """Load a job's recipe back into the 2D form, so it can be varied.
 
     Reroll re-runs a job as it was; this is the other half -- start from what
     it used and change one thing. Prompt history only ever restored the prompt
     text, which left every guidance field, the model, the LoRA and the
     conditioning strengths behind.
+
+    Public: the results tray's "Vary" is the same verb on the same row and was
+    reaching for the private name to do it.
     """
     from .. import create_assets
     from ..state import form_from_params
@@ -1388,6 +1391,30 @@ def compare(ctx: Any, job_id: str) -> None:
         ctx.state.compare_pending = was_pending
 
 
+def delete_assets(ctx: Any, job_ids: list[str]) -> None:
+    """Trash several rows as one act: one toast, one undo, N submits.
+
+    The candidate picker's "Keep -> Delete the others" raised a separate
+    "Moved to trash." with a separate Undo *per loser*, so choosing between
+    eight attempts finished with seven stacked toasts and no way to put them
+    all back at once. The undo carries the whole batch, because what the user
+    did was one thing.
+    """
+
+    kept = [str(job_id) for job_id in job_ids if job_id]
+    if not kept:
+        return
+    if len(kept) == 1:
+        delete_asset(ctx, kept[0])
+        return
+    for job_id in kept:
+        ctx.state.checked.discard(job_id)
+        if ctx.state.selected == job_id:
+            ctx.state.select(None)
+        ctx.submit(f"delete:{job_id}", svc_jobs.trash_job, ctx.svc, job_id)
+    ctx.toast(f"Moved {len(kept)} to trash.", "info", "undo", " ".join(kept))
+
+
 def delete_asset(ctx: Any, job_id: str) -> None:
     """Move one asset to the trash: the tick, the selection, then the row (J91).
 
@@ -1415,8 +1442,15 @@ def delete_asset(ctx: Any, job_id: str) -> None:
 
 
 def restore_asset(ctx: Any, job_id: str) -> None:
-    ctx.state.checked.discard(job_id)
-    ctx.submit(f"restore:{job_id}", svc_jobs.restore_job, ctx.svc, job_id)
+    """Undo a trashing. Takes one id, or several space-separated.
+
+    The batch spelling is what ``delete_assets``' one Undo hands back, and it
+    is a string because that is what a toast action carries.
+    """
+
+    for one in str(job_id).split():
+        ctx.state.checked.discard(one)
+        ctx.submit(f"restore:{one}", svc_jobs.restore_job, ctx.svc, one)
 
 
 def purge_asset(ctx: Any, job_id: str) -> None:

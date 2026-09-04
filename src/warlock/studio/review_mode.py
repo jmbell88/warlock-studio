@@ -87,11 +87,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..service import verdicts as verdicts_mod
+from . import quality
 
 log = logging.getLogger(__name__)
 
@@ -1511,7 +1513,68 @@ def launch(ctx: Any) -> bool:
 # -- an enumerated param draws its own options and a numeric one draws its range
 # -- but the test asserts the complement, so a param that stops resolving is
 # caught by having no help line rather than by somebody noticing the blank box.
+#: One sentence per sweep axis, keyed exactly as ``sweeps.KWARG_AXES`` names
+#: them. **Every axis, and a test says so** (``AXIS_HELP`` covered 3 of 14 when
+#: the three engine flags arrived with tooltips and the older axes had none):
+#: a form that explains a third of its fields teaches the reader that the
+#: tooltips are decoration.
 AXIS_HELP: dict[str, str] = {
+    "lora_weight": (
+        "How strongly the selected style LoRA is applied. Around 1.0 is its "
+        "trained strength; below ~0.5 it barely reads, above ~1.3 it starts to "
+        "overwhelm the prompt. Ignored when no LoRA is selected."
+    ),
+    "profile": (
+        "The mesh budget preset the reconstruction is held to. 'raw' ships the "
+        "engine's own output and ignores the triangle budget; 'custom' is the "
+        "one profile that reads it."
+    ),
+    "reference_prep": (
+        "Whether the reference image is normalised (recentred and rescaled to "
+        "a target occupancy) before the engine sees it. Off by default: the "
+        "vendored exe very likely does its own, in which case doing it here "
+        "over-zooms. true/false."
+    ),
+    "resolution": (
+        "The reconstruction resolution the 3D engine runs at. Higher costs "
+        "time and VRAM roughly with the square, and the texture and band "
+        "defaults are derived from it."
+    ),
+    "ip_scale": (
+        "How much the IP-Adapter lets the reference image steer the image "
+        "generation, 0 to 1. Dropped entirely when no IP-Adapter is selected, "
+        "so a sweep over it on a job without one collapses to one unit."
+    ),
+    "control_scale": (
+        "How strongly the ControlNet hint constrains the image, 0 to 1. "
+        "Dropped when no ControlNet is selected."
+    ),
+    "control_end": (
+        "The fraction of the denoise after which the ControlNet stops acting, "
+        "0 to 1. Ending early keeps the composition and frees the late steps "
+        "for detail. Dropped when no ControlNet is selected."
+    ),
+    "bg_removal": (
+        "Which matting model cuts the subject out of the reference before the "
+        "3D stage. The values are whatever this install has; a wrong matte is "
+        "the most common cause of a mesh with a slab behind it."
+    ),
+    "size_m": (
+        "The physical size the finished mesh is normalised to, in metres. It "
+        "changes the grounded scale of the export and nothing about the "
+        "reconstruction itself."
+    ),
+    "trellis_band": (
+        "Width of the narrow band the engine's DC remesh runs over. Empty runs "
+        "its default of res/512. Measured 2026-08-01: widening it made the "
+        "surface *more* perforated while adding faces and time -- see "
+        "docs/measurements. Restarts the engine per value."
+    ),
+    "trellis_tex_res": (
+        "Baked PBR texture resolution in px. Pinned to 512 by default because "
+        "the engine's 'auto' bakes visible per-texel noise into the baseColor "
+        "atlas at res 1024/1536. Restarts the engine per value."
+    ),
     "custom_triangles": (
         "Triangle budget, used only when profile is 'custom'. Ignored by 'raw'."
     ),
@@ -1714,13 +1777,31 @@ def model_path(unit: dict[str, Any]) -> Path:
     return Path(unit["dir"]) / "model.glb"
 
 
+#: ``{unit dir: (answer, when asked)}``. The inspector asks this on every frame
+#: it draws a unit, and every miss is one stat per name in ``IMAGE_NAMES`` on
+#: the thread that may not block. A hit is remembered outright -- the file a
+#: finished sweep unit was generated from does not move -- and a miss is
+#: re-asked no more than once a second, so a picture that lands late still
+#: appears without the frame loop polling the disk sixty times for it.
+_REFERENCE_CACHE: dict[str, tuple[Path | None, float]] = {}
+_REFERENCE_RETRY = 1.0
+
+
 def reference_path(unit: dict[str, Any]) -> Path | None:
     """What the unit was generated from, or None if neither exists."""
+    key = str(unit["dir"])
+    found = _REFERENCE_CACHE.get(key)
+    now = time.monotonic()
+    if found is not None and (found[0] is not None or now - found[1] < _REFERENCE_RETRY):
+        return found[0]
+    answer: Path | None = None
     for name in verdicts_mod.IMAGE_NAMES:
         path = Path(unit["dir"]) / name
         if path.exists():
-            return path
-    return None
+            answer = path
+            break
+    _REFERENCE_CACHE[key] = (answer, now)
+    return answer
 
 
 def cache_id(unit: dict[str, Any]) -> str:
@@ -1773,18 +1854,14 @@ def mesh_lines(unit: dict[str, Any]) -> list[str]:
         worst = audit.get("worst")
         if isinstance(worst, (int, float)):
             lines.append(f"see-through at worst view: {float(worst) * 100:.1f}%")
-            # The same caveat the inspector carries on the same number, and it
-            # matters more here: Review is where the corpus judgements are
-            # filed, so an unqualified low reading beside a mesh is a figure a
-            # reviewer will read as "no holes -- good" while grading. A high
-            # reading is real evidence and needs no caveat; a low one is what a
-            # solid, featureless slab measures. Imported inside the function
-            # because ``widgets`` pulls in imgui and nothing else in this
-            # module needs it.
-            from .widgets import AUDIT_UNINFORMATIVE
-
-            if float(worst) < AUDIT_UNINFORMATIVE:
-                lines.append("(a solid, featureless mesh scores this too)")
+            # The same caveat the inspector carries on the same number, from
+            # the same headless helper, and it matters more here: Review is
+            # where the corpus judgements are filed, so an unqualified low
+            # reading beside a mesh is a figure a reviewer will read as "no
+            # holes -- good" while grading.
+            caveat = quality.caveat_for(worst)
+            if caveat:
+                lines.append(caveat)
     return lines
 
 

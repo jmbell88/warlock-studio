@@ -108,11 +108,24 @@ OUTWARD_IMPORTS = {
     # about a different declared number -- an image's pixel count, a ``.npy``
     # header's shape, an XML document's DTD and nesting depth. Shared leaves,
     # not sibling engines, so this package is free to reach for them.
+    # The app's one staging idiom. A shared leaf for ``zipguard``'s reason
+    # exactly, one level up: "write into a temporary and replace, and clean the
+    # temporary up whatever happens" is a rule two writers here had spelled out
+    # by hand, and one of the two (``aseout``) had no ``try/finally`` at all --
+    # so a failed encode left a ``.aseprite.tmp`` beside the user's document
+    # forever. A third private copy of a staging rule is a copy that stops
+    # agreeing with the twelve call sites that already share this one.
+    ("ora.py", "warlock.studio.atomic"),
+    ("aseout.py", "warlock.studio.atomic"),
     ("ora.py", "warlock.studio.zipguard"),
     ("ora.py", "warlock.studio.xmlguard"),
     ("ora.py", "warlock.studio.pixelguard"),
     ("asein.py", "warlock.studio.pixelguard"),
     ("gifin.py", "warlock.studio.pixelguard"),
+    # Reachable by *typing*: the surface is measured from the string in the
+    # text field at the size in the size field, and nothing stood between a
+    # 4000-point paste and ``Image.new``.
+    ("textstamp.py", "warlock.studio.pixelguard"),
     ("document.py", "warlock.studio.pixelguard"),
     ("ora.py", "warlock.studio.tilegrid"),
     ("ora.py", "warlock.studio.tilegrid.tileset"),

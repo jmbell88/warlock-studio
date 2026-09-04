@@ -1825,6 +1825,29 @@ def _seed_row(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
         form["seed_locked"] = locked
 
 
+#: ``(frame, id(form)) -> problems``. The Reference stage asks the same
+#: question twice on every frame -- the command bar, to know whether Generate
+#: is live, and this footer, to list what is wrong -- and both answers have to
+#: agree, which one evaluation guarantees and two only tend to.
+_PROBLEMS_CACHE: tuple[tuple[int, int], list[widgets.Problem]] | None = None
+
+
+def problems_for(ctx: Any, form: dict[str, Any]) -> list[widgets.Problem]:
+    """Everything stopping a press, form problems first. Once per frame."""
+
+    global _PROBLEMS_CACHE
+
+    key = (int(getattr(ctx.state, "frame_index", 0)), id(form))
+    if _PROBLEMS_CACHE is not None and _PROBLEMS_CACHE[0] == key:
+        return _PROBLEMS_CACHE[1]
+    problems = validate(form)
+    weight = weights_problem(ctx, form)
+    if weight is not None:
+        problems = [*problems, weight]
+    _PROBLEMS_CACHE = (key, problems)
+    return problems
+
+
 def _plan_footer(ctx: Any, form: dict[str, Any]) -> None:
     """What a press will cost, and what is stopping it. Pinned, never scrolled.
 
@@ -1835,11 +1858,7 @@ def _plan_footer(ctx: Any, form: dict[str, Any]) -> None:
     """
     imgui.dummy((0, sp(8)))
     imgui.separator()
-    problems = validate(form)
-    weight = weights_problem(ctx, form)
-    if weight is not None:
-        problems = [*problems, weight]
-    _generation_plan(ctx, form, problems)
+    _generation_plan(ctx, form, problems_for(ctx, form))
 
 
 def _generation_plan(ctx: Any, form: dict[str, Any], problems: list[widgets.Problem]) -> None:
@@ -1861,16 +1880,25 @@ def _generation_plan(ctx: Any, form: dict[str, Any], problems: list[widgets.Prob
     widgets.muted(f"Recipe: {plan.recipe}")
     active = getattr(ctx.cache, "active", None)
     if active is not None:
-        position = generation_workspace._queue_position(ctx, str(active.get("id") or ""))
+        position = generation_workspace.queue_position(ctx, str(active.get("id") or ""))
         if active.get("status") == "queued":
             widgets.muted(f"Queue: position {position}" if position else "Queue: waiting")
         else:
             widgets.muted("Queue: one local generation is running")
     else:
         widgets.muted("Queue: ready")
-    if not problems:
+    refusal = str(getattr(ctx.state, "submit_refusal", "") or "")
+    if not problems and not refusal:
         widgets.muted("Ready to generate.")
         return
+    if refusal:
+        # Above the form problems: the form is fine -- this is the *door*
+        # saying no, and it is the reason the last press did nothing. It stays
+        # until a press is accepted, because a fading toast is what this
+        # sentence was already tried as.
+        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
+        imgui.text_wrapped(f"Refused: {refusal}")
+        imgui.pop_style_color()
     for problem in problems:
         imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
         imgui.text_wrapped(f"Needs attention: {problem}")

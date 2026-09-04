@@ -534,16 +534,45 @@ def transform_brush(state: Any, name: str, *, back: bool = False) -> bool:
 
 
 def undo(ctx: Any, tab: Any) -> None:
-    """One step back, whichever surface asked for it."""
-    tab.doc.undo()
-    ensure(ctx).select_object(None)
+    """One step back, whichever surface asked for it.
 
+    **The selection is pruned, not cleared.** Dropping it outright meant that
+    undoing a nudge -- the most repeated object edit there is -- deselected the
+    thing that had just moved back, so the next nudge had to start with a
+    click. What the clear was actually for is an object the step *removed*:
+    a selection naming a uid the document no longer holds points at nothing,
+    and every single-object verb then does nothing with no reason given. So
+    the survivors stay and only the ghosts go.
+    """
+    tab.doc.undo()
+    _prune_object_selection(ctx, tab)
 
 
 def redo(ctx: Any, tab: Any) -> None:
     """One step forward. :func:`undo`'s twin, and its reasoning."""
     tab.doc.redo()
-    ensure(ctx).select_object(None)
+    _prune_object_selection(ctx, tab)
+
+
+def _prune_object_selection(ctx: Any, tab: Any) -> None:
+    """Drop selected object uids the document no longer holds.
+
+    Also the answer for a *deleted layer*: an object selection is by uid and a
+    layer takes its objects with it, so the set was left naming objects that
+    are gone -- the same ghosts, by a different road.
+    """
+    from .plotter.tilemap import ObjectLayer
+
+    state = ensure(ctx)
+    if not state.selected_objects:
+        return
+    live = {
+        entry.uid
+        for layer in tab.doc.all_layers()
+        if isinstance(layer, ObjectLayer)
+        for entry in layer.objects
+    }
+    state.select_objects(state.selected_objects & live, primary=state.selected_object)
 
 
 def go_to_cell(ctx: Any, tab: Any, column: int, row: int) -> tuple[int, int]:
@@ -613,6 +642,36 @@ def go_to_object_id(ctx: Any, tab: Any, id: int) -> bool:
 
     found = tab.doc.find_object(int(id))
     return False if found is None else go_to_object(ctx, tab, found[0], found[1])
+
+
+def remove_tileset(ctx: Any, index: int) -> None:
+    """Take a tileset out of the active map, saying why when it will not go.
+
+    The refusal belongs to ``MapDoc.remove_tileset`` -- it is the one that
+    knows how many cells still hold a gid from this set and which layer they
+    are on -- so this passes the sentence on rather than asking the question
+    twice. The index is the palette's, which is what the menu row is about.
+    """
+
+    state = ensure(ctx)
+    tab = state.active
+    if tab is None or tab.busy or not tab.doc.tilesets:
+        return
+    index = max(0, min(int(index), len(tab.doc.tilesets) - 1))
+    name = tab.doc.tilesets[index].tileset.name or "That tileset"
+    try:
+        tab.doc.remove_tileset(index)
+    except (ValueError, IndexError) as exc:
+        # Framed, the house rule: the model's sentence names the tileset, the
+        # count and the layer, and in front of it the user needs to know what
+        # was being attempted.
+        ctx.toast(f"{name} was not removed: {exc}", "error")
+        return
+    # The palette index names a slot that may no longer exist.
+    state.tileset_index = max(0, min(state.tileset_index, len(tab.doc.tilesets) - 1))
+    state.brush = None
+    state.terrain = None
+    ctx.toast(f"{name} removed.")
 
 
 def shift_layer(doc: Any, uid: int, delta: int) -> bool:
@@ -972,11 +1031,16 @@ def _copy_object(
 ) -> None:
     """Ctrl+C / Ctrl+X with Objects in hand.
 
-    The object is stored by reference in an :class:`ObjectClip`; the paste makes
-    the copy. Storing the live object is safe because every edit to one replaces
-    it wholesale rather than writing through -- and a cut has already taken it
-    out of the layer, so there is nothing left to write through to.
+    **A copy, taken now.** This stored the live object, on the reading that
+    every edit replaces one wholesale -- and that is not what happens:
+    ``_apply_object_props`` writes the name, the shape, the position and the
+    rotation straight onto the object it found, so the clipboard followed every
+    later edit. Copy a spawn point, drag it across the map, paste, and what
+    landed was the *moved* one. ``dataclasses.replace`` with nothing changed is
+    the shallow copy the paste already makes one of, and it is taken at the
+    moment the user pressed Ctrl+C, which is the moment they mean.
     """
+    import dataclasses
     layer = tab.doc.active()
     if not isinstance(layer, ObjectLayer):
         return
@@ -990,7 +1054,7 @@ def _copy_object(
     found = next((o for o in layer.objects if o.uid == state.selected_object), None)
     if found is None:
         return
-    state.clipboard = ObjectClip(obj=found)
+    state.clipboard = ObjectClip(obj=dataclasses.replace(found))
     state.clipboard_doc = tab.uid
     if cut:
         tab.doc.remove_object(layer.uid, found.uid)
@@ -1144,21 +1208,17 @@ def _stepped(zoom: float, direction: int) -> float:
 
 
 def _shift_layer(tab: PlotterDoc, delta: int) -> bool:
-    """Move the active layer one place within its own parent. -> whether it moved."""
-    doc = tab.doc
-    uid = doc.active_layer
-    if uid is None:
-        return False
-    found = doc._locate(uid)
-    if found is None:
-        return False
-    _layer, parent_uid, index = found
-    siblings = doc.children_of(parent_uid)
-    wanted = index + int(delta)
-    if not 0 <= wanted < len(siblings):
-        return False
-    doc.move_layer(uid, wanted)
-    return True
+    """The keyboard's Raise/Lower, over the *active* layer.
+
+    A three-line wrapper over :func:`shift_layer`, which is the fourth surface
+    onto that verb and had a second copy of its address resolution here -- and
+    the two had already come apart at the ends: this one refused to move at all
+    at the top of a group's list where ``shift_layer`` clamps, so the same
+    press did different things depending on which control made it.
+    """
+
+    uid = tab.doc.active_layer
+    return False if uid is None else shift_layer(tab.doc, uid, int(delta))
 
 
 def store_stamp(ctx: Any, state: PlotterState, tab: PlotterDoc, slot: int) -> bool:
@@ -1265,6 +1325,13 @@ def _ctrl_key(
         # Tiled's Raise/Lower Layer. Ctrl+Shift rather than Ctrl+arrow: the
         # plain arrows nudge and Ctrl+arrow is free but reads as "a bigger
         # nudge", which is what Inker's Shift+arrow already means.
+        #
+        # Gated inline rather than through ``_MUTATING_CTRL``, which keys on
+        # the letter alone and would then also swallow a plain Ctrl+Up: a
+        # reorder restructures the layer list a save is walking, so it waits,
+        # and the *nudge* on the same arrows does not have to.
+        if tab.busy:
+            return True
         _shift_layer(tab, 1 if name == "up" else -1)
         return True
     if shift and name.isdigit() and name != "0":

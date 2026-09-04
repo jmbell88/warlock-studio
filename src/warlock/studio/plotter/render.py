@@ -26,7 +26,7 @@ import numpy as np
 
 from ... import native
 from ..tilegrid import gid as gidlib
-from . import scene
+from . import project, scene
 from .tilemap import OPAQUE_WHITE, ImageLayer, MapDoc, TileLayer
 
 # The flat composite is ``pixel_height * pixel_width * 4`` bytes in one
@@ -264,6 +264,11 @@ def render_layer(
     # row-major is not monotone in screen depth -- cell ``(width - 1, 0)`` sits
     # in front of ``(0, 1)`` and would be painted under it. It *is* row-major
     # for an orthogonal one, so nothing changes there.
+    # Built once, above the loop: ``doc.cell_origin`` rebuilds the eleven-field
+    # ``Lattice`` from eleven attribute reads on every call, and this loop runs
+    # once per painted cell of the whole map -- which on an export is every one
+    # of them. The canvas hoists it for the same reason.
+    lattice = doc._lattice()
     for column, row in doc.draw_order():
         if row >= layer.height or column >= layer.width:
             continue
@@ -299,7 +304,7 @@ def render_layer(
         # its *bottom* left, so it grows upward out of its cell. Clipped
         # rather than refused.
         height = pixels.shape[0]
-        origin_x, origin_y = doc.cell_origin(column, row)
+        origin_x, origin_y = project.cell_origin(lattice, column, row)
         cells.append(
             (
                 (tile_id, mask),

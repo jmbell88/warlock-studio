@@ -33,7 +33,7 @@ import pytest
 
 from warlock.studio import inker, inker_mode, inker_state
 from warlock.studio.inker import _doc_paint
-from warlock.studio.panes import inker_canvas, inker_tools
+from warlock.studio.panes import inker_canvas, inker_gestures, inker_tools
 
 SIZE = (32, 32)
 ORIGIN = (0.0, 0.0)
@@ -458,12 +458,12 @@ def _tab(**view):
 
 
 @pytest.fixture
-def scene(monkeypatch):
+def scene(monkeypatch, patch_canvas):
     """A clicked shape tool in hand at an identity view, driven through the
     real ``_input`` -- press frame then release frame -- because the press
     guard and the grid snap both live above the tool."""
     mouse = _Mouse()
-    monkeypatch.setattr(inker_canvas, "imgui", mouse.module())
+    patch_canvas("imgui", mouse.module())
     tab = _tab(zoom=1.0, pan=(0.0, 0.0), fitted=True)
     state = inker_state.InkerState(tool="polyline")
     state.fg = RED
@@ -713,10 +713,10 @@ class _Lines:
 
 
 @pytest.fixture
-def overlay(monkeypatch):
-    monkeypatch.setattr(inker_canvas, "_u32", lambda colour, alpha=1.0: 0)
+def overlay(monkeypatch, patch_canvas):
+    patch_canvas("_u32", lambda colour, alpha=1.0: 0)
     mouse = _Mouse()
-    monkeypatch.setattr(inker_canvas, "imgui", mouse.module())
+    patch_canvas("imgui", mouse.module())
     return mouse
 
 
@@ -779,9 +779,9 @@ def test_nothing_is_drawn_with_no_path_open(overlay):
 @pytest.fixture(autouse=True)
 def _cold_cache():
     """Every test in this file starts with the memo empty, and leaves it so."""
-    inker_canvas._curve_settled = None
+    inker_gestures._curve_settled = None
     yield
-    inker_canvas._curve_settled = None
+    inker_gestures._curve_settled = None
 
 
 @pytest.mark.parametrize("count", [1, 2, 3, 4, 5, 9, 20])
@@ -819,9 +819,9 @@ def test_a_warm_memo_resamples_only_the_tail(monkeypatch):
     points = [(3.0 * i, 6.0 + 7.0 * (i % 4)) for i in range(30)]
     inker_canvas._curve_path(points, (95.0, 10.0))  # warms it
     sizes: list[int] = []
-    real = inker_canvas.curve_spans
+    real = inker_gestures.curve_spans
     monkeypatch.setattr(
-        inker_canvas,
+        inker_gestures,
         "curve_spans",
         lambda pts, **kw: (sizes.append(len(list(pts))), real(pts, **kw))[1],
     )

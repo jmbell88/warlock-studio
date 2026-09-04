@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .settings import as_dict, as_list
+from .tokens import SIDEBAR_WIDTHS, clamp_panel
 
 #: This build's layout-blob version. Independent of ``settings.VERSION``.
 VERSION = 2
@@ -153,8 +154,9 @@ class Library:
         wanted = str(settings.get(ACTIVE_KEY) or BUILT_IN[0])
         self.active = wanted if wanted in self.layouts else BUILT_IN[0]
         legacy = as_dict(settings.get("layout"))
-        sidebar_names = {"narrow": 260.0, "default": 300.0, "wide": 360.0}
-        self._width_seed = sidebar_names.get(str(legacy.get("sidebar", "default")), 300.0)
+        self._width_seed = SIDEBAR_WIDTHS.get(
+            str(legacy.get("sidebar", "default")), SIDEBAR_WIDTHS["default"]
+        )
         self._share_seed = 0.55
         with suppress(TypeError, ValueError):
             self._share_seed = float(legacy.get("settings_share", 0.55))
@@ -209,7 +211,7 @@ class Library:
         resolved = float(
             value if value is not None else (default if default is not None else self._width_seed)
         )
-        return min(max(resolved, 220.0), 480.0)
+        return clamp_panel(resolved)
 
     def share(self, workspace: str, key: str, default: float | None = None) -> float:
         """A workspace-local vertical split, with v1 global values as seeds."""
@@ -260,7 +262,7 @@ class Library:
         if not layout.readable or side not in ("left", "right"):
             return
         arrangement = layout.workspaces.setdefault(workspace, Arrangement())
-        arrangement.widths[side] = min(max(float(value), 220.0), 480.0)
+        arrangement.widths[side] = clamp_panel(value)
         self.save()
 
     def set_width_seed(self, value: float) -> None:
@@ -275,7 +277,7 @@ class Library:
         loss.
         """
 
-        self._width_seed = min(max(float(value), 220.0), 480.0)
+        self._width_seed = clamp_panel(value)
         layout = self.current()
         if not layout.readable:
             return

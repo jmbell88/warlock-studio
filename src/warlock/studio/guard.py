@@ -175,6 +175,11 @@ def enter(key: str) -> Mark | None:
     if imgui.get_current_context() is None:
         return None
     try:
+        # A fresh state per mark, deliberately: marks nest, and each holds its
+        # own until it is landed or recovered against. Measured at 0.077 us to
+        # allocate (2026-09-03), so ~25 guarded surfaces cost about 2 us a
+        # frame -- pooling them would mean threading the mark back through the
+        # success path of every caller to buy back a thousandth of a frame.
         state = imgui.internal.ErrorRecoveryState()
         imgui.internal.error_recovery_store_state(state)
         # Not ``_window_name``: its "" fallback is right for the landing check

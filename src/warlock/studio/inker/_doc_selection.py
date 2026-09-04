@@ -49,6 +49,27 @@ def _composite_onto(layer: Any, base: np.ndarray, crop: np.ndarray) -> np.ndarra
     return merged
 
 
+def _cut_alpha(target: np.ndarray, lifted: np.ndarray) -> None:
+    """Take ``lifted``'s alpha out of ``target``, in place. **A subtraction.**
+
+    A lift is a partition of alpha: whatever floats away must be exactly what
+    is no longer there. Computed independently -- as ``a * (1 - m / 255)`` --
+    both halves truncate toward zero and the two floors sum to ``a - 1``
+    wherever ``a * m / 255`` is not a whole number, so every feathered edge
+    lost one level of alpha per lift and a lift-and-drop that changed nothing
+    else still darkened its own outline a step at a time.
+
+    Safe in uint8 with no clip: the lifted alpha is a floor of ``a * m / 255``
+    with ``m <= 255``, so it never exceeds what it is taken from.
+
+    One function because there are two lifts -- the selection's and the ranged
+    move's -- and the argument above is the whole of why the arithmetic is what
+    it is. Written twice it is written once correctly and once by copy.
+    """
+
+    target[..., 3] = target[..., 3] - lifted[..., 3]
+
+
 def _masked_alpha(pixels: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """A copy of ``pixels`` with a selection mask folded into its alpha.
 
@@ -68,6 +89,10 @@ class SelectionOps:
     # -- selection ----------------------------------------------------------
 
     def select(self: Document, mask: SelectionMask | None, op: str = "replace") -> None:
+        # The mask is an input to ``preview_filter``'s blend, and the one input
+        # its written-signature cannot describe cheaply. Dropped here, at the
+        # one writer, rather than sampled there per frame.
+        self._filter_written = None
         before = None if self.mask is None else self.mask.mask
         if mask is None:
             self.mask = None
@@ -239,17 +264,9 @@ class SelectionOps:
         # The floating pixels keep their own alpha *multiplied* by the mask, so
         # a feathered lift floats a feathered chunk rather than a hard one.
         pixels = _masked_alpha(before, crop)
-        # And what stays behind is the *remainder*, subtracted rather than
-        # computed from (1 - mask). A lift is a partition of alpha: whatever
-        # floats away must be exactly what is no longer there. Computed
-        # independently, both halves truncate toward zero and the two floors
-        # sum to a - 1 wherever a * m / 255 is not a whole number -- so every
-        # feathered edge lost one level of alpha per lift, and a lift-and-drop
-        # that changed nothing else still darkened its own outline a step at a
-        # time. Safe in uint8 without a clip: the lifted alpha is a floor of
-        # a * m / 255 with m <= 255, so it never exceeds ``before``.
+        # And what stays behind is the *remainder*: see ``_cut_alpha``.
         cut = before.copy()
-        cut[..., 3] = before[..., 3] - pixels[..., 3]
+        _cut_alpha(cut, pixels)
         layer.pixels[y0:y1, x0:x1] = cut
 
         # Through the funnel's list-returning sibling, exactly as
@@ -516,8 +533,9 @@ class SelectionOps:
         before = layer.pixels[by0:by1, bx0:bx1].copy()
         # ``region`` is a view, so this is the hole, cut in place -- and it
         # happens after ``before`` is read, or the patch would record the state
-        # halfway through its own gesture.
-        region[..., 3] = region[..., 3] - lifted[..., 3]
+        # halfway through its own gesture. The subtraction is ``_cut_alpha``'s,
+        # which is where the argument for it being a subtraction lives.
+        _cut_alpha(region, lifted)
         if landing is not None:
             lx0, ly0, lx1, ly1 = landing
             crop = moved[
@@ -659,7 +677,9 @@ class SelectionOps:
         which of them are its own for that hit-test.
         """
         if self.floating is not None:
-            self.clipboard.put(self.floating.pixels, self.floating.mask)
+            self.clipboard.put(
+                self.floating.pixels, self.floating.mask, self.floating.offset
+            )
             return True
         if self.mask is None:
             return False
@@ -669,7 +689,9 @@ class SelectionOps:
             return False
         x0, y0, x1, y1 = box
         crop = self.mask.mask[y0:y1, x0:x1]
-        self.clipboard.put(_masked_alpha(self.stack.active.pixels[y0:y1, x0:x1], crop), crop)
+        self.clipboard.put(
+            _masked_alpha(self.stack.active.pixels[y0:y1, x0:x1], crop), crop, (x0, y0)
+        )
         return True
 
     def copy_merged(self: Document) -> bool:
@@ -695,7 +717,7 @@ class SelectionOps:
         # background would paste a rectangle of it into the next document.
         flat = self.flatten(matte=False)
         crop = self.mask.mask[y0:y1, x0:x1]
-        self.clipboard.put(_masked_alpha(flat[y0:y1, x0:x1], crop), crop)
+        self.clipboard.put(_masked_alpha(flat[y0:y1, x0:x1], crop), crop, (x0, y0))
         return True
 
     def selection_pixels(self: Document) -> np.ndarray | None:
@@ -945,7 +967,17 @@ class SelectionOps:
         pixels, mask = taken
         if at is None:
             bounds = self.mask.bounds if self.mask is not None else None
-            at = (bounds[0], bounds[1]) if bounds else (0, 0)
+            # The selection first -- pasting *into* a marquee is the gesture
+            # that has an obvious answer. Then where the copy was taken from,
+            # which is Aseprite's answer and the one that makes copying a
+            # sprite from one frame to the next a two-key operation; (0, 0) is
+            # the floor for content that came from outside the document, and
+            # used to be the answer for all three.
+            at = (
+                (bounds[0], bounds[1])
+                if bounds
+                else (self.clipboard.origin or (0, 0))
+            )
         self.floating = FloatingBuffer(
             pixels=pixels, mask=mask, offset=(int(at[0]), int(at[1])),
             layer_uid=self.stack.active.uid,

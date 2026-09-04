@@ -111,11 +111,21 @@ class WangColour:
     name: str = ""
     colour: str = "#ffffff"
     probability: float = 1.0
+    #: The tile Tiled shows as this colour's representative in its editor, as a
+    #: **local** id, or ``-1`` for none -- ``tiles``' reason for being local,
+    #: one field along. Read and written verbatim: the writer used to emit
+    #: ``-1`` unconditionally, so a foreign set came back with every colour's
+    #: swatch reset to the first tile of the atlas.
+    tile: int = -1
+    #: Tiled's custom class (``class`` in the file, which is a keyword here).
+    klass: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", str(self.name))
         object.__setattr__(self, "colour", str(self.colour))
         object.__setattr__(self, "probability", float(self.probability))
+        object.__setattr__(self, "tile", int(self.tile))
+        object.__setattr__(self, "klass", str(self.klass))
         if self.probability < 0.0:
             raise ValueError("a wang colour probability cannot be negative")
 
@@ -133,11 +143,17 @@ class WangSet:
     kind: str = "mixed"
     colours: tuple[WangColour, ...] = ()
     tiles: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    #: ``WangColour.tile``'s twin: the set's own representative tile, local.
+    tile: int = -1
+    #: Tiled's custom class. See ``WangColour.klass``.
+    klass: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", str(self.name))
         object.__setattr__(self, "kind", str(self.kind))
         object.__setattr__(self, "colours", tuple(self.colours))
+        object.__setattr__(self, "tile", int(self.tile))
+        object.__setattr__(self, "klass", str(self.klass))
         if self.kind not in WANG_KINDS:
             raise ValueError(f"a wang set is one of {list(WANG_KINDS)}, not {self.kind!r}")
         cleaned: dict[int, tuple[int, ...]] = {}

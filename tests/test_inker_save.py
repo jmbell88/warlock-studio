@@ -614,7 +614,16 @@ def test_save_as_writes_an_aseprite_file_asein_can_read_back(tmp_path, monkeypat
 
     inker_mode.save_as(ctx, tab)
 
-    assert ctx.result == {"path": dest, "rev": 0, "format": "aseprite", "retitle": True}
+    assert ctx.result == {
+        "path": dest,
+        "rev": 0,
+        "format": "aseprite",
+        "retitle": True,
+        # Measured on the document being written: a plain drawing loses
+        # nothing to this format, so this write really is a save. See
+        # ``aseout.dropped_by_aseprite``.
+        "lossy": [],
+    }
     reopened, warnings = asein.document_from_aseprite(dest.read_bytes())
     assert not warnings
     assert reopened.stack.size == (16, 16)

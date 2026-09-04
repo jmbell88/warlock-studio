@@ -477,6 +477,37 @@ def _centre(pixel: tuple[int, int]) -> tuple[float, float]:
     return (pixel[0] + 0.5, pixel[1] + 0.5)
 
 
+def footprint(
+    point: tuple[float, float], diameter: int, nib: str, *, stamp: bool = False
+) -> tuple[int, int, int, int]:
+    """The half-open pixel box one dab at ``point`` covers.
+
+    ``StrokeState._stamp``'s own anchoring arithmetic, lifted so the *cursor*
+    can be drawn where the dab will land. The brush cursor was a circle at the
+    raw mouse position, which says how wide the brush is and nothing about
+    which pixels it will hit -- and at any zoom above a few hundred percent
+    that is the only question being asked. The two nib families anchor
+    differently (a pixel nib on the pixel it is on, so an odd diameter is
+    centred and an even one grows down and right; everything else by the
+    rounding form a soft rim hides), and drawing one rule for both would put
+    the cursor half a pixel off exactly where it matters.
+
+    ``stamp`` is for an image brush, which is placed by ``_image_dab`` and is
+    not round: the caller passes the tip's own size as ``diameter`` per axis
+    instead, so this takes the pixel-nib branch, which is that placement.
+    """
+
+    diameter = max(1, int(diameter))
+    if stamp or nib in PIXEL_NIBS:
+        left = int(math.floor(point[0])) - (diameter - 1) // 2
+        top = int(math.floor(point[1])) - (diameter - 1) // 2
+    else:
+        radius = diameter / 2.0
+        left = int(math.floor(point[0] - radius + 0.5))
+        top = int(math.floor(point[1] - radius + 0.5))
+    return (left, top, left + diameter, top + diameter)
+
+
 def line_pixels(a: tuple[int, int], b: tuple[int, int]) -> list[tuple[int, int]]:
     """Every whole pixel between two, inclusive of both. Bresenham.
 

@@ -94,6 +94,26 @@ def release_prefix(ctx: Any, prefix: str) -> None:
             forget_texture(value)
 
 
+#: The five document modes, by the ``AppState`` attribute each keeps its tabs
+#: on. The quit chain walks these in order; :func:`any_unsaved` asks all five
+#: the one question the window caption is about.
+DOC_MODES: tuple[str, ...] = ("inker", "clay", "plotter", "packwright", "sirens")
+
+
+def any_unsaved(ctx: Any) -> bool:
+    """Whether *any* document in *any* mode has unsaved changes.
+
+    ``getattr`` rather than each mode's ``ensure``, for :func:`guard`'s reason:
+    asking must not create the state that says no.
+    """
+
+    for attr in DOC_MODES:
+        state = getattr(ctx.state, attr, None)
+        if state is not None and state.any_dirty:
+            return True
+    return False
+
+
 def guard(ctx: Any, attr: str, singular: str, plural: str, verb: str, proceed: Any) -> bool:
     """Ask before losing unsaved work. -> whether it went ahead now.
 

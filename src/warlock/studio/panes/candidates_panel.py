@@ -31,6 +31,7 @@ from ...service import jobs as svc_jobs
 from .. import candidates as candidates_mod
 from .. import controls, dialogs, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 from . import library
 
 
@@ -54,16 +55,25 @@ def draw(ctx: Any) -> None:
     imgui.separator()
 
 
+#: How wide a candidate's "A"/"B" picker button is, in design pixels. Wide
+#: enough for two characters and the frame padding, narrow enough that the
+#: status line beside it still fits a sidebar.
+_PICKER_BUTTON = 44.0
+
+
 def _member(ctx: Any, group: Any, member: dict[str, Any], current: bool) -> None:
     job_id = member["id"]
     label = candidates_mod.label(member)
+    # ``sp``, not raw pixels: this is a design measurement like every other
+    # size in the app, and unscaled it shrinks against a 150%-scaled sidebar.
+    width = (sp(_PICKER_BUTTON), 0.0)
     if current:
-        if widgets.primary_button(f"{label}##candidate-{job_id}", (44, 0)):
+        if widgets.primary_button(f"{label}##candidate-{job_id}", width):
             select(ctx, job_id)
-    elif controls.button(f"{label}##candidate-{job_id}", (44, 0)):
+    elif controls.button(f"{label}##candidate-{job_id}", width):
         select(ctx, job_id)
-    # Safe against the pane edge: a 44 px button plus one item spacing inside a
-    # 300 px sidebar leaves most of the line. The smoke-test guard measures it.
+    # Safe against the pane edge: a 44 dp button plus one item spacing inside a
+    # 300 dp sidebar leaves most of the line. The smoke-test guard measures it.
     imgui.same_line()
     widgets.muted(candidates_mod.status_line(member))
     # Keep is offered on the selected candidate only, and only once every
@@ -117,7 +127,9 @@ def keep(ctx: Any, group: Any, job_id: str) -> None:
             confirm_label="Delete",
             cancel_label="Keep them",
             # The library's own delete, so a loser goes by the one path that
-            # clears the selection and the tick set as well as the row.
-            on_confirm=lambda: [library.delete_asset(ctx, i) for i in losers],
+            # clears the selection and the tick set as well as the row -- the
+            # *batch* spelling, so seven losers are one toast with one Undo
+            # rather than seven of each.
+            on_confirm=lambda: library.delete_assets(ctx, list(losers)),
         )
     )

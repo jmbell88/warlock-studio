@@ -104,7 +104,12 @@ def test_an_export_that_cannot_encode_writes_nothing(tmp_path, monkeypatch):
         raise ValueError("no sidecar today")
 
     monkeypatch.setattr(texturepacker, "tp_bytes", boom)
-    with pytest.raises(ValueError, match="no sidecar"):
+    # Framed as a service refusal since 2026-09-04, so the *reason* reaches the
+    # user rather than "see the log for details": only a ``ServiceError``'s
+    # text survives the task classifier. See ``export_files``.
+    from warlock.service.errors import Invalid
+
+    with pytest.raises(Invalid, match="no sidecar"):
         packwright_mode.export_files(ctx, tab)
     assert (tmp_path / "out.png").read_bytes() == b"the previous export"
     assert not (tmp_path / "out.json").exists()

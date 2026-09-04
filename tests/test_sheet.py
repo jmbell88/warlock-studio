@@ -130,10 +130,42 @@ def test_interpolate_produces_numbered_frames_between_two_poses():
     assert frames[-1]["bones"]["thigh.L"] != pytest.approx(b["bones"]["thigh.L"])
 
 
-def test_a_bone_posed_in_only_one_end_interpolates_from_rest():
+def test_a_bone_posed_in_only_one_end_is_held_rather_than_swung():
+    """**In node space, identity is not rest** -- it is parent alignment.
+
+    This used to assert the identity quaternion, on the reading that an
+    omitted bone means rest (which is what the worker's ``_reset_pose``
+    means, and which is true in ``delta`` space). A *node* rotation is
+    absolute against the parent joint, so blending the missing end from
+    identity swung the bone out through the limb lying along its parent's
+    axis, mid-segment, on every clip built from library poses -- a pose
+    nobody authored, rendered into the middle of the clip.
+
+    The honest reading of a key that says nothing about a bone is that it
+    says nothing, so the other end is held and the bone does not move.
+    Blending from the bone's own *rest* rotation would be better still and
+    is not available here: ``_blend`` is handed two poses and no rig.
+    """
     a = {"id": "a" * 12, "name": "A", "bones": {}}
-    b = {"id": "b" * 12, "name": "B", "bones": {"head": [0.0, 0.0, 0.7071, 0.7071]}}
+    turned = [0.0, 0.0, 0.7071, 0.7071]
+    b = {"id": "b" * 12, "name": "B", "bones": {"head": turned}}
+
     frames = sheetlib.interpolate(a, b, 2)
+
+    # ``slerp`` normalises, so the held value comes back as the unit
+    # quaternion the input rounds to rather than bit-for-bit.
+    assert frames[0]["bones"]["head"] == pytest.approx(turned, abs=1e-5)
+    assert frames[1]["bones"]["head"] == pytest.approx(turned, abs=1e-5)
+
+
+def test_delta_space_still_blends_an_omitted_bone_from_rest():
+    """There identity *is* rest -- a delta of nothing -- which is what
+    ``_reset_pose`` means by an omitted bone."""
+    a = {"name": "A", "bones": {}}
+    b = {"name": "B", "bones": {"head": [0.0, 0.0, 0.7071, 0.7071]}}
+
+    frames = sheetlib.interpolate_clip([a, b], [2], space="delta", closed=False)
+
     assert frames[0]["bones"]["head"] == pytest.approx([0.0, 0.0, 0.0, 1.0])
 
 

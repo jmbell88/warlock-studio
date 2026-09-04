@@ -1977,14 +1977,18 @@ def test_every_task_key_inker_submits_is_answered():
     A key is answered if ``on_task_done`` names it, or if it is keyed on a tab
     uid, which is what the tail resolves. Anything else is a command that can
     finish and say nothing."""
-    import inspect
     import pathlib
     import re
 
     from warlock.studio import inker_mode
 
     root = pathlib.Path(inker_mode.__file__).resolve().parent
-    handled = inspect.getsource(inker_mode.on_task_done)
+    # The **table**, not the function: ``on_task_done`` is a dict lookup since
+    # 2026-09-04 (T7 of the 2026-09-02 review), where it was fifteen
+    # ``if name ==`` arms -- and two keys had been forgotten from that chain
+    # and fell through to the tail reporting nothing, which is the failure this
+    # scan exists to catch.
+    handled = set(inker_mode._TASK_HANDLERS())
 
     keys: set[tuple[str, str]] = set()
     for path in [root / "inker_mode.py", *sorted((root / "panes").glob("inker_*.py"))]:
@@ -1996,7 +2000,7 @@ def test_every_task_key_inker_submits_is_answered():
     for prefix, template in sorted(keys):
         if "{tab.uid}" in template:
             continue  # the uid-keyed tail resolves these
-        assert f'"{prefix}"' in handled, f"{template} finishes and nothing answers it"
+        assert prefix in handled, f"{template} finishes and nothing answers it"
 
 
 # --- palette formats and the swatch strip (Wave 9) ---------------------------

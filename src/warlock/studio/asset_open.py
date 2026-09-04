@@ -144,7 +144,18 @@ def open_asset(ctx: Any, job_or_id: Any) -> None:
         # The row has fallen off the loaded page. Selecting by id still works
         # and is exactly what the toast used to do; there are no params to
         # route without, so this is the honest floor rather than a guess.
+        #
+        # **And go to the library**, which the selection alone did not: a
+        # "Show" pressed from Sirens or Settings selected a row in a mode with
+        # no library in it, so the press did nothing a reader could see. The
+        # library is where a bare selection is visible, and it is the one
+        # destination that is right for a row whose stage cannot be read.
+        from .state import set_mode
+
         library.select(ctx, str(job_or_id))
+        if ctx.state.mode not in ("library", "create"):
+            set_mode(ctx.state, "library")
+            ctx.state.library_scroll_to = str(job_or_id)
         return
 
     target = route(job)

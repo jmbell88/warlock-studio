@@ -776,7 +776,13 @@ def test_dropping_several_files_adds_every_one(tmp_path):
 
     assert ctx.refused == [], "every distinct drop got its own key"
     ctx.deliver()
-    assert [s.key for s in tab.doc.sprites()] == [str(p) for p in paths]
+    # The key is ``sources.file_key`` since 2026-09-04: the stem plus a digest
+    # of where the file came from. It was ``str(path)``, which wrote the
+    # author's directory layout into the shared ``.wpack``.
+    from warlock.studio.packwright.sources import file_key
+
+    assert [s.key for s in tab.doc.sprites()] == [file_key(p) for p in paths]
+    assert not any(str(tmp_path) in s.key for s in tab.doc.sprites())
 
 
 def test_the_same_drop_twice_over_still_dedupes(tmp_path):

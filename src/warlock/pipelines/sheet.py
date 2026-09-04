@@ -208,19 +208,43 @@ def _blend(
     pose_a: Mapping[str, Any],
     pose_b: Mapping[str, Any],
     t: float,
+    space: str = "delta",
 ) -> tuple[dict[str, list[float]], tuple[float, float, float]]:
     """One frame's bones and root offset, ``t`` of the way from A to B.
 
-    A bone posed in only one of the two ends interpolates from rest, which is
-    what the worker's ``_reset_pose`` already means by an omitted bone.
+    **A bone posed in only one end depends on the space, and that is the whole
+    of this function's subtlety.** In ``delta`` space the identity quaternion
+    *is* rest -- a delta of nothing -- so blending the missing end from
+    identity means "return to rest", which is what the worker's
+    ``_reset_pose`` means by an omitted bone and is right.
+
+    In ``node`` space it is not. A node rotation is absolute against the parent
+    joint, so identity there is *parent alignment* and not rest: a shoulder
+    keyed in the first pose and absent from the second swung out through the
+    arm lying along the parent's axis, mid-segment, on every clip built from
+    poses. The honest reading of a key that says nothing about a bone is that
+    it says nothing -- so the other end's value is held, and the bone does not
+    move rather than moving somewhere nobody authored.
     """
     bones_a = pose_a.get("bones") or {}
     bones_b = pose_b.get("bones") or {}
+    node = str(space) == "node"
+
+    def ends(bone: str) -> tuple[Any, Any]:
+        first, second = bones_a.get(bone), bones_b.get(bone)
+        if not node:
+            return (
+                IDENTITY_QUAT if first is None else first,
+                IDENTITY_QUAT if second is None else second,
+            )
+        if first is None:
+            first = second
+        if second is None:
+            second = first
+        return first, second
+
     bones = {
-        bone: slerp(
-            bones_a.get(bone, IDENTITY_QUAT), bones_b.get(bone, IDENTITY_QUAT), t
-        )
-        for bone in sorted(set(bones_a) | set(bones_b))
+        bone: slerp(*ends(bone), t) for bone in sorted(set(bones_a) | set(bones_b))
     }
     ra, rb = _root(pose_a), _root(pose_b)
     root = tuple(a + (b - a) * t for a, b in zip(ra, rb, strict=True))
@@ -397,7 +421,7 @@ def resample_clip(
             a = keys[segment]
             b = keys[(segment + 1) % len(keys)]
             local = (position - offset) / counts[segment]
-        bones, root = _blend(a, b, _ease(local, easing))
+        bones, root = _blend(a, b, _ease(local, easing), space)
         out.append(
             _record(
                 identity,
@@ -446,7 +470,7 @@ def _expand(
     for i, count in enumerate(counts):
         a, b = keys[i], keys[(i + 1) % len(keys)]
         for j in range(count):
-            bones, root = _blend(a, b, _ease(j / count, easing))
+            bones, root = _blend(a, b, _ease(j / count, easing), space)
             out.append(
                 _record(
                     clip_id, name, len(out), bones, root,
@@ -454,7 +478,7 @@ def _expand(
                 )
             )
     if land:
-        bones, root = _blend(keys[-1], keys[-1], 0.0)
+        bones, root = _blend(keys[-1], keys[-1], 0.0, space)
         out.append(
             _record(
                 clip_id, name, len(out), bones, root, with_root=with_root, space=space

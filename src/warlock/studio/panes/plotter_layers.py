@@ -929,6 +929,12 @@ def _delete_layer(ctx: Any, doc: Any, layer: Any) -> None:
     places that really are irreversible go on asking through ``ask_delete``.
     """
     doc.remove_layer(layer.uid)
+    # See ``plotter_menu``'s Delete row: the object selection outlives the
+    # layer that held it unless it is pruned. Resolved off the state rather
+    # than passed in, because this helper takes the *document*.
+    tab = plotter_mode.ensure(ctx).active
+    if tab is not None:
+        plotter_mode._prune_object_selection(ctx, tab)
 
 
 def _subject(doc: Any, state: Any, layer: Any) -> str:

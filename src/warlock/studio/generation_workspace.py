@@ -15,8 +15,9 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ..service import jobs as svc_jobs
+from ..service import sprites as svc_sprites
+from . import asset_open, controls, create_assets, widgets
 from . import candidates as candidates_mod
-from . import controls, create_assets, widgets
 from .panes import thumbs
 from .tokens import sp
 
@@ -71,7 +72,7 @@ def plan_for(form: dict[str, Any], resolved: Any = None) -> Plan:
         sprite = settings_2d.sprite_plan(form)
         candidates = int(sprite["candidates"])
         generations = 1 + int(sprite["generations"])
-        duration = settings_2d.svc_sprites.generation_time_phrase(generations)
+        duration = svc_sprites.generation_time_phrase(generations)
         stages = (
             f"1 character reference + {int(sprite['generations'])} sheet generation"
             + ("s" if int(sprite["generations"]) != 1 else "")
@@ -83,9 +84,25 @@ def plan_for(form: dict[str, Any], resolved: Any = None) -> Plan:
 
 
 def should_draw(ctx: Any) -> bool:
-    """Whether Create has work worth reserving central space for."""
-    jobs = getattr(getattr(ctx, "cache", None), "jobs", ()) or ()
-    return any(job.get("status") in ("queued", "running", "done") for job in jobs[:12])
+    """Whether Create has work worth reserving central space for.
+
+    **The same question :func:`draw` answers**, which is the fix: this asked
+    "is there any queued, running or done job in the first twelve rows" while
+    the tray showed a running job, a candidate group, or ``_recent_results``
+    -- which excludes candidate members. So the two disagreed in both
+    directions: a corpus of nothing but candidate rows reserved a strip and
+    drew the empty state into it, and the viewer lost ``tray_height`` for a
+    tray with nothing in it from the first finished job onward, permanently.
+    """
+
+    cache = getattr(ctx, "cache", None)
+    if cache is None:
+        return False
+    if getattr(cache, "active", None) is not None:
+        return True
+    if candidates_mod.pending(cache.jobs) is not None:
+        return True
+    return bool(_recent_results(ctx))
 
 
 def draw(ctx: Any, height: float = 0.0) -> None:
@@ -106,9 +123,12 @@ def draw(ctx: Any, height: float = 0.0) -> None:
         if jobs:
             _result_grid(ctx, jobs)
         elif active is None:
+            # Only reachable from a caller that draws the tray without asking
+            # ``should_draw`` first; the shell always asks.
             widgets.muted(
-            "Your completed generations will appear here for comparison and variation."
-        )
+                "Your completed generations will appear here for comparison "
+                "and variation."
+            )
     if height > 0:
         imgui.end_child()
 
@@ -127,8 +147,9 @@ def _progress(ctx: Any, job: dict[str, Any]) -> None:
     widgets.secondary("Working now")
     imgui.text_wrapped(name)
     if status == "queued":
-        position = _queue_position(ctx, str(job.get("id") or ""))
+        position = queue_position(ctx, str(job.get("id") or ""))
         widgets.muted(f"Queued{f' · position {position}' if position else ''}")
+        _cancel(ctx, str(job.get("id") or ""))
         return
     progress = ctx.runtime.progress(str(job.get("id") or ""))
     if progress is not None:
@@ -136,6 +157,25 @@ def _progress(ctx: Any, job: dict[str, Any]) -> None:
         widgets.muted(str(progress.get("label") or "Generating…"))
     else:
         widgets.muted("Starting generation…")
+    _cancel(ctx, str(job.get("id") or ""))
+
+
+def _cancel(ctx: Any, job_id: str) -> None:
+    """The progress card's own Cancel, on the tray's copy of its narration.
+
+    This block says what the floating card says and used to say it without the
+    one control the card carries, so the duplicate was strictly worse than the
+    thing it duplicated. No confirmation, for the card's reason: the button
+    says exactly what it does and sits on the thing it acts on.
+    """
+
+    if not job_id:
+        return
+    busy = ctx.busy(f"cancel:{job_id}")
+    if widgets.disabled_button(
+        f"Cancel##tray-cancel-{job_id}", not busy, reason="Cancelling..."
+    ):
+        ctx.submit(f"cancel:{job_id}", svc_jobs.cancel_job, ctx.svc, job_id)
 
 
 def _candidate_grid(ctx: Any, group: Any) -> None:
@@ -184,7 +224,12 @@ def _result_card(ctx: Any, job: dict[str, Any], group: Any = None) -> None:
     rank = params.get("rank")
     score = rank.get("score") if isinstance(rank, dict) else None
     if score is not None:
-        widgets.muted(f"score {float(score) * 100:.0f}%")
+        # Named for what it is. "score 72%" reads as a measurement of the
+        # picture; it is the trained probe's *probability that you would keep
+        # this one* (``judge.score``), which is a guess about the reader and
+        # advisory by construction -- the job records nothing when the probe is
+        # missing or the embedding width has changed.
+        widgets.muted(f"judge: {float(score) * 100:.0f}% likely a keeper")
     imgui.end_group()
     # **Two per row, not one per row.** Four full-width buttons stacked under a
     # 72 dp thumbnail make a card taller than the tray that holds it, and the
@@ -195,10 +240,13 @@ def _result_card(ctx: Any, job: dict[str, Any], group: Any = None) -> None:
     half = (_half_width(), 0.0)
     status = str(job.get("status") or "")
     done = status == "done"
-    not_ready = "This result is not ready yet."
+    not_ready = _why_not_finished(job, status)
 
     if controls.button(f"Open##result-open-{job_id}", half):
-        ctx.state.select(job_id)
+        # **The one door** (``asset_open.open_asset``), not a bare ``select``:
+        # selecting alone leaves ``source_job`` stale on a reference, and a mesh
+        # result opened this way showed ``input.png`` on the Reference stage.
+        asset_open.open_asset(ctx, job)
     imgui.same_line()
     if widgets.disabled_button(f"Vary##result-vary-{job_id}", done, half, reason=not_ready):
         _vary(ctx, job)
@@ -220,7 +268,14 @@ def _result_card(ctx: Any, job: dict[str, Any], group: Any = None) -> None:
             candidates_panel.keep(ctx, group, job_id)
         imgui.same_line()
 
-    if widgets.disabled_button(f"Rerun##result-rerun-{job_id}", done, half, reason=not_ready):
+    # **Rerun is live on a failure.** ``rerun_job`` needs only the brief and the
+    # reference the row already has, and the library card has always offered
+    # "Try again" on exactly these rows; disabling it here with "not ready yet"
+    # was both the wrong reason and the wrong answer.
+    can_rerun = done or status in _FAILED
+    if widgets.disabled_button(
+        f"Rerun##result-rerun-{job_id}", can_rerun, half, reason=not_ready
+    ):
         ctx.submit(f"rerun:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="reroll")
     if group is None:
         imgui.same_line()
@@ -232,6 +287,26 @@ def _result_card(ctx: Any, job: dict[str, Any], group: Any = None) -> None:
         reason="A finished reference image is required.",
     ):
         _make_3d(ctx, job)
+
+
+#: Statuses a job can end in without producing artifacts.
+_FAILED = frozenset({"error", "cancelled", "failed"})
+
+
+def _why_not_finished(job: dict[str, Any], status: str) -> str:
+    """Why a control that needs a finished result is greyed, for *this* row.
+
+    "This result is not ready yet." is true of a queued job and false of one
+    that failed an hour ago; a disabled control that explains itself has to
+    tell the two apart.
+    """
+
+    if status in ("error", "failed"):
+        detail = str(job.get("error") or "").strip()
+        return f"This generation failed: {detail}" if detail else "This generation failed."
+    if status == "cancelled":
+        return "This generation was cancelled."
+    return "This result is not ready yet."
 
 
 def _half_width() -> float:
@@ -251,7 +326,7 @@ def _vary(ctx: Any, job: dict[str, Any]) -> None:
     from . import create_stages
     from .panes import library
 
-    library._copy_settings(ctx, job)
+    library.copy_settings(ctx, job)
     create_stages.go(ctx, "reference", follow=False)
     ctx.toast("Loaded this brief. Change one thing, then generate a variation.")
 
@@ -271,7 +346,13 @@ def _recent_results(ctx: Any) -> list[dict[str, Any]]:
     ][:_RESULT_COLUMNS]
 
 
-def _queue_position(ctx: Any, job_id: str) -> int | None:
+def queue_position(ctx: Any, job_id: str) -> int | None:
+    """Where a queued job sits in line, or None if it is not queued.
+
+    Public: the plan footer in ``panes.settings_2d`` asks the same question,
+    and was reaching for the private name to do it.
+    """
+
     queued = [job for job in reversed(ctx.cache.jobs) if job.get("status") == "queued"]
     for index, job in enumerate(queued, start=1):
         if job.get("id") == job_id:

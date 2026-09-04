@@ -72,7 +72,8 @@ imgui.ini
 # `[tool.hatch.build.targets.sdist]` allowlist is the other half of this;
 # `tests/test_release_hygiene.py` pins both.
 #
-# **This does not rewrite history.** The blobs remain reachable in earlier
-# commits, so a genuine purge is still owed before the repository is published
-# -- see TODO.md.
+# The history purge completed on 2026-09-03: the blobs were stripped from every
+# earlier commit and the remote recreated, so nothing reachable carries them any
+# more. `/examples/` stays untracked regardless, because the underlying assets
+# are third-party and unlicensed for redistribution.
 /examples/

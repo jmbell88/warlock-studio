@@ -494,12 +494,22 @@ def _apply_pose(
             # still mostly apply after a re-rig with a different template.
             unknown.append(name)
             continue
-        x, y, z, w = (float(v) for v in quat)   # stored XYZW, three.js order
+        node = [float(v) for v in quat]   # stored XYZW, three.js order
         pbone.rotation_mode = "QUATERNION"
-        basis = Quaternion((w, x, y, z))
-        pbone.rotation_quaternion = (
-            basis if delta else _rest_local_rotation(pbone.bone).inverted() @ basis
-        )
+        if delta:
+            x, y, z, w = node
+        else:
+            # ``rigging.delta_from_node``, not a local ``inverted() @``: a pose
+            # bone's ``rotation_quaternion`` *is* a rotation from rest, and the
+            # host's pose editor makes the same conversion against the viewer's
+            # rest quaternions. The order and which side is conjugated are the
+            # parts that drift, and a drifted one contorts a skeleton silently
+            # -- so there is one definition and both ends call it.
+            rest = _rest_local_rotation(pbone.bone)
+            x, y, z, w = rigging.delta_from_node(
+                [rest.x, rest.y, rest.z, rest.w], node
+            )
+        pbone.rotation_quaternion = Quaternion((w, x, y, z))
         applied += 1
     return applied, unknown
 

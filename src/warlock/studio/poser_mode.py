@@ -347,6 +347,22 @@ def bind_preview(ctx: Any, viewer: Any, template_key: str) -> None:
     viewer.frame_bounds(lo, hi)
 
 
+def reframe(ctx: Any) -> None:
+    """Put the armature back on screen. ``F``, and the button beside it.
+
+    ``frame_bounds`` on the template's own box rather than ``Viewer.frame``:
+    a Poser armature has no mesh, so ``Model.bounds()`` is zeros and framing
+    the model would put the camera in a point.
+    """
+
+    viewer = viewer_of(ctx)
+    state = ensure(ctx)
+    if viewer is None or not state.template:
+        return
+    lo, hi = preview_bounds(state.template)
+    viewer.frame_bounds(lo, hi)
+
+
 # --- applying ----------------------------------------------------------------
 
 
@@ -569,6 +585,29 @@ def handle_key(ctx: Any, event: Any) -> bool:
         return True
     if event.key == pygame.K_ESCAPE and viewer.editor.selected is not None:
         viewer.editor.selected = None
+        return True
+    # **The view keys Clay already has**, on the same three numbers and with
+    # the same Shift-is-the-opposite rule, plus F to reframe. Poser had none of
+    # them: the only way to look at a pose from the side was to orbit there by
+    # hand, and there was no way back to a model that had been orbited off
+    # screen at all. Read from ``clay_mode`` rather than restated, so the two
+    # viewports cannot come to disagree about which number is the front.
+    from . import clay_mode
+
+    name = pygame.key.name(event.key).lower()
+    if name in clay_mode.AXIS_VIEW_KEYS:
+        wanted = clay_mode.AXIS_VIEW_KEYS[name]
+        if event.mod & pygame.KMOD_SHIFT:
+            wanted = {"front": "back", "right": "left", "top": "bottom"}[wanted]
+        viewer.camera.look_along(wanted)
+        return True
+    if name == "5":
+        viewer.camera.orthographic = not viewer.camera.orthographic
+        return True
+    if name == "f":
+        # ``frame`` on the armature's own bounds, not the model's: a Poser
+        # armature has no mesh, which is exactly why ``frame_bounds`` exists.
+        reframe(ctx)
         return True
     # Ctrl+S / Ctrl+Shift+S, the one chord a user carries between every editor
     # in this app. Both functions existed and neither had a key: saving a pose
@@ -835,9 +874,14 @@ def _clip_space(state: Any) -> str:
     return "delta" if str(state.clips.get("space") or "node") == "delta" else "node"
 
 
-def _to_node(editor: Any, bones: dict[str, Any], space: str) -> dict[str, list[float]]:
-    """Library rotations -> the editor's node-local frame."""
-    from .viewer import math3d as m3
+def _convert(editor: Any, bones: dict[str, Any], space: str, how: Any) -> dict[str, list[float]]:
+    """One direction of the frame conversion, per bone with a rest rotation.
+
+    ``how`` is ``rigging.node_from_delta`` or ``rigging.delta_from_node``: the
+    algebra is *there*, beside the sentence that justifies it, because the
+    Blender worker needs the same rule against Blender's rest quaternions and
+    the two used to write it out separately.
+    """
 
     out: dict[str, list[float]] = {}
     for name, quat in bones.items():
@@ -845,24 +889,19 @@ def _to_node(editor: Any, bones: dict[str, Any], space: str) -> dict[str, list[f
         if space == "delta":
             rest = editor.rest.get(name) if editor is not None else None
             if rest is not None:
-                value = [float(v) for v in m3.quat_mul(rest, value)]
+                value = how(rest, value)
         out[name] = value
     return out
+
+
+def _to_node(editor: Any, bones: dict[str, Any], space: str) -> dict[str, list[float]]:
+    """Library rotations -> the editor's node-local frame."""
+    return _convert(editor, bones, space, rigging.node_from_delta)
 
 
 def _from_node(editor: Any, bones: dict[str, Any], space: str) -> dict[str, list[float]]:
     """The editor's node-local frame -> library rotations."""
-    from .viewer import math3d as m3
-
-    out: dict[str, list[float]] = {}
-    for name, quat in bones.items():
-        value = [float(v) for v in quat]
-        if space == "delta":
-            rest = editor.rest.get(name) if editor is not None else None
-            if rest is not None:
-                value = [float(v) for v in m3.quat_mul(m3.quat_conjugate(rest), value)]
-        out[name] = value
-    return out
+    return _convert(editor, bones, space, rigging.delta_from_node)
 
 
 def apply_key(ctx: Any) -> None:

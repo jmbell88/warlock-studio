@@ -603,10 +603,37 @@ class DragOps:
             obj.translation, obj.rotation, obj.scale = (
                 np.array(v, copy=True) for v in was
             )
+        # And the overlays, for ``cancel_drag``'s reason: the objects have been
+        # put back, and an overlay still holding the abandoned transform's
+        # positions is the new transform measured against a picture of the old
+        # one.
+        self._restore_overlays(doc, list(self._drag_start))
         self._key_kind = kind
         self._key_anchor = self._view_plane_point(self._last_mouse, self._drag_origin)
         self._clear_drag_input()
         doc.touch()
+
+    def _restore_overlays(self: ClayView, doc: Any, uids: Any) -> None:
+        """Put the selection overlays back on the mesh's own positions.
+
+        The preview writes moved vertices straight into each overlay's VBO
+        (``_preview_element_drag``), and the overlay is keyed on ``id(mesh)`` --
+        which does not change during a drag -- so an abandoned drag left the
+        wireframe, the vertex dots and the edge lines at the previewed
+        positions while the *mesh* was back where it started. It looked like
+        the cancel had half worked, and stayed that way until something else
+        rebuilt the overlay.
+        """
+        overlays = getattr(self, "_overlays", {})
+        for uid in uids:
+            overlay = overlays.get(uid)
+            if overlay is None:
+                continue
+            try:
+                obj = doc.by_uid(uid)
+            except KeyError:
+                continue
+            overlay.write_positions(obj.mesh.positions)
 
     def cancel_drag(self: ClayView, doc: Any) -> bool:
         """Esc during a drag: put everything back and record nothing.
@@ -628,6 +655,7 @@ class DragOps:
                 entry = self._cache.pop(uid, None)
                 if entry is not None:
                     entry.gpu.release()
+            self._restore_overlays(doc, drags)
         else:
             for uid, was in self._drag_start.items():
                 try:

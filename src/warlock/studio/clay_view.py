@@ -252,6 +252,14 @@ class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
 
     # -- drawing -----------------------------------------------------------
 
+    @property
+    def dragging(self) -> bool:
+        """Whether a pointer gesture is in progress. ``Viewer.dragging``'s
+        public spelling of ``_grab``, for its reason: the router that has to
+        ask is ``App``, and it was reaching into two viewers' privates."""
+
+        return self._grab is not None
+
     def draw(self, doc: Any, rect: tuple[float, float, float, float], dt: float) -> Any:
         """Draw one frame into the viewport. -> the resolved texture.
 

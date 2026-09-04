@@ -164,6 +164,40 @@ def _keys(ctx: Any, state: Any) -> None:
         ),
     ):
         _ask_new_key(ctx)
+    _insert_existing(ctx, state)
+
+
+def _insert_existing(ctx: Any, state: Any) -> None:
+    """Add a key the library already holds, after the selected one.
+
+    ``poser_mode.insert_key`` and ``PoserState.key_names`` were both written
+    for this and neither had a caller: the pane could author a *new* key pose
+    and could not reuse one, so building a walk out of four poses meant
+    authoring each of them twice. The combo lists what the library has, minus
+    nothing -- a clip may legitimately visit the same key twice, which is how
+    a there-and-back cycle is written without a pingpong.
+    """
+    names = [name for name in state.key_names() if name]
+    if not names:
+        return
+    slot = "poser-insert-key"
+    current = str(ctx.state.preview.get(slot) or names[0])
+    if current not in names:
+        current = names[0]
+    picked = widgets.labeled_combo(
+        "Existing key", current, [(name, name) for name in names]
+    )
+    if picked != current:
+        ctx.state.preview[slot] = picked
+        current = picked
+    if widgets.disabled_button(
+        "Insert this key",
+        bool(state.open_clip()),
+        (-1, 0),
+        reason="Open a clip first.",
+        tooltip="Put a key the library already holds after the selected one.",
+    ):
+        poser_mode.insert_key(ctx, current)
 
 
 def _ask_new_key(ctx: Any) -> None:

@@ -263,6 +263,15 @@ PALETTES: dict[str, dict[str, int]] = {
         # screenshot rather than by a test.
         "TOUR_VEIL": 0x07080B,
         "TOUR_RING": 0x9A8CFF,
+        # A toggle's knob, and the wash a hover or a press paints over the 3D
+        # viewport. Two more entries rather than literals for the checkerboard's
+        # reason, read at the other end: both were hard-coded white, which is
+        # ~1.3:1 against the light theme's EDGE track (the knob) and invisible
+        # over a light viewport (the wash). ``test_accessibility`` measures
+        # ``PALETTES`` and nothing else, so a literal is a colour no test can
+        # see.
+        "KNOB": 0xFFFFFF,
+        "WASH": 0xFFFFFF,
         "CHECKER_A": 0x44464F,
         "CHECKER_B": 0x2C2E35,
     },
@@ -285,6 +294,11 @@ PALETTES: dict[str, dict[str, int]] = {
         # dark artwork on it could not be seen, which is the half that mattered.
         "TOUR_VEIL": 0x2B2C36,
         "TOUR_RING": 0x1B1470,
+        # Dark on light, both of them: a white knob on the light EDGE track
+        # is ~1.3:1, and a white wash over a light-theme viewport is nothing
+        # at all.
+        "KNOB": 0x1B1C22,
+        "WASH": 0x1B1C22,
         "CHECKER_A": 0xFFFFFF,
         "CHECKER_B": 0xD6D6DE,
     },
@@ -319,6 +333,10 @@ PALETTES: dict[str, dict[str, int]] = {
         # reads as a colour cast rather than as the absence of pixels.
         "TOUR_VEIL": 0x0E0C09,
         "TOUR_RING": 0xFFAE4A,
+        # Warm off-white, the palette's TEXT, rather than a flat white that
+        # would be the one cold thing on the screen.
+        "KNOB": 0xF2EDE3,
+        "WASH": 0xF2EDE3,
         "CHECKER_A": 0x4F4A40,
         "CHECKER_B": 0x35312A,
     },
@@ -443,3 +461,62 @@ ELEVATION: dict[str, float] = {"resting": 1.0, "raised": 1.7, "overlay": 2.6}
 # outer bound: the light is above, so a raised surface casts below itself. Kept
 # small -- a shadow a reader can measure is an object hanging in the air.
 SHADOW_DROP = 0.35
+
+
+# --- side columns -------------------------------------------------------------
+
+# The three legacy named sidebar sizes, and the range a dragged splitter may
+# land in, in design pixels.
+#
+# **Here rather than in ``layout``**, which is where they were written and
+# where ``layout.SIDEBAR_WIDTHS``/``PANEL_MIN``/``PANEL_MAX`` still name them:
+# ``layouts`` is the persistence half of the same pair and cannot import
+# ``layout`` (that is the direction the dependency runs), so it had re-spelled
+# all three as literals -- ``{"narrow": 260.0, ...}`` and ``min(max(v, 220.0),
+# 480.0)`` in three places. Two spellings of a clamp is a clamp that stops
+# agreeing, and a splitter and the file it is saved into disagreeing about the
+# ceiling is a width that will not round-trip.
+SIDEBAR_WIDTHS: dict[str, float] = {
+    "narrow": 260.0,
+    "default": 300.0,
+    "wide": 360.0,
+}
+PANEL_MIN = 220.0
+PANEL_MAX = 480.0
+
+
+def clamp_panel(value: float) -> float:
+    """A side-column width, held inside the range a splitter may reach."""
+
+    return min(max(float(value), PANEL_MIN), PANEL_MAX)
+
+
+# --- floating surface widths --------------------------------------------------
+
+# How wide a thing that floats over the app is, in design pixels. Named for the
+# reason the spacing scale is: eight call sites had spelled ``sp(210)``,
+# ``sp(320)``, ``sp(430)``, ``sp(520)`` and ``sp(720)`` inline, so "how wide is
+# a popover" had eight answers and no way to change any of them together. Four
+# steps and no more, and each arrived with its readers -- the same rule the
+# spacing scale states, which is what keeps this from becoming a menu of
+# near-identical widths.
+#
+# A tooltip-sized readout: the FPS meter, a one-line hover card.
+SURFACE_W_TIP = 210.0
+# A popover: a combo's drop-down, one control's options.
+SURFACE_W_POPOVER = 320.0
+# A card: the progress card, a toast with a body.
+SURFACE_W_CARD = 430.0
+# A sheet: the shortcuts reference, the news panel, a snippet listing. Paired
+# with ``SURFACE_H_SHEET``, which is the only height on the scale because it is
+# the only one a surface is ever *given* rather than fitted to.
+SURFACE_W_SHEET = 520.0
+SURFACE_H_SHEET = 720.0
+
+# A picture a judgement is made about, in design pixels: Review's labelling
+# cell and Home's Resume thumbnail. One number for both, because both answer
+# "big enough to judge a composition by, small enough that a sidebar-width
+# column fits three across at 100% scale" -- they were 132 and 136, which is
+# two answers to one question and a difference nobody could see.
+THUMB_CELL = 136.0
+

@@ -1371,6 +1371,36 @@ def _old_palette_chunk(palette: list[tuple[int, ...]]) -> bytes:
 # --- the file ----------------------------------------------------------------
 
 
+def dropped_by_aseprite(doc) -> list[str]:
+    """What this document has that a ``.aseprite`` cannot carry, in words.
+
+    ``docs/COMPAT.md``'s **ORA -> aseprite** table, asked of one document
+    rather than read as a list of possibilities: the writer refuses what it
+    cannot store at all and silently drops the rest, so the only way for a
+    save to say "this was lossy" honestly is to check what is actually there.
+
+    Empty means the round trip keeps everything this document holds, which is
+    the ordinary case and is why a plain drawing saved here is a real save.
+    """
+
+    out: list[str] = []
+    if getattr(doc, "flourish", None):
+        out.append("Flourish recipes (the layers travel; regenerating does not)")
+    if getattr(doc, "matte", None) is not None:
+        out.append("the flatten matte")
+    if str(getattr(doc, "color_mode", "rgb")) == "rgb" and getattr(doc, "palette", None):
+        # Palette-constrained RGB: the chunks *are* written, so the file
+        # carries the colours -- what has nowhere to live is the constraint.
+        out.append("the palette constraint (the colour table itself is written)")
+    anim = getattr(doc, "anim", None)
+    rows = list(anim.tracks) if anim is not None else list(getattr(doc, "stack", []))
+    if any(getattr(row, "alpha_lock", False) for row in rows):
+        out.append("layer alpha lock")
+    if any(not members for members in (getattr(doc, "groups", {}) or {}).values()):
+        out.append("empty groups")
+    return out
+
+
 def aseprite_bytes(doc) -> bytes:
     """``doc`` as a whole ``.aseprite`` file. Pure: no filesystem, no document.
 
@@ -1558,14 +1588,14 @@ def aseprite_bytes(doc) -> bytes:
 def write_aseprite(doc, path) -> None:
     """The same file, on disk. Blocking; callers encode on a task thread.
 
-    Through a temporary and a replace, ``write_ora``'s idiom: a save that dies
-    partway must leave the previous file intact rather than a truncated sprite
-    where the user's work was. Every refusal fires inside
-    :func:`aseprite_bytes`, so a document this writer cannot store never gets as
-    far as opening a file.
+    Through ``studio.atomic``, which is the app's one staging idiom: a save
+    that dies partway must leave the previous file intact rather than a
+    truncated sprite where the user's work was, **and** must not leave its
+    staging file behind -- which the hand-rolled ``.tmp`` here did on every
+    failure, because ``replace`` only runs on success. Every refusal fires
+    inside :func:`aseprite_bytes`, so a document this writer cannot store never
+    gets as far as opening a file.
     """
-    path = Path(path)
-    data = aseprite_bytes(doc)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(path)
+    from ..atomic import write_bytes
+
+    write_bytes(Path(path), aseprite_bytes(doc))

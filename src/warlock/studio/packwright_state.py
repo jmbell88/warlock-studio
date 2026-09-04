@@ -119,12 +119,21 @@ class PackTab:
         clears the flag only on an accepted submit and nothing else re-arms it.
         The flag is cleared at the submit, never at the adoption.
         """
+        # Whether the atlas changed *shape*. Only then is the view's framing
+        # about something that is no longer there: a repack of the same size --
+        # which is most of them, since the size search lands on the same answer
+        # until the sprite set grows past it -- used to throw away the zoom and
+        # the pan on every rename, every trim toggle, every padding nudge, so
+        # anybody working at 400% on one corner was flung back to "fit" a
+        # dozen times an hour.
+        before = None if self.layout is None else (self.layout.width, self.layout.height)
         self.layout = layout
         self.atlas = atlas
         self.pack_generation += 1
         self.packing = False
         self.pack_error = ""
-        self.view.fitted = False
+        if before != (layout.width, layout.height):
+            self.view.fitted = False
 
 
 @dataclass

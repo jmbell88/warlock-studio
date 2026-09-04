@@ -278,9 +278,17 @@ class ImguiRenderer:
         self.prog.release()
 
 
-def _as_bytes(address: int, size: int) -> bytes:
-    """imgui hands out a raw pointer; moderngl wants a buffer."""
-    return ctypes.string_at(address, size)
+def _as_bytes(address: int, size: int) -> Any:
+    """imgui hands out a raw pointer; moderngl wants a buffer.
+
+    ``from_address`` rather than ``ctypes.string_at``: the latter *copies* the
+    whole vertex or index buffer into a fresh ``bytes`` before moderngl copies
+    it again into the VBO, once per command list per frame, for nothing. A
+    ctypes array over the same address supports the buffer protocol, so the
+    upload reads imgui's own memory. Nothing outlives the ``write`` below, so
+    there is no lifetime to keep: imgui owns the storage until the next frame.
+    """
+    return (ctypes.c_ubyte * size).from_address(address)
 
 
 # --- input ------------------------------------------------------------------
@@ -347,6 +355,15 @@ _KEY_MAP = {
     pygame.K_RALT: imgui.Key.right_alt,
     pygame.K_LSHIFT: imgui.Key.left_shift,
     pygame.K_RSHIFT: imgui.Key.right_shift,
+    # The Windows/Command pair and the menu key. imgui has names for all three
+    # and the table simply did not carry them, so a chord holding Super was a
+    # chord imgui could not see -- and ``K_APPLICATION``, which is what a
+    # keyboard's context-menu key sends, arrived as nothing at all. That key
+    # is ``K_MENU`` here and not ``K_APPLICATION``: pygame-ce has no such
+    # name, which the review's entry assumed it did.
+    pygame.K_LGUI: imgui.Key.left_super,
+    pygame.K_RGUI: imgui.Key.right_super,
+    pygame.K_MENU: imgui.Key.menu,
 }
 
 _MODIFIER_MAP = {
@@ -356,6 +373,8 @@ _MODIFIER_MAP = {
     pygame.K_RSHIFT: imgui.Key.mod_shift,
     pygame.K_LALT: imgui.Key.mod_alt,
     pygame.K_RALT: imgui.Key.mod_alt,
+    pygame.K_LGUI: imgui.Key.mod_super,
+    pygame.K_RGUI: imgui.Key.mod_super,
 }
 
 # pygame's button numbers, and *only* the three imgui names. It is a complete

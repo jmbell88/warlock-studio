@@ -227,9 +227,20 @@ def dissolve_edges(mesh: Mesh, sel: ElementSel) -> tuple[Mesh, ElementSel]:
 
     a = adjacency(mesh)
     union = _Union(face_count(mesh))
-    for e in ids.tolist():
-        faces = a.corner_face[a.corner_edge == e]
-        union.union(int(faces[0]), int(faces[1]))
+    # The corner list is sorted by edge **once** and each selected edge's pair
+    # of faces is found by bisection. It used to be ``corner_face[corner_edge
+    # == e]`` inside the loop -- a full scan of every corner in the mesh per
+    # selected edge -- so dissolving a loop of 400 edges on a 200k-corner
+    # sculpt was 80 million comparisons for an answer one sort already holds.
+    order = np.argsort(a.corner_edge, kind="stable")
+    by_edge = a.corner_edge[order]
+    faces_by_edge = a.corner_face[order]
+    lo = np.searchsorted(by_edge, ids, side="left")
+    hi = np.searchsorted(by_edge, ids, side="right")
+    for start, stop in zip(lo.tolist(), hi.tolist(), strict=True):
+        # ``_check_edges`` has already refused anything but a manifold pair, so
+        # the slice is exactly two.
+        union.union(int(faces_by_edge[start]), int(faces_by_edge[stop - 1]))
     return merge_groups(mesh, [np.array(g) for g in union.groups()])
 
 

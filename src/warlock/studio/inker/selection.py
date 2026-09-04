@@ -492,7 +492,17 @@ def colour_distance(pixels: np.ndarray, colour: np.ndarray) -> np.ndarray:
     the flood fill and the wand must agree, so there is exactly one predicate.
     """
     diff = np.abs(pixels.astype(np.int16) - colour.astype(np.int16))
-    return diff.max(axis=2).astype(np.uint8)
+    distance = diff.max(axis=2).astype(np.uint8)
+    # **Two fully transparent pixels are the same pixel.** RGB under alpha 0 is
+    # dead data -- an erase leaves whatever was there, a decode leaves whatever
+    # the encoder wrote -- so comparing it made a flood fill over erased
+    # artwork stop at the outline of what used to be drawn, on a layer that
+    # looks uniformly empty. Only when the *reference* is transparent: an
+    # opaque seed still differs from a transparent pixel by its alpha, which
+    # is the answer that was already right.
+    if int(colour[3]) == 0:
+        distance = np.where(pixels[..., 3] == 0, np.uint8(0), distance)
+    return distance
 
 
 def similar(pixels: np.ndarray, seed: tuple[int, int], tolerance: int) -> np.ndarray:
@@ -971,6 +981,13 @@ class FloatingBuffer:
         if self.source is None:
             self.source = self.pixels.copy()
             self.source_mask = self.mask.copy()
+            # And where it sat, which is what turns a canvas-space pivot back
+            # into a point in the source. Seeding the pixels without it left
+            # ``source_offset`` None, so the first flip of a gesture threw the
+            # pivot away and every later rotate turned about the buffer's
+            # centre instead of the point the user put on it.
+            if self.source_offset is None:
+                self.source_offset = self.offset
         self.source = tf.flip(self.source, axis)
         self.source_mask = tf.flip(self.source_mask, axis)
         self.flips.append(axis)
@@ -1010,14 +1027,28 @@ class Clipboard:
 
     pixels: np.ndarray | None = None
     mask: np.ndarray | None = None
+    #: Where these pixels were taken from, as a canvas-space top-left, or
+    #: ``None`` for content that came from outside the document. It is what
+    #: lets a paste with no selection land **where the copy was made** instead
+    #: of at (0, 0) -- Aseprite's behaviour, and the one anybody duplicating a
+    #: sprite between frames expects. Recorded rather than derived, because by
+    #: the time it is wanted the crop is a bare array with no memory of its
+    #: box.
+    origin: tuple[int, int] | None = None
 
     @property
     def empty(self) -> bool:
         return self.pixels is None
 
-    def put(self, pixels: np.ndarray, mask: np.ndarray) -> None:
+    def put(
+        self,
+        pixels: np.ndarray,
+        mask: np.ndarray,
+        origin: tuple[int, int] | None = None,
+    ) -> None:
         self.pixels = pixels.copy()
         self.mask = mask.copy()
+        self.origin = None if origin is None else (int(origin[0]), int(origin[1]))
 
     def take(self) -> tuple[np.ndarray, np.ndarray] | None:
         if self.pixels is None or self.mask is None:

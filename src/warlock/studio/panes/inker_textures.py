@@ -195,8 +195,16 @@ FRAME_TEXTURE_BYTES = 128 * 1024 * 1024
 FRAME_TEXTURE_CAP = 256
 
 
-def _frame_lru(ctx: Any, uid: str) -> list[str]:
+def _frame_lru(ctx: Any, uid: str) -> dict[str, None]:
     """The frame textures one tab holds, least recently drawn first.
+
+    **A dict used as an ordered set, not a list.** Both of these are touched
+    once per visible cell per frame, and ``list.remove`` is a linear scan --
+    so the touch was O(cells x held) sixty times a second, on the pane whose
+    whole job is to stay smooth while a timeline scrolls. A dict preserves
+    insertion order (the ordering this needs) and drops a key in constant
+    time. Everything the callers do with it -- ``in``, ``len``, iterate,
+    delete -- reads the same either way.
 
     ``cel_thumb``'s pair of accessors, in the same ``inker_tex:{uid}:`` naming
     and for the same two reasons: ``release_doc``'s prefix sweep drops it with
@@ -205,8 +213,8 @@ def _frame_lru(ctx: Any, uid: str) -> list[str]:
     """
     key = f"inker_tex:{uid}:frame-lru"
     order = ctx.state.preview.get(key)
-    if order is None:
-        order = []
+    if not isinstance(order, dict):
+        order = {}
         ctx.state.preview[key] = order
     return order
 
@@ -237,9 +245,8 @@ def _touch_frame_texture(ctx: Any, uid: str, key: str) -> None:
     Fifty frames is 2.6 MB of thumbnails and 800 MB of frames.
     """
     order = _frame_lru(ctx, uid)
-    if key in order:
-        order.remove(key)
-    order.append(key)
+    order.pop(key, None)
+    order[key] = None
     frame = _frame_number()
     touched = _frame_touched(ctx, uid)
     if frame is not None:
@@ -255,7 +262,7 @@ def _touch_frame_texture(ctx: Any, uid: str, key: str) -> None:
             return
         if frame is not None and touched.get(name) == frame:
             continue
-        order.remove(name)
+        del order[name]
         touched.pop(name, None)
         texture = ctx.state.preview.pop(name, None)
         ctx.state.preview.pop(f"{name}:rev", None)
@@ -272,11 +279,12 @@ def _touch_frame_texture(ctx: Any, uid: str, key: str) -> None:
 CEL_THUMB_CAP = 512
 
 
-def _cel_lru(ctx: Any, uid: str) -> list[str]:
+def _cel_lru(ctx: Any, uid: str) -> dict[str, None]:
+    """``_frame_lru``'s pair, and a dict for its reason."""
     key = f"inker_tex:{uid}:cel-lru"
     order = ctx.state.preview.get(key)
-    if order is None:
-        order = []
+    if not isinstance(order, dict):
+        order = {}
         ctx.state.preview[key] = order
     return order
 
@@ -347,9 +355,8 @@ def cel_thumb(ctx: Any, tab: Any, layer: Any, size: int = 36) -> Any:
     rev_key = f"{key}:rev"
     at_key = f"{key}:at"
     order = _cel_lru(ctx, tab.uid)
-    if key in order:
-        order.remove(key)
-    order.append(key)
+    order.pop(key, None)
+    order[key] = None
     touched = _cel_touched(ctx, tab.uid)
     frame = _frame_number()
     if frame is not None:
@@ -379,7 +386,7 @@ def cel_thumb(ctx: Any, tab: Any, layer: Any, size: int = 36) -> Any:
 
 
 def _evict_cel_thumbs(
-    ctx: Any, order: list[str], touched: dict[str, int], frame: int | None
+    ctx: Any, order: dict[str, None], touched: dict[str, int], frame: int | None
 ) -> None:
     """Drop the least recently drawn cel thumbnails past the cap.
 
@@ -394,7 +401,7 @@ def _evict_cel_thumbs(
             return
         if frame is not None and touched.get(key) == frame:
             continue
-        order.remove(key)
+        del order[key]
         touched.pop(key, None)
         texture = ctx.state.preview.pop(key, None)
         ctx.state.preview.pop(f"{key}:rev", None)

@@ -24,7 +24,10 @@ STUDIO = Path(inspect.getfile(widgets)).resolve().parent
 #: the library list and the saved list -- which is why this is a file list and
 #: the count assertion below is separate.
 FILTERED = (
-    "main.py",  # Review's sweep list
+    # Review's sweep list. In ``review_panes`` rather than ``main`` since
+    # 2026-09-04, when Review's pane drawing moved out of the shell as a mixin
+    # (T7 of the 2026-09-02 review).
+    "review_panes.py",
     "panes/clay_outliner.py",
     # The layers panel is deleted and its filter moved with the list it
     # filtered -- the timeline's track column (W2.5a).

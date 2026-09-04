@@ -122,4 +122,5 @@ class HistoryOps:
     def set_selection_mask(self: Document, mask: np.ndarray | None) -> None:
         """Undo hook for a selection change."""
         self.mask = None if mask is None else SelectionMask(mask)
+        self._filter_written = None
         self.rev += 1

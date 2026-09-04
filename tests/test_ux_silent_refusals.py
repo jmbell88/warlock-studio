@@ -165,9 +165,13 @@ def test_fix_matte_records_what_happened_rather_than_swallowing_it(monkeypatch, 
     turns into a toast. Recorded either way: "it worked" and "it was not asked
     for" are different facts, and a single ``matte_failed`` flag conflates them.
     """
-    from warlock.studio import inker, inker_mode
+    # ``_cut_matte`` and ``_load_job`` live in ``inker_open`` since 2026-09-04
+    # (T7); ``inker_mode`` serves the names through ``__getattr__``, and a
+    # ``setattr`` there would shadow rather than replace what the caller
+    # reaches.
+    from warlock.studio import inker, inker_open
 
-    monkeypatch.setattr(inker_mode, "_cut_matte", _Recorder(applied))
+    monkeypatch.setattr(inker_open, "_cut_matte", _Recorder(applied))
     doc = inker.Document.blank(4, 4)
     monkeypatch.setattr(inker.Document, "load", staticmethod(lambda path: doc))
 
@@ -188,7 +192,7 @@ def test_fix_matte_records_what_happened_rather_than_swallowing_it(monkeypatch, 
 
             return Path(".")
 
-    out = inker_mode._load_job(_Svc(), "job", matte=True)
+    out = inker_open._load_job(_Svc(), "job", matte=True)
     assert out["matte_requested"] is True
     assert out["matte_applied"] is applied
 
@@ -203,7 +207,9 @@ def test_a_matte_nobody_asked_for_records_nothing():
     source = inspect.getsource(inker_mode._load_job)
     body = source.split("if matte:")[0]
     assert "matte_requested" not in body
-    branch = inspect.getsource(inker_mode.on_task_done)
+    # The arm, not the dispatcher: ``on_task_done`` is a table lookup since
+    # 2026-09-04 (T7), and the ``inker-open`` landing is ``_done_open``.
+    branch = inspect.getsource(inker_mode._done_open)
     assert 'result.get("matte_requested")' in branch
 
 

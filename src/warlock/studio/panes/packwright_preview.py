@@ -193,6 +193,28 @@ def _outlines(state: Any, tab: Any, draw_list: Any, origin) -> None:
         draw_list.add_rect(
             p0, p1, accent if selected else faint, 0.0, sp(2 if selected else 1)
         )
+        _pivot_mark(draw_list, view, origin, frame, accent if selected else faint)
+
+
+def _pivot_mark(draw_list: Any, view: Any, origin, frame: Any, colour: int) -> None:
+    """A cross where this frame's anchor sits, if it has one.
+
+    The preview half of the anchor control: a number in a field is not
+    something anybody can aim, and this is the only surface that shows the
+    sprite. Placed by the frame's *trim* exactly as ``texturepacker._pivot``
+    normalises it -- the pivot is stored in the sprite's own untrimmed pixels
+    and the frame is what survived the trim, so a cross drawn without that
+    subtraction sits wherever the trim happened to cut.
+    """
+    if frame.pivot is None:
+        return
+    x = frame.x + float(frame.pivot[0]) - frame.trim[0]
+    y = frame.y + float(frame.pivot[1]) - frame.trim[1]
+    at = inker_state.to_screen(view, origin, x, y)
+    arm = sp(5)
+    draw_list.add_line((at[0] - arm, at[1]), (at[0] + arm, at[1]), colour, sp(1))
+    draw_list.add_line((at[0], at[1] - arm), (at[0], at[1] + arm), colour, sp(1))
+    draw_list.add_circle(at, arm * 0.6, colour, 12)
 
 
 def _events(state: Any, tab: Any, origin, hovered: bool) -> None:

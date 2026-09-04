@@ -150,6 +150,34 @@ def _document_rows(ctx: Any) -> list[Row]:
     ]
 
 
+#: The last answer :func:`rows` gave, and the state it was an answer *to*.
+#: Home asks for this list three times a frame -- the count, the grid and the
+#: keyboard -- and the asset half walks the whole job cache page and sorts it
+#: each time. Memoised on the cache generation the way ``jobs_cache.visible``
+#: is (B19), plus the recent-document list itself, which is settings data and
+#: cheap to read: a row cannot go stale without one of the two moving.
+_ROWS_CACHE: tuple[Any, list[Row]] | None = None
+
+
+def _rows_key(ctx: Any, documents: list[Row]) -> Any:
+    """The state this list is an answer to, or None if it cannot be one.
+
+    ``None`` when the cache does not count its own generations -- a bare
+    ``SimpleNamespace`` in a test, or a headless context -- because a key that
+    cannot tell two job pages apart would serve one of them the other's rows.
+    """
+
+    cache = getattr(ctx, "cache", None)
+    generation = getattr(cache, "_generation", None)
+    if generation is None:
+        return None
+    return (
+        id(cache),
+        generation,
+        tuple((row.kind, row.key, row.when) for row in documents),
+    )
+
+
 def rows(ctx: Any) -> list[Row]:
     """Every Resume row this frame, newest first.
 
@@ -158,9 +186,18 @@ def rows(ctx: Any) -> list[Row]:
     Three things index this list -- the click, the arrow keys and Enter -- so
     there is exactly one function answering "what is the nth row".
     """
-    found = _document_rows(ctx) + _asset_rows(ctx)
+    global _ROWS_CACHE
+
+    documents = _document_rows(ctx)
+    key = _rows_key(ctx, documents)
+    if key is not None and _ROWS_CACHE is not None and _ROWS_CACHE[0] == key:
+        return _ROWS_CACHE[1]
+    found = documents + _asset_rows(ctx)
     found.sort(key=lambda row: (row.when is None, -(row.when or 0.0)))
-    return found[:MAX_RESUME]
+    found = found[:MAX_RESUME]
+    if key is not None:
+        _ROWS_CACHE = (key, found)
+    return found
 
 
 def activate(ctx: Any, index: int) -> None:
@@ -433,7 +470,8 @@ NEWS_SEEN_KEY = "news_seen_version"
 
 #: The Resume grid's thumbnail, in design pixels. The picture is the cell:
 #: everything else is one line of name and one of "4m ago" under it.
-RESUME_THUMB = 136.0
+#: ``tokens.THUMB_CELL``, which Review's labelling grid draws at too.
+RESUME_THUMB = tokens.THUMB_CELL
 
 
 def news_should_show(release: Any, seen: str) -> bool:
@@ -559,9 +597,9 @@ _VERSION: str | None = None
 def _version() -> str:
     global _VERSION
     if _VERSION is None:
-        from ..main import _version as installed
+        from ... import installed_version
 
-        _VERSION = installed()
+        _VERSION = installed_version()
     return _VERSION
 
 
@@ -784,7 +822,9 @@ def _news_popup() -> None:
         imgui.end_popup()
         return
     current = changelog.current(_version())
-    if imgui.begin_child("landing/news-scroll", (sp(520), sp(420))):
+    if imgui.begin_child(
+        "landing/news-scroll", (sp(tokens.SURFACE_W_SHEET), sp(420))
+    ):
         # The current release open and the rest collapsed: "what changed" is
         # about this build, and the older ones are there so the answer has a
         # context rather than so it has a scrollback.

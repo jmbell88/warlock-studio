@@ -32,6 +32,7 @@ cel in the document at once.
 
 from __future__ import annotations
 
+import copy as copy_mod
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
@@ -435,16 +436,11 @@ class Track:
         )
 
     def props(self) -> dict[str, object]:
-        return {
-            "name": self.name,
-            "opacity": self.opacity,
-            "visible": self.visible,
-            "blend": self.blend,
-            "alpha_lock": self.alpha_lock,
-            "locked": self.locked,
-            "background": self.background,
-            "reference": self.reference,
-        }
+        """The copied-down properties, as keywords. ``CEL_PROPS``, never a hand
+        list: this used to be a literal dict, which is the fifth place the set
+        has to agree with itself and the one that has no test of its own."""
+
+        return {key: getattr(self, key) for key in CEL_PROPS}
 
 
 @dataclass
@@ -459,8 +455,21 @@ class Frame:
     duration_ms: int = DEFAULT_DURATION_MS
     uid: int = field(default_factory=new_uid)
 
-    def __post_init__(self) -> None:
-        self.duration_ms = clamp_duration(self.duration_ms)
+    def __setattr__(self, name: str, value: object) -> None:
+        """Clamp the duration **on every write**, not only at construction.
+
+        ``__post_init__`` clamped the value a ``Frame`` was born with and
+        nothing clamped the value it was later given, so the two importers that
+        set it from a file (``gifin``, ``sheetin``) could put a number past the
+        ceiling on a frame -- and ``aseout._frame`` then died packing it into
+        the format's ``<H`` with a bare ``struct.error`` naming neither the
+        frame nor the file. Held here rather than at the call sites because it
+        is a property of the field: any future third importer inherits it.
+        """
+
+        if name == "duration_ms":
+            value = clamp_duration(value)
+        object.__setattr__(self, name, value)
 
 
 #: Which way playback moves through a tag's span.
@@ -830,7 +839,9 @@ class Animation:
         ]:
             del self._placeholder_uids[key]
 
-    def layers_for(self, frame: Frame, size: tuple[int, int]) -> list[Layer]:
+    def layers_for(
+        self, frame: Frame, size: tuple[int, int], *, detach: bool = False
+    ) -> list[Layer]:
         """The bottom-first layer list this frame presents as an ordinary stack.
 
         Track properties are copied down onto real cels as well as placeholders:
@@ -847,6 +858,17 @@ class Animation:
         multiply is per *call*, not per object, which is precisely why a linked
         cel can wear two different numbers in its two slots: the shared
         ``Layer`` is rewritten each time it is materialised for a frame.
+
+        **And that rewrite is why ``detach`` exists.** The list the editor holds
+        (``Document.stack``) is the cel objects themselves -- it has to be, or a
+        stroke would land on a copy and never reach ``cels`` -- so materialising
+        *another* frame rewrote the opacity of the very layers the current
+        stack is composed of. Onion-skinning or previewing a frame that links
+        the same cel at a different track opacity therefore changed what the
+        frame under the cursor composited to, until the next edit rebuilt it.
+        ``detach=True`` hands back shallow copies instead, sharing the pixel
+        arrays: it is for every read-only consumer -- a flatten, an export, a
+        writer -- and is never right for the editable stack.
         """
         out: list[Layer] = []
         for track in self.tracks:
@@ -859,6 +881,8 @@ class Animation:
                 # put for the field's own reason.
                 out.append(self.placeholder(track, frame, size))
                 continue
+            if detach:
+                layer = copy_mod.copy(layer)
             for prop in CEL_PROPS:
                 setattr(layer, prop, getattr(track, prop))
             layer.opacity = track.opacity * self.cel_alpha(*key)

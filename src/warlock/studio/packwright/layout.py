@@ -406,6 +406,14 @@ def _candidate_sizes(area: int, floor_w: int, floor_h: int, limit: int) -> list[
     the shorter side each time. Doubling the *shorter* side keeps the atlas
     near-square, which is what a GPU wants and what keeps the wasted corner
     small.
+
+    **The limit itself is the last candidate**, and it has to be, because it
+    need not be a power of two. With a 1500 px ceiling the doubling walked
+    1024 and then 2048, which is past it -- so the loop ended and a set that
+    fits in 1500 square was refused as "does not fit in a 1500px atlas". The
+    search is over *working* sizes rather than over final ones either way: a
+    pack that is not power-of-two shrinks to its used extent afterwards, so an
+    oversized candidate costs nothing but the attempt.
     """
     side = max(next_pot(math.isqrt(max(area - 1, 0)) + 1), next_pot(floor_w), next_pot(floor_h))
     sizes: list[tuple[int, int]] = []
@@ -416,6 +424,8 @@ def _candidate_sizes(area: int, floor_w: int, floor_h: int, limit: int) -> list[
             width *= 2
         else:
             height *= 2
+    if limit >= max(floor_w, floor_h) and (limit, limit) not in sizes:
+        sizes.append((limit, limit))
     return sizes
 
 

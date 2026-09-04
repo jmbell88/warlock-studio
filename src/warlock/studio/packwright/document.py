@@ -302,6 +302,40 @@ class PackDoc:
         self.history.push(SourceReplaceEdit(uid=int(uid), before=before, after=sprite))
         self._apply_sprite(int(uid), sprite)
 
+    def set_pivot(self, uid: int, pivot: tuple[float, float] | None) -> None:
+        """Where this sprite's anchor sits, in its **own untrimmed pixels**.
+
+        One undo step, and ``None`` clears it -- which is not the same as
+        setting it to the centre: a sprite with no pivot gets the format's
+        documented 0.5/0.5 default, and one pinned *at* the centre says so in
+        the file. A reader cannot tell the two apart from the number, but the
+        author can, and the difference survives a change to what the default
+        means.
+
+        Untrimmed, because that is the coordinate the artist drew in and the
+        only one that survives the trim setting being flipped;
+        ``texturepacker._pivot`` is where it is normalised against the trimmed
+        frame on the way out, which is the convention the format has.
+
+        The pivot lives on ``Sprite.meta``, which is frozen -- so this is a new
+        sprite with the same key and the same pixels, applied through the same
+        ``_apply_sprite`` a replacement uses.
+        """
+        import dataclasses
+
+        source = self.source(uid)
+        if source is None:
+            raise ValueError(MISSING_SOURCE)
+        before = source.sprite
+        spot = None if pivot is None else (float(pivot[0]), float(pivot[1]))
+        if before.meta.pivot == spot:
+            return
+        after = dataclasses.replace(
+            before, meta=dataclasses.replace(before.meta, pivot=spot)
+        )
+        self.history.push(SourceReplaceEdit(uid=int(uid), before=before, after=after))
+        self._apply_sprite(int(uid), after)
+
     def rename_source(self, uid: int, name: str) -> None:
         """Rename one source, or clear the override with an empty string.
 

@@ -97,9 +97,18 @@ def axis_widget(ctx: Any, view: Any, rect: tuple[float, float, float, float]) ->
         imgui.set_cursor_screen_pos((cx - radius, cy - radius))
         # Zero alpha on every colour the button paints with, so the picture
         # above is what the reader sees and the button is only the hit target.
+        #
+        # ``theme.WASH`` and not a white literal: a white wash is invisible
+        # over the light theme's viewport, and ``test_accessibility`` measures
+        # ``tokens.PALETTES`` and nothing else, so a literal is a colour no
+        # test can see.
         imgui.push_style_color(imgui.Col_.button.value, (0.0, 0.0, 0.0, 0.0))
-        imgui.push_style_color(imgui.Col_.button_hovered.value, (1.0, 1.0, 1.0, 0.2))
-        imgui.push_style_color(imgui.Col_.button_active.value, (1.0, 1.0, 1.0, 0.35))
+        imgui.push_style_color(
+            imgui.Col_.button_hovered.value, theme.rgba(theme.WASH, 0.2)
+        )
+        imgui.push_style_color(
+            imgui.Col_.button_active.value, theme.rgba(theme.WASH, 0.35)
+        )
         hit = controls.button(
             f"##clay-axis/{ball.view}",
             (radius * 2.0, radius * 2.0),

@@ -888,6 +888,14 @@ class PaintView:
     # tab switch and back should continue the line you were drawing, and a
     # session-wide field would carry one document's last point into another.
     last_paint: tuple[float, float] | None = None
+    #: Wheel travel that has not yet added up to a whole notch. A trackpad and
+    #: a high-resolution wheel deliver fractions, and ``zoom_step`` added
+    #: ``5% x notches`` straight onto the lattice -- so a 0.3 notch took the
+    #: view to 101.5% and every later notch carried that fraction forever, at
+    #: which point the status bar read 106.5, 111.5, ... and the combo showed a
+    #: preset the view was not at. Carried rather than rounded away, so a slow
+    #: trackpad scroll still zooms.
+    zoom_carry: float = 0.0
 
 
 @contextmanager
@@ -1362,12 +1370,23 @@ def zoom_step(
 ) -> None:
     """One wheel notch: +-``ZOOM_PERCENT_STEP`` percent, snapped to the grid.
 
+    ``notches`` may be fractional -- a trackpad and a high-resolution wheel
+    both deliver fractions -- and a fraction of a step is *carried*, never
+    applied: applying it left the lattice, permanently.
+
     Snapped *first*, so a zoom arrived at by fitting (an arbitrary 83.4%) joins
     the lattice on the first notch instead of carrying its fraction forever --
     which is what makes the status bar read 85, 90, 95 rather than 88.4, 93.4.
     The rounding is what a user coming from any paint program expects and what
     the multiplicative ratio cannot give: 100% is reachable from either side.
     """
+    # Whole notches only; the remainder is kept for the next event. See
+    # ``PaintView.zoom_carry``.
+    travel = view.zoom_carry + float(notches)
+    notches = float(int(travel))
+    view.zoom_carry = travel - notches
+    if not notches:
+        return
     if (view.zoom >= FINE_ZOOM_MAX and notches > 0) or (
         view.zoom > FINE_ZOOM_MAX and notches < 0
     ):
@@ -1785,6 +1804,18 @@ class InkerState:
     #: Presence with an empty list means deliberately unbound; an absent target
     #: inherits the Aseprite 1.3.15.5 Windows defaults.
     shortcut_overrides: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    #: The colour picker's held HSV/HSL triple, as
+    #: ``(labels, rgb it wrote, (first, second, third))``, or ``None``.
+    #:
+    #: A cache of *this gesture* and nothing more: a grey has no hue and a dark
+    #: colour quantises through three bytes, so a triple re-derived from the
+    #: RGB every frame made the Hue slider dead on greys and made Saturation
+    #: drift on darks. Dropped the moment the colour changes from anywhere else,
+    #: because the recognition test is the bytes it wrote. See
+    #: ``panes/inker_picker._wheel``.
+    picker_space: tuple[tuple[str, str, str], tuple[int, int, int], tuple[int, int, int]] | None = (
+        None
+    )
     shortcut_query: str = ""
     shortcut_target: str = ""
     shortcut_draft: str = ""
@@ -2624,6 +2655,7 @@ class InkerState:
         self.active_uid = doc.uid
         self._settle_transform()
         self.clear_drag()
+        self.forget_held_keys()
         return doc
 
     def get(self, uid: str) -> InkerDoc | None:
@@ -2644,6 +2676,7 @@ class InkerState:
             self.active_uid = self.docs[min(index, len(self.docs) - 1)].uid if self.docs else ""
         self._settle_transform()
         self.clear_drag()
+        self.forget_held_keys()
         return True
 
     def activate(self, uid: str) -> None:
@@ -2651,6 +2684,7 @@ class InkerState:
             self.active_uid = uid
             self._settle_transform()
             self.clear_drag()
+            self.forget_held_keys()
 
     def _settle_transform(self) -> None:
         """Cancel an open free transform the moment its owner stops being the
@@ -2697,16 +2731,28 @@ class InkerState:
 
     # -- drag ---------------------------------------------------------------
 
+    def forget_held_keys(self) -> None:
+        """Let go of keyboard holds whose release this pane will never see.
+
+        Space-to-pan is a hold, and its release can be *dropped* rather than
+        merely late: ``main`` gates both key edges on ``_passes_text_field``,
+        which answers no for a plain Space, so a release that arrives while a
+        text field has focus never reaches ``handle_key`` and the flag stays
+        on -- every left-drag panning instead of painting.
+
+        **Called from the three tab doors, not from ``clear_drag``**, which is
+        where it used to live. Keyboard state is not gesture state: pressing
+        Space in the middle of a stroke ends the stroke, and ``clear_drag``
+        then cleared the very flag the press had just set -- so the pan the
+        user asked for did not happen and Space had to be released and pressed
+        again. A tab switch, add or close is a different matter: the pane
+        genuinely stops being the one the release would arrive at.
+        """
+
+        self.space_held = False
+
     def clear_drag(self) -> None:
         self.drag_kind = ""
-        # Space-to-pan is a hold, and its release can be *dropped* rather than
-        # merely late: ``main`` gates both key edges on ``_passes_text_field``,
-        # which answers no for a plain Space, so a release that arrives while a
-        # text field has focus never reaches ``handle_key`` and the flag stays
-        # on -- every left-drag panning instead of painting. Cleared here
-        # because every tab switch, add and close comes through this method, so
-        # it is the one place a latched flag is certain to be let go of.
-        self.space_held = False
         self.drag_anchor = None
         self.last_point = None
         self.lasso = []
@@ -3089,3 +3135,89 @@ def step_size(size: int, delta: int) -> int:
 
     step = max(1, int(abs(size) * 0.12))
     return clamp_brush(size + (step if delta > 0 else -step))
+
+
+# --- pure geometry the canvas asks for ----------------------------------------
+#
+# Four functions with no imgui, no document and no side effects, moved here on
+# 2026-09-03 from ``panes/inker_canvas``. They are the arithmetic behind a
+# marquee, a click, a closing gesture and an onion-skin neighbour, and they were
+# the only testable things in a 3.8k-line drawing module -- so every test of
+# them reached into a pane, which is what makes a pane hard to split later. The
+# canvas re-exports all four, where its own call sites already name them.
+
+def marquee_rect(anchor, point) -> tuple[int, int, int, int]:
+    """The pixel rectangle a marquee drag covers, whichever way it was drawn.
+
+    Ordering the corners has to come *before* rounding them. Flooring the
+    anchor and ceiling the release point rounds outward only while the drag
+    runs down and to the right; reverse the drag and the same two rules round
+    inward on both corners, so an identical gesture selects a smaller rectangle
+    depending on the direction it was made in.
+    """
+    x0, x1 = sorted((float(anchor[0]), float(point[0])))
+    y0, y1 = sorted((float(anchor[1]), float(point[1])))
+    return (
+        int(math.floor(x0)),
+        int(math.floor(y0)),
+        int(math.ceil(x1)),
+        int(math.ceil(y1)),
+    )
+
+
+def is_click(anchor, point) -> bool:
+    """Whether a gesture never left the pixel it started in.
+
+    The question ``marquee_rect`` cannot answer. Its corners are floored and
+    ceiled -- correctly, so that a drag rounds outward whichever way it was
+    drawn -- which means a press and release at the same point come back as a
+    1x1 rectangle rather than as an empty one. So the "click deselects" branch
+    was unreachable, and every stray click inside a select tool left a
+    one-pixel selection that nothing could be painted outside of (the
+    2026-09-02 review, section 5).
+
+    Asked of the pixels rather than of a distance in either space: the pixel is
+    what the user aimed at, and a threshold in screen pixels would deselect at
+    one zoom and select at another.
+    """
+    return (int(math.floor(anchor[0])), int(math.floor(anchor[1]))) == (
+        int(math.floor(point[0])),
+        int(math.floor(point[1])),
+    )
+
+
+def closes_gesture(points, point, zoom: float, radius: float) -> bool:
+    """Whether a click at ``point`` closes the polygon on its first vertex.
+
+    Image-space distance times the zoom *is* the screen distance, because the
+    view is a uniform scale after a quarter turn and a turn preserves length
+    (``inker_state.basis`` is orthonormal). So this is quarter-turn and flip
+    invariant without ever building a screen coordinate -- which is what lets it
+    be a pure function of three numbers rather than of the view.
+
+    Below three vertices there is nothing to close: two points are a line, and a
+    click back on the first would otherwise end the gesture with a selection the
+    rasteriser has to refuse anyway.
+    """
+    if len(points) < 3:
+        return False
+    return math.dist(points[0], point) * zoom <= radius
+
+
+def onion_index(current: int, delta: int, span: tuple[int, int]) -> int | None:
+    """Which frame a ghost ``delta`` away is, or None if there is not one.
+
+    Wrapping inside the span rather than clamping: a clamp draws the same
+    ghost twice at the ends of a cycle, which reads as one ghost that stopped
+    moving -- the failure the whole feature exists to avoid.
+    """
+    low, high = span
+    width = high - low + 1
+    if width <= 0:
+        return None
+    index = current + delta
+    if low <= index <= high:
+        return index
+    if width == 1:
+        return None
+    return low + (index - low) % width

@@ -169,7 +169,9 @@ def test_inker_frame_textures_have_a_vram_budget(monkeypatch):
     # entries (the order and the touched map) that ride under the same prefix
     # so ``release_doc``'s sweep collects them with the tab.
     assert len(live) <= 4 * 2 + 2
-    order = ctx.state.preview["inker_tex:t1:frame-lru"]
+    # A dict used as an ordered set since 2026-09-03 -- ``list.remove`` was a
+    # linear scan per visible cell per frame; see ``_frame_lru``.
+    order = list(ctx.state.preview["inker_tex:t1:frame-lru"])
     assert len(order) <= 4
     assert order[-1].endswith("frame9"), "the newest is the one kept"
 

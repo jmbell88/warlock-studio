@@ -87,7 +87,15 @@ def draw(ctx: Any) -> None:
     if packed and tab.layout.is_grid:
         widgets.muted_wrapped("A .tsx goes beside them: this grid is a tileset.")
     else:
-        widgets.muted_wrapped("TexturePacker's JSON (Array) schema, which most engines read.")
+        # The schema the document is *set* to, not the default: the settings
+        # pane offers Array and Hash and this line said Array either way, so an
+        # atlas exported as Hash was described as something else in the one
+        # place a reader looks to check.
+        schema = str(tab.doc.settings.json_schema or "array")
+        label = "Hash" if schema == "hash" else "Array"
+        widgets.muted_wrapped(
+            f"TexturePacker's JSON ({label}) schema, which most engines read."
+        )
 
     imgui.dummy((0, 8))
     # The one heading every mode's exits are under -- see ``inker_bridge``'s

@@ -24,11 +24,9 @@ from .tokens import sp
 
 # Legacy global width presets remain as fallback seeds for untouched v1
 # workspaces. Explicit splitter edits are stored per workspace in layout v2.
-SIDEBAR_WIDTHS: dict[str, float] = {
-    "narrow": 260.0,
-    "default": 300.0,
-    "wide": 360.0,
-}
+# Defined in ``tokens`` and named here, where the eight readers already look:
+# ``layouts`` needs the same numbers and cannot import this module.
+SIDEBAR_WIDTHS = tokens.SIDEBAR_WIDTHS
 
 # The width in force. Module state, set by ``Layout`` at construction and when
 # the option changes, exactly as ``tokens.SCALE`` is -- eight call sites read
@@ -92,8 +90,8 @@ SIDEBAR_MIN = 200.0
 # sidebar sizes.  The values are preferences in design pixels; the fitted
 # values below may temporarily be smaller when UI scale or the window makes
 # the preference impossible.  That temporary fit is never written back.
-PANEL_MIN = 220.0
-PANEL_MAX = 480.0
+PANEL_MIN = tokens.PANEL_MIN
+PANEL_MAX = tokens.PANEL_MAX
 
 # The width the two sidebars actually get this frame, in *physical* px. Module
 # state, computed once by :func:`measure` for the same reason ``SIDEBAR_W`` is

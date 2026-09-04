@@ -70,13 +70,30 @@ def draw(ctx: Any) -> None:
     # sheet.
     needle = widgets.list_filter(ctx, "packwright-sources", len(sources))
     imgui.dummy((0, 2))
-    shown = 0
-    for source in sources:
-        if needle and needle not in (getattr(source, "name", "") or "").lower():
-            continue
-        shown += 1
-        _row(ctx, state, tab, source, editable)
-    widgets.no_matches(needle, shown)
+    matched = [
+        source
+        for source in sources
+        if not needle or needle in (getattr(source, "name", "") or "").lower()
+    ]
+    # **Clipped.** This is the one list in this app that grows without bound
+    # (see the comment above), and every row of it was submitted whether or not
+    # the pane could show it -- at a thousand sources that is a thousand
+    # selectables, a thousand context-menu registrations and a thousand hover
+    # tests per frame, for the twenty a 300 dp column holds. ``ListClipper``
+    # submits the visible span and seeks the cursor past the rest.
+    #
+    # The *selected* row is taller than the others (it grows a rename field and
+    # a Remove button), which the clipper handles by re-measuring: the cost is
+    # a scroll estimate that is one row out while that row is off screen, and
+    # the alternative -- drawing every row to keep the heights uniform -- is
+    # what this exists to stop.
+    clipper = imgui.ListClipper()
+    clipper.begin(len(matched))
+    while clipper.step():
+        for index in range(clipper.display_start, clipper.display_end):
+            _row(ctx, state, tab, matched[index], editable)
+    clipper.end()
+    widgets.no_matches(needle, len(matched))
 
 
 TILESET_POPUP = "packwright-tileset-import"
@@ -224,6 +241,58 @@ def _from_inker(ctx: Any, tab: Any, editable: bool) -> None:
             packwright_mode.add_inker_document(ctx, doc)
 
 
+def _pivot_row(ctx: Any, tab: Any, source: Any) -> None:
+    """Where this sprite's anchor sits, in its own untrimmed pixels.
+
+    The pivot was modelled end to end -- ``SpriteMeta.pivot``, the layout frame,
+    the exported sidecar -- and could only be *set* by importing an Inker
+    document that already carried one. A loose PNG had no way to say where its
+    feet were, which is the one thing an atlas is asked for after "where is the
+    rectangle".
+
+    A checkbox and two fields rather than a always-on pair, because clearing it
+    is a real answer and is not the same as the centre: an absent pivot takes
+    the format's documented 0.5/0.5 default and one pinned at the centre says
+    so. The preview draws a cross wherever this puts it.
+    """
+    from imgui_bundle import imgui
+
+    from ..tokens import sp
+
+    sprite = source.sprite
+    pivot = sprite.meta.pivot
+    changed, wanted = controls.checkbox("Anchor", pivot is not None)
+    if changed:
+        # Defaulting to the centre of the untrimmed picture, which is where the
+        # format would have put it anyway -- so ticking the box changes nothing
+        # until the numbers are moved, and the *file* starts saying it.
+        packwright_mode.set_pivot(
+            ctx,
+            tab,
+            source.uid,
+            (sprite.width / 2.0, sprite.height / 2.0) if wanted else None,
+        )
+        return
+    if pivot is None:
+        return
+    imgui.set_next_item_width(sp(64))
+    moved_x, x = controls.drag_float(
+        "##pivotx", float(pivot[0]), 0.5, 0.0, float(sprite.width)
+    )
+    # One gesture, one step: a drag reports on every frame the pointer moves,
+    # and ``set_pivot`` pushes a step per report without this.
+    controls.fold_undo(tab.doc.history)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(64))
+    moved_y, y = controls.drag_float(
+        "##pivoty", float(pivot[1]), 0.5, 0.0, float(sprite.height)
+    )
+    controls.fold_undo(tab.doc.history)
+    if moved_x or moved_y:
+        packwright_mode.set_pivot(ctx, tab, source.uid, (x, y))
+    widgets.muted("px from this sprite's own top-left, before any trim")
+
+
 def _row(ctx: Any, state: Any, tab: Any, source: Any, editable: bool) -> None:
     from imgui_bundle import imgui
 
@@ -246,6 +315,7 @@ def _row(ctx: Any, state: Any, tab: Any, source: Any, editable: bool) -> None:
             # the pack, and a name that never reaches the layout is a name the
             # exported sidecar does not carry.
             packwright_mode.rename_source(ctx, tab, source.uid, name)
+        _pivot_row(ctx, tab, source)
         if widgets.destructive_button(f"{icons.TRASH} Remove", (-1, 0)):
             packwright_mode.remove_source(ctx, source.uid, tab)
     imgui.pop_id()

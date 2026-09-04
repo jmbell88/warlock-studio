@@ -561,7 +561,7 @@ def test_copying_a_tiles_settings_keeps_it_a_tile():
     from warlock.studio.panes import library
 
     ctx = _copy_ctx()
-    library._copy_settings(ctx, {"stage": "tile", "params": {"prompt": "cobblestone"}})
+    library.copy_settings(ctx, {"stage": "tile", "params": {"prompt": "cobblestone"}})
     assert ctx.state.form_2d["output"] == "tile"
     assert ctx.state.create_stage == "reference"
 
@@ -571,7 +571,7 @@ def test_copying_a_references_settings_makes_an_object():
 
     ctx = _copy_ctx()
     ctx.state.form_2d["output"] = "tile"
-    library._copy_settings(ctx, {"stage": "reference", "params": {"prompt": "a barrel"}})
+    library.copy_settings(ctx, {"stage": "reference", "params": {"prompt": "a barrel"}})
     assert ctx.state.form_2d["output"] == "reference"
 
 

@@ -350,6 +350,31 @@ def _pixels_from(raw: bytes, name: str) -> np.ndarray:
         return np.asarray(image.convert("RGBA"), dtype=np.uint8)
 
 
+def _json_bool(value: Any, default: bool) -> bool:
+    """A JSON boolean, refusing to read the *string* ``"false"`` as True.
+
+    ``bool("false")`` is True, and this file is hand-editable -- so a manifest
+    somebody had typed a quoted boolean into came back with trim on when it
+    said off, and the atlas was silently packed the other way. Only the two
+    spellings JSON itself has are honoured plus the two obvious strings;
+    anything else keeps the default rather than guessing, which is the same
+    doctrine every other reader in this package follows.
+    """
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "1", "yes"):
+            return True
+        if lowered in ("false", "0", "no", ""):
+            return False
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
 def _settings_from(entry: Any) -> PackSettings:
     values = entry if isinstance(entry, dict) else {}
     default = PackSettings()
@@ -358,7 +383,7 @@ def _settings_from(entry: Any) -> PackSettings:
             "mode": str(values.get("mode", default.mode)),
             "padding": int(values.get("padding", default.padding)),
             "extrude": int(values.get("extrude", default.extrude)),
-            "trim": bool(values.get("trim", default.trim)),
+            "trim": _json_bool(values.get("trim"), default.trim),
             "max_size": int(values.get("max_size", default.max_size)),
             # The ``None`` sentinel survives: a manifest that leaves this
             # unsaid gets the *file's* mode's default via ``__post_init__``,
@@ -368,7 +393,7 @@ def _settings_from(entry: Any) -> PackSettings:
             "power_of_two": (
                 None
                 if values.get("power_of_two") is None
-                else bool(values.get("power_of_two"))
+                else _json_bool(values.get("power_of_two"), False)
             ),
             "columns": (
                 None if values.get("columns") is None else int(values.get("columns"))

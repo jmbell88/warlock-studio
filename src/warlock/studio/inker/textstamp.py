@@ -48,6 +48,8 @@ from typing import Any
 
 import numpy as np
 
+from .. import pixelguard
+
 __all__ = ["MAX_SIZE", "MIN_SIZE", "SLACK", "text_stamp"]
 
 #: Point sizes the stamp will attempt. The floor is where a hinted outline
@@ -122,6 +124,12 @@ def text_stamp(
     height = int(y1 - y0) + 2 * SLACK
     if width <= 0 or height <= 0:
         return None
+    # The surface below is allocated from a *measured* string at a size the
+    # user typed: a 4000-point font, or a paragraph pasted into the field, and
+    # nothing between the two and ``Image.new``. The same ceiling every other
+    # allocation in this package answers to -- and a refusal by name, since
+    # this one is reachable by typing rather than by opening a hostile file.
+    pixelguard.check(width, height, "this text at this size")
 
     # Mode "1" is the whole of the ``antialias=False`` implementation: Pillow
     # sets ``ImageDraw.fontmode`` from the image it is drawing into, and "1"

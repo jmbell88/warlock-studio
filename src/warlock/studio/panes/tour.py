@@ -326,7 +326,7 @@ def draw(ctx: Any) -> None:
     # and because the step is not actionable anyway while something else owns
     # the keyboard. ``_was_open`` is left set, so the card does not replay its
     # appear animation when the modal closes and the tour comes back.
-    from ..main import modal_open
+    from ..dialogs import modal_open
 
     if modal_open(ctx):
         return
@@ -404,6 +404,19 @@ def _card_body(ctx: Any, tour: Any, step: Any, state: Any) -> None:
         widgets.secondary("Waiting for you." if not state.satisfied else "Done.")
 
     imgui.dummy((0, sp(tokens.SP_1)))
+    # The card takes the keyboard for its own two verbs. Esc already ends the
+    # tour from ``App._shortcut``; without these the card could only be
+    # clicked, so a tour meant to teach the app could not itself be read from
+    # the keyboard. Read through imgui rather than as a pygame binding, for
+    # ``panes/palette.py``'s reason: this is a floating surface and the keys
+    # belong to it rather than to the mode behind it.
+    back = imgui.is_key_pressed(imgui.Key.left_arrow)
+    forward = imgui.is_key_pressed(imgui.Key.right_arrow) or imgui.is_key_pressed(
+        imgui.Key.enter
+    )
+    if state.index > 0 and back:
+        advance(ctx, -1)
+        return
     if state.index > 0 and controls.button("Back##tour", role=controls.ButtonRole.GHOST):
         advance(ctx, -1)
         return
@@ -413,7 +426,7 @@ def _card_body(ctx: Any, tour: Any, step: Any, state: Any) -> None:
     # A satisfied condition offers the step's exit rather than taking it: the
     # reader has just done the thing and the card would otherwise vanish
     # mid-sentence, which reads as the app having lost their place.
-    if widgets.primary_button(f"{label}##tour"):
+    if widgets.primary_button(f"{label}##tour") or forward:
         advance(ctx)
         return
     if step.chapter is not None:

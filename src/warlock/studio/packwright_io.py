@@ -242,11 +242,23 @@ def export_files(ctx: Any, tab: PackTab | None = None) -> None:
         if path is None:
             return None
         path = path.with_suffix(".png")
+        try:
+            sidecar = texturepacker.tp_bytes(
+                layout, image_name=path.name, schema=schema
+            )
+        except ValueError as exc:
+            # Framed, for ``request_pack``'s reason: only a ``ServiceError``'s
+            # text survives the task classifier, so a bare ValueError reached
+            # the user as "see the log for details" -- and the sentence being
+            # thrown away is the actionable one ("the hash schema keys frames
+            # by filename, and 'barrel.png' names more than one sprite in this
+            # pack -- rename one, or export the array schema instead").
+            from ..service.errors import invalid_from
+
+            raise invalid_from(exc, "That atlas was not exported") from exc
         files = {
             path: composelib.png_bytes(atlas),
-            path.with_suffix(".json"): texturepacker.tp_bytes(
-                layout, image_name=path.name, schema=schema
-            ),
+            path.with_suffix(".json"): sidecar,
         }
         tsx_skipped = None
         if layout.is_grid:

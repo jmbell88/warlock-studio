@@ -252,12 +252,16 @@ def test_a_new_document_from_the_selection_crops_to_it(monkeypatch):
     """Through ``open_pixels`` -- the door a sheet import, a sprite draft and a
     rendered sheet already use -- so this pins the *crop* and lets the adoption
     be the one that is already tested."""
-    from warlock.studio import inker_mode
+    # Patched on ``inker_open``, where it lives since 2026-09-04 (T7):
+    # ``inker_mode`` serves the name through ``__getattr__``, and a ``setattr``
+    # on a name that module does not define would shadow rather than replace
+    # what the caller reaches.
+    from warlock.studio import inker_open
 
     ctx, state, tab = _session()
     opened: list = []
     monkeypatch.setattr(
-        inker_mode, "open_pixels", lambda ctx, pixels, title="": opened.append(pixels)
+        inker_open, "open_pixels", lambda ctx, pixels, title="": opened.append(pixels)
     )
     tab.doc.select(inker.SelectionMask.from_rect(SIZE, (4, 4, 12, 12)))
     assert inker_ops.run(ctx, inker_ops.get("new_from_selection"))

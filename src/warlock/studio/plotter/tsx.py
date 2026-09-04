@@ -456,6 +456,13 @@ def read_wang_model(node: ET.Element) -> tuple[WangSet, ...]:
                 name=colour.get("name") or "",
                 colour=colour.get("color") or "#ffffff",
                 probability=float(colour.get("probability", 1.0) or 1.0),
+                # The representative tile and the custom class, read verbatim.
+                # The writer emitted ``tile="-1"`` unconditionally and dropped
+                # the class, so a foreign set came home with every swatch reset
+                # and its class gone -- a silent edit to somebody's file, which
+                # is the one thing an interop reader must not do.
+                tile=_int_attr(colour, "tile", -1),
+                klass=colour.get("class") or "",
             )
             for colour in wangset.findall("wangcolor")
         ]
@@ -479,9 +486,19 @@ def read_wang_model(node: ET.Element) -> tuple[WangSet, ...]:
                 kind=kind if kind in WANG_KINDS else "mixed",
                 colours=tuple(colours),
                 tiles=tiles,
+                tile=_int_attr(wangset, "tile", -1),
+                klass=wangset.get("class") or "",
             )
         )
     return tuple(out)
+
+
+def _int_attr(node: Any, name: str, default: int) -> int:
+    """One integer attribute, or *default* if it is absent or junk."""
+    try:
+        return int(node.get(name, default))
+    except (TypeError, ValueError):
+        return default
 
 
 def read_wang_model_json(entries: Any) -> tuple[WangSet, ...]:
@@ -497,6 +514,8 @@ def read_wang_model_json(entries: Any) -> tuple[WangSet, ...]:
                 name=str(colour.get("name") or ""),
                 colour=str(colour.get("color") or "#ffffff"),
                 probability=json_number(colour, "probability", 1.0),
+                tile=int(colour.get("tile", -1) or -1),
+                klass=str(colour.get("class") or ""),
             )
             for colour in (wangset.get("colors") or ())
             if isinstance(colour, dict)
@@ -516,6 +535,8 @@ def read_wang_model_json(entries: Any) -> tuple[WangSet, ...]:
                 kind=kind if kind in WANG_KINDS else "mixed",
                 colours=tuple(colours),
                 tiles=tiles,
+                tile=int(wangset.get("tile", -1) or -1),
+                klass=str(wangset.get("class") or ""),
             )
         )
     return tuple(out)
@@ -532,22 +553,27 @@ def write_wang_model(parent: ET.Element, wangsets: tuple[WangSet, ...]) -> None:
         return
     node = ET.SubElement(parent, "wangsets")
     for wangset in wangsets:
-        element = ET.SubElement(
-            node,
-            "wangset",
-            {"name": wangset.name, "type": wangset.kind, "tile": "-1"},
-        )
+        attrs = {
+            "name": wangset.name,
+            "type": wangset.kind,
+            # What the file said, not ``-1``: this is the tile Tiled shows as
+            # the set's representative, and rewriting it is an edit to
+            # somebody's document made on the way through.
+            "tile": str(int(wangset.tile)),
+        }
+        if wangset.klass:
+            attrs["class"] = wangset.klass
+        element = ET.SubElement(node, "wangset", attrs)
         for colour in wangset.colours:
-            ET.SubElement(
-                element,
-                "wangcolor",
-                {
-                    "name": colour.name,
-                    "color": colour.colour,
-                    "tile": "-1",
-                    "probability": _number(colour.probability),
-                },
-            )
+            colour_attrs = {
+                "name": colour.name,
+                "color": colour.colour,
+                "tile": str(int(colour.tile)),
+                "probability": _number(colour.probability),
+            }
+            if colour.klass:
+                colour_attrs["class"] = colour.klass
+            ET.SubElement(element, "wangcolor", colour_attrs)
         for local in sorted(wangset.tiles):
             ET.SubElement(
                 element,

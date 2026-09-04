@@ -127,6 +127,25 @@ values x 2 seeds" — because a bare count is a number you have to reverse-engin
 and a mistyped axis is two hours of GPU. Each sweep in the list carries a line saying what it varied,
 for the same reason: by the time you come back to judge it, the name you typed is rarely enough.
 
+### What you can vary
+
+Each axis carries its own one-line explanation in the form — hover the parameter. There are
+eighteen, and they fall into three groups:
+
+- **The image** — Style strength (the LoRA's weight), Negative prompt, IP-Adapter scale,
+  ControlNet scale and ControlNet end. The last three are dropped when the adapter they belong to
+  is not selected, so a sweep over one of them on a job without it collapses to the baseline.
+- **The hand-off** — Reference prep (whether the reference is recentred and rescaled before the 3D
+  engine sees it) and Background removal (which matting model cuts the subject out). A wrong matte
+  is the most common cause of a mesh with a slab behind it.
+- **The mesh** — Resolution, Profile and Custom triangles (the budget the reconstruction is held
+  to), Size in metres, and the six engine flags: band width, texture resolution, the two guidance
+  strengths, the token budget, decimation and atlas size. Anything named `trellis_` restarts the
+  engine once per value, so a six-value sweep over one of them is six engine launches.
+
+Leaving an engine flag's value empty runs the engine's own default, which is usually not a number
+this app knows — that is why the help says how to get the default rather than what it is.
+
 Because every unit shares the prompt and the seeds, the baseline and each axis unit form
 **matched pairs** — same subject, same seed, one setting differing — which is what the axis
 verdicts below are computed from. More seeds means more pairs per axis value.

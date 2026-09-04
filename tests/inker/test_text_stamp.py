@@ -22,7 +22,7 @@ import pytest
 from warlock.studio import fonts, inker_mode, inker_state
 from warlock.studio.inker.document import Document
 from warlock.studio.inker.textstamp import MAX_SIZE, MIN_SIZE, text_stamp
-from warlock.studio.panes import inker_canvas
+from warlock.studio.panes import inker_canvas, inker_gestures
 
 FONT = str(fonts.FONT_DIR / "Inter-Regular.ttf")
 RED = (255, 0, 0, 255)
@@ -260,11 +260,15 @@ def test_the_vendored_face_leads_the_list_and_is_the_default():
 
 
 @pytest.fixture
-def pressed(monkeypatch):
-    """``_press`` with imgui's two calls stubbed, and a toast recorder."""
+def pressed(patch_canvas):
+    """``_press`` with imgui's two calls stubbed, and a toast recorder.
+
+    Both modules the press path runs through: the dispatch is in
+    ``inker_canvas`` and the text arm it lands on is in ``inker_gestures``, and
+    a real imgui call with no context does not raise -- it takes the process
+    down."""
     opened: list[str] = []
-    monkeypatch.setattr(
-        inker_canvas,
+    patch_canvas(
         "imgui",
         SimpleNamespace(
             get_io=lambda: SimpleNamespace(key_shift=False, key_alt=False, key_ctrl=False),
@@ -289,7 +293,7 @@ def pressed(monkeypatch):
 def test_a_click_records_the_spot_and_opens_the_box(pressed):
     pressed.press((7.0, 9.0))
     assert pressed.state.text_at == (7, 9)
-    assert pressed.opened == [inker_canvas.TEXT_POPUP]
+    assert pressed.opened == [inker_gestures.TEXT_POPUP]
     # No dab, and no gesture left open: the arm returns before every paint
     # branch, which is the failure the slice tool found first.
     assert pressed.state.drag_kind == ""
@@ -473,8 +477,9 @@ def _driven(monkeypatch, pressed, popup):
     alone -- a test that draws a popup and then presses again needs the
     fixture's own imgui stub back afterwards."""
     with monkeypatch.context() as patched:
-        patched.setattr(inker_canvas, "imgui", popup)
-        patched.setattr(inker_canvas, "widgets", popup)
+        for module in (inker_canvas, inker_gestures):
+            patched.setattr(module, "imgui", popup)
+            patched.setattr(module, "widgets", popup)
         inker_canvas._text_popup(pressed.ctx, pressed.state, pressed.tab)
 
 

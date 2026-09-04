@@ -269,7 +269,19 @@ def parse_clip_library(raw: dict[str, Any]) -> dict[str, Any]:
     """
     poses = {}
     for pose in raw["poses"]:
-        row = {"name": str(pose["name"]), "bones": pose["bones"]}
+        # **Through ``validate_pose``, like every other door a pose comes in
+        # by.** A clip library is a file -- shipped, or authored in the editor
+        # and written back -- and its quaternions were taken verbatim: a
+        # 3-element list raised out of the middle of ``sheet._blend`` with no
+        # mention of the file or the bone, and a NaN was interpolated into a
+        # clip and written to disk. The bone names are *not* checked against a
+        # rig here: a library is authored against a template and applied to
+        # whatever is loaded, and the worker already reports an unknown bone
+        # without failing the bake.
+        row = {
+            "name": str(pose["name"]),
+            "bones": validate_bones(pose["bones"]),
+        }
         if pose.get("root_translation"):
             row["root_translation"] = [float(v) for v in pose["root_translation"]]
         poses[row["name"]] = row
@@ -548,6 +560,27 @@ def validate_pose(
     raw = payload.get("bones")
     if not isinstance(raw, dict) or not raw:
         raise ValueError("pose requires a non-empty 'bones' map")
+    return {"name": name, "bones": validate_bones(raw, known_bones)}
+
+
+def validate_bones(
+    raw: Any, known_bones: Sequence[str] | None = None
+) -> dict[str, list[float]]:
+    """One bone -> quaternion map, checked and renormalised, or ValueError.
+
+    Split out of :func:`validate_pose` so a *clip library* can use it: a clip's
+    key poses are read from a file like any other pose and their quaternions
+    were taken verbatim, so a 3-element list raised out of the middle of
+    ``sheet._blend`` naming neither the file nor the bone, and a NaN was
+    interpolated into a clip and written to disk.
+
+    **An empty map is legal here and is not in ``validate_pose``**, which is
+    the whole reason for the split rather than a flag: a saved pose with no
+    bones is a pose that says nothing and is a mistake, while a clip's rest key
+    is exactly that map and is the ordinary case.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("a bone map must be an object")
     allowed = set(known_bones) if known_bones is not None else None
 
     bones: dict[str, list[float]] = {}
@@ -574,7 +607,47 @@ def validate_pose(
                 raise ValueError(f"bone {bone!r} rotation is degenerate")
             values = [v / norm for v in values]
         bones[bone] = values
-    return {"name": name, "bones": bones}
+    return bones
+
+
+# --- the two rotation frames --------------------------------------------------
+#
+# ``node`` is parent-relative and absolute -- what ``Model.set_rotation`` writes
+# and what the pose editor is unconditionally in. ``delta`` is a rotation from
+# the bone's own rest, which is what a clip library is authored in. The two are
+# related by ``node = rest * delta``, and **that one sentence is the whole of
+# the conversion** -- which is why it lives here rather than being written out
+# at each boundary. It was written twice: once in ``studio/poser_mode`` against
+# the viewer's rest quaternions and once in ``pipelines/blender_worker``
+# against Blender's, and neither knew about the other. The multiply is one
+# line; the *order* and which side is conjugated are the parts that drift, and
+# a drifted one contorts a skeleton in a way nothing raises about.
+#
+# Quaternions here are XYZW throughout, this package's order everywhere.
+
+
+def _quat_mul(a: Sequence[float], b: Sequence[float]) -> list[float]:
+    ax, ay, az, aw = (float(v) for v in a)
+    bx, by, bz, bw = (float(v) for v in b)
+    return [
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ]
+
+
+def node_from_delta(rest: Sequence[float], delta: Sequence[float]) -> list[float]:
+    """A rotation from rest, as a parent-relative absolute one."""
+
+    return _quat_mul(rest, delta)
+
+
+def delta_from_node(rest: Sequence[float], node: Sequence[float]) -> list[float]:
+    """A parent-relative absolute rotation, as one from rest."""
+
+    x, y, z, w = (float(v) for v in rest)
+    return _quat_mul([-x, -y, -z, w], node)
 
 
 def mirror_quaternion(q: Sequence[float]) -> list[float]:

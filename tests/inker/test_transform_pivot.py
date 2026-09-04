@@ -522,14 +522,14 @@ def _big() -> inker.Document:
 
 
 @pytest.fixture
-def driven(monkeypatch):
+def driven(monkeypatch, patch_canvas):
     """``_input`` with a fake mouse over a lifted, transforming buffer.
 
     At zoom 1 with no pan and the origin at (0, 0), a screen coordinate *is* an
     image coordinate, so the numbers a test types are the pixels it means.
     """
     mouse = _Mouse()
-    monkeypatch.setattr(inker_canvas, "imgui", mouse.module())
+    patch_canvas("imgui", mouse.module())
     state = inker_state.InkerState()
     doc = _big()
     state.transforming = True

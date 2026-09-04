@@ -22,6 +22,13 @@ PANES = Path(__file__).resolve().parents[2] / "src/warlock/studio/panes"
 NO_HELP_BUTTON = {
     "__init__",  # not a pane
     "inker_canvas",  # the canvas itself; its tools are inker-tools
+    # The three pieces T7 split off the canvas on 2026-09-04. Not panes: they
+    # are the canvas's own drag, slice and multi-click-gesture halves, drawn
+    # inside it, and a (?) in any of them would be a second help button on the
+    # one surface.
+    "inker_drag",
+    "inker_gestures",
+    "inker_slices",
     "inker_textures",  # a texture cache, drawn by nobody
     "plotter_canvas",  # the map itself; its tools are plotter-tools
     # The pattern grid itself; its controls are sirens-transport and

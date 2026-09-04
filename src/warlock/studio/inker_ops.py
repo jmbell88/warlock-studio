@@ -583,6 +583,13 @@ def has_selection(state: Any, tab: Any) -> bool:
     return tab is not None and tab.doc.mask is not None
 
 
+#: ``has_selection``, and only while the document can be written to. The three
+#: ops that use it -- Fill, Stroke and Shift -- put pixels into a layer, so a
+#: save walking ``doc.stack`` on a task thread is exactly the moment they may
+#: not run; they were the three that had the selection gate and not this one.
+_selection_ready, _why_selection = when_ready(has_selection, NO_SELECTION)
+
+
 def _pattern(ctx: Any) -> dict[str, Any]:
     """The pattern keywords ``Edit > Fill`` and ``Edit > Stroke`` pass on.
 
@@ -1099,8 +1106,8 @@ register(
             ctx.state.inker.fg, **_pattern(ctx)
         ),
         menu="Edit",
-        enabled=has_selection,
-        reason=NO_SELECTION,
+        enabled=_selection_ready,
+        reason=_why_selection,
         separator_before=True,
         hint=(
             "The foreground colour -- or the captured tip, if the bucket is "
@@ -1117,8 +1124,8 @@ register(
             ctx.state.inker.fg, int(params["width"]), **_pattern(ctx)
         ),
         menu="Edit",
-        enabled=has_selection,
-        reason=NO_SELECTION,
+        enabled=_selection_ready,
+        reason=_why_selection,
         params=(Param("width", "Width", 1, 1, 32),),
         hint=(
             "The selection's own outline, drawn inside it -- an outline that "
@@ -1132,8 +1139,8 @@ register(
         "Shift pixels...",
         lambda ctx, tab, **params: tab.doc.shift_selected(int(params["dx"]), int(params["dy"])),
         menu="Edit",
-        enabled=has_selection,
-        reason=NO_SELECTION,
+        enabled=_selection_ready,
+        reason=_why_selection,
         params=(
             Param("dx", "Right", 1, -4096, 4096),
             Param("dy", "Down", 0, -4096, 4096),
@@ -2536,18 +2543,24 @@ register(
 # gesture; compatibility aliases follow it and remain visible in the shortcut
 # editor instead of living as invisible branches in ``handle_key``.
 
+#: The held gestures the canvas actually reads.
+#:
+#: **Every one of these has a reader**, and that is the rule this tuple was
+#: failing: it listed eighteen, the shortcut editor offered all eighteen for
+#: remapping, and two were read. The nine with no behaviour at all
+#: (``freehand_angle_snap``, ``shape_rotate``, ``shape_move_origin``, the four
+#: ``translate_*``, ``scale_center``, ``scale_fine``) were deleted on
+#: 2026-09-03 rather than implemented -- a remappable key that does nothing is
+#: worse than an absent one, because the editor promises it works -- and the
+#: four that *did* have behaviour, hard-coded in the canvas, were wired to the
+#: registry instead (``freehand_straight``, ``move_auto_select``,
+#: ``scale_aspect``, ``rotate_snap``).
 ACTION_MODIFIERS: tuple[ActionModifier, ...] = (
     ActionModifier(
         "freehand_straight",
         "Straight line from last point",
         "FreehandTool",
         "Draw from the last painted pixel.",
-    ),
-    ActionModifier(
-        "freehand_angle_snap",
-        "Angle snap from last point",
-        "FreehandTool",
-        "Snap the straight-line angle.",
     ),
     ActionModifier(
         "move_auto_select", "Auto-select layer", "MoveTool", "Select the layer under the cursor."
@@ -2577,45 +2590,11 @@ ACTION_MODIFIERS: tuple[ActionModifier, ...] = (
         "ShapeTool",
         "Use the press point as the shape centre.",
     ),
-    ActionModifier("shape_rotate", "Rotate shape", "ShapeTool", "Rotate before committing."),
-    ActionModifier(
-        "shape_move_origin",
-        "Move shape origin",
-        "ShapeTool",
-        "Reposition the whole uncommitted shape.",
-    ),
-    ActionModifier(
-        "translate_snap_grid",
-        "Snap to grid",
-        "TranslatingSelection",
-        "Snap translation to the grid.",
-    ),
-    ActionModifier(
-        "translate_lock_axis", "Lock axis", "TranslatingSelection", "Move along one axis only."
-    ),
-    ActionModifier(
-        "translate_copy",
-        "Copy selection",
-        "TranslatingSelection",
-        "Duplicate when the move begins.",
-    ),
-    ActionModifier(
-        "translate_fine",
-        "Fine translation",
-        "TranslatingSelection",
-        "Adjust at subpixel precision.",
-    ),
     ActionModifier(
         "scale_aspect",
         "Maintain aspect ratio",
         "ScalingSelection",
         "Keep the original aspect ratio.",
-    ),
-    ActionModifier(
-        "scale_center", "Scale from centre", "ScalingSelection", "Scale around the transform pivot."
-    ),
-    ActionModifier(
-        "scale_fine", "Fine scaling", "ScalingSelection", "Adjust at subpixel precision."
     ),
     ActionModifier("rotate_snap", "Angle snap", "RotatingSelection", "Snap the rotation angle."),
 )
@@ -2656,22 +2635,13 @@ _TOOL_BINDINGS: tuple[Binding, ...] = (
 
 _ACTION_BINDINGS: tuple[Binding, ...] = (
     Binding("freehand_straight", "Shift", "action_modifier", "FreehandTool", "hold", 10),
-    Binding("freehand_angle_snap", "Ctrl+Shift", "action_modifier", "FreehandTool", "hold", 20),
     Binding("move_auto_select", "Ctrl", "action_modifier", "MoveTool", "hold", 10),
     Binding("selection_add", "Shift", "action_modifier", "Selection", "hold", 10),
     Binding("selection_subtract", "Shift+Alt", "action_modifier", "Selection", "hold", 10),
     Binding("selection_intersect", "Ctrl+Shift", "action_modifier", "Selection", "hold", 20),
     Binding("shape_square", "Shift", "action_modifier", "ShapeTool", "hold", 10),
     Binding("shape_center", "Ctrl", "action_modifier", "ShapeTool", "hold", 10),
-    Binding("shape_rotate", "Alt", "action_modifier", "ShapeTool", "hold", 10),
-    Binding("shape_move_origin", "Space", "action_modifier", "ShapeTool", "hold", 10),
-    Binding("translate_snap_grid", "Alt", "action_modifier", "TranslatingSelection", "hold", 10),
-    Binding("translate_lock_axis", "Shift", "action_modifier", "TranslatingSelection", "hold", 10),
-    Binding("translate_copy", "Ctrl", "action_modifier", "TranslatingSelection", "hold", 10),
-    Binding("translate_fine", "Ctrl", "action_modifier", "TranslatingSelection", "hold", 5),
     Binding("scale_aspect", "Shift", "action_modifier", "ScalingSelection", "hold", 10),
-    Binding("scale_center", "Alt", "action_modifier", "ScalingSelection", "hold", 10),
-    Binding("scale_fine", "Ctrl", "action_modifier", "ScalingSelection", "hold", 10),
     Binding("rotate_snap", "Shift", "action_modifier", "RotatingSelection", "hold", 10),
 )
 

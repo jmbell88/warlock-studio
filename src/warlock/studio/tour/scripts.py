@@ -37,8 +37,8 @@ FIRST_HOUR = Tour(
             id="welcome",
             title="This is Warlock Studio",
             body=(
-                "It makes game art on this machine: 3D models, sprite sheets, tile maps "
-                "and drawings. Nothing here talks to a server.\n\n"
+                "It makes game art on this machine: 3D models, sprite sheets, tile maps, "
+                "drawings and music. Nothing here talks to a server.\n\n"
                 "This tour points at things and waits for you. It never clicks anything "
                 "for you, and Esc ends it at any point."
             ),
@@ -51,14 +51,16 @@ FIRST_HOUR = Tour(
             body=(
                 "Everything lives behind these. The top group is the pipeline that turns "
                 "an idea into a finished asset; the group under it is the seven workspaces "
-                "you edit in. Settings sits at the bottom."
+                "you edit in. Settings sits at the bottom.\n\n"
+                "Ctrl+K opens the command palette, which reaches every one of them by "
+                "name -- it is the keyboard's way through this tour and through the app."
             ),
             anchor="rail/home",
         ),
         Step(
             id="open-create",
             title="Open Create",
-            body="Click it, and I will carry on.",
+            body="Click it -- or Ctrl+K and type its name -- and I will carry on.",
             anchor="rail/create",
             done=Condition("mode_is", "create"),
         ),

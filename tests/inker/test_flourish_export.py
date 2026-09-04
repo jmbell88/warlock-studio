@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from _ui_context import imgui_context
 
-from warlock.studio import inker, inker_flourish, inker_mode, inker_ops, inker_state, probe
+from warlock.studio import inker, inker_flourish, inker_ops, inker_state, probe
 from warlock.studio.inker import sheetout
 from warlock.studio.inker.flourish import bake as B
 from warlock.studio.inker.flourish import engines, presets
@@ -61,7 +61,15 @@ def test_export_is_greyed_without_an_effect_and_offered_with_one():
 def test_export_runs_the_per_tag_export_once(monkeypatch):
     ctx, tab = _scene()
     calls: list = []
-    monkeypatch.setattr(inker_mode, "export_per_tag", lambda c, t, kind: calls.append((t, kind)))
+    # Patched on ``inker_export``, which is where it lives since 2026-09-04
+    # (T7): ``inker_mode`` serves the name through ``__getattr__``, and a
+    # module-level ``setattr`` on a name that module does not define would be
+    # shadowing rather than replacing what the caller reaches.
+    from warlock.studio import inker_export
+
+    monkeypatch.setattr(
+        inker_export, "export_per_tag", lambda c, t, kind: calls.append((t, kind))
+    )
     assert inker_ops.run(ctx, inker_ops.get("flourish_export"))
     assert calls == [(tab, "sheet")]
 

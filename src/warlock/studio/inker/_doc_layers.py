@@ -16,6 +16,7 @@ from . import composite as cp
 from . import groups as gp
 from . import index_plane as ixp
 from .anim_edits import (
+    CelOpacityEdit,
     CelSetEdit,
     TrackAddEdit,
     TrackMoveEdit,
@@ -209,6 +210,17 @@ class LayerOps:
                 # track-property list has to agree with itself.
                 alpha_lock=track.alpha_lock,
                 locked=track.locked,
+                # And the rest of the row. The still branch copies *every*
+                # property (``Layer.copy`` does), so anything left off this
+                # list is a property that survives duplication on a still
+                # document and is silently reset on an animated one:
+                # ``continuous`` turned a held-pose row into a blank-cel row,
+                # and the note is the label the timeline reads.
+                background=track.background,
+                reference=track.reference,
+                continuous=track.continuous,
+                # ``Note`` is frozen and deliberately shared -- see its docstring.
+                note=track.note,
             )
             # Copies, not links -- *from* the original: duplicating a layer to
             # paint a variation on it and having every stroke land on the
@@ -230,6 +242,20 @@ class LayerOps:
                     copy = cel.copy(name=copy_track.name)
                     copies[id(cel)] = copy
                 cels[frame.uid] = copy
+                # The three per-slot side tables travel with the slots they
+                # describe. They are keyed on ``(track uid, frame uid)``, so a
+                # duplicate row started with none of them: a faded cel came
+                # back at full strength, a lifted one dropped to its track's
+                # position, and every cel note was lost.
+                alpha = self.anim.cel_alpha(track.uid, frame.uid)
+                if alpha != 1.0:
+                    self.anim.cel_opacity[(copy_track.uid, frame.uid)] = alpha
+                zindex = self.anim.cel_zindex(track.uid, frame.uid)
+                if zindex:
+                    self.anim.cel_z[(copy_track.uid, frame.uid)] = zindex
+                note = self.anim.cel_notes.get((track.uid, frame.uid))
+                if note is not None:
+                    self.anim.cel_notes[(copy_track.uid, frame.uid)] = note
             self._put_track(index + 1, copy_track, cels)
             self._push_with_inheritance(
                 TrackAddEdit(index + 1, copy_track, cels, pinned=True), parent
@@ -649,6 +675,37 @@ class LayerOps:
         )
         return True
 
+    @staticmethod
+    def _refuse_merge_across_z(anim: Any, index: int) -> None:
+        """Refuse a merge-down on any frame where a per-cel lift separates the
+        pair, naming the frame.
+
+        ``cel_z`` is an offset on a row's position *within one frame*, so the
+        two rows this op merges need not be the two rows that frame stacks
+        adjacently: a third row lifted between them, or a lift that inverts
+        the pair, makes the merged picture something that frame never showed.
+        There is no per-frame answer to give -- the op produces one layer for
+        the whole timeline -- so the honest one is to say which frame and do
+        nothing.
+        """
+        for number, frame in enumerate(anim.frames, start=1):
+            if not anim.any_cel_z(frame.uid):
+                continue
+            heights = {
+                position: position + anim.cel_zindex(track.uid, frame.uid)
+                for position, track in enumerate(anim.tracks)
+            }
+            top, bottom = heights[index], heights[index - 1]
+            if top < bottom or any(
+                bottom < height < top
+                for position, height in heights.items()
+                if position not in (index, index - 1)
+            ):
+                raise ValueError(
+                    f"frame {number} lifts these cels apart; clear the cel z "
+                    "offsets there before merging"
+                )
+
     def _merge_tracks(self: Document, index: int, upper_member: int | None = None) -> bool:
         """Merge-down across every frame at once, as one undo step.
 
@@ -676,10 +733,26 @@ class LayerOps:
         And a slot with **no upper cel at all** gets no edit: there is nothing
         to merge into the lower, and minting a copy of it would break its links
         and cost the grid a full plane per frame for no change.
+
+        **Per-cel opacity is folded in, and per-cel z is a refusal.** The
+        effective alpha of a slot is ``track x cel`` (``layers_for``'s fold),
+        so merging at the track's number alone silently discarded every cel
+        dimmed against its row -- the merged drawing came back at full
+        strength on exactly the frames somebody had faded. It is folded here,
+        it joins the memo key (two frames sharing both objects but not both
+        alphas do *not* merge to the same picture), and the lower slots' own
+        alphas are cleared afterwards for the reason the track's opacity is:
+        the merged pixels already carry them. ``cel_z`` gets no such
+        treatment, because there is nowhere for it to land: it reorders rows
+        *within one frame*, so on a frame where a lift puts a third row between
+        the pair -- or swaps them -- the two layers this op merges are not the
+        two layers that frame composites, and any answer would be a different
+        picture. That frame is named and the merge is refused whole.
         """
         anim = self._require_anim()
         width, height = self.size
         upper_track, lower_track = anim.tracks[index], anim.tracks[index - 1]
+        self._refuse_merge_across_z(anim, index)
 
         merged_for: dict[tuple[int, int], Layer] = {}
         upper_cels: dict[int, Layer] = {}
@@ -691,15 +764,31 @@ class LayerOps:
             lower = anim.cels.get((lower_track.uid, frame.uid))
             if upper is None:
                 continue
-            key = (id(lower), id(upper))
+            lower_alpha = (
+                0.0 if lower is None else anim.cel_alpha(lower_track.uid, frame.uid)
+            )
+            upper_alpha = anim.cel_alpha(upper_track.uid, frame.uid)
+            key = (id(lower), id(upper), lower_alpha, upper_alpha)
             layer = merged_for.get(key)
             fresh = layer is None
             if layer is None:
                 entries = []
                 if lower is not None:
-                    entries.append((lower.pixels, lower_track.opacity, lower_track.blend))
+                    entries.append(
+                        (
+                            lower.pixels,
+                            lower_track.opacity * lower_alpha,
+                            lower_track.blend,
+                        )
+                    )
                 if upper_track.visible:
-                    entries.append((upper.pixels, upper_track.opacity, upper_track.blend))
+                    entries.append(
+                        (
+                            upper.pixels,
+                            upper_track.opacity * upper_alpha,
+                            upper_track.blend,
+                        )
+                    )
                 merged = cp.to_uint8(cp.stack_region(entries, (0, 0, width, height)))
                 # ``_resolved_plane``: a cel minted inside an indexed document
                 # is born with its index plane, or the save silently records
@@ -727,6 +816,14 @@ class LayerOps:
             edits.append(
                 CelSetEdit(lower_track.uid, frame.uid, lower, layer, pinned=pinned)
             )
+            # The merged pixels carry this slot's own dimming now, so leaving
+            # the number on would apply it a second time -- the track's
+            # opacity's argument, one level down.
+            if lower_alpha != 1.0:
+                self._set_cel_opacity(lower_track.uid, frame.uid, 1.0)
+                edits.append(
+                    CelOpacityEdit(lower_track.uid, frame.uid, lower_alpha, 1.0)
+                )
 
         if not edits:
             # Nothing anywhere in the upper row: the merge is the removal, and

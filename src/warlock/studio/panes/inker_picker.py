@@ -194,15 +194,31 @@ def _wheel(
     to_space: Any,
     from_space: Any,
 ) -> None:
-    """HSV and HSL are the same three sliders over two different triples."""
+    """HSV and HSL are the same three sliders over two different triples.
+
+    **The triple is held, not re-derived.** Deriving it from the 8-bit RGB on
+    every frame loses information the sliders are the only record of: a grey
+    has no hue at all, so dragging Hue on one moved nothing and the slider
+    snapped back to 0; and on a dark colour the round trip through three bytes
+    quantises, so a saturation drag walked to a number the user did not choose
+    and could not get back to. The held triple is dropped the moment the colour
+    changes from anywhere else (the wheel, an eyedrop, a palette click), which
+    is what keeps it a *cache of this gesture* rather than a second opinion
+    about what colour is selected.
+    """
 
     r, g, b = (channel / 255.0 for channel in colour[:3])
-    first, second, third = to_space(r, g, b)
-    values = [
-        int(round(first * 360.0)) % 360,
-        int(round(second * 100.0)),
-        int(round(third * 100.0)),
-    ]
+    held = getattr(state, "picker_space", None)
+    rgb = tuple(int(channel) for channel in colour[:3])
+    if held is not None and held[0] == labels and held[1] == rgb:
+        values = list(held[2])
+    else:
+        first, second, third = to_space(r, g, b)
+        values = [
+            int(round(first * 360.0)) % 360,
+            int(round(second * 100.0)),
+            int(round(third * 100.0)),
+        ]
     highs = (359, 100, 100)
     out = list(values)
     touched = False
@@ -213,7 +229,15 @@ def _wheel(
             touched = True
     if touched:
         rr, gg, bb = from_space((out[0] % 360) / 360.0, out[1] / 100.0, out[2] / 100.0)
-        write(ctx, state, tab, slot, (rr * 255.0, gg * 255.0, bb * 255.0, colour[3]))
+        written = (
+            int(round(rr * 255.0)),
+            int(round(gg * 255.0)),
+            int(round(bb * 255.0)),
+        )
+        # Keyed on the bytes actually written, so the next frame recognises its
+        # own answer and anything else's replaces it.
+        state.picker_space = (labels, written, tuple(out))
+        write(ctx, state, tab, slot, (*written, colour[3]))
     _alpha(ctx, state, tab, slot, colour)
 
 

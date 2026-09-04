@@ -142,10 +142,10 @@ class _Mouse:
 
 
 @pytest.fixture
-def driven(monkeypatch):
+def driven(monkeypatch, patch_canvas):
     """``_input`` with a fake mouse, at identity view so screen == image."""
     mouse = _Mouse()
-    monkeypatch.setattr(inker_canvas, "imgui", mouse.module())
+    patch_canvas("imgui", mouse.module())
     state = inker_state.InkerState(fg=FG, bg=BG)
     tab = SimpleNamespace(
         doc=inker.Document.blank(*SIZE),

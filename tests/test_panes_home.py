@@ -352,10 +352,15 @@ def test_the_new_menu_offers_every_creation_type_exactly_once():
 
 
 def test_the_version_string_is_asked_for_once_per_process(monkeypatch):
-    """C3: ``main._version`` is an importlib.metadata distribution walk, and
-    the header and the news block both used to ask every frame. An installed
-    version cannot change under a running process."""
-    from warlock.studio import main
+    """C3: ``warlock.installed_version`` is an importlib.metadata distribution
+    walk, and the header and the news block both used to ask every frame. An
+    installed version cannot change under a running process.
+
+    It moved out of ``studio.main`` on 2026-09-03: Home is a pane, and
+    importing the frame loop for one helper is how a leaf comes to depend on
+    the shell.
+    """
+    import warlock
 
     calls: list[int] = []
 
@@ -363,7 +368,7 @@ def test_the_version_string_is_asked_for_once_per_process(monkeypatch):
         calls.append(1)
         return "9.9.9"
 
-    monkeypatch.setattr(main, "_version", counted)
+    monkeypatch.setattr(warlock, "installed_version", counted)
     monkeypatch.setattr(landing, "_VERSION", None)
     assert landing._version() == "9.9.9"
     assert landing._version() == "9.9.9"

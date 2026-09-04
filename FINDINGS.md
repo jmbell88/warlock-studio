@@ -13,11 +13,10 @@ tags: **Critical** (crash, data loss, or corrupts a document), **High** (wrong
 result the user will hit, or a promise in the docs the code breaks), **Medium**,
 **Low**. Line numbers are against the working tree at review time.
 
-**Every functional High is closed as of 2026-09-03.** The two that remain
-unstruck are both `[Structure]` extractions (T7) and are debt rather than
-defects; `main.py` and `inker_mode.py` have *grown* since this review was
-written, to 6,427 and 4,814 lines, which is the argument for doing them rather
-than against it. Two of the entries closed that day were closed by *striking*
+**Every functional High is closed as of 2026-09-03, and the T7 extractions on
+2026-09-04.** What remains unstruck is section 8 (Sirens), which the user set
+aside on 2026-09-04; nothing else in this document is open. Two of the entries
+closed on 2026-09-03 were closed by *striking*
 rather than by building: `review_mode.launch` and `_reload_linked` had both
 been fixed as collateral of the T2 sweep and left standing here. An audit that
 lists work already done overstates what is open, which is a defect in the
@@ -57,12 +56,13 @@ its mark back through `Done.result` (`journal.on_task_done`, routed from `main` 
 is `tests/test_task_thread_writes.py`, which runs each task half on a real worker thread
 and asserts the UI state it must not touch did not move.
 
-**T4. Greyed controls with no or wrong reason.** Progress-card Cancel
-(`panes/overlay.py:367`), Plotter layer menu passing `BUSY` for an `active`/`many` gate
-(`plotter_menu.py:151-173`), error/cancelled rows in the results tray saying "not ready
-yet" (`generation_workspace.py:198-223`), Inker tileset doors saying "Open a drawing
-first" when the tab is saving (`inker_mode.py:4319, 4359`). The app's own rule is that a
-disabled control explains itself.
+**T4. ~~Greyed controls with no or wrong reason.~~** Built 2026-09-03, each site as a
+*pure* reason function beside the draw call, because a pane cannot be driven headlessly
+and a sentence chosen inline cannot be tested: `overlay.cancel_reason`,
+`plotter_menu._layer_reason` (which names the first gate that actually fails, and lets
+busy win over the shape gates because busy is the one that passes on its own),
+`generation_workspace._why_not_finished`, `inker_mode._no_document_reason`.
+`tests/test_findings_themes.py`.
 
 **T5. ~~Documented behaviour the code does not have.~~** Closed 2026-09-03, each the way
 it deserved. Sirens' "instrument kind vs channel kind is a refusal": the *sentence* went --
@@ -78,59 +78,88 @@ the import is eager and would be even without that line, because `journal.snapsh
 (The X-ray pick, the stale-buffer `play`, the imgui-nav sentences, `TILED_VERSION` and
 "six workspaces" were settled on 2026-09-03 too.)
 
-**T6. Per-frame recomputation nobody looks at.** Menu bar rebuilds every command spec
-and evaluates every `enabled()` each frame including a 200-job scan (`menus.py:180`,
-`palette.py:660`); Troupe `sendable_meshes` runs an uncached 400-row `list_jobs` per
-frame while the picker header is open (`troupe_settings.py:98`); `Model.bounds()`
-min/max over every vertex per frame for the inspector (`viewer_embed.py:211`,
-`gltf.py:236-263`); Home rebuilds Resume rows several times a frame
-(`landing.py:153-211`); Review stats the reference image three times per frame
-(`review_mode.py:1693-1699`); Reference-stage validation runs twice per frame
-(`create_brief.py:89`, `settings_2d.py:1836`). Memoise on `cache._generation` or the
-menu-open state.
+**T6. ~~Per-frame recomputation nobody looks at.~~** Built 2026-09-03, five sites; the
+sixth was already fixed and is worth recording, since an audit that lists work already
+done overstates what is open: Troupe's `sendable_meshes` had grown both halves the entry
+asks for (a `files_cache` and `cast_and_pending`'s throttle) before the review was
+written. The menu bar takes `specs(..., evaluate=False)` for the root names and evaluates
+the gates only inside a menu that is open -- **nothing memoised**, so an open menu is
+still rebuilt from live state every frame, which is what that docstring promises.
+`landing.rows` memoises on the cache generation (`jobs_cache.visible`'s own key, B19) and
+refuses to memoise at all for a cache that does not count generations, because such a key
+cannot tell two job pages apart. `review_mode.reference_path` remembers a hit outright
+and re-asks a miss once a second. `settings_2d.problems_for` is the Reference stage's one
+evaluation, keyed on the new `AppState.frame_index` -- the bar and the plan block have to
+*agree*, which one call guarantees and two only tend to. `Primitive.box` is the
+measurement `Model.bounds`' docstring already claimed it did not repeat: the transform
+was eight corners, but the min/max making them was a full pass over 443k vertices, every
+frame. `tests/test_findings_themes.py`.
 
-**T7. `main.py` at 6,345 lines and `inker_mode.py` at 4,466.** `main.py` still holds ~900
-lines of Review pane drawing (`_review_*`), the Clay and Poser viewports, and ~300 lines
-of shortcut data; these are the only surfaces not under their own `guard`. `inker_mode.py`
-holds export (~900 lines), keys, palette IO, playback, open, tilesets and journal.
-`inker_canvas.py` (3.6k) mixes input, transform, slices, text, overlays and scrollbars.
-`sirens_mode.py` (1,250) holds editing, playback, keys and journal. The seams are
-listed per mode below.
+**T7. ~~`main.py` at 6,345 lines and `inker_mode.py` at 4,466.~~** Closed 2026-09-04, and
+deliberately last: pure code motion over behaviour the sections below had just pinned, so
+a move could not also be a change. `main.py` is 4,880 -- the Review panes, the Clay and
+Poser viewports are mixins on `App` (`review_panes.py`, `clay_viewport.py`,
+`poser_viewport.py`, the repository's own idiom, as `ClayView` is assembled) and the
+shortcut data is `shortcuts.py`. `inker_mode.py` is 2,430, with `inker_export`,
+`inker_keys`, `inker_palette_io`, `inker_playback` and `inker_open` beside it, and its
+fifteen-arm `on_task_done` chain is now a prefix table (`_TASK_HANDLERS`) -- which is what
+found the two palette-export keys that had been *forgotten* from the chain and fell
+through reporting neither success nor failure. `inker_canvas.py` is 3,108 with
+`inker_drag`, `inker_slices` and `inker_gestures` beside it.
 
-**T8. Test blind spots.** Zero test references for `studio/_view_cache/_view_drag/
-_view_overlay/_view_pick.py`, `sizeguard.py`, `panes/thumbs.py`, `panes/inker_menu.py`,
-`packwright_items.py`, `troupe_bridge.py`, `troupe_sheets.py`, and **all six Sirens
-panes**. `_layouts_popup` has no test, which is why finding 1 shipped. Several suites
-are `inspect.getsource` string assertions rather than behaviour
-(`tests/test_generation_workspace.py`). `tests/plotter/_semantics.py::_tileset_facts`
-does not compare `tiles`, `wangsets` or presentation fields, which is why the TMX/TMJ
-readers can disagree and still pass.
+Every moved name is still reachable at its old address, through a PEP 562 `__getattr__`
+over a `_MOVED` table rather than an import at the bottom of the parent: each moved module
+imports its parent as a *module object* (attributes resolved at call time), so a bottom
+`from .inker_export import ...` would fail whenever something imported the pair the other
+way round, and resolving on demand has no order at all. `sirens_mode.py` (1,250) is
+untouched -- see section 8, which the user set aside.
+
+**T8. ~~Test blind spots.~~** Closed 2026-09-04 in `tests/test_findings_blind_spots.py`,
+which names every module on the list and asserts the *decidable* half of each -- a pure
+helper, a cache key, a predicate, a piece of arithmetic. None of these panes can be
+driven headlessly (this suite has no imgui harness), so a draw function stays covered by
+the smoke pass and its **decisions** are covered here; that split is the pattern the rest
+of the suite already follows and is why several of this review's fixes were built as pure
+reason functions beside their draw calls. `screen_ray`'s orthographic branch, the GPU
+cache key's mesh-not-transform rule, the drag cancel's overlay restore and the picked
+element's per-mode shape are behaviour tests. `_layouts_popup` is covered by section 2's
+guard entry; `_tileset_facts` was widened on 2026-09-03 (see section 7's Tests);
+`test_generation_workspace.py`'s string assertions are answered by the behaviour tests in
+`tests/test_findings_themes.py`. **The six Sirens panes are deliberately not covered** --
+section 8 was left open on 2026-09-04 at the user's direction.
 
 ---
 
 ## 2. Core shell (`main.py`, layout, dialogs, palette, journal, Home)
 
 ### Correctness
-- **[Medium]** `_layouts_popup`, `component_gallery.draw()` and `_shortcuts_popup` all
-  draw at host scope with no `guard.run` (`main.py:3422, 3427, 3440`). Wrap each.
+- ~~**[Medium]** `_layouts_popup`, `component_gallery.draw()` and `_shortcuts_popup` all
+  draw at host scope with no `guard.run`.~~ Built 2026-09-03, with
+  `draw_placeholder=False`: a popup that failed has nowhere to put a placeholder except
+  the host window beside the rail, where it would sit for the rest of the session.
 - ~~**[High] `Layout.save()` can skip persisting rail/sidebar.**~~ Built 2026-09-03:
   the latch is gone rather than made accurate. `save` is the only writer of `rail` and
   `sidebar` -- which the library never persists -- so *no* early return there can be
   right, and its own comment already said so ("a key this method forgets is a preference
   that silently resets"). Rewriting the legacy share blob unchanged costs nothing: it is
   a migration seed, not a source of truth. `tests/test_layouts.py`.
-- **[Medium] Ctrl chords leak through the command palette.** `palette_open` is not in
-  `modal_open` (`main.py:218`); Ctrl+Enter with the palette open in Create generates.
-- **[Medium] The Manual overlay does not own the keyboard.** Only Esc is intercepted
-  (`main.py:2777`); with the reference open, `Delete` in Create trashes the selected
-  asset unconfirmed and tool letters switch Inker tools.
-- **[Medium] Prompt dialog cannot be tabbed.** `dialogs.py:494` calls
-  `set_keyboard_focus_here` every frame the field is not active; use the `Confirm._focused`
-  one-shot.
+- ~~**[Medium] Ctrl chords leak through the command palette.**~~ Built 2026-09-03 -- but
+  **not** by adding `palette_open` to `modal_open`, which would have blocked Ctrl+K too
+  and left no way out. The gate is in `_shortcut`, immediately below the Ctrl+K branch,
+  so exactly one binding survives; Esc is swallowed with the rest because the palette
+  reads its own Escape through imgui, where its query box holds the focus.
+- ~~**[Medium] The Manual overlay does not own the keyboard.**~~ Built 2026-09-03, the
+  palette gate's shape one branch lower: Esc passes because the branch immediately below
+  is what answers it, and Ctrl+K/Ctrl+//F1 stay above because they are the three bindings
+  that work everywhere.
+- ~~**[Medium] Prompt dialog cannot be tabbed.**~~ Built 2026-09-03: `Prompt._focused`,
+  `Confirm`'s one-shot. `is_any_item_active` is true of the *field*, so the old spelling
+  re-grabbed on every frame after a Tab and the buttons were unreachable.
 - ~~**[Medium]** `journal.write` sets three tab attributes from the task thread with no
   lock on the read side (`journal.py:427-446`). See T3.~~ Built 2026-09-03.
-- **[Low]** `_MODIFIER_MAP`/`_KEY_MAP` lack GUI/super and `K_APPLICATION`
-  (`imgui_backend.py:288-359`).
+- ~~**[Low]** `_MODIFIER_MAP`/`_KEY_MAP` lack GUI/super and `K_APPLICATION`.~~ Built
+  2026-09-03: left/right super in both tables, plus the menu key -- which is `K_MENU`,
+  not `K_APPLICATION`; pygame-ce has no such name, which the entry assumed it did.
 
 ### UX
 - ~~**[High] Settings → Advanced "Sidebar width" is dead.**~~ Built 2026-09-03: made
@@ -143,35 +172,57 @@ readers can disagree and still pass.
   2026-09-03: `Layout.reset_sizes` -> `layouts.Library.reset_sizes`, which clears every
   arrangement's `widths` and `shares` and deliberately *not* `columns`/`hidden` --
   those are which panes are where, which is a different button's promise.
-- **[Medium]** Delete key is bound in the Create sidebar library but not in Library mode
-  (`main.py:2964` vs the `library` branch at ~2826); the shortcuts sheet advertises it.
-- **[Medium]** The window title reflects only unsaved *pose* edits (`main.py:2272`); a
-  dirty Inker/Clay/Plotter/Sirens document leaves the caption clean. Derive from the
-  quit-guard predicate.
-- **[Low]** Progress-card Cancel greys with no reason (`overlay.py:367`).
+- ~~**[Medium]** Delete key is bound in the Create sidebar library but not in Library
+  mode.~~ Built 2026-09-03, on the sidebar binding's own reasoning: the trash *is* the
+  confirmation.
+- ~~**[Medium]** The window title reflects only unsaved *pose* edits.~~ Built 2026-09-03
+  exactly as prescribed: `docmodes.any_unsaved` is the quit chain's own predicate, so the
+  caption and the question asked on the way out cannot disagree. Sampled per frame rather
+  than pushed from the one callback that used to own it, and only a *change* is sent to
+  the window manager.
+- ~~**[Low]** Progress-card Cancel greys with no reason (`overlay.py:367`).~~ Built
+  2026-09-03 (T4).
 
 ### Structure
-- **[High]** Extract `panes/review_*.py`, `panes/clay_viewport.py`,
-  `panes/poser_viewport.py` and `shortcuts.py` from `main.py:259-554, 4400-5610`.
-- **[Medium]** Panes import `main` (`panes/tour.py:329`, `panes/landing.py:554`) for
-  `modal_open` and `_version`. Move them to `dialogs.py` / `warlock/__init__`.
-- **[Medium]** `layouts.py:156-157, 212, 263` re-spell `layout.SIDEBAR_WIDTHS`,
-  `PANEL_MIN/MAX`; put them in `tokens`.
-- **[Medium]** The ~150 function-local `from . import` statements in `main.py` buy
-  nothing once `ensure_providers()` imports all six mode modules on frame 1. Accept eager
-  loading and say so, or actually gate on `state.inker is not None`.
-- **[Low]** `App` reaches `viewer._grab`/`clay_view._grab` (`main.py:2601, ~2683`);
-  expose `dragging`. Three copies of the hover/grab routing rule at `main.py:2590-2640`,
-  only the Clay one carrying the `tab.saving` press gate.
-- **[Low]** Surface sizes off the token scale: `_LABEL_CELL = 132`, `sp(520)/sp(720)`,
-  `sp(430)`, `sp(320)`, `sp(210)`, `landing.py:469-470`.
+- ~~**[High]** Extract `panes/review_*.py`, `panes/clay_viewport.py`,
+  `panes/poser_viewport.py` and `shortcuts.py` from `main.py:259-554, 4400-5610`.~~ Built
+  2026-09-04 (T7). The three pane groups are *mixins* rather than modules of free
+  functions -- `class App(ClayViewport, PoserViewport, ReviewPanes)` -- because every one
+  of them reads a dozen attributes off `self`, and threading those through a parameter
+  list would have made the move a rewrite. The shell names they call are imported inside
+  the methods, which is what keeps the import one-way.
+- ~~**[Medium]** Panes import `main` for `modal_open` and `_version`.~~ Built 2026-09-03
+  to those two destinations. `main.modal_open` and `main._version` stay as re-exports,
+  where every existing caller names them.
+- ~~**[Medium]** `layouts.py` re-spells `layout.SIDEBAR_WIDTHS`, `PANEL_MIN/MAX`.~~
+  Built 2026-09-03: both live in `tokens` with a `clamp_panel` helper, and `layout` names
+  them where its eight readers already look. `layouts` cannot import `layout` -- that is
+  the direction the dependency runs -- which is why it had literals in the first place.
+- ~~**[Medium]** The ~150 function-local `from . import` statements in `main.py`.~~
+  Settled 2026-09-03 by saying so, which is the first of the two options offered: they
+  are about *import order*, not laziness -- this module is imported before pygame has a
+  display, and a mode module at its top would drag imgui and moderngl into that moment.
+  The module docstring records it. Gating on `state.inker is not None` was rejected: that
+  is state about a document, not about whether a module is loaded.
+- ~~**[Low]** `App` reaches `viewer._grab`/`clay_view._grab`; three copies of the
+  hover/grab routing rule.~~ Built 2026-09-03: `Viewer.dragging`/`ClayView.dragging` and
+  one `main._takes_pointer`. The `tab.saving` press gate stays where it is -- it is a
+  different rule, about a document rather than a pointer.
+- ~~**[Low]** Surface sizes off the token scale.~~ Built 2026-09-03: four named
+  floating-surface widths in `tokens` (tip / popover / card / sheet, plus the one height a
+  surface is *given* rather than fitted to) and one `THUMB_CELL` for the picture a
+  judgement is made about -- Review's cell and Home's Resume thumbnail were 132 and 136,
+  two answers to one question and a difference nobody could see.
 
 ### Performance
-- **[Medium]** Menu bar spec rebuild per frame (T6). ~~**[Medium]** Settings flush on the
-  frame thread during drags (T2).~~ **[Low]** `ctypes.string_at` copies vertex/index
-  buffers per command list per frame (`imgui_backend.py:239, 281`);
-  `(c_ubyte * size).from_address` is zero-copy. **[Low]** `guard.enter` allocates an
-  `ErrorRecoveryState` per pane per frame (`guard.py:164-188`).
+- ~~**[Medium]** Menu bar spec rebuild per frame (T6).~~ ~~**[Medium]** Settings flush on
+  the frame thread during drags (T2).~~ ~~**[Low]** `ctypes.string_at` copies vertex/index
+  buffers per command list per frame.~~ Built 2026-09-03: `from_address`, so the upload
+  reads imgui's own memory. ~~**[Low]** `guard.enter` allocates an `ErrorRecoveryState`
+  per pane per frame.~~ Measured and kept 2026-09-03: 0.077 us to allocate, so ~25 guarded
+  surfaces cost about 2 us a frame. Marks nest and each holds its own until it is landed,
+  so pooling would mean threading the mark back through every caller's success path to buy
+  back a thousandth of a frame.
 
 ---
 
@@ -184,47 +235,58 @@ readers can disagree and still pass.
   `ctx.submit` (`:1500-1503`), landing and failure at `:703`/`:781`. Struck late --
   it had been fixed and left standing here, which is how an audit comes to overstate
   what is open.
-- **[Medium]** `_sync_viewer` decodes the reference PNG on the frame thread the moment a
-  job finishes (`viewer_embed.load_reference:183-192`). Split like `parse_model`/`_adopt_model`.
-- **[Medium]** Results-tray "Open" bypasses `asset_open.open_asset`
-  (`generation_workspace.py:200`): `source_job` stays stale on a reference and a mesh
-  result shows `input.png` on the Reference stage.
+- ~~**[Medium]** the reference PNG is decoded on the frame thread.~~ Built 2026-09-03 --
+  and half of the entry was already fixed, which is worth recording: `_sync_viewer` had
+  the `parse`/`adopt` split when the review was written. What was real is
+  `inker_mode._nudge_viewer`, which decoded inline on the frame a revert lands.
+  `viewer_embed.request_reference` is that split as a function a mode can call, and
+  `LOAD_KEY` moved there with it so no mode has to import the shell to show a picture.
+- ~~**[Medium]** Results-tray "Open" bypasses `asset_open.open_asset`
+  (`generation_workspace.py:200`).~~ Built 2026-09-03: the card calls the one router.
 - ~~**[Medium]** `jobs_cache.measure_one` mutates `_dir_sizes` from a task (T3).~~ Built
   2026-09-03.
-- **[Low]** `create_stages._reached_export` imports imgui-bearing `widgets` every frame
-  from a module whose docstring says it imports nothing from imgui
-  (`create_stages.py:120`). Move `artifacts_for`'s table to a headless module.
+- ~~**[Low]** `create_stages._reached_export` imports imgui-bearing `widgets` every
+  frame.~~ Built 2026-09-03 exactly as prescribed: `studio/artifacts.py`, four tables and
+  one lookup, re-exported from `widgets` where every caller already names them.
 
 ### UX
-- **[Medium]** Error/cancelled rows in the tray say "not ready yet" and disable Rerun,
-  though `rerun_job` needs only `input.png` and the library card offers "Try again" on
-  the same rows. Enable Rerun with the failure as caption or drop the rows.
-- **[Medium]** A VRAM door refusal is a fading toast while the plan block keeps saying
-  "Ready to generate" (`validation.check_vram:385`, `main._collect_tasks:1641-1681`,
-  `_generation_plan:1869`). `vram.shortfall_message` is a multi-remedy sentence a toast
-  cannot hold. Record the last refusal on `AppState` and draw it in the plan block.
-- **[Medium]** `hole_worst` is presented as a ranking in the inspector's remesh line
-  (`panes/inspector.py:1214-1224`, "kept the best of 12.3%, 4.5%"), which INVARIANTS
-  forbids. Say what was compared and carry the `AUDIT_UNINFORMATIVE` caveat. The caveat
-  itself exists three times with three wordings (`widgets.quality_badge:592`,
-  `inspector._quality:1189`, `review_mode.mesh_lines:1749`) and `review_mode` imports it
-  from `widgets` inside a per-frame function. One headless helper.
-- **[Medium]** "Working now" in the tray duplicates the global progress card without its
-  Cancel (`generation_workspace._progress:124`, `overlay.py:339-372`).
-- **[Medium]** Review's sweep-axis help covers 3 of 14 axes (`review_mode.py:1566`,
-  `AXIS_HELP` vs `sweeps.KWARG_AXES`); the three new engine axes got tooltips, the older
-  ones have none. Add help and a parity test; `36-review.md` names no axis at all.
-- **[Low]** "Keep → Delete the others" raises one undo toast per loser
-  (`candidates_panel.keep:110`). **[Low]** `rank.score` shown as an unqualified "score N%"
-  (`generation_workspace.py:184`). **[Low]** Toast "Show" from Sirens/Settings only
-  selects, no mode change (`asset_open.open_asset:142`).
+- ~~**[Medium]** Error/cancelled rows in the tray say "not ready yet" and disable
+  Rerun.~~ Built 2026-09-03 (T4): Rerun is live on a stopped row and the caption is the
+  failure, which is what the library card has always said on the same rows.
+- ~~**[Medium]** A VRAM door refusal is a fading toast while the plan block keeps saying
+  "Ready to generate".~~ Built 2026-09-03 exactly as prescribed: `AppState.submit_refusal`,
+  set where every task failure already passes through and only for a refusal that names no
+  control, drawn above the form problems and cleared by the next accepted press.
+- ~~**[Medium]** `hole_worst` is presented as a ranking in the inspector's remesh line.~~
+  Built 2026-09-03: `studio/quality.py` owns the threshold, the caveat and
+  `remesh_line`, which says the *measurement* ("silhouette openness measured 12.3%,
+  4.5% -- kept the lowest") and the rule that chose, and never a ranking word. The
+  "three wordings" half was stale: two of the three were already the same sentence and
+  the badge carries none -- it mutes a colour. What was real is the per-frame
+  `from .widgets import` inside `review_mode`, which is gone with the threshold.
+- ~~**[Medium]** "Working now" in the tray duplicates the global progress card without
+  its Cancel.~~ Built 2026-09-03 by giving it the Cancel rather than by deleting the
+  block: the tray is where a Create user is looking, and a duplicate that cannot act was
+  strictly worse than the thing it duplicated.
+- ~~**[Medium]** Review's sweep-axis help covers 3 of 14 axes.~~ Built 2026-09-03: all
+  eighteen, a parity test against `sweeps.KWARG_AXES` in both directions, and a "What you
+  can vary" section in `36-review.md` grouping them by what they act on.
+- ~~**[Low]** "Keep → Delete the others" raises one undo toast per loser.~~ Built
+  2026-09-03: `library.delete_assets` is one toast with one Undo carrying the batch, and
+  `restore_asset` takes it back. ~~**[Low]** `rank.score` shown as an unqualified
+  "score N%".~~ Built 2026-09-03: it is the probe's probability that you would keep this
+  one, so it says so -- "judge: 72% likely a keeper". ~~**[Low]** Toast "Show" from
+  Sirens/Settings only selects, no mode change.~~ Built 2026-09-03: the fallback goes to
+  the library, which is where a bare selection is visible and the one destination that is
+  right for a row whose stage cannot be read.
 
 ### Structure / performance
-- **[Low]** Private reach-across: `generation_workspace._vary` → `library._copy_settings`,
-  `settings_2d` → `generation_workspace._queue_position`, `plan_for` reaching
-  `service.sprites` through a pane. **[Low]** `generation_workspace.should_draw` is
-  permanently true after the first done job, so the empty state is unreachable and the
-  viewer always loses `tray_height`.
+- ~~**[Low]** Private reach-across.~~ Built 2026-09-03: `library.copy_settings` and
+  `generation_workspace.queue_position` are public (both are questions two surfaces
+  genuinely share), and `plan_for` imports `service.sprites` itself. ~~**[Low]**
+  `generation_workspace.should_draw` is permanently true after the first done job.~~
+  Built 2026-09-03: it asks the same three questions `draw` answers, so the strip is
+  reserved exactly when there is something to put in it.
 
 ### Tests
 `test_generation_workspace.py` is five source-string assertions; nothing drives
@@ -235,22 +297,29 @@ refused `"submit"` is reported. Nothing pins where the reference PNG decode happ
 
 ## 4. First run, doctor, docs, tour, accessibility
 
-- **[Low]** The tour welcome step omits music (`tour/scripts.py:43`); the "click the
-  rail" step has no keyboard path and should mention Ctrl+K.
-- **[Medium] Clay HUD colours are untokenised** (`panes/clay_hud.py:100-102`,
-  `(1,1,1,0.2)` washes): invisible on the light theme, and `test_accessibility.py` only
-  measures `tokens.PALETTES`. **[Low]** Toggle knob hard-coded white
-  (`widgets.py:2108`, `controls.py:871`), ~1.3:1 against the light `EDGE` track.
-  **[Low]** Raw px sizes at `candidates_panel.py:61,63` and `inspector.py:640`.
-  **[Low]** Tour card has no Enter/Right/Left binding (`panes/tour.py:412`).
-- **[Low]** No i18n layer exists; fine, but record the decision in INVARIANTS so nobody
-  half-starts extraction.
-- **[Low]** Stale `src/warlock/sirens/`, `src/warlock/plotter/`, `src/warlock/packwright/`
-  directories hold only `__pycache__`; the engines live under `studio/`. Delete them and
-  fix CLAUDE.md's shorthand.
-- **[Low]** Seven files in the diff carry `LF will be replaced by CRLF` warnings
-  (`README.md`, `config.py`, `doctor.py`, `generation.py`, `review_mode.py`,
-  `test_doctor.py`, `test_progress.py`). Harmless, noisy in every diff.
+- ~~**[Low]** The tour welcome step omits music; the "click the rail" step has no
+  keyboard path.~~ Built 2026-09-03: the welcome step names music, and Ctrl+K is in the
+  rail step and in the one that waits for a click.
+- ~~**[Medium] Clay HUD colours are untokenised**~~ and ~~**[Low]** the toggle knob is
+  hard-coded white~~: built 2026-09-03 as two palette entries in all three themes --
+  `WASH` (what a hover or press paints over a 3D viewport) and `KNOB` -- so
+  `test_accessibility` can see them at all, which was the deeper half of the entry.
+  ~~**[Low]** Raw px sizes at `candidates_panel.py` and `inspector.py`.~~ Built
+  2026-09-03: both named and through `sp`. ~~**[Low]** Tour card has no
+  Enter/Right/Left binding.~~ Built 2026-09-03, read through imgui like the palette's
+  own keys, because the card is a floating surface and the keys belong to it.
+- ~~**[Low]** No i18n layer exists; record the decision.~~ Done 2026-09-03, in
+  `docs/INVARIANTS.md`, naming the two prose files (the manual and the tour script) that
+  would have to move first so the cost is not rediscovered.
+- ~~**[Low]** Stale `src/warlock/{sirens,plotter,packwright}` directories.~~ Deleted
+  2026-09-03, and CLAUDE.md now says the shorthand drops a `studio/` prefix rather than
+  spelling six paths that read as top-level packages.
+- ~~**[Low]** Seven files carry `LF will be replaced by CRLF` warnings.~~ Re-checked
+  2026-09-03 and gone: all six that still exist are uniformly CRLF in the worktree and LF
+  in the index, which is exactly what `* text=auto` promises, `git add -n` over the whole
+  tree emits no such warning, and `service/generation.py` no longer exists at all. Nothing
+  to fix, and a whole-tree `eol=lf` flip would have been a large churn for a warning that
+  is not being printed.
 
 ---
 
@@ -261,17 +330,35 @@ refused `"submit"` is reported. Nothing pins where the reference PNG decode happ
   `StrokeState` on a 32-wide canvas, a diameter-4 pixel dab at x=6.0 covers columns
   5–8 and its mirror covers 23–26, which is exact about `default_axis` (column c ↔
   column 31−c). The review's arithmetic assumed a different axis.
-- **[Medium]** `animation.layers_for:862` mutates the shared `Layer.opacity` of a linked
-  cel; onion skin / preview of another frame corrupts the current stack's opacity.
-- **[Medium]** `merge_down` drops per-cel opacity and z (`_doc_layers.py:700`), and bakes
-  the lower layer's own opacity/blend then resets it.
-- **[Medium]** Interactive Move re-resolves palette indices by nearest colour
-  (`_doc_paint.py:625, 652`) instead of permuting them like `offset_layer` does.
-- **[Medium]** Bucket fill `refer="layer"` stops at erased pixels because `similar`
-  compares dead RGB under alpha 0 (`selection.py:494`).
-- **[Low]** `FloatingBuffer.flip` seeds `source` but not `source_offset` (pivot lost);
+- ~~**[Medium]** `animation.layers_for` mutates the shared `Layer.opacity` of a linked
+  cel.~~ Built 2026-09-03: `layers_for(..., detach=True)` hands shallow copies (the pixel
+  arrays are shared) to every read-only consumer, and `frame_stack` -- the onion skin and
+  the playback cache -- is the one that needed it. The editable stack still gets the cel
+  objects themselves, because a stroke has to land on them.
+- ~~**[Medium]** `merge_down` drops per-cel opacity and z.~~ Built 2026-09-03, and the
+  two halves get different answers because they are different problems. Opacity is folded
+  in (it joins the memo key -- two frames sharing both cel objects but not both alphas do
+  not merge to the same picture) and cleared on the lower slots afterwards, for the reason
+  the track's opacity is. `cel_z` is a **refusal**: it reorders rows within one frame, so
+  on a frame where a lift puts a third row between the pair, the two layers this op merges
+  are not the two that frame composites -- there is no per-frame answer to give, so the
+  frame is named and nothing happens. The "bakes then resets" half was already correct and
+  is what the fix is modelled on.
+- ~~**[Medium]** Interactive Move re-resolves palette indices by nearest colour.~~ Built
+  2026-09-03: the session snapshots the index plane beside the pixels, translates both,
+  and commits through `_commit_permuted_indices` -- `offset_layer`'s door, which exists
+  for exactly this and had one caller.
+- ~~**[Medium]** Bucket fill `refer="layer"` stops at erased pixels.~~ Built 2026-09-03
+  in `colour_distance`, so the fill, the wand and Select Colour Range stay one predicate:
+  two fully transparent pixels are the same pixel. Only when the *reference* is
+  transparent -- an opaque seed still differs from an erased pixel by its alpha, which was
+  already right.
+- ~~**[Low]** `FloatingBuffer.flip` seeds `source` but not `source_offset`;
   `duplicate_layer` drops `cel_opacity/cel_z/cel_notes/note/continuous`; `paste()` with
-  no selection lands at (0,0) and the clipboard records no source box.
+  no selection lands at (0,0).~~ All three built 2026-09-03. The clipboard records an
+  `origin` now, so a paste with no marquee lands where the copy was taken from
+  (Aseprite's answer, and what makes copying a sprite between frames two keys); (0, 0)
+  survives as the floor for content from outside the document.
 
 ### App-layer correctness
 - ~~**[High]** The context-bar combine mode is overwritten by every press.~~ Built
@@ -297,24 +384,44 @@ refused `"submit"` is reported. Nothing pins where the reference PNG decode happ
 - ~~**[High]** `_reload_linked` decodes on the frame thread.~~ Built 2026-09-03,
   also T2 collateral: `_reload_linked` takes an already-decoded document and owns only
   the textures and the tab; the decode moved to the revert task (`inker_mode.py:2626`).
-- **[Medium]** Space mid-stroke kills its own pan: `clear_drag` resets `space_held`
-  (`inker_state.py:2636`). Keyboard state is not gesture state.
-- **[Medium]** `fill_selection`/`stroke_selection`/`shift_selected` skip the busy gate
-  (`inker_ops.py:1101-1134`) and can write while `write_ora` walks the stack.
-- **[Medium]** Save As `.aseprite` marks clean and drops the journal though the write is
-  lossy (`inker_mode.py:1232, 2766`).
-- ~~**[Medium]** Four sliders push a step per frame (T1).~~ **[Medium]** Cursor readout and
-  shape commit truncate where the press floors (`inker_canvas.py:713, 2450`).
-  **[Medium]** `toggle_play` lacks `step_frame`'s open-gesture guard
-  (`inker_mode.py:3290`). **[Medium]** `_settle` mutates before a save that may be
-  refused (`:1224`). **[Medium]** Sixteen `ACTION_MODIFIERS` are remappable and never
-  read (`inker_ops.py:2409-2491`; `action_active` has two callers); modifiers are read
-  four different ways in the canvas.
-- **[Medium]** Frame-spread exports refuse silently during playback; a second tab's
-  export is refused with no message (`inker_mode.py:1723, 1351, 1725`).
-- **[Low]** Timeline prompt callbacks and drag-reorder carry stack indices into deferred
-  paths (`inker_timeline.py:1732-1833`). Fractional wheel notches leave the 5 % zoom
-  lattice. "Queued a mesh…" toasted before the job exists (`:2489`).
+- ~~**[Medium]** Space mid-stroke kills its own pan.~~ Built 2026-09-03 exactly as the
+  entry's own sentence prescribes: `forget_held_keys` is called from the three tab doors,
+  where the original reasoning (a release this pane will never see) actually applies, and
+  `clear_drag` no longer touches it.
+- ~~**[Medium]** `fill_selection`/`stroke_selection`/`shift_selected` skip the busy
+  gate.~~ Built 2026-09-03 through `when_ready`, which exists for this and which they were
+  the three writing ops not to use.
+- ~~**[Medium]** Save As `.aseprite` marks clean and drops the journal though the write
+  is lossy.~~ Built 2026-09-03, asked of *this* document rather than of the format:
+  `aseout.dropped_by_aseprite` walks `docs/COMPAT.md`'s ORA -> aseprite table against what
+  the document actually holds, so a plain drawing written here is still a real save and
+  one carrying a Flourish recipe, a matte, an alpha lock or an empty group stays dirty,
+  keeps its crash copy, and is told what has no place in the file.
+- ~~**[Medium]** Four sliders push a step per frame (T1).~~ ~~**[Medium]** Cursor readout
+  and shape commit truncate where the press floors.~~ Built 2026-09-03: `math.floor`, so
+  the readout names the pixel a click would hit (`int` truncates towards zero, so a cursor
+  just off the left edge read as pixel 0). ~~**[Medium]** `toggle_play` lacks `step_frame`'s
+  open-gesture guard.~~ Built 2026-09-03, with *stopping* deliberately above the guard: a
+  way out must always be available. ~~**[Medium]** `_settle` mutates before a save that may
+  be refused.~~ Built 2026-09-03 at the reachable door -- "send to 3D" on a dirty linked
+  tab now refuses *before* the float is committed and the preview thrown away, with the
+  pending float folded into the dirty test rather than settled first, because a pending
+  paste is exactly "what you see". ~~**[Medium]** Sixteen `ACTION_MODIFIERS` are remappable
+  and never read.~~ Built 2026-09-03 in both directions: the nine with no behaviour at all
+  were **deleted** rather than implemented (a remappable key that does nothing is worse
+  than an absent one), the four that had hard-coded behaviour were wired to the registry,
+  and the four spellings of "which modifiers are held" became one `held_chord()`. A test
+  pairs the tuple and its readers in both directions.
+- ~~**[Medium]** Frame-spread exports refuse silently.~~ Built 2026-09-03: all four
+  refusals at that door say why -- no timeline, playback running, the tab being written,
+  and an export already being set up.
+- ~~**[Low]** Timeline prompt callbacks and drag-reorder carry stack indices into
+  deferred paths.~~ Built 2026-09-03: both carry the layer's **uid** and resolve it when
+  the answer or the drop arrives -- the package's own "undo is addressed by uid, never
+  index" rule, one level up. ~~Fractional wheel notches leave the 5 % zoom lattice.~~
+  Built 2026-09-03: `PaintView.zoom_carry` keeps the remainder, so a trackpad still zooms
+  and 101.5% is unreachable. ~~"Queued a mesh…" toasted before the job exists.~~ Built
+  2026-09-03: the toast is on the landing, where the job id is.
 
 ### File IO
 - ~~**[High]** GIF export ignores per-frame palette overrides.~~ Built 2026-09-03.
@@ -334,27 +441,40 @@ refused `"submit"` is reported. Nothing pins where the reference PNG decode happ
   by design and would have blanked whatever an undersized grid did not cover; and the
   rebuild moved *inside* the guard, before the swap, with `MemoryError` added to the
   caught set since that loop is the member's one large allocation.
-- **[Medium]** Hand-listed `Layer` fields drop `background`/`reference` on open
-  (`ora.py:1814-1861`, `asein.py:1515`); use `fields(Layer)`.
-- **[Medium]** `gifin`/`sheetin` set `duration_ms` past the clamp; `aseout._frame` then
-  dies with a bare `struct.error` on `<H` (`gifin.py:102`, `sheetin.py:355`, `aseout.py:278`).
-- **[Medium]** `asein` decodes tilesets with the raw transparent index and cels with the
-  clamped one (`asein.py:1713`). **[Medium]** `write_ora`/`write_aseprite` hand-roll a
-  `.tmp` without `try/finally` instead of `studio/atomic.py`.
-- **[Low]** `asein` warns the reference layer "opens hidden" while reading VISIBLE
-  verbatim; skipped header fields have no COMPAT row. `textstamp` allocates unbounded
-  (`textstamp.py:130`) with no `pixelguard` check.
+- ~~**[Medium]** Hand-listed `Layer` fields drop `background`/`reference` on open.~~
+  Built 2026-09-03 through `Track.props()`, which is now `CEL_PROPS` rather than a dict
+  literal of its own -- so the copied-down set has one definition and the ORA reader takes
+  it whole. (The `ora` list had caught up with the set by review time; what was real is
+  that it was a *list*, and the fifth hand copy was `props` itself.)
+- ~~**[Medium]** `gifin`/`sheetin` set `duration_ms` past the clamp.~~ Built 2026-09-03
+  on `Frame.__setattr__` rather than at the two call sites: the clamp is a property of the
+  field, so a third importer inherits it instead of being the next bug.
+- ~~**[Medium]** `asein` decodes tilesets with the raw transparent index and cels with
+  the clamped one.~~ Built 2026-09-03: `_transparent_slot` is the one answer, as its own
+  docstring already argued for the other two readers. ~~**[Medium]**
+  `write_ora`/`write_aseprite` hand-roll a `.tmp`.~~ Built 2026-09-03 through
+  `studio/atomic.py`, which joins the engine's outward-import allowlist as a shared leaf
+  for `zipguard`'s reason -- a third private copy of a staging rule is a copy that stops
+  agreeing.
+- ~~**[Low]** `asein` warns the reference layer "opens hidden" while reading VISIBLE
+  verbatim.~~ Built 2026-09-03: the sentence went, not the behaviour -- it described an
+  override the reader had already stopped doing. ~~Skipped header fields have no COMPAT
+  row.~~ Two added 2026-09-03: the pixel aspect ratio and the grid rectangle, each with
+  why it is dropped rather than read. ~~`textstamp` allocates unbounded.~~ Built
+  2026-09-03: `pixelguard.check`, refused by name because this one is reachable by typing
+  rather than by opening a hostile file.
 
 ### UX parity
 - ~~**[High]** Max zoom is 1000 %.~~ Built 2026-09-03: 64× (Aseprite's 6400%), with the
   ladder extended and the wheel switching from 5% notches to one rung per notch above 8×
   — 1,260 notches to the ceiling is not a control.
-- **[Medium]** Brush cursor is a floating ring at raw mouse coordinates, not the
-  footprint (`inker_canvas.py:3602`). ~~with no mirrored twin~~ — the twins were built
-  2026-09-03 (`_pixel_cell` outlines every mirror through `brush.mirrors_of`, so the
-  pixels a click will also paint are drawn). The *footprint* half stands: the ring is
-  still a circle at the raw cursor for a brush wider than one pixel, and `_pixel_cell`
-  answers "which pixel" only at 4× and above.
+- ~~**[Medium]** Brush cursor is a floating ring at raw mouse coordinates, not the
+  footprint.~~ Both halves built now; the footprint on 2026-09-03. `brush.footprint` is
+  `StrokeState._stamp`'s own anchoring arithmetic lifted out, so the box drawn is the box
+  the dab will cover -- the two nib families anchor differently and one rule for both
+  would be half a pixel out exactly where it matters. Above `PIXEL_CELL_MIN_ZOOM` the ring
+  is **not** drawn at all: two cursors saying different things about one brush is worse
+  than either.
 - ~~**[Medium]** Grid, symmetry, layer-edge and pixel-cell lines at fractional screen
   coordinates antialias across two pixels.~~ Built 2026-09-03: `crisp` snaps an
   axis-aligned line into one device pixel. **The symmetry guide is deliberately not
@@ -369,75 +489,162 @@ refused `"submit"` is reported. Nothing pins where the reference PNG decode happ
   read out of `inker_ops.BINDINGS`. **Delete layer and delete frame keep no chord**, which
   is `delete_frame`'s own recorded argument: every other verb there is undone by pressing
   it again, and a one-key drop of the thing under the cursor is worth a menu.
-- **[Medium]** Picker Hue/Saturation sliders are dead on greys and drift on dark colours
-  because HSV is re-derived from 8-bit RGB per frame (`inker_picker.py:186-203`).
-- **[Low]** Onion skin on a two-frame clip draws the other frame twice; `,`/`.`/Enter
-  bound twice; `_MUTATING_CTRL` duplicates `inker_ops.ready`'s gate.
+- ~~**[Medium]** Picker Hue/Saturation sliders are dead on greys and drift on dark
+  colours.~~ Built 2026-09-03: `InkerState.picker_space` holds the triple, keyed on the
+  bytes it wrote -- so it is a cache of *this gesture* and anything else changing the
+  colour replaces it.
+- ~~**[Low]** Onion skin on a two-frame clip draws the other frame twice~~ -- the span
+  wraps, so -1 and +1 are one frame; a drawn-set fixes it and nearest-first ordering means
+  the ghost kept is the closest. ~~`,`/`.`/Enter bound twice~~ -- the raw arms went; they
+  were a workaround for a context bug in the `play` op that is fixed, and only the
+  registry's binding is remappable or carries a refusal. ~~`_MUTATING_CTRL` duplicates
+  `inker_ops.ready`'s gate~~ -- the duplicate check at the registry dispatch went, since
+  `inker_ops.run` enforces the gate *and says why*: the second check refused the same
+  presses silently. Every op bound to one of those chords is `when_ready`-gated, which is
+  what makes the removal safe and is asserted.
 
 ### Structure
-- **[High]** Extract from `inker_mode.py` in payoff order: `inker_export.py`
+- ~~**[High]** Extract from `inker_mode.py` in payoff order: `inker_export.py`
   (`:1243-2329`), `inker_keys.py` (`:3206-3830`), `inker_palette_io.py`,
   `inker_playback.py`, `inker_open.py`; replace the fifteen-arm `on_task_done` chain
-  with a prefix table.
-- **[Medium]** Split `inker_canvas.py` into input / transform / slices / overlays; move
-  pure helpers (`marquee_rect`, `closes_gesture`, `_onion_index`) into `inker_state`;
-  `0x1FFFFFFF` → `gid.GID_MASK`. One `held_chord()`.
-- **[Medium]** Three `over`-style commits and three cut-arithmetic copies in
-  `_doc_selection.py` (the root of the alpha-lock bug).
+  with a prefix table.~~ Built 2026-09-04, all five and the table -- see T7. The table is
+  built once behind `functools.cache` rather than written as a literal, because two of its
+  keys are constants on `inker_flourish`, which imports this module back.
+  `tests/test_ux_silent_refusals.py` and friends now name the module a function actually
+  lives in; `test_every_task_key_inker_submits_is_answered` reads `_TASK_HANDLERS()`
+  instead of parsing the chain's source.
+- ~~**[Medium]** Split `inker_canvas.py` into input / transform / slices / overlays.~~
+  Built 2026-09-04, on the seams the code actually had rather than the four this line
+  guessed: `inker_drag` (the held pointer and its release -- the pane's one hard rule,
+  that a drag never commits and the release is the only writer, is now a file), 
+  `inker_slices` (a named rectangle on the canvas, so its own hit test, handles and drag)
+  and `inker_gestures` (the multi-click gestures -- lasso, curve, text -- which are not
+  drags at all, because nothing is held down to end them). Transform and the overlays stay
+  in the canvas: they are what the draw order *is*, and splitting them would have put half
+  a sequence in another file.
+  ~~Move pure helpers (`marquee_rect`, `closes_gesture`, `_onion_index`) into
+  `inker_state`~~ -- done 2026-09-03, with `is_click` beside them, and the canvas
+  re-exports all four. ~~`0x1FFFFFFF` → `gid.GID_MASK`~~ and ~~one `held_chord()`~~ done
+  the same day. The **split itself is the T7 work** and is deliberately last, so the
+  moves are pure code motion over behaviour these tests now pin.
+- ~~**[Medium]** Three `over`-style commits and three cut-arithmetic copies in
+  `_doc_selection.py`.~~ Closed 2026-09-03. The `over` half was already done --
+  `_composite_onto` is the one rule and its docstring says so -- and the cut half was two
+  copies rather than three; `_cut_alpha` is now the one place the "it is a *subtraction*"
+  argument lives.
 
 ### Performance
-- **[Medium]** `preview_filter` re-blends, invalidates and re-uploads the box every frame
-  the popup is open (`_doc_paint.py:457-500`); a 2048² filter = 16 MB upload per frame.
-- **[Medium]** Every brush-down copies the whole layer twice (`_doc_paint.py:927`,
-  `brush.py:777, 789`): 32 MiB per click at 2048².
-- **[Medium]** A brush-down that draws nothing triggers `_stamp_all` + full recomposite
-  (`document.py:1119-1131`); `_ensure_cel_for` swaps in place.
-- **[Medium]** `_content_box` rescans four alpha passes per painted frame, keyed on a
-  never-pruned `id(doc)` (`inker_canvas.py:2877`). LRUs are Python lists with
-  `remove()` per visible cell per frame (`inker_textures.py:239-357`).
-- **[Low]** `_below` cache is full-canvas float32 (64 MiB at 2048²); mirror preview does
-  up to 4096 `add_rect_filled` per frame; `_adopt` writes the settings file on every tab
-  open; `gifout.map_to_palette` is O(palette × pixels).
+- ~~**[Medium]** `preview_filter` re-blends, invalidates and re-uploads the box every
+  frame the popup is open.~~ Built 2026-09-03: `_filter_written` is the signature of the
+  blend last written, so an idle popup costs a tuple compare. The mask is the one input it
+  cannot describe cheaply, so it is dropped at `select`, the one writer.
+- ~~**[Medium]** Every brush-down copies the whole layer twice.~~ Measured 2026-09-03
+  and it is one copy, not two: `StrokeState.coverage` is `np.zeros`, 0.012 ms at 2048
+  square because the pages are mapped lazily and a stroke touches a few of them. The real
+  one is the `before` snapshot at 6.8 ms -- and 0.1 ms at 256 square, which is the size
+  documents are drawn at; 2048 is `pixelguard`'s ceiling rather than a normal canvas.
+  Kept, with the figures in the code: the alternative is a copy-on-write tile ledger
+  inside the blend, which is the one loop where a mistake corrupts undo rather than
+  dropping a frame.
+- ~~**[Medium]** A brush-down that draws nothing triggers `_stamp_all` + full
+  recomposite.~~ Built 2026-09-03 exactly as the entry prescribes: the autovivify was a
+  swap in place, so `_discard_pending_cel` is the same swap back -- the placeholder is
+  rebuilt with the uid it always had, and only its row is stamped and invalidated. The
+  whole rebuild survives as the fallback for a row or column that has since gone.
+- ~~**[Medium]** `_content_box` ... keyed on a never-pruned `id(doc)`.~~ Built
+  2026-09-03: a weakref finalizer drops a document's whole block when it dies, which
+  closes both halves at once -- the id cannot be reused while an entry for it exists, and
+  the entries cannot outlive what they describe. (The rescan itself was already memoised
+  on `(rev, layer_stamp)`.) ~~LRUs are Python lists with `remove()` per visible cell per
+  frame.~~ Built 2026-09-03: dicts used as ordered sets, which is the ordering these need
+  and a constant-time drop.
+- **[Low]** `_below` cache is full-canvas float32 (64 MiB at 2048²) -- **kept**, and the
+  only one of these four left: it is the base a stacked blend composites onto, and uint8
+  there is banding on exactly the documents that have layers under the active one. One
+  allocation, not per frame. ~~Mirror preview does up to 4096 `add_rect_filled` per
+  frame~~ -- built 2026-09-03: one rect per *run*, split by the face box because the two
+  sides are different colours. ~~`_adopt` writes the settings file on every tab open~~ --
+  re-checked and stale: `Settings.set` compares before marking dirty and the write is
+  debounced, so an identical block is a no-op. ~~`gifout.map_to_palette` is
+  O(palette × pixels)~~ -- built 2026-09-03 over the region's *distinct* colours, which is
+  `indexed.snap`'s own trick and at most 256 inputs after the snap above it.
 
 ---
 
 ## 6. Clay, Poser, Troupe, shared viewer
 
 ### Correctness
-- **[Medium]** Esc on a Clay element drag leaves the overlay VBO at the previewed
-  positions (`_view_drag.py:625-630, 905`); same in `_restart_keyboard_drag`.
-- **[Medium]** `reserve_uid` on the task thread races `new_uid` (T3). **[Medium]** Clay
-  crash-recovery decode on the frame thread (`clay_mode.py:1047`).
-- **[Medium]** Poser `_blend` interpolates a partial key from identity, which is not
-  rest in node space (`pipelines/sheet.py:207-222`); a bone present in one key swings
-  through parent-alignment mid-segment.
-- **[Medium]** Zero-sum or unnormalised skin weights collapse vertices in the viewer
-  (`viewer/programs.py:141`, `gltf.py:462-471` never renormalises).
-- **[Medium]** Clip-library key quaternions are never validated (`rigging.py:272`,
-  `service/clips.py:723`); a 3-element list raises inside `_blend` and a NaN is written
-  to disk. `validate_pose` exists.
-- **[Medium]** Troupe atlas decoded and uploaded on the frame thread, then decoded again
-  for scoring (`troupe_mode.py:827, 725`).
+- ~~**[Medium]** Esc on a Clay element drag leaves the overlay VBO at the previewed
+  positions.~~ Built 2026-09-03: `_restore_overlays` rewrites them from the mesh's own
+  positions, at both doors. The overlay is keyed on `id(mesh)`, which does not change
+  during a drag, so nothing else was going to.
+- ~~**[Medium]** `reserve_uid` on the task thread races `new_uid` (T3).~~ ~~**[Medium]**
+  Clay crash-recovery decode on the frame thread.~~ Re-checked 2026-09-03 and already
+  fixed: `_journal_adopt` reads and parses on a task, `inker-recover`'s shape, and says
+  so.
+- ~~**[Medium]** Poser `_blend` interpolates a partial key from identity.~~ Built
+  2026-09-03, and the answer differs by space because the problem does. In `delta` the
+  identity *is* rest and the old behaviour was right. In `node` it is parent alignment,
+  so the other end is **held**: the honest reading of a key that says nothing about a
+  bone is that it says nothing, and the bone does not move rather than moving somewhere
+  nobody authored. Blending from the bone's own rest would be better still and is not
+  available -- `_blend` is handed two poses and no rig.
+- ~~**[Medium]** Zero-sum or unnormalised skin weights collapse vertices in the
+  viewer.~~ Built 2026-09-03 at the reader: renormalised (exact for a well-formed file --
+  a sum of 1 divides by 1) and a zero-sum vertex pinned to its first joint, since the
+  shader sums with no division and such a vertex went to the world origin as a spike.
+- ~~**[Medium]** Clip-library key quaternions are never validated.~~ Built 2026-09-03
+  through `validate_pose`'s own bone loop, split out as `validate_bones` -- a split
+  rather than a flag, because an empty map is a mistake in a saved pose and is exactly
+  what a clip's rest key is.
+- ~~**[Medium]** Troupe atlas decoded and uploaded on the frame thread~~ -- fixed before
+  the review by T2; both `_decode_atlas` and `_score_task` are task-thread halves and say
+  so. The *double decode* stands and is deliberate: they are two tasks that need not both
+  run, of a file the OS has just cached, and coupling their caches to save one decode on
+  selection would tie the QA pass to the texture's lifetime.
 
 ### UX
-- **[Medium]** Poser right-click "Reset the whole pose" bypasses the guard the button
-  has (`main.py:3750`).
-- **[Medium]** Poser and the shared viewer have no reframe key, no axis views, and a
-  click on empty space orbits rather than deselecting; the gizmo is dismissed only with
-  an undocumented Esc.
-- **[Low]** No pan without a middle button in either viewer. Shade Auto's
-  "whole document" branch is unreachable (`clay_ops.py:680`, gated on `has_objects`).
-  `insert_key` has no caller.
+- ~~**[Medium]** Poser right-click "Reset the whole pose" bypasses the guard the button
+  has.~~ Built 2026-09-03: through `poser_mode.guard`, like the two buttons. A right-click
+  menu is the easiest of the three doors to hit by accident.
+- ~~**[Medium]** Poser and the shared viewer have no reframe key, no axis views, and a
+  click on empty space orbits rather than deselecting.~~ All three built 2026-09-03.
+  Poser reads **Clay's** `AXIS_VIEW_KEYS` rather than restating them, so the two
+  viewports cannot come to disagree about which number is the front; `F` reframes through
+  `frame_bounds`, since an armature has no mesh for `Model.bounds` to measure. A press
+  that hits no marker still starts an orbit -- a drag from empty space must turn the
+  model -- so the deselect is decided at the *release*, and `_motion` tells a click from a
+  drag with a small threshold because a pen jitters on a tap.
+- ~~**[Low]** No pan without a middle button in either viewer.~~ Built 2026-09-03:
+  Alt+drag, which is what every DCC binds it to, beside the middle button. ~~Shade Auto's
+  "whole document" branch is unreachable.~~ Built 2026-09-03: `any_object` is the gate
+  that matches the op's own fallback. ~~`insert_key` has no caller.~~ Built 2026-09-03:
+  the clip pane can add a key the library already holds, which it could not -- building a
+  walk out of four poses meant authoring each of them twice. `PoserState.key_names` was
+  written for exactly this picker and had no caller either.
 
 ### Structure / performance
-- **[Medium]** The node/rest rotation conversion lives only in `poser_mode.py:816-847`
-  and is restated in `blender_worker.py:497`; `service.clips.preview_frames` has zero
-  callers while `rebuild_frames` reimplements it.
-- **[Medium]** Bevel rewrites every face in a Python loop (`ops_bevel.py:414-428`);
-  Select More/Less reimplements the vectorised `_face_corner_mask`
-  (`clay_ops.py:828`); `Model.bounds()` per frame (T6); hover motion redraws the MSAA
-  scene (`viewer_embed.py:481`); pose mode rebuilds every overlay per frame.
-- **[Low]** `dissolve_edges` is O(selected × corners).
+- ~~**[Medium]** The node/rest rotation conversion lives only in `poser_mode` and is
+  restated in `blender_worker`.~~ Built 2026-09-03: `rigging.node_from_delta` /
+  `delta_from_node` are the one definition, beside the sentence that justifies them, and
+  both ends call them -- the worker converting Blender's WXYZ rest at the boundary. They
+  cannot share a *rest source* (one is bpy's, one the viewer's), which is why only the
+  algebra moved. ~~`service.clips.preview_frames` has zero callers while `rebuild_frames`
+  reimplements it.~~ Settled 2026-09-03 by saying so in its docstring: they share the
+  interpolator, which is the part that must not differ, and they differ in *where the
+  record comes from* -- the pane expands the clip being edited, and a scrubber showing the
+  file instead would ignore the edit in front of it.
+- ~~**[Medium]** Bevel rewrites every face in a Python loop~~ -- built 2026-09-03: a
+  face the bevel does not touch is copied whole, so one edge on a 200k-face sculpt no
+  longer runs the branch 200k times; the affected faces stay corner by corner, because
+  which corners they grow genuinely is per corner. ~~Select More/Less reimplements the
+  vectorised `_face_corner_mask`~~ -- built 2026-09-03, which also retires the second
+  spelling of the rule those two verbs rest on being inverses of. ~~`Model.bounds()` per
+  frame (T6)~~. ~~Hover motion redraws the MSAA scene~~ -- built 2026-09-03: only a
+  *changed* gizmo hover is dirty. ~~Pose mode rebuilds every overlay per frame~~ -- closed
+  by that: `_overlays` is only reached on a frame the renderer actually redraws.
+- ~~**[Low]** `dissolve_edges` is O(selected × corners).~~ Built 2026-09-03: the corner
+  list is sorted by edge once and each edge's pair of faces found by bisection.
 
 ### Tests
 No Ctrl chord-during-drag beyond Ctrl+J and Ctrl+Z; nothing drives
@@ -473,39 +680,82 @@ No Ctrl chord-during-drag beyond Ctrl+J and Ctrl+Z; nothing drives
   `PackDoc.replace_source` swaps one source's pixels in a single undo step, keeping its
   uid and its rename, and the toast names both halves of a mixed batch. Identical pixels
   are still a skip.
-- **[Medium]** `tileset_usage` misses grouped tile layers and tile objects, so
-  `remove_tileset` can renumber painted cells (`_map_tilesets.py:104`).
-- **[Medium]** Closing the active tab carries brush/palette/terrain/selection onto the
-  neighbour (`plotter_state.py:717`, no `_forget_document_state`).
-- **[Medium]** Image-layer texture stamped on `id(pixels)`, which CPython recycles
-  (`plotter_canvas.py:1091`). **[Medium]** Ctrl+Shift+Up/Down reorders layers while
-  saving (`_MUTATING_CTRL` omits them). **[Medium]** The object clipboard is a live
-  reference (`plotter_mode.py:948`). **[Medium]** Terrain re-fit treats an infinite
-  map's window edge as the map edge (`terrain.py:166`). **[Medium]** Foreign Wang set
-  `class`/properties/representative tile dropped and written back as `tile="-1"`.
-  **[Medium]** Deprecated image-layer `x`/`y` folded on XML, dropped on JSON.
-  **[Medium]** Absolute filesystem paths persisted as sprite keys in `.wpack`.
-- **[Low]** Tile-object `gid` unchecked; `_image_layer_files` can be shadowed by the map
-  name; unknown `staggeraxis` silently replaced; MaxRects tries only POT sizes even with
-  `power_of_two=False`; `wpack` coerces `"false"` to True.
+- ~~**[Medium]** `tileset_usage` misses grouped tile layers and tile objects.~~ Built
+  2026-09-04: it walks `all_layers()` and counts a `TileShape`'s gid as the cell it is.
+- ~~**[Medium]** Closing the active tab carries brush/palette/terrain/selection onto the
+  neighbour.~~ Built 2026-09-04, and only when the *active* tab went: closing a background
+  tab is not arriving anywhere.
+- ~~**[Medium]** Image-layer texture stamped on `id(pixels)`.~~ Built 2026-09-04: the
+  array is pinned beside the stamp, which is what makes an identity sound -- the
+  ``_content_box`` fix in another mode. ~~**[Medium]** Ctrl+Shift+Up/Down reorders layers
+  while saving.~~ Built 2026-09-04, gated inline rather than through `_MUTATING_CTRL`
+  (which keys on the letter and would swallow a plain Ctrl+Up nudge too). ~~**[Medium]**
+  The object clipboard is a live reference.~~ Built 2026-09-04: `_apply_object_props`
+  writes straight onto the object, so the copy is taken at the press. ~~**[Medium]**
+  Terrain re-fit treats an infinite map's window edge as the map edge.~~ Built
+  2026-09-04, and the parameter for it already existed: `outside=not doc.infinite`. Past
+  an infinite map's window the map is genuinely unpainted, so the terrain must grow an
+  outline there rather than run seamlessly off into nothing. ~~**[Medium]** Foreign Wang
+  set `class`/representative tile dropped.~~ Built 2026-09-04 on both spellings, read and
+  written. ~~**[Medium]** Deprecated image-layer `x`/`y` folded on XML, dropped on JSON.~~
+  Built 2026-09-04 -- one map read with its image in place from a `.tmx` and at the origin
+  from the `.tmj` beside it. ~~**[Medium]** Absolute filesystem paths persisted as sprite
+  keys.~~ Built 2026-09-04: `sources.file_key` is the stem plus a digest of where the file
+  came from -- stable per file, which is what makes a re-add a replacement, and carrying
+  no directory into a shared document.
+- ~~**[Low]** Tile-object `gid` unchecked~~ -- said out loud now, once per read, naming
+  the object and the layer. ~~`_image_layer_files` can be shadowed by the map name~~ --
+  the bundle's own names are reserved, so a source that spells `map.tmx` takes the
+  `images/` fallback instead of replacing the map with PNG bytes. ~~Unknown `staggeraxis`
+  silently replaced~~ -- logged on both spellings; on a staggered map that fallback moves
+  every other row half a tile. ~~MaxRects tries only POT sizes even with
+  `power_of_two=False`~~ -- the limit itself is the last candidate, so a 1500 px ceiling
+  is reachable. ~~`wpack` coerces `"false"` to True~~ -- `_json_bool`, because the file is
+  hand-editable. All 2026-09-04.
 
 ### UX
-- **[Medium]** Tileset removal is modelled and undoable but has no UI. **[Medium]** "Add
-  to Packwright" from Library/Troupe toasts "Start or open an atlas first" instead of
-  minting one. **[Medium]** No pivot/anchor control or preview. **[Medium]** Export
-  encode errors reach the user as "see the log" (`texturepacker.py:145`).
-- **[Low]** Every repack resets the view; undo drops the object selection; deleting a
-  layer leaves `selected_objects` pointing into it; layer-menu reasons name the wrong
-  cause; bridge label always says "JSON (Array)".
+- ~~**[Medium]** Tileset removal is modelled and undoable but has no UI.~~ Built
+  2026-09-04: a Tileset menu row, with the model's own refusal (which names the count and
+  the layer) passed on. ~~**[Medium]** "Add to Packwright" from Library/Troupe toasts
+  "Start or open an atlas first".~~ The Library door already minted; Troupe's and the file
+  *drop* did not, and do now (2026-09-04) -- an atlas has no numbers that cannot be taken
+  back later, which is that rule's own argument. ~~**[Medium]** No pivot/anchor control or
+  preview.~~ Built 2026-09-04: `PackDoc.set_pivot` (one undo step, `None` clears it and is
+  deliberately not the same as the centre), a checkbox and two folded drag fields on the
+  selected source, and a cross in the preview placed by the frame's trim exactly as
+  `texturepacker._pivot` normalises it. ~~**[Medium]** Export encode errors reach the user
+  as "see the log".~~ Built 2026-09-04: framed as a `ServiceError`, since only that text
+  survives the task classifier -- and the sentence being thrown away was the actionable
+  one.
+- ~~**[Low]** Every repack resets the view~~ -- only a repack that changes the atlas's
+  *shape* does now, so a rename no longer flings somebody working at 400% back to "fit".
+  ~~Undo drops the object selection~~ -- it is pruned rather than cleared: what the clear
+  was for is an object the step *removed*, and undoing a nudge deselecting the thing that
+  just moved back was the cost. ~~Deleting a layer leaves `selected_objects` pointing into
+  it~~ -- the same prune, at both delete doors. ~~Layer-menu reasons name the wrong
+  cause~~ -- T4. ~~Bridge label always says "JSON (Array)"~~ -- it reads the document's
+  schema. All 2026-09-04.
 
 ### Structure / performance
-- **[Low]** `tileset_from_inker` bypasses `land_tileset`; `_shift_layer` duplicates
-  `shift_layer`.
-- ~~**[Medium]** Save/Export encode on the frame thread (T2).~~ **[Medium]** Per-visible-cell
-  Python in the canvas rebuilding an 11-field `Lattice` per call, with no LOD, so zooming
-  out is the worst case (`plotter_canvas.py:1037-1071`, `_map_project.py:35`); same on
-  the export path (`render.py:302`). **[Low]** Objects drawn without culling; Wang fill is
-  per-cell Python; source/packed lists have no `list_clipper` at 1024 rows.
+- ~~**[Low]** `tileset_from_inker` bypasses `land_tileset`.~~ Built 2026-09-04: that
+  function is "the whole tail of the arrival" and this was a hand copy of its first line,
+  so a drawing brought over from Inker landed without selecting itself, without clearing
+  the stale brush, without arming its terrain and without refitting the view.
+  ~~`_shift_layer` duplicates `shift_layer`.~~ Built 2026-09-04 -- and the two had already
+  come apart at the ends, so the same press did different things from different
+  controls.
+- ~~**[Medium]** Save/Export encode on the frame thread (T2).~~ ~~**[Medium]**
+  Per-visible-cell Python rebuilding an 11-field `Lattice` per call.~~ Built 2026-09-04 on
+  both paths by hoisting the lattice out of the loop -- it cannot change inside one
+  layer's draw. No LOD: the cell count is already bounded by the visible block, and a
+  second picture at a second detail level is a second thing to keep agreeing with the
+  export. ~~**[Low]** Objects drawn without culling~~ -- culled against the pane with a
+  margin, which the tile layers already were. ~~Wang fill is per-cell Python~~ -- the
+  assert-write is one fancy index now; the *re-fit* is unavoidably sequential (each cell
+  reads neighbours the loop may already have re-chosen) and that is the algorithm rather
+  than the implementation, which the code now says. ~~Source/packed lists have no
+  `list_clipper` at 1024 rows~~ -- both clipped; the sources list's selected row is taller
+  than the rest and the clipper re-measures, which is written down where it matters.
 
 ### Tests
 ~~`_tileset_facts` blind to `tiles`, `wangsets`, presentation~~ -- widened 2026-09-03 to
@@ -611,6 +861,7 @@ wider than the remaining channels. None of the six Sirens panes has a test.
    the `.ora` tile grid.~~ Done 2026-09-03. The GIF and `.ora` tests assert the *file*
    -- decoded frames, and a document byte-identical to its pre-load state -- since both
    defects are invisible to a test that inspects arguments.
-9. Extractions (T7) once the behaviour above is pinned, so the moves are pure. This is
-   now the only item left in this list, and the only unstruck **[High]** entries in the
-   document are its two halves (sections 2 and 5).
+9. ~~Extractions (T7) once the behaviour above is pinned, so the moves are pure.~~ Done
+   2026-09-04, in that order and for that reason -- see T7 for what each file became and
+   for the one door back. Section 8 (Sirens) is the only thing left in this document, and
+   it is set aside rather than owed to this review.

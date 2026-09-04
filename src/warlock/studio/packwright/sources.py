@@ -178,6 +178,36 @@ def layer_key(prefix: str, index: int, name: str) -> str:
     return f"{prefix}#layer{index:02d}:{name}"
 
 
+def file_key(path: Any) -> str:
+    """One loose image file's key: its stem, plus a digest of where it came from.
+
+    A key is a sprite's **identity** -- it is what makes re-adding an edited
+    PNG a replacement rather than a second copy -- so it has to be stable per
+    file. It used to be ``str(path)``, an absolute filesystem path, and that is
+    stable in exactly the wrong way: it is written into the ``.wpack``, so a
+    shared atlas document carried the author's directory layout, and the same
+    two files added on two machines were four different sprites.
+
+    The stem is what a person recognises and the digest is what keeps two
+    ``barrel.png`` in different folders apart. Eight hex characters of SHA-256
+    over the resolved path: short enough to read past, long enough that a
+    collision is not a thing that happens to anybody.
+
+    The exported atlas is unaffected either way -- ``texturepacker`` names a
+    frame from ``Sprite.name``, never from the key.
+    """
+
+    import contextlib
+    import hashlib
+    from pathlib import Path as _Path
+
+    resolved = _Path(path)
+    with contextlib.suppress(OSError):  # a path the OS will not resolve
+        resolved = resolved.resolve()
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
+    return f"{resolved.stem or 'image'}#{digest}"
+
+
 def _meta_of(doc: Any, frame_uid: Any) -> SpriteMeta:
     """One frame's metadata, if the document has any to give.
 

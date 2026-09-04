@@ -16,3 +16,21 @@ os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 # pins that one; a bump that moves fewer than all three leaves Home printing a
 # version whose "What's new" entry does not exist (2026-08-11, v0.0.22).
 __version__ = "0.0.31"
+
+
+def installed_version() -> str:
+    """The version this process is *running*, falling back to the constant.
+
+    Here rather than in ``studio.main``: Home draws it and the crash log writes
+    it, and neither has any other reason to import the frame loop -- a pane
+    importing ``main`` for one helper is how a leaf comes to depend on the
+    shell. The distribution's metadata wins over :data:`__version__` because an
+    editable install can be a build behind the source tree.
+    """
+
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("warlock")
+    except PackageNotFoundError:
+        return __version__

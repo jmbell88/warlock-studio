@@ -157,10 +157,29 @@ def map_to_palette(
         lookup: dict[tuple[int, ...], int] = {}
         for index, colour in enumerate(table):
             lookup.setdefault(colour, index)
-        picks = np.zeros(rgb.shape[0], dtype=np.uint8)
-        for colour, index in lookup.items():
-            picks[(rgb == np.asarray(colour, dtype=np.uint8)).all(axis=1)] = index
-        picks = picks.reshape(flat.shape[:2])
+        # Over the region's **distinct** colours, not over its pixels --
+        # ``indexed.snap``'s own trick, and the same arithmetic: a full-image
+        # comparison per palette entry is 256 passes over four million pixels
+        # for an answer that has at most 256 distinct inputs, and after
+        # ``snap`` above it has at most as many as the table holds. The packed
+        # uint32 view is what makes ``np.unique`` cheap here.
+        packed = (
+            rgb[:, 0].astype(np.uint32) << 16
+            | rgb[:, 1].astype(np.uint32) << 8
+            | rgb[:, 2].astype(np.uint32)
+        )
+        unique, inverse = np.unique(packed, return_inverse=True)
+        mapped = np.array(
+            [
+                lookup.get(
+                    (int(value >> 16) & 0xFF, int(value >> 8) & 0xFF, int(value) & 0xFF),
+                    0,
+                )
+                for value in unique
+            ],
+            dtype=np.uint8,
+        )
+        picks = mapped[inverse].reshape(flat.shape[:2])
     picks[flat[..., 3] < ALPHA_THRESHOLD] = TRANSPARENT_INDEX
 
     indexed = Image.fromarray(picks, "P")

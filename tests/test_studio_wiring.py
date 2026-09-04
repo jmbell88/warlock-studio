@@ -317,7 +317,13 @@ def test_the_reference_lookup_returns_none_when_neither_name_is_there(tmp_path):
 def test_the_pane_skips_a_label_through_the_public_surface():
     assert hasattr(review_mode, "advance_labels")
     assert not hasattr(review_mode, "_advance_labels")
-    assert "review_mode.advance_labels" in inspect.getsource(main.App)
+    # ``App`` inherits Review's pane drawing from ``review_panes.ReviewPanes``
+    # since 2026-09-04 (T7), and ``getsource`` on a class shows only its own
+    # body -- so the call lives in the mixin now.
+    from warlock.studio import review_panes
+
+    assert "review_mode.advance_labels" in inspect.getsource(review_panes.ReviewPanes)
+    assert issubclass(main.App, review_panes.ReviewPanes)
 
 
 # --- H51: the pose-dirty callback has a real consumer ------------------------

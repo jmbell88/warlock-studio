@@ -86,10 +86,7 @@ def draw(ctx: Any) -> None:
     focus.begin(state, FOCUS_PANE)
 
     sheet = form.get("output") == "sheet"
-    problems = settings_2d.validate(form)
-    weight = settings_2d.weights_problem(ctx, form)
-    if weight is not None:
-        problems = [*problems, weight]
+    problems = settings_2d.problems_for(ctx, form)
     busy = ctx.busy("submit")
 
     _type(ctx, form)

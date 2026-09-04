@@ -129,11 +129,13 @@ def ask_add_sources(ctx: Any) -> None:
         return
     uid = tab.uid
 
+    from .packwright.sources import file_key
+
     def run() -> dict[str, Any] | None:
         path = dialogs.open_file("Add an image", IMAGE_FILTER)
         if path is None:
             return None
-        return {"sprites": [(str(path), path.stem, _decode(path))], "uid": uid}
+        return {"sprites": [(file_key(path), path.stem, _decode(path))], "uid": uid}
 
     ctx.submit(f"packwright-add:{uid}", run)
 
@@ -172,8 +174,11 @@ def add_rendered_sheet(ctx: Any, job_id: str, sheet_id: str, *, pixel: bool = Fa
     """
     tab = active(ctx)
     if tab is None:
-        ctx.toast("Start or open an atlas first.", "error")
-        return
+        # ``add_job_source``'s rule: this is offered from *outside* Packwright,
+        # so refusing is an offer taken back -- and an atlas has no numbers
+        # that cannot be taken back later, so one is simply made.
+        tab = new_document(ctx)
+        set_mode(ctx.state, "packwright")
     uid = tab.uid
 
     def run() -> dict[str, Any] | None:
@@ -246,14 +251,18 @@ def add_source_paths(ctx: Any, paths: list[Path]) -> None:
     """
     tab = active(ctx)
     if tab is None:
-        ctx.toast("Start or open an atlas first.", "error")
-        return
+        # A drop is the same offer from outside: minted rather than refused,
+        # ``add_job_source``'s rule.
+        tab = new_document(ctx)
+        set_mode(ctx.state, "packwright")
+    from .packwright.sources import file_key
+
     wanted = [Path(p) for p in paths]
     uid = tab.uid
 
     def run() -> dict[str, Any]:
         return {
-            "sprites": [(str(p), p.stem, _decode(p)) for p in wanted],
+            "sprites": [(file_key(p), p.stem, _decode(p)) for p in wanted],
             "uid": uid,
         }
 
@@ -324,6 +333,24 @@ def add_inker_document(ctx: Any, inker_tab: Any) -> None:
         ctx.toast(f"Those frames were not added: {exc}", "error")
         return
     ctx.toast(_added_sentence(*_add_sprites(ctx, tab, sprites)))
+
+
+def set_pivot(
+    ctx: Any, tab: PackTab, uid: int, pivot: tuple[float, float] | None
+) -> None:
+    """Move one sprite's anchor, and re-arm the pack.
+
+    Through the mode rather than onto the document for ``rename_source``'s
+    reason: the pivot rides in the layout and out into the exported sidecar, so
+    a pivot that never reaches a pack is a pivot the sidecar does not carry.
+    """
+
+    if tab is None or tab.saving:
+        return
+    before = tab.doc.history.head
+    tab.doc.set_pivot(int(uid), pivot)
+    if tab.doc.history.head != before:
+        tab.pack_dirty = True
 
 
 def _add_sprites(ctx: Any, tab: PackTab, sprites: list[Any]) -> tuple[int, int]:

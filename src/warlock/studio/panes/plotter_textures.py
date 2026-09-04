@@ -79,7 +79,9 @@ def tileset_texture(ctx: Any, uid: str, index: int, tileset: Any, epoch: int) ->
     return texture
 
 
-def image_texture(ctx: Any, uid: str, name: str, pixels: Any, stamp: Any) -> Any:
+def image_texture(
+    ctx: Any, uid: str, name: str, pixels: Any, stamp: Any, *, pin: Any = None
+) -> Any:
     """A texture for an array this mode *generates*, re-uploaded when it moves.
 
     ``tileset_texture``'s twin for the one image here that is not frozen: the
@@ -87,6 +89,14 @@ def image_texture(ctx: Any, uid: str, name: str, pixels: Any, stamp: Any) -> Any
     staleness stamp that is a value rather than an identity: a freshly computed
     array gets a new ``id`` every time, and keying on that would re-upload the
     texture on every frame that asked for it.
+
+    ``pin`` is for the *other* kind of stamp: an identity. ``id()`` is only a
+    sound staleness signal while the object it names is alive, because CPython
+    hands the address straight back to the next allocation of that size -- so a
+    caller keying on one has to keep it alive, and this is where it is kept.
+    The image layer is that caller: it freezes its picture, so a matching id
+    genuinely is the same art, and without the pin a replaced picture that
+    landed at the same address went on being drawn as the old one.
 
     Shares ``PREFIX`` so ``release_doc`` frees it with the rest of the tab's.
     """
@@ -106,6 +116,8 @@ def image_texture(ctx: Any, uid: str, name: str, pixels: Any, stamp: Any) -> Any
         texture.filter = (nearest, nearest)
         ctx.state.preview[key] = texture
         ctx.state.preview[stamp_key] = stamp
+        if pin is not None:
+            ctx.state.preview[f"{key}:pin"] = pin
     return texture
 
 

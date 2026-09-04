@@ -381,6 +381,18 @@ def has_objects(doc: Any) -> bool:
     return bool(doc.selection)
 
 
+def any_object(doc: Any) -> bool:
+    """Whether the *document* holds an object, selected or not.
+
+    For the one op that means "tidy the shading" and says so: ``_shade_auto``
+    falls back to every object when nothing is selected, and gating it on
+    ``has_objects`` made that fallback unreachable -- a comment describing a
+    branch nothing could take.
+    """
+
+    return bool(getattr(doc, "objects", ()))
+
+
 def has_elements(doc: Any) -> bool:
     return bool(doc.element_sel)
 
@@ -682,7 +694,12 @@ def _shade_auto(ctx: Any, doc: Any, angle: float = 30.0, **_: Any) -> None:
 
     # The whole document when nothing is selected: this is the one op here that
     # means "tidy the shading", and a user with no selection means all of it.
-    run_object_op(ctx, doc, one, uids=list(doc.selection) or [obj.uid for obj in doc.objects])
+    # Reachable since 2026-09-03 -- the op was gated on ``has_objects``, which
+    # requires a selection, so this branch was a comment describing something
+    # nothing could take.
+    run_object_op(
+        ctx, doc, one, uids=list(doc.selection) or [entry.uid for entry in doc.objects]
+    )
 
 
 def _frame(ctx: Any, doc: Any, **_: Any) -> None:
@@ -826,15 +843,16 @@ def _sel_from_verts(mesh: Any, verts: Any, mode: str) -> Any:
         return el.ElementSel(verts=verts)
     inside = np.zeros(len(mesh.positions), dtype=bool)
     inside[verts[(verts >= 0) & (verts < len(inside))]] = True
-    starts = np.asarray(mesh.starts, dtype="i8")
-    loops = np.asarray(mesh.loops, dtype="i8")
     if mode == "face":
-        keep = [
-            face
-            for face in range(len(starts) - 1)
-            if bool(inside[loops[starts[face] : starts[face + 1]]].all())
-        ]
-        return el.ElementSel(faces=np.asarray(keep, dtype="i4"))
+        # ``elements._face_corner_mask``, which is this question vectorised and
+        # is the same definition ``convert`` uses to go *up* a level. This had
+        # a Python loop over every face of the mesh -- so Select More on a
+        # 200k-face sculpt walked all of them per press, for an answer numpy
+        # already had -- and, worse, a second spelling of "a face is selected
+        # only when all of its corners are", which is the rule those two verbs
+        # rest on being inverses of each other.
+        mask = el._face_corner_mask(mesh, verts)
+        return el.ElementSel(faces=np.flatnonzero(mask).astype("i4"))
     from .clay.adjacency import adjacency
 
     a = adjacency(mesh)
@@ -957,7 +975,10 @@ def _register_defaults() -> None:
             label="Shade Auto...",
             modes=("object",),
             run=_shade_auto,
-            enabled=has_objects,
+            # ``any_object``, not ``has_objects``: this op's own fallback is
+            # "the whole document when nothing is selected", and the tighter
+            # gate made that unreachable.
+            enabled=any_object,
             params=(
                 Param(
                     "angle",

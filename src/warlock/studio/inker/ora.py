@@ -56,7 +56,6 @@ foreign save discards.
 
 from __future__ import annotations
 
-import contextlib
 import io
 import json
 import logging
@@ -66,7 +65,7 @@ from xml.etree import ElementTree
 
 import numpy as np
 
-from .. import pixelguard, xmlguard, zipguard
+from .. import atomic, pixelguard, xmlguard, zipguard
 from ..tilegrid import gid
 from ..tilegrid.tileset import Tileset
 from . import composite as cp
@@ -1175,64 +1174,60 @@ def write_ora(doc, path: Path) -> None:
     thumb_buf = io.BytesIO()
     thumb.save(thumb_buf, "PNG")
 
-    tmp = path.with_name(path.name + ".tmp")
-    # ``try/finally`` around the encode for ``plotter_io``/``packwright_io``/
-    # ``journal``'s reason: ``replace`` only runs on success, so a failed encode
-    # left the staging file sitting beside the user's document forever. Not data
-    # loss -- the destination is never touched -- just a stray dotfile per
-    # failure, and the unlink is a no-op once the replace has renamed it away.
-    try:
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
-            # Stored, and first: the spec makes this a magic number at a fixed
-            # offset, and a deflated one is not readable as such.
-            zf.writestr(
-                zipfile.ZipInfo("mimetype", _EPOCH), b"image/openraster", zipfile.ZIP_STORED
-            )
-            # One encoder for both paths, chosen by the document's mode rather than
-            # per layer: a document is indexed or it is not, and a mixed archive is
-            # a state no reader (ours least of all) has a sensible answer for.
-            def encode(layer) -> bytes:
-                if getattr(doc, "color_mode", "rgb") == "indexed" and layer.indices is not None:
-                    return _png_indexed(layer.indices, doc.palette, doc.transparent_index)
-                return _png(layer.pixels)
+    # ``atomic.staged``, the app's one staging idiom, rather than the
+    # hand-rolled temporary-and-replace this had: ``replace`` only runs on
+    # success, so a failed encode left the staging file sitting beside the
+    # user's document forever. Not data loss -- the destination is never
+    # touched -- just a stray file per failure. A zip is written *into* the
+    # staged path rather than handed over as bytes, which is what the context
+    # manager form is for.
+    with atomic.staged(path) as tmp, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Stored, and first: the spec makes this a magic number at a fixed
+        # offset, and a deflated one is not readable as such.
+        zf.writestr(
+            zipfile.ZipInfo("mimetype", _EPOCH), b"image/openraster", zipfile.ZIP_STORED
+        )
+        # One encoder for both paths, chosen by the document's mode rather than
+        # per layer: a document is indexed or it is not, and a mixed archive is
+        # a state no reader (ours least of all) has a sensible answer for.
+        def encode(layer) -> bytes:
+            if getattr(doc, "color_mode", "rgb") == "indexed" and layer.indices is not None:
+                return _png_indexed(layer.indices, doc.palette, doc.transparent_index)
+            return _png(layer.pixels)
 
-            if anim is None:
-                zf.writestr(_member("stack.xml"), _stack_xml(doc))
-                for index, layer in enumerate(reversed(list(doc.stack))):
-                    zf.writestr(_member(f"data/layer{index}.png"), encode(layer))
-            else:
-                zf.writestr(_member("stack.xml"), _stack_xml_animated(doc, names))
-                # One PNG per name, with no de-duplication needed: ``_cel_names``
-                # is built from the same ``unique_cel_layers`` walk and gives each
-                # distinct cel its own name, so the two can only ever agree.
-                for layer in anim.unique_cel_layers():
-                    zf.writestr(_member(names[id(layer)]), encode(layer))
-                zf.writestr(_member(ANIMATION_MEMBER), _animation_json(doc, names))
-            # Only when there is a tileset to record -- a document that has never
-            # touched one produces the exact archive this writer wrote before
-            # tilesets existed, which is what the determinism suite pins.
-            if getattr(doc, "tilesets", None):
-                _write_tiles(zf, doc, anim, names)
-            # Same bargain: only an effect with a texture adds members.
-            if anim is not None and getattr(doc, "flourish", None):
-                _write_flourish_assets(
-                    zf, doc, {track.uid: i for i, track in enumerate(anim.tracks)}
-                )
-            if getattr(doc, "palette", None):
-                zf.writestr(_member(PALETTE_MEMBER), gpl.dumps(doc.palette).encode("utf-8"))
-            # Only when there are slices *or* a colour mode to record. A plain RGB
-            # document with neither produces an archive byte-identical to the one
-            # this build wrote before either existed, which is what the determinism
-            # suite pins and what makes both additions invisible to every reader
-            # that has never heard of them.
-            if getattr(doc, "slices", None) or _colour_block(doc) is not None:
-                zf.writestr(_member(WARLOCK_MEMBER), _warlock_json(doc))
-            zf.writestr(_member("mergedimage.png"), _png(merged))
-            zf.writestr(_member("Thumbnails/thumbnail.png"), thumb_buf.getvalue())
-        tmp.replace(path)
-    finally:
-        with contextlib.suppress(OSError):
-            tmp.unlink(missing_ok=True)
+        if anim is None:
+            zf.writestr(_member("stack.xml"), _stack_xml(doc))
+            for index, layer in enumerate(reversed(list(doc.stack))):
+                zf.writestr(_member(f"data/layer{index}.png"), encode(layer))
+        else:
+            zf.writestr(_member("stack.xml"), _stack_xml_animated(doc, names))
+            # One PNG per name, with no de-duplication needed: ``_cel_names``
+            # is built from the same ``unique_cel_layers`` walk and gives each
+            # distinct cel its own name, so the two can only ever agree.
+            for layer in anim.unique_cel_layers():
+                zf.writestr(_member(names[id(layer)]), encode(layer))
+            zf.writestr(_member(ANIMATION_MEMBER), _animation_json(doc, names))
+        # Only when there is a tileset to record -- a document that has never
+        # touched one produces the exact archive this writer wrote before
+        # tilesets existed, which is what the determinism suite pins.
+        if getattr(doc, "tilesets", None):
+            _write_tiles(zf, doc, anim, names)
+        # Same bargain: only an effect with a texture adds members.
+        if anim is not None and getattr(doc, "flourish", None):
+            _write_flourish_assets(
+                zf, doc, {track.uid: i for i, track in enumerate(anim.tracks)}
+            )
+        if getattr(doc, "palette", None):
+            zf.writestr(_member(PALETTE_MEMBER), gpl.dumps(doc.palette).encode("utf-8"))
+        # Only when there are slices *or* a colour mode to record. A plain RGB
+        # document with neither produces an archive byte-identical to the one
+        # this build wrote before either existed, which is what the determinism
+        # suite pins and what makes both additions invisible to every reader
+        # that has never heard of them.
+        if getattr(doc, "slices", None) or _colour_block(doc) is not None:
+            zf.writestr(_member(WARLOCK_MEMBER), _warlock_json(doc))
+        zf.writestr(_member("mergedimage.png"), _png(merged))
+        zf.writestr(_member("Thumbnails/thumbnail.png"), thumb_buf.getvalue())
 
 
 def ora_bytes(doc) -> bytes:
@@ -1485,17 +1480,12 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
                 # beside it are two readings of the same bytes, and reading the
                 # member twice would be two chances for them to disagree.
                 data = zf.read(src)
-                layer = Layer(
-                    pixels=_decode(data, size),
-                    name=track.name,
-                    opacity=track.opacity,
-                    visible=track.visible,
-                    blend=track.blend,
-                    alpha_lock=track.alpha_lock,
-                    locked=track.locked,
-                    background=track.background,
-                    reference=track.reference,
-                )
+                # ``Track.props()``, never a hand list: the copied-down set is
+                # the one ``CEL_PROPS`` names, and a reader that spells it out
+                # is a fifth place for it to fall behind -- which is exactly how
+                # ``background`` and ``reference`` came to be copied by some of
+                # the sites and forgotten by others.
+                layer = Layer(pixels=_decode(data, size), **track.props())
                 if reader is not None:
                     reader.attach(layer, data)
                 planes[src] = layer

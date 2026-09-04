@@ -440,8 +440,10 @@ def test_clay_state_close_has_a_caller():
     text = (STUDIO / "clay_mode.py").read_text(encoding="utf-8")
     assert "state.close(uid)" in text
     # And both routes to it: the tab bar's x and Ctrl+W. The bar is drawn by
-    # ``main`` rather than by a pane, because ``main`` owns Clay's centre pane.
-    assert "close_tab" in (STUDIO / "main.py").read_text(encoding="utf-8")
+    # the *shell* rather than by a pane, because the shell owns Clay's centre
+    # pane -- in ``clay_viewport.py`` since 2026-09-04, when it moved out of
+    # ``main`` as a mixin (T7 of the 2026-09-02 review).
+    assert "close_tab" in (STUDIO / "clay_viewport.py").read_text(encoding="utf-8")
     assert 'name == "w"' in text
 
 
@@ -492,7 +494,11 @@ def test_the_right_button_means_one_thing_in_both_viewports():
 
     source = inspect.getsource(viewer_embed.Viewer._press)
     assert "button in (2, 3)" not in source
-    assert 'self._grab = "pan" if button == 2 else "orbit"' in source
+    # Alt+left pans as well since 2026-09-03 -- a trackpad and most pen tablets
+    # have no middle button, so panning was unreachable on the hardware this
+    # app is most likely to be drawn with. The *right* button still means one
+    # thing, which is what this test is about.
+    assert 'button == 2 or (button == 1 and alt)' in source
     # And the menu is gated on pose mode, or it would appear over Create's
     # inspector, where nobody is posing anything.
     assert "button == 3 and self.pose_mode" in source

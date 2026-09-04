@@ -36,18 +36,28 @@ from .. import (
     toolbar,
     widgets,
 )
-from ..inker import STAMP_MODES, textstamp
-from ..inker.document import catmull_rom, curve_points, curve_spans
+from ..inker import STAMP_MODES
 from ..inker.indexed import shade_ramp
-from ..inker.slices import SliceKey, slice_props
 from ..inker.tiling import SEAM_MAX, axes_of, canonical, seam_ratio, tile_offset
+
+#: The four pure helpers this module used to define. They live in
+#: ``inker_state`` now (no imgui, no document, no side effects) and are named
+#: here because every call site in this file and four test files already do.
+#: Three of them are used only from ``inker_drag`` and ``inker_gestures`` since
+#: T7, and are kept anyway for exactly that reason -- the address is the
+#: promise, not where the caller happens to live.
 from ..inker_state import (
     BG_BUTTON_TOOLS,
     PAINT_TOOLS,
     PATH_SHAPE_TOOLS,
     SELECT_TOOLS,
     SHAPE_TOOLS,
+    closes_gesture,  # noqa: F401 -- re-export
+    is_click,  # noqa: F401 -- re-export
+    marquee_rect,  # noqa: F401 -- re-export
 )
+from ..inker_state import onion_index as _onion_index
+from ..tilegrid import gid
 from ..tokens import sp
 from . import inker_bridge, inker_context, inker_menu, inker_textures
 
@@ -558,6 +568,7 @@ def _one_canvas(
     ctx: Any, state: Any, tab: Any, index: int, size: tuple[float, float]
 ) -> tuple[Any, bool]:
     """One view's pane. Returns its origin and whether the pointer is in it."""
+    from . import inker_gestures
     flags = imgui.WindowFlags_.no_scroll_with_mouse.value | imgui.WindowFlags_.no_scrollbar.value
     hovered = False
     origin = None
@@ -643,7 +654,7 @@ def _one_canvas(
             _scrollbars(state, tab, (origin.x, origin.y), region, lit)
             # Inside the child, because that is where ``_press`` opened it from and
             # an imgui popup's id is computed off the id stack it was opened on.
-            _text_popup(ctx, state, tab)
+            inker_gestures._text_popup(ctx, state, tab)
         else:
             # A keyboard zoom aimed at a canvas that did not draw this frame is
             # dropped, not banked: ``pending_zoom_rung`` is set by ``handle_key``
@@ -710,7 +721,11 @@ def _cursor_pixel(state: Any, tab: Any, origin, hovered: bool):
     # raw number is off the canvas, and a readout saying "300, 40" on a
     # 256-wide document is a coordinate the user cannot use.
     px, py = canonical((px, py), tab.doc.size, axes_of(tab.tiled))
-    point = (int(px), int(py))
+    # ``floor``, not ``int``: a press floors (``marquee_rect``, ``is_click``),
+    # and ``int`` truncates *towards zero*, so a cursor at x = -0.3 -- just off
+    # the left edge -- read as pixel 0 while a click there landed on -1 and did
+    # nothing. The readout has to name the pixel the click would hit.
+    point = (int(math.floor(px)), int(math.floor(py)))
     if not tab.doc.in_bounds(point):
         return None, None
     # Through the same ``sample_layer`` a pick would use, so the swatch is a
@@ -876,6 +891,7 @@ def _remedy(ctx: Any, state: Any, tip: Any) -> None:
 def _input(
     ctx: Any, state: Any, tab: Any, origin, region, *, active: bool, hovered: bool
 ) -> None:
+    from . import inker_drag
     io = imgui.get_io()
     mouse = imgui.get_mouse_pos()
     point = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
@@ -933,7 +949,7 @@ def _input(
         # would ever reach it. Both are reachable without trying: press Space
         # mid-drag, or middle-click mid-drag.
         if state.drag_kind and state.drag_kind != "pan":
-            _release(ctx, state, tab, _snapped(state, _local(state, point)))
+            inker_drag._release(ctx, state, tab, _snapped(state, _local(state, point)))
         button = 2 if imgui.is_mouse_dragging(2) else 0
         delta = imgui.get_mouse_drag_delta(button)
         imgui.reset_mouse_drag_delta(button)
@@ -958,7 +974,7 @@ def _input(
         # up: a live ``drag_kind`` here holds an open stroke that this early
         # return would strand exactly as the pan above used to.
         if state.drag_kind and state.drag_kind != "pan":
-            _release(ctx, state, tab, _snapped(state, _local(state, point)))
+            inker_drag._release(ctx, state, tab, _snapped(state, _local(state, point)))
         state.clear_gesture()
         return
     if state.transforming and tab.doc.floating is not None:
@@ -983,7 +999,7 @@ def _input(
             # Closed here, with the *previous* gesture's tile offset still in
             # ``state``, so it commits where it was drawn rather than being
             # orphaned by the press below.
-            _release(ctx, state, tab, _snapped(state, _local(state, point)))
+            inker_drag._release(ctx, state, tab, _snapped(state, _local(state, point)))
         state.drag_button = pressed
         # The tile the press landed in, fixed for the whole gesture. See
         # ``tiling.tile_offset``: folding per point would jump the brush a full
@@ -994,9 +1010,9 @@ def _input(
         # own cannot answer.
         _press(ctx, state, tab, _snapped(state, _local(state, point)), origin)
     elif state.drag_kind and imgui.is_mouse_down(state.drag_button):
-        _drag(state, tab, _snapped(state, _local(state, point)))
+        inker_drag._drag(state, tab, _snapped(state, _local(state, point)))
     elif state.drag_kind and not imgui.is_mouse_down(state.drag_button):
-        _release(ctx, state, tab, _snapped(state, _local(state, point)))
+        inker_drag._release(ctx, state, tab, _snapped(state, _local(state, point)))
 
 
 def _local(state: Any, point: tuple[float, float]) -> tuple[float, float]:
@@ -1152,7 +1168,7 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
             state.drag_kind = "rotate"
         elif near:
             state.drag_kind = "scale"
-        elif buf.contains((int(point[0]), int(point[1]))):
+        elif buf.contains((int(math.floor(point[0])), int(math.floor(point[1])))):
             state.drag_kind = "move"
         else:
             state.drag_kind = ""
@@ -1172,7 +1188,7 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
         axes = HANDLE_AXES.get(state.transform_grab, "xy")
         fx = abs(point[0] - cx) / ref_x if "x" in axes else 1.0
         fy = abs(point[1] - cy) / ref_y if "y" in axes else 1.0
-        if imgui.get_io().key_shift:
+        if modifier_held("scale_aspect", "ScalingSelection", state.shortcut_overrides):
             # Shift constrains to uniform. For a corner that is the screen
             # distance ratio (the same number the drag used to produce before
             # there were two axes); for an edge handle there is only one live
@@ -1188,7 +1204,7 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
             # is anticlockwise on the drawing, and without this the buffer turns
             # the opposite way to the cursor.
             step = -step
-        if imgui.get_io().key_shift:
+        if modifier_held("rotate_snap", "RotatingSelection", state.shortcut_overrides):
             step = round(step / 15.0) * 15.0
         doc.transform_floating(angle=angle0 + step, resample=state.resample)
     elif state.drag_kind == "pivot":
@@ -1248,12 +1264,17 @@ def _transform_box(state: Any, tab: Any, draw_list: Any, origin) -> None:
             )
 
 
-def _combine_op(overrides: Any = None) -> str:
-    """Resolve Aseprite's selection modifiers through the shortcut registry."""
-    from .. import inker_ops
+def held_chord() -> str:
+    """The modifier keys held right now, in the registry's spelling.
+
+    One function, because this was written out four times in this file -- in
+    ``_combine_op``, in the shape constraint, and twice as a bare
+    ``io.key_shift`` -- and a fifth reader would have been a fifth answer. The
+    order is the one ``inker_ops`` parses its bindings in.
+    """
 
     io = imgui.get_io()
-    chord = "+".join(
+    return "+".join(
         name
         for name, held in (
             ("Ctrl", io.key_ctrl),
@@ -1262,7 +1283,27 @@ def _combine_op(overrides: Any = None) -> str:
         )
         if held
     )
-    binding = inker_ops.resolve_binding(chord, "Selection", overrides, trigger="hold")
+
+
+def modifier_held(name: str, context: str, overrides: Any = None) -> bool:
+    """Whether the action modifier ``name`` is held for ``context``.
+
+    The one door onto ``inker_ops.action_active``, so a gesture the shortcut
+    editor offers to remap is a gesture remapping actually reaches.
+    """
+
+    from .. import inker_ops
+
+    return inker_ops.action_active(name, held_chord(), context, overrides)
+
+
+def _combine_op(overrides: Any = None) -> str:
+    """Resolve Aseprite's selection modifiers through the shortcut registry."""
+    from .. import inker_ops
+
+    binding = inker_ops.resolve_binding(
+        held_chord(), "Selection", overrides, trigger="hold"
+    )
     return {
         "selection_add": "add",
         "selection_subtract": "subtract",
@@ -1425,6 +1466,7 @@ def _manual_note(ctx: Any, state: Any, doc: Any) -> None:
 
 
 def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
+    from . import inker_gestures, inker_slices
     doc = tab.doc
     tool = state.tool
     # Handed over once, here, at the top of every gesture. The document's funnel
@@ -1456,7 +1498,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     # missing early-out looks like the first time somebody drags on the canvas.
     if tool == "slice":
         if state.drag_button == 0:
-            _slice_press(ctx, state, tab, origin, point)
+            inker_slices._slice_press(ctx, state, tab, origin, point)
         else:
             # Inert on the right button, and said here rather than by the
             # ``BG_BUTTON_TOOLS`` check below because this branch returns above
@@ -1475,7 +1517,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         if state.drag_button == 0 and not _locked_out(ctx, state, tab):
             state.text_at = ipoint
             state.text_uid = tab.uid
-            _open_text(state, tab)
+            inker_gestures._open_text(state, tab)
         state.drag_kind = ""
         return
 
@@ -1485,7 +1527,9 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     # whatever tool is held -- and before the Alt branch, so the two modifiers
     # never both fire on one press. Ctrl is genuinely free on this canvas:
     # panning is middle-drag or space-drag.
-    if (tool == "move" or tool in PAINT_TOOLS) and imgui.get_io().key_ctrl:
+    if (tool == "move" or tool in PAINT_TOOLS) and modifier_held(
+        "move_auto_select", "MoveTool", state.shortcut_overrides
+    ):
         hit = doc.layer_at(ipoint)
         if hit is not None:
             doc.set_active_layer(hit)
@@ -1592,7 +1636,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         # Before the shared selection branch and returning, because the whole
         # point of this tool is that it does *not* start a ``drag_kind="lasso"``
         # drag: its vertices are clicked, not dragged out.
-        _gesture_press(ctx, state, tab, point)
+        inker_gestures._gesture_press(ctx, state, tab, point)
         return
     if tool in PATH_SHAPE_TOOLS:
         # One branch up's reason, from the other side of the toolbox (Q-c):
@@ -1601,7 +1645,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         # They share the branch above's position and not its exemptions: these
         # paint, so ``_locked_out`` has already refused the click on a locked
         # layer and the right button has already gone inert.
-        _gesture_press(ctx, state, tab, point)
+        inker_gestures._gesture_press(ctx, state, tab, point)
         return
     if tool in SELECT_TOOLS:
         doc.commit_floating()
@@ -1650,7 +1694,11 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         # a Shift-*drag* carries on freehand from the end of the line. Never
         # for the spray: its advance is ``spray_at`` on a timer rather than a
         # walk down a segment, so there is no line for this to draw.
-        from_last = imgui.get_io().key_shift and not spraying and tab.view.last_paint is not None
+        from_last = (
+            modifier_held("freehand_straight", "FreehandTool", state.shortcut_overrides)
+            and not spraying
+            and tab.view.last_paint is not None
+        )
         opening = tab.view.last_paint if from_last else point
         # Asked once, and it decides two arguments rather than one; see
         # ``_press_mode`` for why the ink cannot be read independently of it.
@@ -1752,796 +1800,6 @@ def _dab_size(state: Any, spraying: bool) -> int:
     return max(1, round(state.brush_size * inker_state.SPRAY_DAB_FRACTION))
 
 
-# --- the polygonal lasso, and the multi-click gesture under it (C4) -----------
-#
-# The pane's second kind of gesture. A drag is press / move / release and
-# ``drag_kind`` names it while the button is down; this one is a run of separate
-# clicks with the button *up* in between, so it cannot be a ``drag_kind`` at all
-# -- and must not be, because ``_input`` refuses a press while a gesture owns the
-# mouse (the C12d guard) and a click sequence would be eaten by its own state.
-# Each click is therefore complete at the press: nothing drags, nothing releases,
-# and ``InkerState.gesture_pts`` is the whole of what survives between clicks.
-#
-# Built as the shared thing rather than the poly lasso's own, because the curve
-# and polygon shape tools are this gesture with a different landing -- and Q-c
-# is that landing: ``_gesture_press`` collects for all four tools, and
-# ``inker_mode.commit_gesture`` decides whether the vertices become a selection
-# or paint. The only thing they differ in on the way there is whether a click
-# back on the first point closes them (``CLOSES_ON_FIRST``).
-
-#: How near the first vertex a click has to land to close the polygon, in
-#: **screen** pixels before ``sp`` -- the slice handles' rule, for the slice
-#: handles' reason: an image-space radius is a hundredth of a pixel at 100x zoom
-#: and half the canvas at 5%, so the target would be unhittable at one end of the
-#: zoom range and unavoidable at the other.
-POLY_CLOSE = 7.0
-
-#: The gesture tools whose path is **closed**, and which therefore end on a
-#: click back at the first vertex. The poly lasso (a polygon is what a selection
-#: is) and the polygon shape tool; the polyline and the curve are open paths, so
-#: a click near their first point is a click like any other and placing a vertex
-#: there is the only thing it can honestly mean. They end on a double-click or
-#: Enter instead, which every gesture tool answers.
-CLOSES_ON_FIRST = frozenset({"lasso_poly", "polygon"})
-
-
-def closes_gesture(points, point, zoom: float, radius: float) -> bool:
-    """Whether a click at ``point`` closes the polygon on its first vertex.
-
-    Image-space distance times the zoom *is* the screen distance, because the
-    view is a uniform scale after a quarter turn and a turn preserves length
-    (``inker_state.basis`` is orthonormal). So this is quarter-turn and flip
-    invariant without ever building a screen coordinate -- which is what lets it
-    be a pure function of three numbers rather than of the view.
-
-    Below three vertices there is nothing to close: two points are a line, and a
-    click back on the first would otherwise end the gesture with a selection the
-    rasteriser has to refuse anyway.
-    """
-    if len(points) < 3:
-        return False
-    return math.dist(points[0], point) * zoom <= radius
-
-
-def _gesture_press(ctx: Any, state: Any, tab: Any, point) -> None:
-    """One click of a multi-click gesture: open, extend, or close the path.
-
-    Shared by the polygonal lasso and by the three clicked shape tools (Q-c),
-    which differ only in what ``commit_gesture`` does with the vertices and in
-    whether a click back on the first one closes them. A second copy of this
-    arithmetic is exactly where the two would come to disagree about what a
-    double-click means.
-
-    ``drag_kind`` is left empty on every arm, which is the load-bearing part:
-    it keeps the next click out of the C12d guard, keeps ``_drag`` and
-    ``_release`` out of the gesture entirely -- so this tool can never take the
-    freehand ``drag_kind="lasso"`` path -- and keeps ``clear_drag`` free to mean
-    "cancel the gesture" everywhere it is already called from.
-    """
-    doc = tab.doc
-    if not state.gesture_pts:
-        # The float lands on the first click, as it does for every other
-        # selection tool's press and every paint tool's -- the user has moved on
-        # from it.
-        doc.commit_floating()
-        # Captured once, here. ``state.combine`` is re-read at every press, and
-        # letting go of Shift before the closing click would otherwise turn an
-        # add into a replace that throws the selection away. Recorded for the
-        # painting shapes too, which have no use for it: one gesture has one
-        # opening arm, and a field left stale is a field the next tool reads.
-        state.gesture_combine = state.combine
-        state.gesture_pts = [point]
-        state.drag_kind = ""
-        return
-    if imgui.is_mouse_double_clicked(state.drag_button) or (
-        state.tool in CLOSES_ON_FIRST
-        and closes_gesture(state.gesture_pts, point, tab.view.zoom, sp(POLY_CLOSE))
-    ):
-        # The closing click places no vertex of its own: a double-click's second
-        # press lands on top of the first, and a click near vertex 0 *is*
-        # vertex 0. Either would add a degenerate edge to the polygon.
-        inker_mode.commit_gesture(state, tab)
-    else:
-        state.gesture_pts.append(point)
-    state.drag_kind = ""
-
-
-#: The settled part of the previewed curve: ``(vertices, samples)``, or None.
-#:
-#: The frame loop never blocks, and this overlay runs on it: a fifty-vertex
-#: curve resampled from scratch every frame is milliseconds of pure arithmetic
-#: per frame for a picture that changed in two segments. Module-level rather
-#: than per-tab state because it is a *memo* of a pure function keyed on its own
-#: argument -- a stale entry cannot be read, only missed, so nothing has to
-#: invalidate it when the tab, the tool or the document changes.
-_curve_settled: tuple[tuple[tuple[float, float], ...], list[tuple[float, float]]] | None
-_curve_settled = None
-
-
-def _curve_path(points, cursor) -> list[tuple[float, float]]:
-    """The previewed curve through ``points`` and the cursor, resampling only
-    what the cursor can move.
-
-    A Catmull-Rom segment is a function of four consecutive control points, so
-    the provisional cursor point reaches exactly the last two segments -- the
-    one that ends at it and the one before, which has it as its far neighbour.
-    Everything earlier is settled, and settled is what is memoised.
-
-    The result is **identical** to ``catmull_rom([*points, cursor])``, sample
-    for sample and bit for bit, which it has to be: the same four control points
-    in the same order through the same arithmetic, and the tail is recomputed
-    from a four-point slice whose middle two segments have the same neighbours
-    they do in the whole path. That equality is the test.
-    """
-    global _curve_settled
-
-    pts = curve_points(points)  # collapsed exactly as ``catmull_rom`` does
-    if len(pts) < 3:
-        # One or two control points make no settled segment to keep; the whole
-        # path is at most the two segments this would recompute anyway.
-        return catmull_rom([*pts, cursor])
-    key = tuple(pts)
-    if _curve_settled is None or _curve_settled[0] != key:
-        _, spans = curve_spans(pts)
-        settled = [pts[0]]
-        # Segments 0 .. len(pts) - 3, which end at the second-to-last vertex.
-        for span in spans[: len(pts) - 2]:
-            settled.extend(span)
-        _curve_settled = (key, settled)
-    out = list(_curve_settled[1])
-    # The last three vertices plus the cursor: its middle two segments have
-    # exactly the neighbours they have in the whole path, so their samples are
-    # the whole path's. The first one is the settled tail already in ``out``.
-    for span in curve_spans([*pts[-3:], cursor])[1][1:]:
-        out.extend(span)
-    return out
-
-
-def _gesture_preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
-    """The open path, its rubber band, and where the closing click goes.
-
-    Through ``to_screen`` like every other overlay (Ink9), so the polygon is
-    drawn on the turned or mirrored page rather than a quarter turn away from
-    it. The rubber band follows the *snapped* cursor rather than the raw one,
-    which is the rule ``_preview``'s shape branch already states: a band drawn
-    somewhere the next vertex will not go is worse than no band at all.
-
-    The curve is previewed **segment by segment through the same arithmetic the
-    commit rasterises** (``_curve_path``, which is ``catmull_rom`` with the
-    settled segments memoised), rather than as the straight chords between its
-    points: a spline preview that shows a polygon is a preview of a different
-    tool, and one that samples the curve its own way is a promise the rasteriser
-    has not made. The cursor rides along as a provisional last point, so what is
-    on screen is the curve *if you click here* -- exactly what the polygon's
-    rubber-band edge already means.
-    """
-    points = state.gesture_pts
-    if not points:
-        return
-    view = tab.view
-    colour = _u32(theme.ACCENT)
-    mouse = imgui.get_mouse_pos()
-    cursor = _snapped(state, _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y)))
-    if state.tool == "curve":
-        curve = [inker_state.to_screen(view, origin, x, y) for x, y in _curve_path(points, cursor)]
-        for a, b in zip(curve, curve[1:], strict=False):
-            draw_list.add_line(a, b, colour)
-        return
-    screen = [inker_state.to_screen(view, origin, x, y) for x, y in points]
-    for a, b in zip(screen, screen[1:], strict=False):
-        draw_list.add_line(a, b, colour)
-    tip = inker_state.to_screen(view, origin, *cursor)
-    draw_list.add_line(screen[-1], tip, colour)
-    if state.tool in CLOSES_ON_FIRST and len(screen) >= 3:
-        # The edge a commit would close with, and the target that closes it.
-        # Fainter than the placed edges: it is what *would* happen, not what has.
-        draw_list.add_line(tip, screen[0], _u32(theme.ACCENT, 0.4))
-        draw_list.add_circle(screen[0], sp(POLY_CLOSE), colour)
-
-
-# --- the text tool ------------------------------------------------------------
-#
-# A popup on the canvas rather than a section in the tools panel, because the
-# gesture is "put a word *here*": the click chooses the spot and the popup is
-# the only thing between it and a floating buffer. Both halves live in this
-# module and neither may move to another pane -- an imgui popup is matched by an
-# id computed off the id stack, so an ``open_popup`` in the canvas child and a
-# ``begin_popup`` in a sidebar would never meet (the same trap
-# ``inker_bridge.CONVERT_POPUP`` is written up under).
-#
-# There is no live preview. A stamp *is* a floating buffer, which the canvas
-# already draws and the user can already drag, so previewing it before the OK
-# button would be a second, worse copy of what the next click gives them.
-
-TEXT_POPUP = "inker-text"
-
-#: How tall the typing box is, in design pixels: four lines and a bit, which is
-#: what a caption or a label takes and enough for a longer one to scroll in.
-TEXT_BOX_HEIGHT = 88.0
-
-#: The cap on what one stamp may hold. Generous rather than meaningful -- it is
-#: there so a paste of a whole file into the box cannot ask FreeType to lay out
-#: a megabyte on the frame thread.
-TEXT_MAX = 4000
-
-
-def _open_text(state: Any, tab: Any) -> None:
-    """Start a text stamp at the press that just landed.
-
-    The font scan happens here rather than at import: reading several hundred
-    directory entries is a frame's worth of work that a session which never
-    touches the tool must not pay, and ``font_choices`` caches it from the
-    first open onwards.
-
-    **Antialiasing follows the document until the user says otherwise**: off on
-    an indexed one, on everywhere else, decided here on every open. A palette
-    is a promise that the file holds exactly those colours, and an antialiased
-    edge is a rim of blends that each snap to the nearest slot -- so the
-    default that keeps the promise is the monochrome rasteriser.
-
-    It is a *default* and not a rule: an indexed document with a soft-edged
-    palette is a real thing, so ticking the box in the popup sets
-    ``text_aa_touched`` and this stops deciding anything. That flag is the
-    whole fix for what the first version got wrong -- it asked whether the text
-    tool had a stored options *entry*, which ``options_for`` creates on the
-    first read of any of the three, so one popup on an RGB document made every
-    indexed document for the rest of the session open with AA on. The manual
-    says "on an indexed document it starts off", with no session in the
-    sentence, and a promise that holds until you have used the tool once is not
-    the promise.
-    """
-    inker_mode.font_choices()
-    if not state.text_aa_touched:
-        state.aa = not tab.doc.palette
-    imgui.open_popup(TEXT_POPUP)
-
-
-def _text_popup(ctx: Any, state: Any, tab: Any) -> None:
-    """The typing box, the font, the size and the AA toggle.
-
-    Nothing to clean up when imgui closes it on a click outside -- unlike the
-    filter and conversion sessions this is cloned from, a text stamp previews
-    nothing and holds nothing on the document, so an unanswered popup is
-    simply a stamp that was never made. That is the whole of why there is no
-    ``text_open`` flag beside ``filter_uid``.
-    """
-    if not imgui.begin_popup(TEXT_POPUP):
-        state.text_uid = ""
-        return
-    if state.text_uid and state.text_uid != tab.uid:
-        # The tab changed under the popup. ``text_at`` is a point in the *other*
-        # document's pixels, so answering OK here would stamp into this one at
-        # coordinates that mean nothing -- with the antialias default decided
-        # from the other document's palette. Closed rather than redirected: the
-        # user pointed at a place on a picture that is no longer on screen.
-        state.text_uid = ""
-        imgui.close_current_popup()
-        imgui.end_popup()
-        return
-    widgets.popup_chrome(_imgui=imgui)
-    state.text_buffer = widgets.multiline(
-        "##inkertext", state.text_buffer, sp(TEXT_BOX_HEIGHT), TEXT_MAX
-    )
-    choices = inker_mode.font_choices()
-    if choices:
-        state.font = widgets.combo("##inkerfont", state.font, choices, sp(240))
-    else:
-        # Only reachable with the vendored face missing *and* no system font
-        # directory, i.e. a broken install. Said out loud rather than drawn as
-        # an empty combo the user would click at.
-        widgets.muted("No fonts found.")
-    changed, value = widgets.labeled_slider_int(
-        "Size", int(state.text_size), textstamp.MIN_SIZE, textstamp.MAX_SIZE
-    )
-    if changed:
-        state.text_size = int(value)
-    changed, value = controls.checkbox("Antialias", bool(state.aa), _imgui=imgui)
-    if changed:
-        state.aa = bool(value)
-        # The user has an opinion now, so ``_open_text`` stops forming one --
-        # in *both* directions. Ticking it on an indexed document keeps it
-        # ticked there, and unticking it on an RGB one keeps it unticked; a
-        # default that reasserted itself on the next click would be a checkbox
-        # the user cannot operate.
-        state.text_aa_touched = True
-    widgets.help_marker(
-        "Off renders the glyphs as whole pixels -- no partial coverage "
-        "anywhere -- which is what pixel art and an indexed palette want."
-    )
-    imgui.color_button(
-        "##inkertextfg", imgui.ImVec4(*[c / 255.0 for c in state.fg]), 0, (sp(16), sp(16))
-    )
-    imgui.same_line()
-    widgets.muted("the foreground colour")
-
-    imgui.dummy((0, 4))
-    if controls.button("OK##inkertext", (sp(90), 0), _imgui=imgui):
-        # The tool becomes Move on success (``stamp_text``), so the popup must
-        # close either way: a refusal has already toasted why.
-        inker_mode.stamp_text(ctx, state, tab)
-        imgui.close_current_popup()
-    imgui.same_line()
-    if controls.button("Cancel##inkertext", (sp(90), 0), _imgui=imgui):
-        imgui.close_current_popup()
-    imgui.end_popup()
-
-
-# --- slices -------------------------------------------------------------------
-#
-# A tool rather than a pane, so there is no new help anchor and no fourth
-# sidebar: the overlay is on the canvas where the rectangles are, and the list,
-# the toggles and the delete button ride the tools panel like every other tool's
-# options do.
-#
-# The whole surface obeys the pane's two existing rules. Every screen position
-# goes through ``_corners``/``_box`` rather than ``origin + x * zoom``, which is
-# what keeps it correct on a turned or mirrored page. And a drag commits
-# nothing: the press records what the slice looked like, the drag mutates the
-# live object so the overlay follows the cursor, and the release pushes exactly
-# one ``set_slice`` -- one gesture, one Ctrl+Z.
-
-#: A slice's corner grab squares and the pivot's ring, in **design** pixels --
-#: everything below runs both through ``sp``, drawing and hit-testing alike, so
-#: the grab radius cannot come out smaller than the handle a user can see on a
-#: scaled display.
-SLICE_HANDLE = 4.0
-SLICE_PIVOT_RADIUS = 5.0
-#: How much bigger the grab radius is than the thing drawn. Generous, because
-#: the alternative to grabbing a corner is starting a new slice on top of the
-#: one you were aiming at.
-SLICE_GRAB = 2.5
-#: The smallest rectangle a drag will make, in **image** pixels. Two rather than
-#: one: a stationary cursor at a fractional position rounds outward to a 1x1
-#: rectangle, so a one-pixel floor would put a slice down on every stray click.
-#: A genuinely one-pixel slice is still reachable by dragging a corner in.
-SLICE_MIN = 2
-#: How long a dash of the nine-slice centre is, in screen pixels. Dashed rather
-#: than solid because the centre sits inside the slice's own outline and two
-#: solid rectangles a few pixels apart read as one thick border.
-SLICE_DASH = 4.0
-
-#: Which corner of the bounds a resize drag is holding, and the pair of indices
-#: into ``(x0, y0, x1, y1)`` it writes. Named so the press can record one string
-#: and the drag can stay arithmetic.
-SLICE_CORNERS = {"nw": (0, 1), "ne": (2, 1), "sw": (0, 3), "se": (2, 3)}
-
-
-def slices_visible(state: Any) -> bool:
-    """Whether the overlay draws. Derived rather than a second flag to keep in
-    step: the slice tool forces it on, and ``show_slices`` is only ever the
-    answer to "keep showing them while I paint"."""
-    return bool(state.show_slices) or state.tool == "slice"
-
-
-def _near(a, b, radius: float) -> bool:
-    return math.dist(a, b) <= radius
-
-
-def _slice_grab(state: Any, tab: Any, origin, point) -> tuple[str, str]:
-    """What a press at ``point`` is holding: ``(kind, corner)``.
-
-    Handles are hit-tested in **screen** space so a grab square is the same size
-    to the hand at every zoom -- an image-space radius is a hundredth of a pixel
-    at 100x and half the canvas at 5%. The rest (is the cursor inside a slice)
-    is image space, where the rectangle actually is.
-
-    The order is outermost first: the bounds corners, then the pivot, then the
-    centre's corners, then the body, then empty canvas. Two grabs can genuinely
-    coincide -- a pivot parked on a corner -- and resizing is the gesture a user
-    reaches for at a corner, so it wins there.
-    """
-    doc = tab.doc
-    entry = doc.slice_by_uid(state.slice_uid)
-    mouse = imgui.get_mouse_pos()
-    at = (mouse.x, mouse.y)
-    frame_uid = tab.frame_uid
-    if entry is not None:
-        key = entry.at(frame_uid)
-        x0, y0, x1, y1 = key.bounds
-        corners = {
-            "nw": (x0, y0),
-            "ne": (x1, y0),
-            "sw": (x0, y1),
-            "se": (x1, y1),
-        }
-        grab = sp(SLICE_HANDLE) * SLICE_GRAB
-        for name, (cx, cy) in corners.items():
-            if _near(inker_state.to_screen(tab.view, origin, cx, cy), at, grab):
-                return "slice-resize", name
-        if key.pivot is not None:
-            pivot = inker_state.to_screen(tab.view, origin, x0 + key.pivot[0], y0 + key.pivot[1])
-            if _near(pivot, at, sp(SLICE_PIVOT_RADIUS) * SLICE_GRAB):
-                return "slice-pivot", ""
-        if key.center is not None:
-            cx0, cy0, cx1, cy1 = key.center
-            inner = {
-                "nw": (x0 + cx0, y0 + cy0),
-                "ne": (x0 + cx1, y0 + cy0),
-                "sw": (x0 + cx0, y0 + cy1),
-                "se": (x0 + cx1, y0 + cy1),
-            }
-            for name, (cx, cy) in inner.items():
-                if _near(inker_state.to_screen(tab.view, origin, cx, cy), at, grab):
-                    return "slice-center", name
-    # The body of *any* slice, last one first: the list is drawn in order, so
-    # the last is the one on top and the one the click visibly landed on.
-    for candidate in reversed(doc.slices):
-        x0, y0, x1, y1 = candidate.at(frame_uid).bounds
-        if x0 <= point[0] < x1 and y0 <= point[1] < y1:
-            state.slice_uid = candidate.uid
-            return "slice-move", ""
-    return "slice-new", ""
-
-
-def _slice_press(ctx: Any, state: Any, tab: Any, origin, point) -> None:
-    """Decide what this gesture is, and record what it started from."""
-    if state.transforming:
-        # A free transform owns the canvas until it is applied or cancelled;
-        # letting a slice drag start underneath it would commit a step against
-        # a document that is mid-operation.
-        state.drag_kind = ""
-        return
-    kind, corner = _slice_grab(state, tab, origin, point)
-    entry = tab.doc.slice_by_uid(state.slice_uid)
-    state.drag_kind = kind
-    state.slice_drag = (
-        None if entry is None or kind == "slice-new" else slice_props(entry),
-        corner,
-    )
-
-
-def _nudged(rect, corner: str, dx: float, dy: float):
-    """One corner of a rectangle moved, the other three left alone.
-
-    The corner is allowed to cross the far one, which is what every editor's
-    resize does; the ordering happens once, at release, inside
-    ``clamp_rect``. Ordering *during* the drag would swap which pair of indices
-    the corner's name points at, and the rectangle would stick at the crossing.
-    """
-    out = list(rect)
-    ix, iy = SLICE_CORNERS[corner]
-    out[ix] += dx
-    out[iy] += dy
-    return tuple(out)
-
-
-def _slice_drag(state: Any, tab: Any, point) -> None:
-    """Move the live slice so the overlay follows the cursor. Pushes nothing.
-
-    Measured against what was true at the **press**, never against the previous
-    frame -- the rule ``_transform_input`` states, and here it is the difference
-    between a drag that works and one that does not: the geometry is integer, so
-    a per-frame delta of a third of a pixel truncates to nothing every frame and
-    a slow drag at a high zoom moves the rectangle not at all.
-
-    **Whatever the overlay is drawing is what moves.** On a frame with a key of
-    its own that is the key, not the slice's own rectangle -- they are the same
-    thing only on an unkeyed frame, and dragging the base while the canvas draws
-    the key is a gesture that visibly does nothing.
-    """
-    entry = tab.doc.slice_by_uid(state.slice_uid)
-    if entry is None or state.slice_drag is None or state.drag_kind == "slice-new":
-        return
-    before, corner = state.slice_drag
-    if before is None:
-        return
-    anchor = state.drag_anchor or point
-    dx, dy = point[0] - anchor[0], point[1] - anchor[1]
-
-    frame_uid = tab.frame_uid
-    keyed = frame_uid is not None and frame_uid in before["keys"]
-    start = (
-        before["keys"][frame_uid]
-        if keyed
-        else SliceKey(before["bounds"], before["pivot"], before["center"])
-    )
-    bounds, pivot, center = start.bounds, start.pivot, start.center
-
-    if state.drag_kind == "slice-move":
-        x0, y0, x1, y1 = bounds
-        bounds = (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
-    elif state.drag_kind == "slice-resize":
-        bounds = _nudged(bounds, corner, dx, dy)
-    elif state.drag_kind == "slice-pivot" and pivot is not None:
-        pivot = (pivot[0] + dx, pivot[1] + dy)
-    elif state.drag_kind == "slice-center" and center is not None:
-        center = _nudged(center, corner, dx, dy)
-
-    if keyed:
-        # A fresh frozen key in a fresh dictionary, never a write into the live
-        # one: the step's "before" is holding that dictionary's contents and
-        # must not move with the drag.
-        entry.keys = {**entry.keys, frame_uid: SliceKey(bounds, pivot, center)}
-        return
-    entry.bounds, entry.pivot, entry.center = bounds, pivot, center
-    entry.normalise()
-
-
-def _slice_release(ctx: Any, state: Any, tab: Any, point) -> None:
-    """One step for the whole gesture, or nothing at all."""
-    doc = tab.doc
-    if state.drag_kind == "slice-new":
-        anchor = state.drag_anchor or point
-        rect = marquee_rect(anchor, point)
-        if rect[2] - rect[0] >= SLICE_MIN and rect[3] - rect[1] >= SLICE_MIN:
-            state.slice_uid = doc.add_slice(rect).uid
-            return
-        # A click with no drag on empty canvas deselects, which is what the
-        # marquee tool does with the same gesture -- and it is not "make a
-        # one-pixel slice", which is what rounding a stationary cursor outward
-        # would otherwise produce on every stray click.
-        state.slice_uid = 0
-        return
-    if state.slice_drag is None:
-        return
-    before, _corner = state.slice_drag
-    if before is not None:
-        # ``was``, because the live object has already been dragged: reading the
-        # before here would compare the slice against itself and push nothing.
-        doc.set_slice(state.slice_uid, was=before)
-
-
-def _dashed_rect(draw_list: Any, a, b, colour: int) -> None:
-    """A rectangle in dashes, so it reads as *inside* the slice's own outline
-    rather than as a second border a few pixels in from it."""
-    corners = ((a[0], a[1]), (b[0], a[1]), (b[0], b[1]), (a[0], b[1]))
-    for start, end in zip(corners, (*corners[1:], corners[0]), strict=True):
-        length = math.dist(start, end)
-        if length <= 0.0:
-            continue
-        steps = max(1, int(length // (SLICE_DASH * 2)))
-        ux, uy = (end[0] - start[0]) / length, (end[1] - start[1]) / length
-        for step in range(steps):
-            head = step * length / steps
-            tail = min(head + SLICE_DASH, length)
-            draw_list.add_line(
-                (start[0] + ux * head, start[1] + uy * head),
-                (start[0] + ux * tail, start[1] + uy * tail),
-                colour,
-            )
-
-
-def _slices(state: Any, tab: Any, draw_list: Any, origin) -> None:
-    """Every slice, and the handles of the selected one.
-
-    Everything here is placed through ``_box``/``to_screen``, never through
-    ``origin + x * zoom``: a quarter turn maps an axis-aligned image rectangle
-    onto an axis-aligned *screen* rectangle, and that is only true of a position
-    that has been through the view's basis.
-    """
-    frame_uid = tab.frame_uid
-    outline = _u32(theme.ACCENT, 0.75)
-    inner = _u32(theme.ACCENT, 0.45)
-    hot = _u32(theme.ACCENT)
-    for entry in tab.doc.slices:
-        key = entry.at(frame_uid)
-        x0, y0, x1, y1 = key.bounds
-        selected = entry.uid == state.slice_uid
-        a, b = _box(tab.view, origin, x0, y0, x1, y1)
-        draw_list.add_rect(a, b, hot if selected else outline)
-        if key.center is not None:
-            cx0, cy0, cx1, cy1 = key.center
-            ca, cb = _box(tab.view, origin, x0 + cx0, y0 + cy0, x0 + cx1, y0 + cy1)
-            _dashed_rect(draw_list, ca, cb, inner)
-        if key.pivot is not None:
-            px, py = inker_state.to_screen(tab.view, origin, x0 + key.pivot[0], y0 + key.pivot[1])
-            radius = sp(SLICE_PIVOT_RADIUS)
-            draw_list.add_circle((px, py), radius, hot if selected else outline)
-            draw_list.add_line((px - radius, py), (px + radius, py), hot)
-            draw_list.add_line((px, py - radius), (px, py + radius), hot)
-        if not selected:
-            continue
-        size = sp(SLICE_HANDLE)
-        for cx, cy in _corners(tab.view, origin, x0, y0, x1, y1):
-            draw_list.add_rect_filled((cx - size, cy - size), (cx + size, cy + size), hot)
-
-
-def _drag(state: Any, tab: Any, point) -> None:
-    doc = tab.doc
-    if state.drag_kind.startswith("slice-"):
-        _slice_drag(state, tab, point)
-        state.last_point = point
-        return
-    if state.drag_kind == "tile":
-        _tile_stamp(state, tab, point)
-        state.last_point = point
-        return
-    if state.drag_kind == "paint":
-        doc.stroke_to(point)
-    elif state.drag_kind == "spray":
-        # Every held frame, moving or not: an airbrush keeps emitting while the
-        # button is down, which is the whole tool. A rate times a delta rather
-        # than a count per frame, so the cloud is the same on a slow machine as
-        # on a fast one -- with the fraction carried, or a rate under one dab a
-        # frame would round to nothing sixty times a second.
-        state.spray_carry += state.spray_rate * imgui.get_io().delta_time
-        emit = int(state.spray_carry)
-        if emit > 0:
-            state.spray_carry -= emit
-            doc.spray_at(point, emit)
-    elif state.drag_kind == "layer_move":
-        # From the anchor, not from the last point: the session re-renders from
-        # its snapshot, so what it wants is the total offset.
-        anchor = state.drag_anchor or point
-        doc.preview_layer_move(round(point[0] - anchor[0]), round(point[1] - anchor[1]))
-    elif state.drag_kind == "move" and doc.floating is not None:
-        last = state.last_point or point
-        doc.move_floating(round(point[0] - last[0]), round(point[1] - last[1]))
-    elif state.drag_kind == "lasso" and (
-        not state.lasso or math.dist(state.lasso[-1], point) >= 2.0
-    ):
-        # Sampled rather than every pixel: a lasso is a polygon, and a vertex
-        # per mouse-move makes a thousand-point one out of a slow drag.
-        state.lasso.append(point)
-    state.last_point = point
-
-
-def _shape_drag(state: Any, anchor, point):
-    """A shape drag's two endpoints, with the modifiers read *now*.
-
-    Live rather than sampled at press, unlike ``combine``: a user decides a
-    rectangle should have been a square halfway through drawing it, and the
-    preview has to be able to change its mind with them.
-    """
-    from .. import inker_ops
-
-    io = imgui.get_io()
-    held = "+".join(
-        name
-        for name, down in (
-            ("Ctrl", io.key_ctrl),
-            ("Alt", io.key_alt),
-            ("Shift", io.key_shift),
-        )
-        if down
-    )
-    return inker_state.shape_endpoints(
-        state.tool,
-        anchor,
-        point,
-        constrain=inker_ops.action_active(
-            "shape_square", held, "ShapeTool", state.shortcut_overrides
-        ),
-        from_centre=inker_ops.action_active(
-            "shape_center", held, "ShapeTool", state.shortcut_overrides
-        ),
-    )
-
-
-def marquee_rect(anchor, point) -> tuple[int, int, int, int]:
-    """The pixel rectangle a marquee drag covers, whichever way it was drawn.
-
-    Ordering the corners has to come *before* rounding them. Flooring the
-    anchor and ceiling the release point rounds outward only while the drag
-    runs down and to the right; reverse the drag and the same two rules round
-    inward on both corners, so an identical gesture selects a smaller rectangle
-    depending on the direction it was made in.
-    """
-    x0, x1 = sorted((float(anchor[0]), float(point[0])))
-    y0, y1 = sorted((float(anchor[1]), float(point[1])))
-    return (
-        int(math.floor(x0)),
-        int(math.floor(y0)),
-        int(math.ceil(x1)),
-        int(math.ceil(y1)),
-    )
-
-
-def is_click(anchor, point) -> bool:
-    """Whether a gesture never left the pixel it started in.
-
-    The question ``marquee_rect`` cannot answer. Its corners are floored and
-    ceiled -- correctly, so that a drag rounds outward whichever way it was
-    drawn -- which means a press and release at the same point come back as a
-    1x1 rectangle rather than as an empty one. So the "click deselects" branch
-    was unreachable, and every stray click inside a select tool left a
-    one-pixel selection that nothing could be painted outside of (the
-    2026-09-02 review, section 5).
-
-    Asked of the pixels rather than of a distance in either space: the pixel is
-    what the user aimed at, and a threshold in screen pixels would deselect at
-    one zoom and select at another.
-    """
-    return (int(math.floor(anchor[0])), int(math.floor(anchor[1]))) == (
-        int(math.floor(point[0])),
-        int(math.floor(point[1])),
-    )
-
-
-def _release(ctx: Any, state: Any, tab: Any, point) -> None:
-    from ..inker import SelectionMask
-
-    doc = tab.doc
-    anchor = state.drag_anchor or point
-    kind = state.drag_kind
-
-    if kind.startswith("slice-"):
-        _slice_release(ctx, state, tab, point)
-        state.clear_drag()
-        return
-    if kind in ("paint", "spray"):
-        doc.end_stroke()
-        # Where the next Shift-click draws from. After ``end_stroke``, so a
-        # refused or empty stroke still moves it -- the user's hand was here
-        # either way, and a line back to some earlier point they have forgotten
-        # about is more surprising than a line from where they just clicked.
-        tab.view.last_paint = point
-    elif kind == "layer_move":
-        doc.commit_layer_move()
-    elif kind == "shape":
-        p0, p1 = _shape_drag(state, anchor, point)
-        doc.shape(
-            state.tool,
-            (int(p0[0]), int(p0[1])),
-            (int(p1[0]), int(p1[1])),
-            # Never the background colour: a right-press on a shape tool is
-            # inert and never reaches here (see ``BG_BUTTON_TOOLS``).
-            state.fg,
-            state.brush_size,
-            filled=state.shape_filled,
-            wrap=tab.tiled,
-            # The rectangle's rounded corners (6.4). Read at the commit rather
-            # than at the press, so ``C`` held mid-drag changes the shape under
-            # the cursor -- which is what Aseprite's own gesture does.
-            radius=int(state.corner_radius) if state.tool == "rect" else 0,
-        )
-    elif kind == "marquee":
-        rect = marquee_rect(anchor, point)
-        if not is_click(anchor, point) and rect[2] > rect[0] and rect[3] > rect[1]:
-            build = (
-                SelectionMask.from_ellipse
-                if state.tool == "select_ellipse"
-                else SelectionMask.from_rect
-            )
-            doc.select(build(doc.size, rect), state.combine)
-        else:
-            # A click with no drag inside a select tool means "deselect", which
-            # is what every other editor does and what stops a stray click
-            # leaving a one-pixel selection nothing can be painted outside.
-            doc.deselect()
-    elif kind == "mask-move":
-        # One step for the whole drag: the live offset was drawn by shifting
-        # the ants and touched nothing, so this is the first and only thing the
-        # gesture pushes.
-        dx, dy = _mask_shift(state, point)
-        if (dx or dy) and doc.mask is not None:
-            doc.select(doc.mask.translated(dx, dy))
-    elif kind == "lasso":
-        # The same landing the polygonal lasso commits through (C4), so the two
-        # cannot come to disagree about what a run of vertices selects. A drag
-        # too short to be a polygon is the marquee's stray click: deselect.
-        if not inker_mode.polygon_select(doc, state.lasso, state.combine):
-            doc.deselect()
-    elif kind == "gradient":
-        # To transparent means the *foreground* colour at zero alpha, not the
-        # background one: fading to a transparent black leaves a dark fringe
-        # wherever the two are blended.
-        end = (*state.fg[:3], 0) if state.gradient_to_transparent else state.bg
-        doc.gradient(
-            anchor,
-            point,
-            state.fg,
-            end,
-            kind=state.gradient_kind,
-            # Empty means the foreground-to-background preset, which is a live
-            # reading of the two colours rather than a copy of them -- so
-            # swapping with X changes the next gradient, as it always has.
-            stops=state.gradient_stops or None,
-            # "none" is the tool option's spelling and None is the engine's:
-            # the engine's is a *path*, not a value, and keeping the two apart
-            # is what makes the undithered arithmetic byte-identical.
-            dither=None if state.gradient_dither == "none" else state.gradient_dither,
-        )
-    # Only the kinds that actually paint. A marquee drag pushes no history step
-    # either, and reading a still head after one would announce a revert that
-    # never happened; ``clear_drag`` below drops the banked head for every other
-    # gesture. The tile stamp is excluded by construction -- it writes refs and
-    # never reaches the tileset at all.
-    if kind in ("paint", "spray", "shape", "gradient"):
-        _manual_note(ctx, state, doc)
-    state.clear_drag()
-
-
 # --- drawing ----------------------------------------------------------------
 
 #: Onion tints. Red behind, green ahead -- the convention every 2D animation
@@ -2574,25 +1832,6 @@ def _onion_span(state: Any, tab: Any, anim: Any, current: int) -> tuple[int, int
     return (0, last)
 
 
-def _onion_index(current: int, delta: int, span: tuple[int, int]) -> int | None:
-    """Which frame a ghost ``delta`` away is, or None if there is not one.
-
-    Wrapping inside the span rather than clamping: a clamp draws the same
-    ghost twice at the ends of a cycle, which reads as one ghost that stopped
-    moving -- the failure the whole feature exists to avoid.
-    """
-    low, high = span
-    width = high - low + 1
-    if width <= 0:
-        return None
-    index = current + delta
-    if low <= index <= high:
-        return index
-    if width == 1:
-        return None
-    return low + (index - low) % width
-
-
 def _onion(ctx: Any, state: Any, tab: Any, draw_list, view, origin, size) -> None:
     """Neighbouring frames, tinted and faded, beneath the live one.
 
@@ -2617,12 +1856,20 @@ def _onion(ctx: Any, state: Any, tab: Any, draw_list, view, origin, size) -> Non
         int(getattr(state, "onion_tint_back", ONION_BACK)),
         int(getattr(state, "onion_tint_forward", ONION_FORWARD)),
     )
+    # Which frames a ghost has already been drawn for. The span wraps, so on a
+    # short clip two different offsets resolve to one frame -- on a two-frame
+    # clip, -1 and +1 are both the other frame -- and drawing it twice stacked
+    # two tints and two fades on one picture, which reads as a third frame that
+    # is not there. Nearest-first ordering means the first ghost drawn for a
+    # frame is the closest one, which is the one worth keeping.
+    drawn: set[int] = {current}
     for offset in range(max(state.onion_before, state.onion_after), 0, -1):
         for delta, colour in ((-offset, tints[0]), (offset, tints[1])):
             limit = state.onion_before if delta < 0 else state.onion_after
             index = _onion_index(current, delta, span)
-            if offset > limit or index is None:
+            if offset > limit or index is None or index in drawn:
                 continue
+            drawn.add(index)
             texture = inker_textures.frame_texture(
                 ctx, tab, anim.frames[index].uid, track_uid=track_uid
             )
@@ -2648,6 +1895,31 @@ def _onion(ctx: Any, state: Any, tab: Any, draw_list, view, origin, size) -> Non
 MIRROR_PREVIEW_MAX = 4096
 
 
+def _runs(xs: list[int], ys: list[int], box) -> list[tuple[int, int, int, bool]]:
+    """``(x, y, width, inside)`` spans over the marked pixels, row by row.
+
+    ``np.nonzero`` yields row-major order, so consecutive entries on one row
+    with consecutive x are one span; the face box splits a span because the two
+    sides are drawn in different colours.
+    """
+
+    out: list[tuple[int, int, int, bool]] = []
+    start = last = None
+    row = inside_run = None
+    for x, y in zip(xs, ys, strict=True):
+        inside = box is not None and box[0] <= x < box[2] and box[1] <= y < box[3]
+        if start is not None and y == row and x == last + 1 and inside is inside_run:
+            last = x
+            continue
+        if start is not None:
+            out.append((start, row, last - start + 1, bool(inside_run)))
+        start = last = x
+        row, inside_run = y, inside
+    if start is not None:
+        out.append((start, row, last - start + 1, bool(inside_run)))
+    return out
+
+
 def _mirror_preview(tab: Any, draw_list, view, origin) -> None:
     """What a mirror onto the counterpart would change, over the live cell.
 
@@ -2658,6 +1930,7 @@ def _mirror_preview(tab: Any, draw_list, view, origin) -> None:
     this is the offer, and the strip's button is the acceptance.
     """
     from .. import inker_sheet
+    from . import inker_slices
 
     report = inker_sheet.mirror_report(tab)
     if report is None:
@@ -2667,13 +1940,18 @@ def _mirror_preview(tab: Any, draw_list, view, origin) -> None:
     if 0 < len(xs) <= MIRROR_PREVIEW_MAX:
         open_ = _u32(theme.ACCENT, 0.7)
         held = _u32(theme.WARN, 0.35)
-        for x, y in zip(xs.tolist(), ys.tolist(), strict=True):
-            inside = box is not None and box[0] <= x < box[2] and box[1] <= y < box[3]
-            a, b = _box(view, origin, x, y, x + 1, y + 1)
+        # **Runs, not pixels.** Differences come in horizontal runs -- a limb,
+        # an outline, an edge of a shape -- so one rect per *span* draws the
+        # same picture for a fraction of the calls: the cap is 4,096 pixels and
+        # 4,096 ``add_rect_filled`` a frame is a stall in the one place the
+        # user is trying to look. A run is broken by a gap and by the face box,
+        # since the two halves are different colours.
+        for x0, y, width, inside in _runs(xs.tolist(), ys.tolist(), box):
+            a, b = _box(view, origin, x0, y, x0 + width, y + 1)
             draw_list.add_rect_filled(a, b, held if inside else open_)
     if box is not None:
         a, b = _box(view, origin, box[0], box[1], box[2], box[3])
-        _dashed_rect(draw_list, a, b, _u32(theme.WARN, 0.9))
+        inker_slices._dashed_rect(draw_list, a, b, _u32(theme.WARN, 0.9))
 
 
 def _playback_frame(ctx: Any, tab: Any, draw_list, view, origin, size) -> None:
@@ -2687,6 +1965,7 @@ def _playback_frame(ctx: Any, tab: Any, draw_list, view, origin, size) -> None:
 
 
 def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
+    from . import inker_gestures, inker_slices
     doc = tab.doc
     view = tab.view
     draw_list = imgui.get_window_draw_list()
@@ -2773,14 +2052,14 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     if symmetry_axes(state):
         _symmetry(state, draw_list, view, origin, doc.size)
     _ants(ctx, tab, draw_list, origin, state)
-    if slices_visible(state):
-        _slices(state, tab, draw_list, origin)
+    if inker_slices.slices_visible(state):
+        inker_slices._slices(state, tab, draw_list, origin)
     if state.transforming:
         _transform_box(state, tab, draw_list, origin)
     _preview(state, tab, draw_list, origin)
     # Beside the drag preview rather than inside it: a multi-click gesture holds
     # no ``drag_kind``, which is the first thing ``_preview`` returns on.
-    _gesture_preview(state, tab, draw_list, origin)
+    inker_gestures._gesture_preview(state, tab, draw_list, origin)
     if hovered:
         # **The shapes get the ring too.** ``doc.shape`` takes the same
         # ``brush_size`` the brush does, so a line has a stroke width -- and
@@ -2881,10 +2160,42 @@ def _floating(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
 
 #: ``{(doc_id, layer_uid): (stamp, box_or_None)}``. Keyed on the document's own
 #: identity as well as the layer's, because a uid is unique within a document
-#: and this dict outlives one. Bounded by the layers of the open documents.
+#: and this dict outlives one.
+#:
+#: **``id()`` is only safe here because of the weakrefs below.** CPython
+#: recycles an address the moment the object at it is collected, so a closed
+#: document's entries would go on answering for whichever document was
+#: allocated next -- the same trap the Plotter's ``id(pixels)`` texture key
+#: fell into -- and nothing pruned them, so the dict grew for the life of the
+#: session. The finalizer drops a document's whole block when it dies, which
+#: closes both halves at once: the id cannot be reused while an entry for it
+#: exists, and the entries cannot outlive what they describe.
 _CONTENT_BOX: dict[
     tuple[int, int], tuple[tuple[int, int], tuple[int, int, int, int] | None]
 ] = {}
+_CONTENT_BOX_LIVE: dict[int, Any] = {}
+
+
+def _content_key(doc: Any) -> int:
+    """``id(doc)``, with a finalizer that forgets its entries. See above."""
+
+    import weakref
+
+    ident = id(doc)
+    if ident not in _CONTENT_BOX_LIVE:
+
+        def drop(_ref: Any, ident: int = ident) -> None:
+            _CONTENT_BOX_LIVE.pop(ident, None)
+            for key in [key for key in _CONTENT_BOX if key[0] == ident]:
+                del _CONTENT_BOX[key]
+
+        try:
+            _CONTENT_BOX_LIVE[ident] = weakref.ref(doc, drop)
+        except TypeError:
+            # Something not weakref-able: cache nothing rather than cache
+            # something that can go stale invisibly.
+            return 0
+    return ident
 
 
 def _content_box(doc: Any, layer: Any) -> tuple[int, int, int, int] | None:
@@ -2897,21 +2208,30 @@ def _content_box(doc: Any, layer: Any) -> tuple[int, int, int, int] | None:
     ``rev`` moves on every invalidation, which is the superset. The cost of the
     coarser half is a recompute on a layer switch, which is a click.
     """
-    import numpy as np
 
-    key = (id(doc), layer.uid)
+    ident = _content_key(doc)
+    if not ident:
+        return _measure_content(layer)
+    key = (ident, layer.uid)
     stamp = (int(doc.rev), doc.layer_stamp(layer.uid))
     cached = _CONTENT_BOX.get(key)
     if cached is not None and cached[0] == stamp:
         return cached[1]
-    opaque = layer.pixels[..., 3] > 0
-    rows = np.flatnonzero(opaque.any(axis=1))
-    box = None
-    if rows.size:
-        cols = np.flatnonzero(opaque.any(axis=0))
-        box = (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
+    box = _measure_content(layer)
     _CONTENT_BOX[key] = (stamp, box)
     return box
+
+
+def _measure_content(layer: Any) -> tuple[int, int, int, int] | None:
+    """The opaque bounds, measured. The uncached half of :func:`_content_box`."""
+    import numpy as np
+
+    opaque = layer.pixels[..., 3] > 0
+    rows = np.flatnonzero(opaque.any(axis=1))
+    if not rows.size:
+        return None
+    cols = np.flatnonzero(opaque.any(axis=0))
+    return (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
 
 
 def _layer_edges(tab: Any, draw_list: Any, view: Any, origin) -> None:
@@ -2980,7 +2300,11 @@ def _tile_numbers(state: Any, tab: Any, draw_list: Any, view: Any, origin) -> No
     hi_row = min(height, int(max(p[1] for p in seen) // tile_h) + 2)
     for row in range(lo_row, hi_row):
         for column in range(lo_col, hi_col):
-            local = int(refs[row, column]) & 0x1FFFFFFF
+            # ``gid.GID_MASK``, not the literal: the word's low bits are
+            # defined in exactly one place and a second spelling of them is one
+            # that stops agreeing -- a drifted mask reads a flipped tile as a
+            # tile id of two billion.
+            local = int(refs[row, column]) & gid.GID_MASK
             if not local:
                 continue
             at = inker_state.to_screen(view, origin, column * tile_w + 2, row * tile_h + 2)
@@ -3496,6 +2820,7 @@ def _ants(ctx: Any, tab: Any, draw_list: Any, origin, state: Any = None) -> None
 
 def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
     """What the current drag would produce, before it produces it."""
+    from . import inker_drag
     if state.drag_anchor is None or not state.drag_kind:
         return
     view = tab.view
@@ -3530,7 +2855,7 @@ def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
         # Through the same function the release goes through, and back to
         # screen: a preview drawn from the raw cursor while the commit applies a
         # constraint is a picture of a shape the user is not about to get.
-        p0, p1 = _shape_drag(state, state.drag_anchor, landing)
+        p0, p1 = inker_drag._shape_drag(state, state.drag_anchor, landing)
         anchor = inker_state.to_screen(view, origin, *p0)
         tip = inker_state.to_screen(view, origin, *p1)
 
@@ -3587,6 +2912,17 @@ def _pixel_cell(state: Any, tab: Any, draw_list: Any, origin) -> None:
     if point is None:
         return
     _cell_outline(view, origin, draw_list, point, _u32(theme.TEXT, 0.85))
+    # **And the footprint**, which is the half the floating ring never said: a
+    # brush wider than one pixel covers a *box of cells*, anchored the way the
+    # engine anchors it (``brush.footprint``, which is ``_stamp``'s own
+    # arithmetic), and a circle at the raw cursor is a picture of the width
+    # with the position left out. Dimmer than the cell, because the cell is
+    # where the pointer is and this is what the click will reach.
+    # Only for the tools whose gesture is sized by the brush -- the same set
+    # the ring is drawn for. A marquee's footprint is the marquee.
+    box = _footprint_box(state, tab, point) if state.tool in _RINGED_TOOLS else None
+    if box is not None:
+        _box_outline(view, origin, draw_list, box, _u32(theme.TEXT, 0.45))
     # **And its mirrored twins.** With symmetry on, a dab lands in more than one
     # place and only one of them had a cursor -- so the pixel the user was
     # aiming at was drawn and the pixels the same click would also paint were
@@ -3613,11 +2949,38 @@ def _pixel_cell(state: Any, tab: Any, draw_list: Any, origin) -> None:
 def _cell_outline(view: Any, origin: Any, draw_list: Any, point, colour: int) -> None:
     """One image pixel, outlined. Two corners describe it -- see
     :func:`_pixel_cell` on why a quarter turn needs no more than that."""
-    a = inker_state.to_screen(view, origin, float(point[0]), float(point[1]))
-    b = inker_state.to_screen(view, origin, float(point[0] + 1), float(point[1] + 1))
+    _box_outline(view, origin, draw_list, (point[0], point[1], point[0] + 1, point[1] + 1), colour)
+
+
+def _box_outline(view: Any, origin: Any, draw_list: Any, box, colour: int) -> None:
+    """A half-open pixel box, outlined on the lattice."""
+    x0, y0, x1, y1 = box
+    a = inker_state.to_screen(view, origin, float(x0), float(y0))
+    b = inker_state.to_screen(view, origin, float(x1), float(y1))
     lo = crisp((min(a[0], b[0]), min(a[1], b[1])))
     hi = crisp((max(a[0], b[0]), max(a[1], b[1])))
     draw_list.add_rect(lo, hi, colour)
+
+
+def _footprint_box(state: Any, tab: Any, point) -> tuple[int, int, int, int] | None:
+    """The pixels the next dab covers, or None when the ring already says it.
+
+    ``None`` for a one-pixel brush, whose footprint *is* the cell outline
+    ``_pixel_cell`` already draws.
+    """
+    from ..inker import brush
+
+    tip = state.tip_for(state.tool)
+    at = (float(point[0]) + 0.5, float(point[1]) + 0.5)
+    if tip is not None:
+        width, height = tip.size
+        left, top, _r, _b = brush.footprint(at, int(width), state.nib, stamp=True)
+        vertical = brush.footprint(at, int(height), state.nib, stamp=True)
+        return (left, vertical[1], left + int(width), vertical[1] + int(height))
+    diameter = max(1, int(state.brush_size))
+    if diameter <= 1:
+        return None
+    return brush.footprint(at, diameter, state.nib)
 
 
 def _tile_cursor(state: Any, tab: Any, draw_list: Any, origin) -> None:
@@ -3655,7 +3018,17 @@ def _tile_cursor(state: Any, tab: Any, draw_list: Any, origin) -> None:
 
 def _cursor(state: Any, draw_list: Any, view: Any) -> None:
     """A circle the size of the brush. The one piece of feedback that makes a
-    variable-size brush usable at all."""
+    variable-size brush usable at all.
+
+    **Below ``PIXEL_CELL_MIN_ZOOM`` only.** Above it, ``_pixel_cell`` draws the
+    cell under the pointer and ``_footprint_box`` draws the box the dab will
+    actually cover, both on the lattice -- which is the question being asked at
+    that zoom, and which a ring floating at the raw mouse position cannot
+    answer. Drawing both would be two cursors saying different things about one
+    brush.
+    """
+    if view.zoom >= PIXEL_CELL_MIN_ZOOM:
+        return
     mouse = imgui.get_mouse_pos()
     colour = _u32(theme.TEXT, 0.7)
     tip = state.tip_for(state.tool)
@@ -3686,3 +3059,56 @@ def _cursor(state: Any, draw_list: Any, view: Any) -> None:
     if state.nib == "soft" and state.hardness < 0.99:
         inner = radius * max(state.hardness, 0.05)
         draw_list.add_circle((mouse.x, mouse.y), inner, _u32(theme.TEXT, 0.25))
+
+
+# --- what moved out, and the one door back ------------------------------------
+#
+# ``inker_drag``, ``inker_gestures`` and ``inker_slices`` -- the three pieces
+# T7 split off this module (the 2026-09-02 review). ``inker_mode``'s table, for its reasons: each
+# moved module imports this one, so a bottom ``from .inker_slices import ...``
+# here would fail whenever something imported the pair the other way round, and
+# resolving on demand has no order at all.
+_MOVED: dict[str, str] = {
+    "CLOSES_ON_FIRST": "inker_gestures",
+    "POLY_CLOSE": "inker_gestures",
+    "SLICE_CORNERS": "inker_slices",
+    "SLICE_DASH": "inker_slices",
+    "SLICE_GRAB": "inker_slices",
+    "SLICE_HANDLE": "inker_slices",
+    "SLICE_MIN": "inker_slices",
+    "SLICE_PIVOT_RADIUS": "inker_slices",
+    "TEXT_BOX_HEIGHT": "inker_gestures",
+    "TEXT_MAX": "inker_gestures",
+    "TEXT_POPUP": "inker_gestures",
+    "_curve_path": "inker_gestures",
+    "_curve_settled": "inker_gestures",
+    "_dashed_rect": "inker_slices",
+    "_drag": "inker_drag",
+    "_gesture_press": "inker_gestures",
+    "_gesture_preview": "inker_gestures",
+    "_near": "inker_slices",
+    "_nudged": "inker_slices",
+    "_open_text": "inker_gestures",
+    "_release": "inker_drag",
+    "_shape_drag": "inker_drag",
+    "_slice_drag": "inker_slices",
+    "_slice_grab": "inker_slices",
+    "_slice_press": "inker_slices",
+    "_slice_release": "inker_slices",
+    "_slices": "inker_slices",
+    "_text_popup": "inker_gestures",
+    "slices_visible": "inker_slices",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module = _MOVED.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    return getattr(import_module(f".{module}", __package__), name)
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_MOVED})

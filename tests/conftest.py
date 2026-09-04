@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -973,3 +974,48 @@ def installed_recipes(monkeypatch):
     from warlock import generation
 
     monkeypatch.setattr(generation, "_present", lambda key, config: True)
+
+
+# --- the canvas pane is four modules -----------------------------------------
+#
+# ``panes/inker_canvas`` and the ``inker_drag``, ``inker_slices`` and
+# ``inker_gestures`` pieces T7 split off it on 2026-09-04. It is *one* surface,
+# so a test faking imgui's mouse is faking it for the whole press/drag/release
+# path rather than for whichever file the arm it exercises happens to live in.
+# This lives here rather than in ``tests/inker/conftest.py`` because a second
+# ``conftest`` module shadows this one for the four test files that do
+# ``from conftest import ...``.
+
+
+def canvas_modules() -> tuple[Any, ...]:
+    """The four modules the canvas pane is made of, parent first."""
+    from warlock.studio.panes import (
+        inker_canvas,
+        inker_drag,
+        inker_gestures,
+        inker_slices,
+    )
+
+    return (inker_canvas, inker_drag, inker_gestures, inker_slices)
+
+
+def patch_all(setter: Any, name: str, value: Any) -> None:
+    """``setter`` is any ``monkeypatch``-shaped object, including a context."""
+    for module in canvas_modules():
+        if name in vars(module):
+            setter.setattr(module, name, value)
+
+
+@pytest.fixture
+def patch_canvas(monkeypatch: pytest.MonkeyPatch):
+    """Set a module-level name across every module the canvas pane is made of.
+
+    A real imgui call with no context does not raise -- it takes the worker
+    down -- so a stub that reaches only the parent module is a hang, not a
+    failure. That is what this exists to make impossible.
+    """
+
+    def patch(name: str, value: Any) -> None:
+        patch_all(monkeypatch, name, value)
+
+    return patch

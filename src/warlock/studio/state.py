@@ -849,6 +849,14 @@ class AppState:
     # the pane switch on a remembered name. Not persisted: a refusal describes
     # a submit, and a submit does not survive the session that made it.
     field_errors: dict[str, str] = field(default_factory=dict)
+    #: Why the last Generate press was refused, when the refusal names no
+    #: control. The VRAM door is the one such refusal in ``service.validation``
+    #: and deliberately so -- ``vram.remedies`` offers several answers and
+    #: sometimes an environment variable, which is not a widget -- so it had
+    #: nowhere to go but a fading toast, while the plan block a few pixels away
+    #: went on saying "Ready to generate." A multi-remedy paragraph is not
+    #: something a toast can hold. Cleared by the next accepted submit.
+    submit_refusal: str = ""
     # ``ServiceError.rows`` for the same refusals, and what installing exactly
     # those costs. Carried beside the message rather than parsed back out of
     # it, which is the reason the service field exists at all: the offer under
@@ -963,6 +971,13 @@ class AppState:
     # one the app forces on the user at the door (``check_vram``) and nothing
     # on screen answered.
     show_resources: bool = True
+    #: How many frames the app has drawn. Bumped once, at the top of
+    #: ``App.frame``, and never read for anything but *identity*: a pane that
+    #: computes the same answer twice in one frame -- because a bar and the
+    #: column under it both ask -- memoises on this and gets the fresh answer
+    #: the next frame regardless. Not persisted, and 0 in a headless context,
+    #: where nothing draws twice anyway.
+    frame_index: int = 0
     # Suppress every animation in the app (accessibility: vestibular
     # sensitivity). Persisted, because it is a property of the person rather
     # than of the session. The flag itself lives in ``motion.REDUCED`` -- this

@@ -96,6 +96,24 @@ class Primitive:
     joints: np.ndarray | None = None  # (n, 4) i4
     weights: np.ndarray | None = None  # (n, 4) f4
     material: Material = field(default_factory=Material)
+    #: The primitive's own axis-aligned box in *its* space, computed once.
+    #: ``Model.bounds`` runs per frame for the inspector and for framing, and
+    #: its docstring's claim that it does not touch every vertex was only true
+    #: of the transform: the ``min``/``max`` that make the box were a full pass
+    #: over the positions, every frame, on 443k vertices. Positions never move
+    #: -- a pose moves the *node* -- so the box is a property of the primitive.
+    _box: tuple[np.ndarray, np.ndarray] | None = field(
+        default=None, repr=False, compare=False
+    )
+
+    def box(self) -> tuple[np.ndarray, np.ndarray] | None:
+        """``(min, max)`` over this primitive's positions, or None if empty."""
+
+        if self._box is None:
+            if len(self.positions) == 0:
+                return None
+            self._box = (self.positions.min(axis=0), self.positions.max(axis=0))
+        return self._box
 
 
 @dataclass
@@ -245,10 +263,10 @@ class Model:
         hi = np.full(3, -np.inf)
         for node, prims in self.mesh_instances():
             for prim in prims:
-                if len(prim.positions) == 0:
+                local = prim.box()
+                if local is None:
                     continue
-                pmin = prim.positions.min(axis=0)
-                pmax = prim.positions.max(axis=0)
+                pmin, pmax = local
                 corners = np.array(
                     [
                         [x, y, z]
@@ -464,11 +482,28 @@ class _Reader:
             # Reading the integer forms as-is would give every vertex a weight
             # of 65535, which renders as an explosion rather than as a mesh.
             if raw.dtype == np.uint8:
-                out.weights = raw.astype("f4") / 255.0
+                weights = raw.astype("f4") / 255.0
             elif raw.dtype == np.uint16:
-                out.weights = raw.astype("f4") / 65535.0
+                weights = raw.astype("f4") / 65535.0
             else:
-                out.weights = raw.astype("f4")
+                weights = raw.astype("f4")
+            # **Renormalised, and a zero-sum vertex pinned to its first joint.**
+            # The shader sums ``u_joints[j] * w`` over the four influences with
+            # no division, so the spec's "the weights of a vertex sum to 1" is
+            # a requirement this renderer *relies* on rather than one it
+            # checks. A file whose weights sum to 0 -- a stray vertex an
+            # exporter left unweighted, which is common enough in rigs that
+            # come back from a round trip -- collapsed every such vertex onto
+            # the origin, and the mesh grew a spike to the world centre.
+            # Renormalising is exact for a well-formed file (a sum of 1 divides
+            # by 1) and is the only reading available for a malformed one.
+            total = weights.sum(axis=1, keepdims=True)
+            dead = total[:, 0] <= 0.0
+            if dead.any():
+                weights[dead] = 0.0
+                weights[dead, 0] = 1.0
+                total = weights.sum(axis=1, keepdims=True)
+            out.weights = weights / total
         if "material" in prim and prim["material"] < len(materials):
             out.material = materials[prim["material"]]
         return out

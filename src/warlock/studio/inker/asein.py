@@ -807,13 +807,15 @@ def _read_layer(state: _Parse, r: _Reader, opacity_valid: bool) -> None:
     # the format puts it -- only for this one layer kind.
     tileset = r.u32() if kind == _LAYER_TILEMAP else None
     if flags & _LAYER_REFERENCE:
-        # A reference layer is an underlay to trace over and Aseprite's own
-        # export leaves it out, so opening it *visible* is what would change
-        # the picture. It arrives hidden rather than dropped: the pixels are in
-        # the file, the user may well want them, and a checkbox is a cheaper way
-        # back than reopening in Aseprite would be.
+        # The *sentence*, not the behaviour: the VISIBLE bit is read verbatim a
+        # few lines down (see the comment there), so "opens hidden" was a
+        # warning describing an override this reader had already stopped doing
+        # -- and it said so about a file that showed the layer. What is worth
+        # saying is what is actually true of a reference layer here: it is an
+        # underlay, and a flattened export leaves it out.
         state.warn(
-            f"the reference layer {name!r} opens hidden, as an export leaves it out"
+            f"the reference layer {name!r} is an underlay; a flattened export"
+            " leaves it out"
         )
     mode = "normal"
     if kind in (_LAYER_IMAGE, _LAYER_TILEMAP):
@@ -1710,8 +1712,14 @@ def document_from_aseprite(
     # tileset lands in ``doc.tilesets`` in the same place it would if a
     # tilemap layer had used it (``ora``'s "not garbage" rule, restated for
     # the reader that predates it).
+    # ``_transparent_slot``, not the raw byte: this is the *third* reader of
+    # it and the last one still clamping differently, so a file naming a slot
+    # past the end of its own palette decoded its tilesets against a table row
+    # that does not exist while its cels decoded against slot 0. Two answers to
+    # one question is how the cels and the tilesets came to disagree; that
+    # function's docstring is the whole argument.
     tileset_lut = (
-        _lut(sprite.palette or [], sprite.transparent_index)
+        _lut(sprite.palette or [], _transparent_slot(sprite))
         if sprite.depth == _INDEXED
         else None
     )

@@ -203,7 +203,10 @@ def test_the_progress_card_can_be_faded_out_after_its_job_is_gone():
     source = inspect.getsource(overlay.progress_card)
     assert "_LAST_PROGRESS" in source
     assert "motion.value(_PROGRESS_KEY" in source
-    assert 'widgets.disabled_button("Cancel", live' in source
+    assert '"Cancel", live and not cancelling' in source
+    # And it says which of the two greyed states it is in (T4).
+    assert "cancel_reason(live, cancelling)" in source
+    assert "stopped" in overlay.cancel_reason(False, False)
 
 
 def test_the_progress_card_takes_the_same_depth_treatment_as_every_other_surface():

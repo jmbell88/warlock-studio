@@ -19,7 +19,7 @@ from ...service import derive as svc_derive
 from ...service import files as svc_files
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
-from .. import controls, create_stages, fonts, forms, theme, widgets
+from .. import controls, create_stages, fonts, forms, quality, theme, widgets
 from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -33,6 +33,10 @@ from . import (
     stamps,
     texture_panel,
 )
+
+#: How tall the trellis log readout is, in design pixels. Enough lines to see
+#: a stack trace's shape without the pane becoming a log viewer.
+_LOG_HEIGHT = 160.0
 
 # Matches the library card's thumbnail, so the two read as the same kind of
 # object rather than as two different image widgets. Design px: every use of it
@@ -637,7 +641,10 @@ def _error(ctx: Any, job: Any) -> None:
     log_text = ctx.state.preview.get("trellis_log") if ctx.state.preview else None
     if log_text:
         controls.input_text_multiline(
-            "##log", log_text[-4000:], (-1, 160), imgui.InputTextFlags_.word_wrap.value
+            "##log",
+            log_text[-4000:],
+            (-1, sp(_LOG_HEIGHT)),
+            imgui.InputTextFlags_.word_wrap.value,
         )
     if "error.log" in (job.get("files") or []) and controls.button("Save error.log..."):
         ctx.save_artifact(job["id"], "error.log")
@@ -1208,20 +1215,19 @@ def _quality(ctx: Any, job: Any) -> None:
         # (``tests/test_quality_badge.py``), so raw imgui here is an access
         # violation rather than a failure -- and a caveat nobody hovers is a
         # caveat nobody reads anyway.
-        if ratio < widgets.AUDIT_UNINFORMATIVE:
-            widgets.muted("(a solid, featureless mesh scores this too)")
+        caveat = quality.caveat_for(ratio)
+        if caveat:
+            widgets.muted(caveat)
 
     attempts = params.get("mesh_attempts")
-    if isinstance(attempts, list) and len(attempts) > 1:
+    if isinstance(attempts, list):
         # Only ever present on a job the remesh actually ran for, so the line
         # doubles as the answer to "why is this not the mesh seed I asked for".
-        widgets.muted(
-            f"remeshed {len(attempts) - 1} time(s); kept the best of "
-            + ", ".join(
-                "unmeasured" if a.get("worst") is None else f"{float(a['worst']) * 100:.1f}%"
-                for a in attempts
-            )
-        )
+        # ``quality.remesh_line`` owns the wording: this used to say "kept the
+        # best of 12.3%, 4.5%", which is ``hole_worst`` presented as a ranking
+        # -- the one thing INVARIANTS says it may never be.
+        for line in quality.remesh_line(attempts):
+            widgets.muted(line)
 
 
 # --- verdicts ---------------------------------------------------------------

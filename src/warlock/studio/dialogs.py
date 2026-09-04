@@ -408,6 +408,8 @@ class Prompt:
     value: str = ""
     on_accept: Any = None
     _open: bool = field(default=False, repr=False)
+    #: :class:`Confirm`'s one-shot, for its reason. See the focus call.
+    _focused: bool = field(default=False, repr=False)
 
 
 class PromptQueue:
@@ -492,8 +494,14 @@ class PromptQueue:
         if _has_context():
             widgets.field_label(prompt.label)
         imgui.set_next_item_width(sp(FIELD_W))
-        if not imgui.is_any_item_active():
+        # Only on the frame the modal appears -- ``Confirm``'s one-shot and its
+        # reason. ``is_any_item_active`` is true of the *field*, so the old
+        # spelling re-grabbed the keyboard on every frame the field was not
+        # active, which is every frame after a Tab: the focus snapped straight
+        # back and the buttons could not be reached from the keyboard at all.
+        if not prompt._focused:
             imgui.set_keyboard_focus_here()
+            prompt._focused = True
         # ``enter_returns_true`` makes the returned flag mean *Enter was
         # pressed*, not *the text changed* -- but the returned string is the
         # live buffer either way. Storing it only when the flag was set left
@@ -554,3 +562,36 @@ class PromptQueue:
             self._answered()
         imgui.end_popup()
         imgui.pop_style_var()
+
+
+def modal_open(ctx: Any) -> bool:
+    """Whether *any* modal is on screen and owns the keyboard.
+
+    It used to know about exactly two: the confirm queue and the prompt queue.
+    The matte preview is a third -- a real modal, drawn in front of the
+    promotion, with its own Accept and Cancel -- and every global shortcut
+    leaked straight through it (UX-08). Ctrl+K opened the palette behind it;
+    Ctrl+Enter submitted the form the modal was a *question about*; a mode key
+    left the app somewhere else with the modal still up. Ownership is a
+    property of "a modal is up", not of which queue happens to hold it, so the
+    predicate asks all four.
+
+    A module function with ``App._modal_open`` delegating to it, because the
+    guided tour needs the same question and is deliberately *not* one of the
+    answers: ``panes/tour.py`` suspends its scrim while a modal is up, and a
+    second copy of this list would be a copy that stopped agreeing the next
+    time a modal was added.
+
+    **Here rather than in the frame loop**, which is where it used to live: the
+    tour is a pane, and importing ``main`` for one predicate made a leaf depend
+    on the shell. This module already owns two of the four answers.
+    """
+    from . import matte_preview
+    from .panes import first_run
+
+    return (
+        ctx.confirms.pending is not None
+        or ctx.prompts.pending is not None
+        or matte_preview.is_open(ctx)
+        or first_run.is_open(ctx)
+    )

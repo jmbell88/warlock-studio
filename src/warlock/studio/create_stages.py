@@ -111,15 +111,15 @@ def _reached_export(job: Any, rig_meta: Any, poses: Any) -> bool:
     five anonymous icons -- so a final step that can never tick reads as work
     still outstanding on every finished asset there will ever be. Answer the
     rail's question instead: the export grid is stage-keyed and never empty
-    (:func:`panes.widgets.artifacts_for`), so this is reached the moment the
+    (:func:`artifacts.artifacts_for`), so this is reached the moment the
     asset is one the grid has entries for. Note that :func:`reached` stops at
     the first unreached stage, which is what keeps this from ticking on a bare
     reference: Export is only asked about once mesh, rig and pose have all
     answered yes.
     """
-    from . import widgets
+    from . import artifacts
 
-    return job is not None and bool(widgets.artifacts_for(job))
+    return job is not None and bool(artifacts.artifacts_for(job))
 
 
 def _reached_pose(job: Any, rig_meta: Any, poses: Any) -> bool:

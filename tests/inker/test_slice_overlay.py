@@ -57,10 +57,10 @@ class _Lines:
 
 
 @pytest.fixture(autouse=True)
-def _no_context(monkeypatch):
+def _no_context(monkeypatch, patch_canvas):
     """``_u32`` reaches into a live imgui context and takes the process down
     without one, which is the whole reason this pane's drawing was untested."""
-    monkeypatch.setattr(inker_canvas, "_u32", lambda colour, alpha=1.0: 0)
+    patch_canvas("_u32", lambda colour, alpha=1.0: 0)
 
 
 def _tab(width: int = 32, height: int = 16, **view) -> object:

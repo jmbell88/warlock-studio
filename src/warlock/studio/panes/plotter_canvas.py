@@ -244,7 +244,7 @@ def draw(ctx: Any) -> None:
     if state.grid:
         _grid(draw_list, doc, view, (origin.x, origin.y), region)
     if state.show_objects:
-        _objects(state, doc, draw_list, view, (origin.x, origin.y))
+        _objects(state, doc, draw_list, view, (origin.x, origin.y), region)
     # Above the grid so its edge reads against one, below the cursor so the
     # footprint stays the thing under the pointer.
     _marquee(state, tab, draw_list, (origin.x, origin.y))
@@ -888,6 +888,7 @@ def _cell_quad(
     row: int,
     shift: tuple[float, float],
     tint: int,
+    lattice: Any = None,
 ) -> bool:
     """One tile, drawn into one lattice cell. -> whether anything was drawn.
 
@@ -915,7 +916,18 @@ def _cell_quad(
         bool(mask & gidlib.FLIP_V),
         bool(mask & gidlib.FLIP_D),
     )
-    px, py = doc.cell_origin(column, row)
+    # ``project.cell_origin`` against a lattice the *caller* built, not
+    # ``doc.cell_origin``: that property rebuilds the eleven-field ``Lattice``
+    # from eleven attribute reads on every call, and this is called once per
+    # visible cell per frame -- so zooming out, which is when the cell count is
+    # highest, paid for it most. The lattice cannot change inside one layer's
+    # draw, so it is built once above the loop. ``None`` keeps the old spelling
+    # for the two callers that have no lattice to hand.
+    px, py = (
+        doc.cell_origin(column, row)
+        if lattice is None
+        else project.cell_origin(lattice, column, row)
+    )
     own_w, own_h = ref.tileset.tile_size(local)
     p0 = inker_state.to_screen(
         view, origin, px + shift[0], py + shift[1] + (doc.tile_h - own_h)
@@ -1041,6 +1053,7 @@ def _layers(
         # the order the block already has; for an isometric one depth is
         # ``column + row``, and row-major is not monotone in it.
         cells = _cell_order(ids.shape[:2], doc.renderorder, doc.isometric)
+        lattice = doc._lattice()
         for row, column in cells:
             tile_id = int(ids[row, column])
             if not tile_id:
@@ -1067,6 +1080,7 @@ def _layers(
                 r0 + row,
                 shift,
                 tint,
+                lattice,
             )
 
 
@@ -1083,13 +1097,17 @@ def _image_layer(
     The texture is keyed on the pixel array's identity, the tileset rule --
     :class:`~..plotter.tilemap.ImageLayer` freezes its picture on construction,
     so a matching id is the same art and a replaced picture is a new array.
+    **The array is pinned beside the stamp** and that is what makes the
+    identity sound: CPython hands a freed address straight back to the next
+    allocation of the same size, so a replaced picture landing where the old
+    one was matched the stale stamp and went on being drawn.
     """
     if layer.pixels.size == 0:
         return
     from imgui_bundle import imgui
 
     texture = plotter_textures.image_texture(
-        ctx, tab.uid, f"img{layer.uid}", layer.pixels, id(layer.pixels)
+        ctx, tab.uid, f"img{layer.uid}", layer.pixels, id(layer.pixels), pin=layer.pixels
     )
     if texture is None:
         return
@@ -1305,15 +1323,55 @@ def _ruler_band(
                 draw_list.add_text((cross + 2.0, position + 1.0), ink, str(value))
 
 
-def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
+#: How far past the pane an object may sit and still be drawn, in design px.
+#: Generous, because the *handles* of a selected object stick out past its own
+#: box and a point marker is drawn as a ring around its position.
+_OBJECT_CULL_MARGIN = 64.0
+
+
+def _off_pane(view: Any, origin, obj: Any, dx: float, dy: float, bounds) -> bool:
+    """Whether one object's screen box misses the pane entirely."""
+
+    x0, y0 = inker_state.to_screen(view, origin, obj.x + dx, obj.y + dy)
+    x1, y1 = inker_state.to_screen(
+        view, origin, obj.x + dx + float(obj.w or 0), obj.y + dy + float(obj.h or 0)
+    )
+    left, top = min(x0, x1), min(y0, y1)
+    right, bottom = max(x0, x1), max(y0, y1)
+    return (
+        right < bounds[0] or left > bounds[2] or bottom < bounds[1] or top > bounds[3]
+    )
+
+
+def _objects(
+    state: Any, doc: Any, draw_list: Any, view: Any, origin, region: Any = None
+) -> None:
     """The object outlines, through the same resolver the tiles go through.
 
     An object layer draws no pixels, so it is absent from an export -- but it is
     still a layer in the tree, and a group that is hidden, offset or under a
     parallax factor has to move its objects with everything else or the handles
     stop sitting on what they resize.
+
+    **Culled against the pane**, which the tile layers already are (``_layers``
+    draws the visible block and nothing else) and which this was not: every
+    object of every object layer was projected, outlined and submitted whatever
+    the view was showing, so a map with a few thousand spawn points cost the
+    same at 800% on one corner as it did fitted. The test is the object's own
+    screen box against the pane's, with a margin, so an outline that starts off
+    screen and crosses it still draws.
     """
     from imgui_bundle import imgui
+
+    bounds = None
+    if region is not None:
+        margin = sp(_OBJECT_CULL_MARGIN)
+        bounds = (
+            origin[0] - margin,
+            origin[1] - margin,
+            origin[0] + region[0] + margin,
+            origin[1] + region[1] + margin,
+        )
 
     for entry in plotter_scene.resolve(doc):
         layer = entry.layer
@@ -1325,6 +1383,8 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
         # object, so the draw and the dispatch cannot disagree within a frame.
         sole = len(state.selected_objects) == 1
         for obj in layer.objects:
+            if bounds is not None and _off_pane(view, origin, obj, dx, dy, bounds):
+                continue
             selected = obj.uid in state.selected_objects
             alpha = float(obj.opacity) * float(entry.opacity) * (1.0 if obj.visible else 0.4)
             colour = imgui.get_color_u32(
@@ -2557,7 +2617,9 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
         result = (
             plotter_tools.erase(layer.data, cell[0], cell[1])
             if ref is None
-            else plotter_terrain.erase_terrain(layer.data, cell[0], cell[1], ref)
+            else plotter_terrain.erase_terrain(
+                layer.data, cell[0], cell[1], ref, outside=not doc.infinite
+            )
         )
     elif state.tool == "fill":
         target = _terrain_ref(state, doc) if state.brush is None else None
@@ -2569,7 +2631,12 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
             refits = True
             result = (
                 plotter_terrain.fill_terrain(
-                    layer.data, cell[0], cell[1], target.value, target.ref
+                    layer.data,
+                    cell[0],
+                    cell[1],
+                    target.value,
+                    target.ref,
+                    outside=not doc.infinite,
                 )
                 if target.wangset is None
                 else plotter_terrain.fill_wang(
@@ -2622,7 +2689,16 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
         # the picker armed, and nothing below this line knows there are two.
         result = (
             plotter_terrain.paint_terrain(
-                layer.data, cell[0], cell[1], target.value, target.ref
+                layer.data,
+                cell[0],
+                cell[1],
+                target.value,
+                target.ref,
+                # An infinite map's array edge is a *window* edge, not the
+                # map's: past it the map is unpainted, so the terrain must grow
+                # an outline there rather than run seamlessly off into nothing.
+                # See ``terrain._retile_into``.
+                outside=not doc.infinite,
             )
             if target.wangset is None
             else plotter_terrain.paint_wang(

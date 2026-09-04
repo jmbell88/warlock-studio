@@ -357,12 +357,22 @@ def revert(svc: WarlockService, template: str) -> dict[str, Any]:
 def preview_frames(svc: WarlockService, template: str, clip: str) -> dict[str, Any]:
     """One clip expanded to the poses each of its frames shows.
 
-    What the editor scrubs. It goes through ``sheet.interpolate_clip`` -- the
-    renderer's own interpolator -- rather than a preview-shaped reimplementation
-    of it, so what the scrubber shows is what the sheet will draw, including the
-    easing and the closed-loop wrap. A preview with its own interpolation would
-    be a second opinion about what a walk is, which is the whole thing the
-    single clip library exists to avoid.
+    The **stored** clip, expanded. It goes through ``sheet.interpolate_clip``
+    -- the renderer's own interpolator -- rather than a preview-shaped
+    reimplementation of it, so what this returns is what the sheet will draw,
+    including the easing and the closed-loop wrap. A preview with its own
+    interpolation would be a second opinion about what a walk is, which is the
+    whole thing the single clip library exists to avoid.
+
+    **The pane deliberately does not call this**, which is worth stating
+    because it looks like a service door with no reader. ``poser_mode.
+    rebuild_frames`` expands the clip *being edited* -- keys inserted and not
+    yet saved, a segment count mid-typing -- and a scrubber that showed the
+    file instead would be a scrubber that ignores the edit in front of it. The
+    two share the one thing that must not differ, the interpolator; where the
+    record comes from is exactly what they are for. This is the answer for
+    anything asking about a clip it has not got open: the API, and the tests
+    that pin the stored path end to end.
     """
     key = _template_or_invalid(template)
     found = rigging.clip_library(key)

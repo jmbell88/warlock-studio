@@ -73,6 +73,11 @@ class FakeViewer:
         self.framed = None
         # The onion-skin ghosts the clip editor pushes; empty everywhere else.
         self.onion: list = []
+        # The real camera, because the view keys are about what it does and a
+        # stub would pass whatever they did.
+        from warlock.studio.viewer.camera import Camera
+
+        self.camera = Camera()
         if model is not None:
             self.editor.bind(model, bones)
             self.pose_mode = True
@@ -507,7 +512,7 @@ def test_preview_bounds_cover_the_whole_skeleton():
 # --- keys --------------------------------------------------------------------
 
 
-def test_escape_deselects_the_joint_and_nothing_else(svc):
+def test_escape_deselects_the_joint(svc):
     import pygame
 
     ctx = FakeCtx(svc)
@@ -517,8 +522,40 @@ def test_escape_deselects_the_joint_and_nothing_else(svc):
     assert poser_mode.handle_key(ctx, event) is True
     assert viewer.editor.selected is None
     assert poser_mode.handle_key(ctx, event) is False
-    other = SimpleNamespace(type=pygame.KEYDOWN, key=pygame.K_f, mod=0)
+    # An unbound letter still falls through.
+    other = SimpleNamespace(type=pygame.KEYDOWN, key=pygame.K_g, mod=0)
     assert poser_mode.handle_key(ctx, other) is False
+
+
+def test_poser_has_clays_view_keys(svc):
+    """It had none: the only way to look at a pose from the side was to orbit
+    there by hand, and no way back once the model was off screen."""
+    import pygame
+
+    from warlock.studio import clay_mode
+
+    ctx = FakeCtx(svc)
+    viewer = ctx.poser_viewer = _bound_viewer()
+
+    def press(key, mod=0):
+        return poser_mode.handle_key(
+            ctx, SimpleNamespace(type=pygame.KEYDOWN, key=key, mod=mod)
+        )
+
+    assert press(pygame.K_1) is True
+    front = (viewer.camera.theta, viewer.camera.phi)
+    assert press(pygame.K_1, pygame.KMOD_SHIFT) is True
+    assert (viewer.camera.theta, viewer.camera.phi) != front
+
+    ortho = viewer.camera.orthographic
+    assert press(pygame.K_5) is True
+    assert viewer.camera.orthographic is not ortho
+
+    assert press(pygame.K_f) is True
+
+    # The table is Clay's, read rather than restated, so the two viewports
+    # cannot come to disagree about which number is the front.
+    assert set(clay_mode.AXIS_VIEW_KEYS) == {"1", "3", "7"}
 
 
 def test_the_mode_is_wired_into_the_switch():

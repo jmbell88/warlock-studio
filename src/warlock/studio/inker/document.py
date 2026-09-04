@@ -268,6 +268,18 @@ class Document(
     )
     #: The last ``(name, params) -> filtered pixels`` a preview computed, for
     #: the life of one filter session. See :meth:`preview_filter`.
+    #: The signature of the blend ``preview_filter`` last *wrote*, or None.
+    #:
+    #: ``_filter_memo`` below stops the filter being recomputed; this stops the
+    #: blend, the invalidate and the texture upload behind them from running on
+    #: a frame where nothing about the answer changed -- which is every frame
+    #: the popup is open and idle, and 16 MB of upload each at 2048 square.
+    #: Cleared by anything that changes the mask (``select``, a history
+    #: restore, a whole-canvas transform), because the mask is the one input to
+    #: the blend the signature cannot cheaply describe.
+    _filter_written: tuple[Any, ...] | None = field(
+        init=False, default=None, repr=False
+    )
     _filter_memo: tuple[tuple[Any, ...], np.ndarray] | None = field(
         init=False, default=None, repr=False
     )
@@ -322,7 +334,11 @@ class Document(
     #: rather than from the last preview (a drag would compound otherwise), and
     #: the uid rather than "the active layer" because a session lives across
     #: frames. See ``_doc_paint.begin_layer_move``.
-    _move: tuple[np.ndarray, int] | None = field(init=False, default=None, repr=False)
+    #: ``(pixels snapshot, layer uid, index-plane snapshot or None)``. The
+    #: plane is in here because a move *permutes* it: see ``begin_layer_move``.
+    _move: tuple[np.ndarray, int, np.ndarray | None] | None = field(
+        init=False, default=None, repr=False
+    )
     #: Frames that have gone, for whoever is holding a *texture* keyed on one.
     #: Plain ints and a drain, so the document goes on knowing nothing about GL:
     #: see ``panes/inker_textures.release_dropped``.
@@ -859,7 +875,11 @@ class Document(
         half would stop being expressible this way, which is why
         :func:`sheetout.layer_splits` never cuts one.
         """
-        layers = self.anim.layers_for(frame, self.size)
+        # ``detach``: this stack is flattened and thrown away, and without it
+        # materialising another frame rewrote the opacity of the cel objects
+        # ``Document.stack`` is made of -- so an onion skin changed what the
+        # frame under the cursor composited to.
+        layers = self.anim.layers_for(frame, self.size, detach=True)
         fold = self.group_fold()
         # The z rows are filtered with the rows for the fold's reason exactly:
         # both are lists parallel to the stack, and an unfiltered one on a
@@ -1139,10 +1159,46 @@ class Document(
         "A step that changes nothing is not pushed" applies to the cel as much
         as to the pixels: a brush-down with no drag would otherwise leave a
         blank cel behind and a document asking to be saved.
+
+        **Targeted, not ``_set_cel``.** That helper ends in ``_anim_changed``,
+        which stamps *every* frame in the document and recomposites the whole
+        canvas -- so a click that drew nothing threw away every cached frame
+        flatten (the onion skin's, the timeline's thumbnails, playback's) and
+        paid a full recomposite, on the most repeated gesture in the editor.
+        The autovivify it is reversing was itself a swap in place
+        (``_ensure_cel_for``), so the reversal is the same swap back: the
+        placeholder is rebuilt with the uid it always had, and only the row it
+        occupies is stamped and invalidated.
         """
         pending, self._pending_cels = self._pending_cels, []
+        if not pending:
+            return
+        anim = self.anim
+        if anim is None:
+            return
         for edit in reversed(pending):
-            self._set_cel(edit.track_uid, edit.frame_uid, None)
+            anim.cels.pop((edit.track_uid, edit.frame_uid), None)
+            index = next(
+                (
+                    position
+                    for position, track in enumerate(anim.tracks)
+                    if track.uid == edit.track_uid
+                ),
+                None,
+            )
+            if index is None or edit.frame_uid != anim.frame.uid:
+                # The row or the column went, or the placeholder belongs to a
+                # frame that is no longer on screen: the stack the swap would
+                # write into is not this one. Fall back to the whole rebuild,
+                # which is what this method used to do unconditionally.
+                self._anim_changed()
+                continue
+            frame = anim.frames[anim.frame_index(edit.frame_uid)]
+            blank = anim.placeholder(anim.tracks[index], frame, self.size)
+            self.stack.layers[index] = blank
+            self._layer_stamps[blank.uid] = self._layer_stamps.get(blank.uid, 0) + 1
+            self._stamp([edit.frame_uid])
+            self.invalidate(layer_uid=blank.uid)
 
     # -- geometry helpers ---------------------------------------------------
 
@@ -1807,6 +1863,7 @@ class Document(
             apply = fn if mask_fn is _SAME_AS_PIXELS else mask_fn
             if apply is not None:
                 self.mask = SelectionMask(apply(self.mask.mask))
+                self._filter_written = None
         anim = self.anim
         if anim is None:
             for layer in self.stack:

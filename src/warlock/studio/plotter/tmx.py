@@ -41,6 +41,7 @@ import gzip
 import io
 import itertools
 import json
+import logging
 import re
 import xml.etree.ElementTree as ET
 import zlib
@@ -94,6 +95,8 @@ from .tsx import (
     tsx_bytes,
     xml_root,
 )
+
+log = logging.getLogger(__name__)
 
 # Re-exported deliberately: ``TiledUnsupported`` is defined in :mod:`.props`
 # because the property model is the package's leaf, but it is *about* Tiled
@@ -223,6 +226,7 @@ def _offset_fields(root: ET.Element) -> dict[str, Any]:
     """
     axis = root.get("staggeraxis", "y")
     index = root.get("staggerindex", "odd")
+    _warn_unknown_stagger(axis, index)
     return {
         "stagger_axis": axis if axis in project.STAGGER_AXES else "y",
         "stagger_index": index if index in project.STAGGER_INDICES else "odd",
@@ -230,10 +234,27 @@ def _offset_fields(root: ET.Element) -> dict[str, Any]:
     }
 
 
+def _warn_unknown_stagger(axis: str, index: str) -> None:
+    """Say when a stagger value is being replaced rather than read.
+
+    Both fall back silently, and for a *staggered* map the fallback moves every
+    other row or column half a tile: the map opens looking wrong with nothing
+    anywhere saying a value was not understood. Logged rather than refused --
+    the map is still openable and the setting is one combo box away -- which is
+    the same trade every other unknown-vocabulary field here makes.
+    """
+
+    if axis not in project.STAGGER_AXES:
+        log.warning("unknown stagger axis %r; opening as 'y'", axis)
+    if index not in project.STAGGER_INDICES:
+        log.warning("unknown stagger index %r; opening as 'odd'", index)
+
+
 def _offset_fields_json(payload: dict[str, Any]) -> dict[str, Any]:
     """:func:`_offset_fields` over Tiled's JSON spelling."""
     axis = str(payload.get("staggeraxis", "y"))
     index = str(payload.get("staggerindex", "odd"))
+    _warn_unknown_stagger(axis, index)
     return {
         "stagger_axis": axis if axis in project.STAGGER_AXES else "y",
         "stagger_index": index if index in project.STAGGER_INDICES else "odd",
@@ -657,6 +678,40 @@ def _read_tmx_text(node: ET.Element, width: float, height: float) -> Text:
     )
 
 
+def _warn_dangling_tile_objects(doc: MapDoc) -> None:
+    """Say when a tile object names a gid no tileset in this map covers.
+
+    The gid was read and stored unchecked, so such an object drew nothing and
+    said nothing -- indistinguishable, on screen, from an object the reader had
+    dropped. Logged rather than refused: it is one object of a map, the map is
+    otherwise sound, and Tiled itself opens these.
+    """
+
+    from ._map_model import ObjectLayer, TileShape
+
+    if not doc.tilesets:
+        ranges: list[tuple[int, int]] = []
+    else:
+        ranges = [(int(ref.firstgid), int(ref.last_gid)) for ref in doc.tilesets]
+    for layer in doc.all_layers():
+        if not isinstance(layer, ObjectLayer):
+            continue
+        for entry in layer.objects:
+            shape = getattr(entry, "shape", None)
+            if not isinstance(shape, TileShape):
+                continue
+            local = int(shape.gid) & gidlib.GID_MASK
+            if not local or any(low <= local <= high for low, high in ranges):
+                continue
+            log.warning(
+                "object %r on layer %r names tile %d, which no tileset in this "
+                "map covers; it will draw nothing",
+                entry.name or entry.uid,
+                layer.name,
+                local,
+            )
+
+
 def _read_tmx_object(node: ET.Element) -> MapObject:
     name = node.get("name", "")
     where = f"object {node.get('id', '?')}"
@@ -934,6 +989,7 @@ def read_tmx(
         next_object_id=_optional_int(root.get("nextobjectid")),
     )
     _adopt_object_space(doc)
+    _warn_dangling_tile_objects(doc)
     return doc
 
 
@@ -1190,6 +1246,14 @@ def _read_tmj_layer_list(
                 if not source
                 else image_loader(source)
             )
+            # The deprecated ``x``/``y`` pixel offsets, folded into ``offset``
+            # exactly as the XML reader does. The JSON side dropped them, so
+            # one map saved by an older Tiled read with its image in place from
+            # a ``.tmx`` and at the origin from the ``.tmj`` beside it -- the
+            # two spellings of one document disagreeing, which is the failure
+            # the whole shared-reader rule exists to stop.
+            common["offset_x"] += json_number(entry, "x", 0)
+            common["offset_y"] += json_number(entry, "y", 0)
             layers.append(
                 ImageLayer(
                     **common,
@@ -1284,6 +1348,7 @@ def read_tmj(
         next_object_id=_optional_int(payload.get("nextobjectid")),
     )
     _adopt_object_space(doc)
+    _warn_dangling_tile_objects(doc)
     return doc
 
 
@@ -1498,6 +1563,11 @@ def _export_ids(
     return layer_ids, object_ids, next_layer_id, next_object_id
 
 
+#: Names the export writes itself, which an image layer's source may not take.
+#: See ``_image_layer_files``.
+_RESERVED_EXPORT_NAMES = frozenset({"map.tmx", "map.tmj", "map.json"})
+
+
 def _image_layer_files(doc: MapDoc, files: dict[str, bytes]) -> dict[int, str]:
     """Add image-layer PNGs and return each layer uid's safe relative path.
 
@@ -1525,6 +1595,15 @@ def _image_layer_files(doc: MapDoc, files: dict[str, bytes]) -> dict[int, str]:
             and not candidate.drive
             and not source.startswith("/")
             and ".." not in candidate.parts
+            # **And not one of the bundle's own names.** The export writes
+            # ``map.tmx`` and a ``tilesets/`` folder into the same dict, and an
+            # image layer whose source happened to spell one of them
+            # overwrote it with PNG bytes -- the map document replaced by a
+            # picture, which is the same shape of loss the absolute-path rule
+            # above exists to stop, from inside the archive instead of outside
+            # it.
+            and source.lower() not in _RESERVED_EXPORT_NAMES
+            and not source.lower().startswith("tilesets/")
         )
         stem = _SAFE.sub("-", layer.name).strip("-") or "image"
         path = source if safe else f"images/{index:02d}-{stem}.png"
