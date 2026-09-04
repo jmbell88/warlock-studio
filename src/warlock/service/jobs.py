@@ -65,6 +65,9 @@ from ._jobs_list import (  # noqa: F401  -- the facade's re-export
     storage,
     storage_sizes,
 )
+from ._jobs_music import (  # noqa: F401  -- the facade's re-export
+    create_music_job,
+)
 from ._jobs_resubmit import (  # noqa: F401  -- the facade's re-export
     keep_candidate,
     promote_candidates,

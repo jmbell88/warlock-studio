@@ -40,6 +40,7 @@ from ._q_generate import GenerateOps
 from ._q_jobs import JobOps
 from ._q_lora import LoraOps
 from ._q_mesh import MeshPostOps
+from ._q_music import MusicOps
 from ._q_rig import RigOps
 from ._q_sprite import SpriteOps
 from ._q_tileset import TileSetOps
@@ -92,6 +93,13 @@ T2I_PHASES = {
     # and its ETA need no change.
     "condition": ("t2i_load", "Loading conditioning"),
     "sample": ("t2i_sample", "Drawing reference image"),
+}
+
+MUSIC_PHASES = {
+    # One entry, because the music worker emits one state. Its own table rather
+    # than a shared one all the same: these strings are what the child sends,
+    # and the two children are free to grow different vocabularies.
+    "load": ("music_load", "Loading music model"),
 }
 
 # Whether reference.prepare recentres and rescales the subject, or merely
@@ -874,6 +882,7 @@ class Worker(
     TileSheetOps,
     TileSetOps,
     MeshPostOps,
+    MusicOps,
     LoraOps,
     JobOps,
 ):
@@ -895,6 +904,9 @@ class Worker(
             atlas=config.trellis_atlas,
         )
         self._text2image = None  # lazy: torch/diffusers may not be installed
+        # Beside it and not inside it: the two children hold different weights
+        # for different stages, and either may be resident without the other.
+        self._music_client = None  # lazy: the music extra may not be installed
         # Which base model the resident pipe is, so _get_text2image can tell a
         # cache hit from a swap.
         self._t2i_key: str | None = None
@@ -1037,6 +1049,12 @@ class Worker(
         # Before the cancel and before the grace period, so a load already in
         # flight on a worker thread learns not to publish. Cancelling the task
         # below only cancels the coroutine awaiting it (MDL-02).
+        # Both children, and the music one first only because it is the one
+        # more recently added -- neither ordering matters, because each kills
+        # its own process and they share nothing.
+        music = self._music_client
+        if music is not None:
+            await asyncio.to_thread(music.close)
         pipe = self._text2image
         close = getattr(pipe, "close", None)
         if close is not None:
@@ -1094,6 +1112,9 @@ class Worker(
                 pipe = self._text2image
                 if pipe is not None and pipe.loaded:
                     pipe.unload()
+                music = self._music_client
+                if music is not None and music.loaded:
+                    music.unload()
         except TimeoutError:
             log.warning(
                 "a model operation was still running at shutdown; the image "

@@ -126,6 +126,12 @@ DERIVED_PARAMS = (
     # re-rendering those runs against that base.
     "rendered_cells",
     "reference_report",
+    # What the *music* worker observed about the track it wrote, as opposed to
+    # what was asked for. A reroll at a different duration must not inherit
+    # this one's, or the row wears a length it does not have. Request echoes --
+    # ``duration``, ``lyrics``, the recipe knobs -- deliberately stay out: they
+    # are the request normalised, and "run that again" means running that.
+    "actual_duration",
     # Advisory, and about this run's pixels -- a reroll inheriting it would
     # claim a seam verdict about an image it is about to replace. The tile
     # *flag* is deliberately not here: that is an input, like output, and
@@ -513,6 +519,32 @@ def check_weights(svc: Any, kind: str, params: dict[str, Any]) -> None:
     startup rather than a per-job surprise -- re-refusing every submit would say
     the same thing a second time in a worse place.
     """
+    if kind == "music":
+        # Before the text gate below, not after it: a music job would otherwise
+        # fall out of this function unchecked and find out in the worker, which
+        # is the whole failure this function exists to move forward.
+        #
+        # Refused rather than degraded, unlike a missing pose or matting model:
+        # Muse has no fallback, and is not supposed to have one.
+        from .. import fetch, models
+
+        spec = models.MUSIC_MODELS.get(
+            str(params.get("music_model") or models.DEFAULT_MUSIC_MODEL)
+        )
+        if spec is None:
+            raise Invalid(
+                "that music model is not one this build knows about",
+                field="music_model",
+            )
+        if not fetch.present(svc.config, "music", spec):
+            raise Invalid(
+                f"The music model {spec.label!r} cannot run: its weights are not "
+                f"downloaded. "
+                f"{install_remedy(spec.label, fetch.download_text(svc.config, 'music', spec))}",
+                field="music_model",
+                rows=(f"music:{spec.key}",),
+            )
+        return
     if kind != "text":
         return
     from .. import fetch, models

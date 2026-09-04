@@ -27,6 +27,11 @@ log = logging.getLogger(__name__)
 # passing through this dict first.
 MEDIA = {
     "model.glb": "model/gltf-binary",
+    # The one artifact a music job produces. No source/derived pair, because
+    # unlike source.glb/model.glb there is no second, differently-useful version
+    # of what the model made -- the same reason a reference job has only
+    # input.png.
+    "track.wav": "audio/wav",
     # The trellis response model.glb is derived from, kept downloadable so a
     # user can take the full-density reconstruction if they want it.
     "source.glb": "model/gltf-binary",

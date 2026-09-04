@@ -186,6 +186,11 @@ class GenerateOps:
     async def _generate(self: Worker, job: dict[str, Any]) -> None:
         from . import queue as queue_mod
 
+        if job["kind"] == "music":
+            # The whole integration with the generic done/error/cancelled
+            # machinery: everything below this line is about images and meshes.
+            await self._music(job)
+            return
         if job["kind"] == "rig":
             await self._rig(job)
             return

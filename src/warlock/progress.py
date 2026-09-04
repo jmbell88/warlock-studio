@@ -182,6 +182,20 @@ PHASES_CHARSHEET: dict[str, tuple[float, float]] = {
     "pixel": (0.88, 1.00),
 }
 
+# A music job is one load and one sampling loop, with nothing after it: the WAV
+# is written by the model call itself. The load is a larger share of the bar
+# than the image pipeline's because 8.3 GiB is a bigger read than 7, and the
+# sample is longer than any image sample -- so the two slices are nearer even
+# than PHASES_TEXT's.
+#
+# Registered rather than left to the fallback: an unregistered kind draws
+# PHASES_IMAGE, whose phases are `trellis`/`optimize`/`scale`/`audit` -- none of
+# which a music job ever emits, so the bar would sit at zero and then jump.
+PHASES_MUSIC: dict[str, tuple[float, float]] = {
+    "music_load": (0.00, 0.25),
+    "music_sample": (0.25, 1.00),
+}
+
 _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "text": PHASES_TEXT,
     "image": PHASES_IMAGE,
@@ -194,6 +208,7 @@ _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "lora_train": PHASES_LORA_TRAIN,
     "tile_sheet": PHASES_TILE_SHEET,
     "charsheet": PHASES_CHARSHEET,
+    "music": PHASES_MUSIC,
 }
 
 

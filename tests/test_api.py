@@ -333,6 +333,7 @@ def test_health_reports_the_worker_and_the_doctor_checks(svc, worker):
         + len(models.METRIC_MODELS)
         + len(models.MATTING_MODELS)
         + len(models.POSE_MODELS)
+        + len(models.MUSIC_MODELS)
     )
 
 

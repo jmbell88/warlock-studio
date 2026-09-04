@@ -46,6 +46,10 @@ PRIMARY = {
     "reference": "input.png",
     "tile": "input.png",
     "tilesheet": "input.png",
+    # Its own stage string rather than reusing "model": db.py's queries load
+    # that one with mesh-verdict semantics, and a music row picking those up
+    # would be graded against a scale that has no meaning for audio.
+    "music": "track.wav",
 }
 
 #: How many rows one page of the walk reads. The same keyset-cursor shape

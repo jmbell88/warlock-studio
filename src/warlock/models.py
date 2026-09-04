@@ -1459,6 +1459,8 @@ class MusicModel:
         return download_text(self.fetch)
 
 
+DEFAULT_MUSIC_MODEL = "ace_step_v1"
+
 MUSIC_MODELS: dict[str, MusicModel] = _table(
     MusicModel(
         # v1 and not v1.5: the newer release declares Python 3.11-3.12 and this
@@ -1483,8 +1485,7 @@ MUSIC_MODELS: dict[str, MusicModel] = _table(
             ),
         ),
         description=(
-            "Generates a finished piece of music from a comma-separated style "
-            "tag string and a lyric block.\n\n"
+            "Generates finished music from style tags and a lyric block.\n\n"
             "The model behind Muse, and the only one: it runs offline in its "
             "own subprocess on the same card the image pipeline uses. Its two "
             "inputs are the two fields the mode presents, so nothing is "

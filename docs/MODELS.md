@@ -219,7 +219,25 @@ since a skeleton half-measured and half-assumed is worse than either. `rig.json`
 produced the joints under `fit.method` (`pose2d`, `bbox`, or `manual` after an adjust-joints
 pass), and `WARLOCK_POSE_FIT=0` turns the whole thing off.
 
-## FLUX proper is not offered
+## The music model (Muse)
+
+One entry, and the only model the Muse mode can use. It is ~8.3 GB and lives beside every
+other model in the model root, so nothing new has to be configured to hold it.
+
+```powershell
+# ACE-Step v1 3.5B (~8.3 GB): text-to-music. Style tags and a lyric block in, a
+# 44.1 kHz WAV out. Runs in its own subprocess on the same card as the image
+# model, and needs `uv sync --extra music` -- its own extra, not `text2image`.
+uvx hf download ACE-Step/ACE-Step-v1-3.5B --revision 82cd0d7b6322bd28cd4e830fe675ddb6180ce36c `
+  --local-dir $HOME/.warlock/models/ace-step-v1-3.5b
+```
+
+Unlike the measuring models above there is no fallback: Muse refuses at the door and names this
+download, rather than generating something worse. The pipeline code is vendored in this
+application (`src/warlock/pipelines/acestep/`) with its modifications documented beside it, so
+nothing is executed out of the downloaded directory — the same arrangement BiRefNet has.
+
+
 
 Both `dev` and `schnell` are click-through gated on Hugging Face, and 12B parameters will not
 coexist with trellis on one card. To use a local FLUX copy anyway: download it yourself

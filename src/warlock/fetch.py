@@ -70,6 +70,7 @@ KINDS: tuple[Kind, ...] = (
     Kind("metric", models.METRIC_MODELS, "metric model: ", "Measurement"),
     Kind("pose", models.POSE_MODELS, "pose model: ", "Measurement"),
     Kind("matting", models.MATTING_MODELS, "host matting: ", "Measurement"),
+    Kind("music", models.MUSIC_MODELS, "music model: ", "Music models"),
 )
 
 CHECK_PREFIXES: dict[str, str] = {kind.key: kind.check_prefix for kind in KINDS}
@@ -823,6 +824,14 @@ def present(config: Config, kind: str, spec: Any) -> bool:
         return (base / "config.json").exists() and (
             base / f"diffusion_pytorch_model{variant}.safetensors"
         ).exists()
+    if kind == "music":
+        # Named files rather than the formula below: ACE-Step has no top-level
+        # config.json at all -- it is four sibling subfolders, each with its own
+        # -- so the tail's `dir_name/config.json` test would report every music
+        # model absent forever. Every probe entry, so a fetch interrupted
+        # between subfolders reads as absent rather than as a model that raises
+        # halfway through a load.
+        return all((root / spec.dir_name / name).is_file() for name in spec.probe)
     # metric / pose / matting: every entry in those tables downloads
     # config.json plus safetensors weights, and the weights are the multi-GB
     # half an interrupted fetch is missing. Config alone must not read as

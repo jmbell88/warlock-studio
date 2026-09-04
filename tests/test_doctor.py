@@ -101,6 +101,7 @@ def test_run_checks_returns_every_check(tmp_path):
         + len(model_registry.METRIC_MODELS)
         + len(model_registry.MATTING_MODELS)
         + len(model_registry.POSE_MODELS)
+        + len(model_registry.MUSIC_MODELS)
     )
     assert len(run_checks(_config(tmp_path))) == expected
 

@@ -318,6 +318,27 @@ def estimate_parts(
         if params.get("ip_adapter") or locked:
             sheet += IP_ENCODER_GIB
         return (sheet if exclusive else sheet + TRELLIS_GIB), image
+    if kind == "music":
+        # Its own branch, and it has to be *before* the catch-all below or a
+        # music job is priced at zero -- which is not a harmless
+        # under-estimate: check_vram would then admit a job that OOMs at load,
+        # which is the exact failure the door exists to prevent.
+        #
+        # Priced from the registry rather than a constant, so a second music
+        # model costs a row and not an edit here. No conditioning term: ACE-Step
+        # takes tags and lyrics and has no adapter to load beside it. Trellis is
+        # added under coexist exactly as every image-model kind above does --
+        # at ~8.3 GiB the two are expected to co-reside on a large card.
+        from . import models
+
+        spec = models.MUSIC_MODELS.get(
+            str((params or {}).get("music_model") or models.DEFAULT_MUSIC_MODEL)
+        )
+        music = spec.vram_gib if spec is not None else 10.0
+        # Returned as the second term as well: it is a resident checkpoint that
+        # ``queue._check_resources`` must credit back rather than charge twice,
+        # which is the whole contract of this function's second return value.
+        return (music if exclusive else music + TRELLIS_GIB), music
     if kind not in ("text", "image"):
         # rig / pose / sheet / charsheet are Blender, out of process and
         # CPU-side -- and the character sheet's pixel-art pass after it is

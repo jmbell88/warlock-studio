@@ -105,6 +105,7 @@ def static_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         *_matting_checks(config, probe_slow=probe_slow),
         *_text_checks(config),
         *_pose_checks(config, probe_slow=probe_slow),
+        *_music_checks(config),
         blender_check(probe=probe_slow),
     ]
 
@@ -774,6 +775,38 @@ def _metric_checks(config: Config) -> list[Check]:
             f"  {fetch.download_text(config, 'metric', spec)}"
         )
         checks.append(Check(fetch.check_name("metric", spec.label), ok, detail, fatal=False))
+    return checks
+
+
+def _music_checks(config: Config) -> list[Check]:
+    """One row per music model: are its weights on disk?
+
+    Structurally the pose and matting loops, with one difference that is not
+    cosmetic: there is no load probe. Those two are optional and degrade, so
+    "the directory is there but the import is broken" is worth a distinct
+    answer; ACE-Step is loaded only inside its own subprocess, and the app
+    process deliberately never imports torch -- so a probe here would either
+    lie or undo the thing the subprocess exists for.
+
+    Non-fatal for the reason every model row is: a machine with no music
+    weights runs the whole application except one mode, and doctor's fatal
+    checks are the ones that mean nothing works.
+    """
+    checks: list[Check] = []
+    for spec in models.MUSIC_MODELS.values():
+        path = config.t2i_model_root / spec.dir_name
+        ok = fetch.present(config, "music", spec)
+        if ok:
+            detail = f"weights present at {path} -- Muse can generate"
+        else:
+            detail = (
+                f"not found at {path} -- Muse refuses at the door rather than "
+                f"falling back; download with:\n"
+                f"  {fetch.download_text(config, 'music', spec)}"
+            )
+        checks.append(
+            Check(fetch.check_name("music", spec.label), ok, detail, fatal=False)
+        )
     return checks
 
 
