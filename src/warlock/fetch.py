@@ -706,10 +706,18 @@ def verify_manifest(dest: Path) -> Verification:
         return Verification(dest=dest, status=VERIFY_UNKNOWN)
 
     from . import hashes
+    from .publish import _contained
 
     bad: list[str] = []
     missing: list[str] = []
     for name, digest in sorted(wanted.items()):
+        # A manifest is written by a completed download, but it is also just a
+        # JSON file on disk -- and this joins its keys onto ``dest`` unchecked.
+        # A repo digest entry spelled ``../../x`` would have this hash, and
+        # report on, a file outside the model directory entirely.
+        if not _contained(dest, name):
+            missing.append(name)
+            continue
         path = dest / name
         if not path.is_file():
             missing.append(name)

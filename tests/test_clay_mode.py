@@ -698,6 +698,21 @@ class _ImportConfig:
         return self.root / job_id
 
 
+def test_the_task_key_does_not_come_from_salted_hash(tmp_path: Path) -> None:
+    """``hash(str(path))`` is salted per process and only 64 bits wide -- two
+    different paths in one session could collide on ``abs()`` and drop the
+    second open. sha1 is deterministic and the same across processes."""
+    a = tmp_path / "one.wblk"
+    b = tmp_path / "two.wblk"
+
+    key_a = clay_mode._path_key(a)
+    key_b = clay_mode._path_key(b)
+
+    assert key_a != key_b
+    assert clay_mode._path_key(a) == key_a, "stable across calls"
+    assert key_a == clay_mode._path_key(Path(str(a)))
+
+
 def test_importing_a_glb_parses_off_the_frame_thread(tmp_path: Path) -> None:
     ctx = FakeCtx()
     path = tmp_path / "thing.glb"

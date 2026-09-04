@@ -340,7 +340,14 @@ WARLOCKC_API void warlockc_palette_nearest_i32(const int32_t *queries,
  *
  * The parity bar is the exact reached set, which is byte-identical to the
  * dilation result by construction: both compute the four-connected transitive
- * closure of the seed within `match`, and that set is unique. */
+ * closure of the seed within `match`, and that set is unique.
+ *
+ * **Ceiling: h * w must be < 2^31.** The queue holds a flat cell index
+ * (`y * w + x`) in each `int32_t` slot, and that index runs up to h*w - 1 --
+ * so an array at or beyond 2^31 cells overflows the index itself, not just
+ * the count of them. Nothing in this file checks that; the caller
+ * (`warlock/native.py`'s `flood`) is where it is asserted, per this module's
+ * validate-before-call contract. */
 WARLOCKC_API void warlockc_flood_u8(const uint8_t *match, int64_t match_stride,
                                     uint8_t *out, int64_t out_stride,
                                     int32_t *scratch, int64_t h, int64_t w,

@@ -118,6 +118,29 @@ def test_a_cancelled_screenshot_picker_says_nothing(monkeypatch):
     assert not toasts
 
 
+def test_a_landing_handler_that_raises_does_not_end_the_session():
+    """Finding #1's other half. A Flourish regenerate over a linked cel used
+    to raise out of ``_on_task_done`` -- through ``_collect_tasks``, which
+    ``frame`` calls with no guard of its own -- and end the whole run: the
+    outer ``try`` in ``App.run`` treats an escaped exception as the app dying,
+    not one task's landing going wrong. The task itself already finished, so
+    the only failure left to report is that landing it broke.
+    """
+    app = main_mod.App.__new__(main_mod.App)
+    toasts = _Toasts()
+    tasks = SimpleNamespace(poll=lambda: [_done("boom:1")])
+    app.app_ctx = SimpleNamespace(toast=toasts, tasks=tasks)
+
+    def _raises(done):
+        raise RuntimeError("landing blew up")
+
+    app._on_task_done = _raises
+    app._collect_tasks()  # must not raise
+
+    assert toasts and "boom:1" in toasts[0][0]
+    assert toasts[0][1] == "error"
+
+
 # --- the ratchet --------------------------------------------------------------
 
 

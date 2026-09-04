@@ -145,6 +145,27 @@ def test_disk_check_is_not_fatal(tmp_path):
     assert isinstance(checks["free disk space"].ok, bool)
 
 
+def test_store_check_handles_uri_special_characters_in_the_path(tmp_path):
+    """A raw f-string ``file:{path}?mode=ro`` breaks on a path containing '#'
+    (truncates to a URI fragment) or '%' (starts a percent-escape) -- and a
+    user's home directory is exactly the kind of path that was never shaped
+    with URIs in mind. ``Path.as_uri()`` percent-encodes it correctly.
+    """
+    import sqlite3
+
+    odd = tmp_path / "weird#dir%name"
+    odd.mkdir()
+    db_path = odd / "jobs.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE jobs (id TEXT)")
+    conn.commit()
+    conn.close()
+
+    config = _config(tmp_path, db_path=db_path)
+    check = doctor._store_check(config)
+    assert check.ok, check.detail
+
+
 def _t2i_names() -> list[str]:
     return [f"image model: {m.label}" for m in model_registry.BASE_MODELS.values()] + [
         f"style LoRA: {lora.label}" for lora in model_registry.STYLE_LORAS.values()

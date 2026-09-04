@@ -256,3 +256,43 @@ def test_a_regeneration_is_still_refused_when_the_layer_has_gone():
     pixels = np.full((4, 4, 4), 255, dtype=np.uint8)
 
     assert doc.apply_pixels(9_999_999, (0, 0, 4, 4), pixels) is False
+
+
+def test_apply_pixels_checks_the_lock_on_its_target_not_the_active_layer():
+    """Finding #2. ``write_locked()`` defaults to ``stack.active`` -- but
+    ``apply_pixels`` is addressed by uid precisely because the active layer
+    may have moved on by the time a regeneration lands, so a locked *other*
+    layer must still refuse the write and an unlocked active layer must not
+    wave it through on the lock's behalf.
+    """
+    doc = Document.blank(8, 8)
+    locked = doc.add_layer("locked")
+    doc.set_layer_props(locked=True)
+    other = doc.add_layer("other")
+    assert doc.stack.active.uid == other.uid
+    assert doc.write_locked() is False  # the active layer is not the locked one
+    pixels = np.full((4, 4, 4), 255, dtype=np.uint8)
+
+    assert doc.apply_pixels(locked.uid, (0, 0, 4, 4), pixels) is False
+
+    assert tuple(int(v) for v in locked.pixels[0, 0]) == (0, 0, 0, 0)
+
+
+def test_a_lock_refusal_discards_the_autovivified_cel():
+    """Finding #9. ``_ensure_cel_for`` used to run before the lock was
+    checked, so a regeneration refused as locked still left a materialised
+    (blank) cel behind on the placeholder it was never allowed to write to --
+    exactly the "a step that changed nothing" case ``_discard_pending_cel``
+    exists to reverse, minted anyway.
+    """
+    doc = _animated()
+    doc.set_layer_props(locked=True)
+    uid = doc.stack.active.uid
+    assert doc.anim is not None and doc.anim.is_placeholder(doc.stack.active)
+    head = doc.history.head
+    pixels = np.full((4, 4, 4), 255, dtype=np.uint8)
+
+    assert doc.apply_pixels(uid, (0, 0, 4, 4), pixels) is False
+
+    assert doc.anim.is_placeholder(doc.stack.active), "the placeholder must survive a refusal"
+    assert doc.history.head == head

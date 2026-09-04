@@ -381,7 +381,7 @@ def _grid(ctx: Any, state: Any, tab: Any, pattern: Any, left: int, fits: int) ->
     # that scrolls off the pane within a bar is a playhead nobody watches.
     focus = playhead if (state.follow and playhead is not None) else state.row
     top = max(0, min(int(focus) - visible // 2, max(0, pattern.rows - visible)))
-    selection = state.selection(tab)
+    selection = state.selection()
 
     for index in range(visible):
         row = top + index

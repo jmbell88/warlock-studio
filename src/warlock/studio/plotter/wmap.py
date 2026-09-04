@@ -194,6 +194,20 @@ WMAP_SUFFIX = ".wmap"
 # too: a test lowers it rather than building a gigabyte.
 MAX_DECOMPRESSED_BYTES = 1 << 30
 
+# ``MAX_DECOMPRESSED_BYTES`` bounds the archive's total unpacked size, but a
+# manifest can spend that whole budget on repetition rather than bulk: a
+# tileset list naming the same small image a thousand times, or a layer tree a
+# few kilobytes of JSON deep but a million nodes wide, each decodes -- a PNG
+# through Pillow, an ``.npy`` array, a dataclass per object -- well before the
+# byte ceiling above ever notices. These three mirror ``tmx.MAX_LAYERS``, the
+# same cap this codebase already puts on the sibling Tiled reader for the same
+# reason: a document with a thousand layers, a thousand tilesets or a hundred
+# thousand objects is not one anyone drew by hand, and is far past the largest
+# map this editor's own writer has ever produced.
+MAX_TILESETS = 1000
+MAX_LAYER_NODES = 1000
+MAX_OBJECTS = 100_000
+
 #: Every shape by the name it answers to, which is the reverse of
 #: :data:`~._map_model.SHAPE_KINDS` and the only thing this codec needs: the
 #: writer asks a shape for its name and the reader asks a name for its class.
@@ -939,11 +953,27 @@ def _read_layer_array(raw: bytes, width: int, height: int, name: str) -> np.ndar
     return np.ascontiguousarray(array).copy()
 
 
-def _read_picture(zf: zipfile.ZipFile, name: str, what: str) -> np.ndarray:
+def _read_picture(
+    zf: zipfile.ZipFile, name: str, what: str, cache: dict[str, np.ndarray] | None = None
+) -> np.ndarray:
     # ``pixelguard`` for the ceiling and, incidentally, for the ``with`` this
     # never had: ``Image.open`` is lazy and holds its file object open, so every
     # tileset in a document was left to the collector.
-    return pixelguard.decode_rgba(io.BytesIO(_member(zf, name, what)), what)
+    #
+    # ``cache`` is keyed by member name and shared across one ``read_wmap``
+    # call: nothing stops a manifest from naming one tileset or image-layer
+    # member many times over, and without this a document that does so pays a
+    # fresh PNG decode per reference rather than per picture. The array handed
+    # back is shared, so a caller may not mutate it in place -- neither
+    # ``Tileset`` nor ``ImageLayer`` does; both treat ``pixels`` as read-only
+    # after construction, and ``pixelguard.decode_rgba`` already hands back an
+    # owned copy rather than a view.
+    if cache is not None and name in cache:
+        return cache[name]
+    picture = pixelguard.decode_rgba(io.BytesIO(_member(zf, name, what)), what)
+    if cache is not None:
+        cache[name] = picture
+    return picture
 
 
 def _two(entry: dict[str, Any], key: str, default: Any) -> Any:
@@ -1001,8 +1031,49 @@ def _malformed(what: str) -> NoReturn:
     raise ValueError(f"this map holds {what} that is malformed")
 
 
+class _ReadBudget:
+    """What one ``read_wmap`` call may decode, in total, across the whole tree.
+
+    A running counter rather than a length taken afterward, because
+    :func:`_read_layers` recurses -- no single stack frame ever sees the tree's
+    full width, only its own list of entries, so the check has to travel with
+    the walk rather than wait for it to return. The same shape as
+    :class:`.tmx._Budget`, and for the same reason: a manifest a few kilobytes
+    deep can still name a layer tree a million nodes wide, or one object layer
+    a million objects long, and each node costs a decode -- an ``.npy`` array,
+    a PNG, a dataclass built per object -- well before ``MAX_DECOMPRESSED_BYTES``
+    would ever notice.
+    """
+
+    __slots__ = ("nodes", "objects")
+
+    def __init__(self) -> None:
+        self.nodes = 0
+        self.objects = 0
+
+    def node(self) -> None:
+        self.nodes += 1
+        if self.nodes > MAX_LAYER_NODES:
+            raise ValueError(
+                f"this map's layer tree holds more than the {MAX_LAYER_NODES} "
+                "layers this build reads"
+            )
+
+    def object_count(self, count: int) -> None:
+        self.objects += count
+        if self.objects > MAX_OBJECTS:
+            raise ValueError(
+                f"this map holds more than the {MAX_OBJECTS} objects this "
+                "build reads"
+            )
+
+
 def _read_layers(
-    entries: Any, zf: zipfile.ZipFile, doc: MapDoc
+    entries: Any,
+    zf: zipfile.ZipFile,
+    doc: MapDoc,
+    budget: _ReadBudget,
+    pictures: dict[str, np.ndarray],
 ) -> list[Layer]:
     """One list of manifest layer entries, as layers. Recursive through groups.
 
@@ -1012,6 +1083,13 @@ def _read_layers(
     on the way back out. :func:`read_wmap` catches that at the call site and
     turns it into the same ``ValueError`` every other unreadable manifest gets
     -- :func:`_read_shape`'s re-raise, one level up.
+
+    ``budget`` is shared across the whole recursion (see :class:`_ReadBudget`)
+    and charged *before* this entry's payload is decoded, so the node or object
+    that crosses the ceiling is the one that is refused rather than the one
+    after it. ``pictures`` is shared the same way, so an image layer naming a
+    member another layer already decoded reuses that array instead of decoding
+    it again.
     """
     if not isinstance(entries, list):
         _malformed("a layer list")
@@ -1019,6 +1097,7 @@ def _read_layers(
     for entry in entries:
         if not isinstance(entry, dict):
             _malformed("a layer")
+        budget.node()
         kind = str(entry.get("type", ""))
         name = str(entry.get("name", ""))
         common: dict[str, Any] = {
@@ -1054,6 +1133,15 @@ def _read_layers(
                 )
             )
         elif kind == "object":
+            raw_objects = entry.get("objects", [])
+            if not isinstance(raw_objects, list):
+                _malformed("an object layer's objects")
+            # Charged before any of them is built: the list is already sitting
+            # in memory as parsed JSON, but building each one mints a uid,
+            # walks its properties and constructs its shape, and a hundred
+            # thousand of those is real work a refusal should preempt rather
+            # than perform.
+            budget.object_count(len(raw_objects))
             out.append(
                 ObjectLayer(
                     **common,
@@ -1061,7 +1149,7 @@ def _read_layers(
                     # the two, so there is one list of legal draw orders.
                     draworder=str(entry.get("draworder", "topdown")),
                     color=entry.get("color"),
-                    objects=[_read_object(o) for o in entry.get("objects", [])],
+                    objects=[_read_object(o) for o in raw_objects],
                 )
             )
         elif kind == "image":
@@ -1070,7 +1158,10 @@ def _read_layers(
                 ImageLayer(
                     **common,
                     pixels=_read_picture(
-                        zf, str(entry.get("image", "")), "an image layer's picture"
+                        zf,
+                        str(entry.get("image", "")),
+                        "an image layer's picture",
+                        pictures,
                     ),
                     source=str(entry.get("source", "")),
                     repeat_x=repeat_x,
@@ -1079,7 +1170,10 @@ def _read_layers(
             )
         elif kind == "group":
             out.append(
-                GroupLayer(**common, children=_read_layers(entry.get("layers", []), zf, doc))
+                GroupLayer(
+                    **common,
+                    children=_read_layers(entry.get("layers", []), zf, doc, budget, pictures),
+                )
             )
         else:
             raise ValueError(f"this map holds a layer of unknown kind {kind!r}")
@@ -1275,8 +1369,24 @@ def read_wmap(data: bytes) -> MapDoc:
         # file before megabytes of atlas have been decoded.
         doc.stamps = _stamps_from(zf, manifest.get("stamps"))
 
+        raw_tilesets = manifest.get("tilesets", [])
+        if not isinstance(raw_tilesets, list):
+            _malformed("this map's tilesets")
+        # Before any of them is decoded: a tileset image is a PNG through
+        # Pillow, and nothing stops a manifest from naming a hundred thousand
+        # of them.
+        if len(raw_tilesets) > MAX_TILESETS:
+            raise ValueError(
+                f"this map declares {len(raw_tilesets)} tilesets; "
+                f"{MAX_TILESETS} is the most this build reads"
+            )
+        # Shared across every tileset image and every image-layer picture in
+        # this call: a manifest can name one member from several entries, and
+        # without this each reference pays its own PNG decode.
+        pictures: dict[str, np.ndarray] = {}
+
         previous = 0
-        for entry in manifest.get("tilesets", []):
+        for entry in raw_tilesets:
             firstgid = int(entry.get("firstgid", 1))
             if firstgid <= previous:
                 # Contiguity is what ``resolve`` walks; a list that does not
@@ -1303,7 +1413,7 @@ def read_wmap(data: bytes) -> MapDoc:
                         grid_height=int(grid[2]),
                         transformations=tuple(bool(value) for value in transformations),
                         pixels=_read_picture(
-                            zf, str(entry.get("image", "")), "a tileset image"
+                            zf, str(entry.get("image", "")), "a tileset image", pictures
                         ),
                         tile_w=int(entry.get("tile_w", 1)),
                         tile_h=int(entry.get("tile_h", 1)),
@@ -1339,7 +1449,9 @@ def read_wmap(data: bytes) -> MapDoc:
             )
 
         try:
-            doc.layers.extend(_read_layers(manifest.get("layers", []), zf, doc))
+            doc.layers.extend(
+                _read_layers(manifest.get("layers", []), zf, doc, _ReadBudget(), pictures)
+            )
         except RecursionError as exc:
             # A tree deep enough to exhaust the stack on the way *out* of the
             # parser, which is a file this reader cannot hold rather than a

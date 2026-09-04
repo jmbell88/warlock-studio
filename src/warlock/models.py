@@ -16,6 +16,7 @@ records below.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -1178,6 +1179,30 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
     ),
 )
 
+# generation.register_imported_loras/remove_imported_lora mutate this table in
+# place from whichever thread runs a fetch/import (worker or frame, depending
+# on caller), while the frame thread reads it every frame drawing the style
+# picker. An atomic dict-object swap would dodge the lock below but breaks
+# every module that bound the *object* at import time -- fetch.KINDS and
+# guidance._TABLES both hold ``models.STYLE_LORAS`` as a table reference in a
+# module-level structure built once, so rebinding the name would leave them
+# reading a permanently stale table forever after the first import/removal.
+# So: the mutations take this lock, and a full-dict iteration takes a
+# shallow-copy snapshot under the same lock instead of iterating the live
+# dict, which is exactly what a ``dict changed size during iteration`` needs.
+STYLE_LORAS_LOCK = threading.Lock()
+
+
+def style_loras_snapshot() -> dict[str, StyleLora]:
+    """A point-in-time copy of ``STYLE_LORAS``, safe to iterate unlocked.
+
+    The copy itself has to happen under the lock too -- ``dict(STYLE_LORAS)``
+    racing a concurrent ``pop``/``__setitem__`` is exactly the same hazard as
+    iterating the live dict, just with a smaller window.
+    """
+    with STYLE_LORAS_LOCK:
+        return dict(STYLE_LORAS)
+
 
 IP_ADAPTERS: dict[str, IPAdapter] = _table(
     IPAdapter(
@@ -1643,8 +1668,9 @@ def loras_by_base() -> dict[str, list[str]]:
     was enough only while every adapter in the registry named one
     architecture's modules.
     """
+    loras = style_loras_snapshot()
     return {
-        m.key: [lora.key for lora in STYLE_LORAS.values() if lora_fits(m, lora)]
+        m.key: [lora.key for lora in loras.values() if lora_fits(m, lora)]
         for m in BASE_MODELS.values()
     }
 
@@ -1687,7 +1713,7 @@ def catalog() -> dict[str, Any]:
         ],
         "style_lora": [
             {"key": lora.key, "label": lora.label, "default_weight": lora.default_weight}
-            for lora in STYLE_LORAS.values()
+            for lora in style_loras_snapshot().values()
         ],
         "ip_adapter": [
             {"key": a.key, "label": a.label, "default_scale": a.default_scale}

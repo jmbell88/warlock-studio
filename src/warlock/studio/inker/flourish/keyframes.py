@@ -112,17 +112,40 @@ def interpolate(
 
 
 def field_from_recipe(
-    recipe, *, direction: float = 0.0, scale: float = 10.0, speed: float = 3.0, seed_salt: int = 0
+    recipe,
+    *,
+    direction: float = 0.0,
+    scale: float = 10.0,
+    speed: float = 3.0,
+    seed_salt: int = 0,
+    size: tuple[int, int] | None = None,
 ):
     """A displacement field per frame from the recipe's own noise -- the heat
     shimmer's field, whether or not the recipe has a distortion layer -- so
-    the morph moves the way the effect moves. ``(dx, dy)`` at logical size."""
+    the morph moves the way the effect moves. ``(dx, dy)`` at ``size`` (width,
+    height), or the recipe's own logical size when ``size`` is omitted.
+
+    ``interpolate`` calls ``_shift`` with these planes and the *anchor*
+    array, and the one caller (``inker_flourish.decode_restyle``) resizes its
+    anchors to the document's canvas, not the recipe's -- an effect lands
+    centred and offset inside a document that can be a different size.
+    Passing ``size`` keeps the field's grid the shape ``_shift`` will
+    actually index it against (finding #12); omitting it keeps the old
+    logical-resolution grid for any future caller that interpolates at the
+    recipe's own size.
+    """
     from . import noise
     from . import render as R
 
     def field(frame: int) -> tuple[np.ndarray, np.ndarray]:
         ctx = R.frame_ctx(recipe, min(max(frame, 0), recipe.frame_count - 1), direction)
-        x, y = ctx.coarse()
+        if size is None:
+            x, y = ctx.coarse()
+        else:
+            w, h = size
+            xs = np.arange(w, dtype=np.float32) + 0.5 - w / 2.0
+            ys = np.arange(h, dtype=np.float32) + 0.5 - h / 2.0
+            x, y = np.meshgrid(xs, ys)
         drift = speed * ctx.time
         seed = ctx.seed + 7919 * 61 + seed_salt
         dx = (noise.fbm(x / scale, y / scale - drift, seed + 3, octaves=2) - 0.5) * 2.0

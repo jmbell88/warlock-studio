@@ -268,6 +268,9 @@ def parse_clip_library(raw: dict[str, Any]) -> dict[str, Any]:
     editor comes to save something the renderer cannot open.
     """
     poses = {}
+    pose_names = [str(pose["name"]) for pose in raw["poses"]]
+    if len(set(pose_names)) != len(pose_names):
+        raise ValueError("duplicate pose names")
     for pose in raw["poses"]:
         # **Through ``validate_pose``, like every other door a pose comes in
         # by.** A clip library is a file -- shipped, or authored in the editor
@@ -290,6 +293,9 @@ def parse_clip_library(raw: dict[str, Any]) -> dict[str, Any]:
     # silently means the other thing.
     space = str(raw.get("space") or "node")
     clips = []
+    clip_names = [str(clip["name"]) for clip in raw["clips"]]
+    if len(set(clip_names)) != len(clip_names):
+        raise ValueError("duplicate clip names")
     for clip in raw["clips"]:
         keys = [str(k) for k in clip["keys"]]
         missing = [k for k in keys if k not in poses]

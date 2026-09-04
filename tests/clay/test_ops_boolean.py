@@ -322,3 +322,41 @@ def test_every_kind_refuses_a_single_object_with_its_own_verb(kind):
 
     with pytest.raises(OpError, match="at least two"):
         ops_boolean.boolean([only], kind)
+
+
+# --- the triangle budget -----------------------------------------------------
+
+
+def test_the_kernel_never_runs_past_the_triangle_budget(monkeypatch):
+    """Two boxes at 12 triangles each is nowhere near the real ceiling, so
+    lowering it is what stands in for the import-sized inputs it exists to
+    catch -- and the point is that the refusal fires before ``manifold3d``
+    ever sees the meshes, not after it runs out of memory computing them."""
+    from warlock.studio.clay.elements import OpError
+
+    first = bd.Obj(uid=bd.new_uid(), name="a", mesh=bp.box())
+    second = bd.Obj(
+        uid=bd.new_uid(), name="b", mesh=bp.box(), translation=np.array([0.5, 0.0, 0.0])
+    )
+    monkeypatch.setattr(ops_boolean, "MAX_BOOLEAN_TRIANGLES", 20)
+
+    with pytest.raises(OpError, match="union"):
+        ops_boolean.union([first, second])
+
+
+def test_the_budget_is_the_sum_of_every_input_not_the_largest(monkeypatch):
+    """A budget read off one mesh would pass three boxes that together exceed
+    it, since no single input does."""
+    from warlock.studio.clay import mesh as bm
+    from warlock.studio.clay.elements import OpError
+
+    box = bp.box()
+    one_box_triangles = len(box.loops) - 2 * bm.face_count(box)
+    objs = [
+        bd.Obj(uid=bd.new_uid(), name=f"o{i}", mesh=bp.box(), translation=np.array([i, 0.0, 0.0]))
+        for i in range(3)
+    ]
+    monkeypatch.setattr(ops_boolean, "MAX_BOOLEAN_TRIANGLES", one_box_triangles * 2)
+
+    with pytest.raises(OpError, match="union"):
+        ops_boolean.union(objs)

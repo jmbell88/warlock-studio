@@ -377,3 +377,52 @@ def test_the_prune_message_does_not_promise_a_trash_it_does_not_use():
     source = inspect.getsource(library.ask_prune)
     assert "deleted from disk" in source
     assert "cannot be undone" in source
+
+
+# --- opening a job's folder ---------------------------------------------------
+
+
+class _FolderCtx:
+    def __init__(self, path):
+        self._path = path
+        self.toasts: list[tuple[str, str]] = []
+        self.submitted: list[tuple[str, Any, tuple]] = []
+
+    def job_dir(self, job_id):
+        return self._path
+
+    def toast(self, text, level="info", action=None):
+        self.toasts.append((text, level))
+
+    def submit(self, key, fn, *args, **kwargs):
+        self.submitted.append((key, fn, args))
+        return True
+
+
+def test_opening_a_folder_goes_through_ctx_submit_not_inline(tmp_path):
+    """``startfile`` is a blocking shell call, so it takes the same door
+    ``ctx.open_log`` already uses rather than running on the frame thread."""
+    import os
+
+    ctx = _FolderCtx(tmp_path)
+
+    library._open_folder(ctx, "j1")
+
+    assert ctx.submitted, "startfile must be handed to ctx.submit, not called inline"
+    key, fn, args = ctx.submitted[0]
+    assert key.startswith("open-folder:")
+    assert fn is os.startfile
+    assert args == (str(tmp_path),)
+    assert not ctx.toasts, "a folder that exists is not itself a toast"
+
+
+def test_opening_a_missing_folder_still_toasts_inline():
+    """The existence check stays synchronous -- it is a stat, not a shell
+    call -- so a missing folder never reaches ``ctx.submit`` at all."""
+    missing = type("P", (), {"exists": lambda self: False})()
+    ctx = _FolderCtx(missing)
+
+    library._open_folder(ctx, "j1")
+
+    assert not ctx.submitted
+    assert ctx.toasts and "not on disk" in ctx.toasts[0][0]

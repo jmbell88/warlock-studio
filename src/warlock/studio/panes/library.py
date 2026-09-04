@@ -1055,18 +1055,22 @@ def _open_folder(ctx: Any, job_id: str) -> None:
     therefore not a kill-on-close-job question. Silent about a missing
     directory in the sense that it says so as a toast -- a job whose files were
     removed by hand is a real state, not a fault.
+
+    ``startfile`` itself goes through ``ctx.submit`` rather than running
+    inline -- it is a blocking shell call (Explorer can take a moment to
+    launch on a cold start), and ``open_log`` already makes the same call the
+    same way. A raised ``OSError`` is caught by ``TaskRunner.poll`` and
+    reaches the frame thread as the ordinary failed-task toast; the friendlier
+    "Could not open the folder" wording is one this generic path cannot carry,
+    which is the trade for not blocking the frame on a shell call.
     """
+    import os
+
     path = ctx.job_dir(job_id)
     if not path.exists():
         ctx.toast("That job's folder is not on disk.", "warn")
         return
-    try:
-        import os
-
-        os.startfile(path)  # noqa: S606 -- a directory, handed to the shell
-    except OSError as exc:
-        log.warning("could not open %s: %s", path, exc)
-        ctx.toast("Could not open the folder. See the log for details.", "error", action="log")
+    ctx.submit(f"open-folder:{job_id}", os.startfile, str(path))  # noqa: S606 -- a directory, handed to the shell
 
 
 # --- actions ----------------------------------------------------------------

@@ -455,6 +455,13 @@ _NVML_SUCCESS = 0
 #: A sentinel distinct from None, which is a *cached failure* here.
 _UNSET: Any = object()
 _NVML_SESSION: Any = _UNSET
+#: Guards the init below the way ``_published_lock`` guards ``_published`` --
+#: ``device_memory`` is called from both the frame-loop sampler and admission
+#: checks on other threads, and without this two threads racing the first call
+#: could both see ``_UNSET``, both pay ``nvmlInit_v2``, and the loser's handle
+#: (and its ``nvmlShutdown`` on the failure branches) would leak or double-free
+#: the module-level session the winner already published.
+_nvml_lock = threading.Lock()
 
 
 class _NvmlMemory(ctypes.Structure):
@@ -526,24 +533,32 @@ def _nvml() -> tuple[Any, Any, str] | None:
 
     if _NVML_SESSION is not _UNSET:
         return _NVML_SESSION
-    _NVML_SESSION = None
-    if sys.platform != "win32":
-        return None
-    try:
-        nvml = ctypes.CDLL("nvml.dll")
-        if nvml.nvmlInit_v2() != _NVML_SUCCESS:
+    with _nvml_lock:
+        # Re-check inside the lock: another thread may have finished the
+        # init while this one was waiting for it.
+        if _NVML_SESSION is not _UNSET:
+            return _NVML_SESSION
+        _NVML_SESSION = None
+        if sys.platform != "win32":
             return None
-        handle = ctypes.c_void_p()
-        if nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)) != _NVML_SUCCESS:
-            nvml.nvmlShutdown()
+        try:
+            nvml = ctypes.CDLL("nvml.dll")
+            if nvml.nvmlInit_v2() != _NVML_SUCCESS:
+                return None
+            handle = ctypes.c_void_p()
+            if (
+                nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle))
+                != _NVML_SUCCESS
+            ):
+                nvml.nvmlShutdown()
+                return None
+            buffer = ctypes.create_string_buffer(96)
+            if nvml.nvmlDeviceGetName(handle, buffer, len(buffer)) != _NVML_SUCCESS:
+                buffer.value = b""
+        except (OSError, AttributeError, ValueError):
             return None
-        buffer = ctypes.create_string_buffer(96)
-        if nvml.nvmlDeviceGetName(handle, buffer, len(buffer)) != _NVML_SUCCESS:
-            buffer.value = b""
-    except (OSError, AttributeError, ValueError):
-        return None
-    _NVML_SESSION = (nvml, handle, buffer.value.decode("utf-8", "replace"))
-    return _NVML_SESSION
+        _NVML_SESSION = (nvml, handle, buffer.value.decode("utf-8", "replace"))
+        return _NVML_SESSION
 
 
 def probe() -> DeviceMemory | None:
@@ -858,7 +873,13 @@ def dispatch_shortfall_message(
     tail = remedies(
         params, exclusive=exclusive, extra=("close other GPU applications and try again",)
     )
-    held = headroom_gib - free_gib
+    # headroom_gib is the budget computed at submission time and free_gib a
+    # fresh reading at dispatch; on a card that gained room in between (another
+    # process exited, or the WDDM figure moved) free_gib can exceed headroom_gib,
+    # and an unclamped subtraction would print a negative "in models Warlock
+    # already holds" -- a phrase that must never go negative regardless of what
+    # the two readings did.
+    held = max(0.0, headroom_gib - free_gib)
     return (
         f"this job needs about {need_gib:.1f} GiB of VRAM and only "
         f"{headroom_gib:.1f} GiB is available to it ({free_gib:.1f} GiB free plus "

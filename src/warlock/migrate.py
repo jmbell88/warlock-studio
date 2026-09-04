@@ -304,6 +304,15 @@ def _carry_the_database(config: Config, moved: list[tuple[Path, Path]]) -> None:
     ever onto a path that does not exist: a database already there is a library
     in its own right, and merging two of them is the thing ``_pending`` already
     declines to attempt.
+
+    Through ``sqlite3.Connection.backup``, the same as ``JobStore.backup_to`` --
+    not ``shutil.copy2``. The store the mover just relocated runs in WAL mode,
+    so the committed database is the ``.sqlite`` file *plus* whatever is still
+    in its ``-wal`` sidecar; a plain byte copy of the ``.sqlite`` alone silently
+    drops every transaction since the last checkpoint. ``_ROOTS`` moving
+    ``assets`` as a directory tree carries the ``-wal``/``-shm`` files along for
+    free, but this path copies just the one named file onto a location
+    ``WARLOCK_DB`` chose, so it has to take a consistent snapshot itself.
     """
     store = config.db_path
     if store.exists():
@@ -318,9 +327,17 @@ def _carry_the_database(config: Config, moved: list[tuple[Path, Path]]) -> None:
             # sqlite file at the path the app is about to open is worse than no
             # file at all, which at least reads as "new library".
             tmp = store.with_name(store.name + ".migrating")
-            shutil.copy2(candidate, tmp)
+            source = sqlite3.connect(str(candidate))
+            try:
+                target = sqlite3.connect(str(tmp))
+                try:
+                    source.backup(target)
+                finally:
+                    target.close()
+            finally:
+                source.close()
             os.replace(tmp, store)
-        except OSError as exc:  # pragma: no cover -- a full or read-only volume
+        except (OSError, sqlite3.Error) as exc:  # pragma: no cover -- a full or read-only volume
             raise MigrationError(
                 f"the library moved to {dest}, but its job history could not be "
                 f"copied to {store}: {exc}"

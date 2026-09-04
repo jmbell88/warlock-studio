@@ -1100,17 +1100,22 @@ def register_imported_loras(config: Any | None) -> None:
     if config is None:
         return
     for manifest in load_lora_manifests(config):
-        existing = models.STYLE_LORAS.get(manifest.key)
-        if existing is not None and existing.filename == manifest.filename:
-            continue
-        models.STYLE_LORAS[manifest.key] = models.StyleLora(
-            key=manifest.key,
-            label=manifest.label,
-            filename=manifest.filename,
-            trigger=manifest.trigger_text,
-            default_weight=manifest.tuned_weight,
-            family=manifest.family,
-        )
+        # Locked: this can run on the config/import worker thread while the
+        # frame thread iterates models.STYLE_LORAS drawing the style picker
+        # every frame. See models.STYLE_LORAS_LOCK for why this mutates in
+        # place under a lock rather than swapping in a new dict object.
+        with models.STYLE_LORAS_LOCK:
+            existing = models.STYLE_LORAS.get(manifest.key)
+            if existing is not None and existing.filename == manifest.filename:
+                continue
+            models.STYLE_LORAS[manifest.key] = models.StyleLora(
+                key=manifest.key,
+                label=manifest.label,
+                filename=manifest.filename,
+                trigger=manifest.trigger_text,
+                default_weight=manifest.tuned_weight,
+                family=manifest.family,
+            )
 
 
 def remove_imported_lora(config: Any, key: str) -> bool:
@@ -1149,7 +1154,8 @@ def remove_imported_lora(config: Any, key: str) -> bool:
     target = (root / gone.filename).resolve()
     if target.parent == root.resolve():
         target.unlink(missing_ok=True)
-    models.STYLE_LORAS.pop(key, None)
+    with models.STYLE_LORAS_LOCK:
+        models.STYLE_LORAS.pop(key, None)
     return True
 
 
@@ -1167,7 +1173,7 @@ def lora_catalog(config: Any | None = None) -> list[dict[str, Any]]:
             "source": "built-in",
             "checksum": "",
         }
-        for x in models.STYLE_LORAS.values()
+        for x in models.style_loras_snapshot().values()
     ]
     if config is not None:
         out.extend(asdict(x) for x in load_lora_manifests(config))

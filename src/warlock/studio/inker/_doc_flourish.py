@@ -281,6 +281,22 @@ class FlourishOps:
         counts = {"taken": 0, "kept": 0, "agreed": 0, "conflicts": 0, "added": 0}
         present = {track.uid for track in anim.tracks}
 
+        # Every target that would raise must be found before the loop below
+        # writes anything: a raise partway through leaves earlier cels
+        # already mutated and no undo step pushed to cover them (finding #1).
+        for key, _name in _layer_keys(baked):
+            track_uid = tracks.get(key)
+            if track_uid is None or track_uid not in present:
+                continue
+            for frame_uid in frame_uids:
+                if anim.cels.get((track_uid, frame_uid)) is not None and anim.is_linked(
+                    track_uid, frame_uid
+                ):
+                    raise ValueError(
+                        "unlink this effect's cels before regenerating: a linked cel "
+                        "cannot take two different renders"
+                    )
+
         for key, name in _layer_keys(baked):
             track_uid = tracks.get(key)
             if track_uid is None or track_uid not in present:

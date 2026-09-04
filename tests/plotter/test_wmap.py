@@ -294,6 +294,85 @@ def test_a_file_from_a_newer_version_is_refused():
         wmap.read_wmap(data)
 
 
+def test_too_many_tilesets_is_refused_before_any_image_is_decoded(monkeypatch):
+    """A manifest can name the same tileset image over and over; the count is
+    checked before the loop that decodes any of them, not after."""
+
+    def swell(manifest):
+        one = manifest["tilesets"][0]
+        manifest["tilesets"] = [
+            {**one, "firstgid": index + 1} for index in range(4)
+        ]
+
+    data = _rewrite(_doc(), swell)
+    monkeypatch.setattr(wmap, "MAX_TILESETS", 3)
+    with pytest.raises(ValueError) as exc:
+        wmap.read_wmap(data)
+    assert "tilesets" in str(exc.value) and "3" in str(exc.value)
+
+
+def test_too_many_layer_tree_nodes_is_refused(monkeypatch):
+    """The running node count travels through the recursive layer reader, so a
+    manifest naming far more layers than this build will hold is refused
+    without decoding all of them first."""
+
+    def swell(manifest):
+        one = manifest["layers"][0]
+        manifest["layers"] = [dict(one) for _ in range(4)]
+
+    data = _rewrite(_doc(), swell)
+    monkeypatch.setattr(wmap, "MAX_LAYER_NODES", 3)
+    with pytest.raises(ValueError) as exc:
+        wmap.read_wmap(data)
+    assert "layer tree" in str(exc.value) and "3" in str(exc.value)
+
+
+def test_too_many_nodes_in_a_nested_group_is_refused(monkeypatch):
+    """The cap is on the whole tree, not the top level -- a group's children
+    count against the same running total."""
+
+    def swell(manifest):
+        leaf = manifest["layers"][0]
+        manifest["layers"] = [
+            {
+                "id": 0,
+                "name": "group",
+                "type": "group",
+                "visible": True,
+                "opacity": 1.0,
+                "locked": False,
+                "class": "",
+                "blend_mode": "normal",
+                "tint": [255, 255, 255, 255],
+                "properties": {},
+                "layers": [dict(leaf) for _ in range(4)],
+            }
+        ]
+
+    data = _rewrite(_doc(), swell)
+    monkeypatch.setattr(wmap, "MAX_LAYER_NODES", 3)
+    with pytest.raises(ValueError) as exc:
+        wmap.read_wmap(data)
+    assert "layer tree" in str(exc.value)
+
+
+def test_too_many_objects_is_refused_before_any_is_built(monkeypatch):
+    """Building an object mints a uid and walks its properties; the count is
+    charged before any of that runs."""
+
+    def swell(manifest):
+        for layer in manifest["layers"]:
+            if layer.get("type") == "object":
+                one = layer["objects"][0]
+                layer["objects"] = [dict(one) for _ in range(4)]
+
+    data = _rewrite(_doc(), swell)
+    monkeypatch.setattr(wmap, "MAX_OBJECTS", 3)
+    with pytest.raises(ValueError) as exc:
+        wmap.read_wmap(data)
+    assert "objects" in str(exc.value) and "3" in str(exc.value)
+
+
 def test_a_missing_layer_member_is_refused():
     def drop(manifest):
         manifest["layers"][0]["data"] = "layers/99.npy"

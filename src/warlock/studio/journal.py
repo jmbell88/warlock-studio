@@ -400,6 +400,14 @@ def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -
     move. That is deliberate: a disk that has just refused a write is not a
     disk to re-encode a document against sixty times a second, and the failure
     is toasted by name in the meantime (``main._collect_tasks``).
+
+    An ``encode`` that raises gets the same treatment, applied here instead of
+    by a task: there is no submit to accept it, so ``at`` is advanced by hand
+    (``name``/``head`` untouched -- there is no copy to claim) before this
+    returns ``False``. Left unadvanced, a slot whose encode keeps raising --
+    a corrupt in-memory state, say -- would be offered to ``_write_if_due``
+    again on every single frame rather than backing off like every other
+    failure this function knows about.
     """
     stamp = time.monotonic() if stamp is None else stamp
     mark = mark_of(slot)
@@ -411,6 +419,11 @@ def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -
         data = provider.encode(slot)
     except Exception:
         log.exception("journal: could not encode %s/%s", provider.kind, name)
+        # The debounce still moves, the same as an accepted submit whose write
+        # later fails on disk: an encode that just raised is not one to retry
+        # every frame, so ``at`` advances (name/head untouched -- there is no
+        # copy) and the retry lands ``JOURNAL_SECONDS`` later instead.
+        set_mark(slot, Mark(name=mark.name, head=mark.head, at=stamp))
         return False
     meta = {
         "version": VERSION,

@@ -290,12 +290,15 @@ def test_an_unreadable_line_does_not_stall_the_ops_behind_it(tmp_path):
 
 
 def test_trim_is_served_without_touching_a_pipe_that_was_never_built():
-    """The op exists so the release path can call it unconditionally.
+    """The op must answer even when nothing was ever built.
 
-    ``_release_music`` trims and then unloads without asking which kind of pipe
-    it holds, so a trim against a worker that has never constructed one has to
-    be an answer rather than a construction -- otherwise the release path is
-    what *loads* 8.3 GiB.
+    ``trim`` is served unconditionally by whatever calls it, so a trim against
+    a worker that has never constructed a pipe has to be an answer rather than
+    a construction -- otherwise trimming would be what *loads* 8.3 GiB. (As of
+    the fix for MDL-18, ``_release_music`` itself no longer calls this on its
+    way to ``unload`` -- killing the child already gives back everything a
+    trim would have -- but the op is served the same way for any other
+    caller.)
     """
     stdin = io.StringIO(json.dumps({"op": "trim"}) + "\n")
     stdout = io.StringIO()

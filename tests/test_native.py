@@ -11,6 +11,7 @@ from __future__ import annotations
 import ctypes
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from warlock import native
@@ -136,3 +137,21 @@ def test_the_built_library_reports_the_abi_this_build_expects(monkeypatch):
     native.reset()
     assert native.available() is True
     assert int(native.lib().warlockc_abi()) == native.ABI
+
+
+# --- flood's queue-index ceiling ----------------------------------------------
+
+
+def test_flood_refuses_a_grid_the_int32_queue_index_cannot_address(monkeypatch):
+    """``warlockc_flood_u8``'s scratch queue stores one flat cell index per
+    ``int32_t`` slot, so ``h * w`` at or beyond 2**31 overflows the index
+    itself rather than merely running slowly (MDL-26). The guard has to fire
+    before any C call, not after, so this only needs a truthy fake ``lib()`` --
+    real buffers that size would not fit in a test process anyway."""
+    monkeypatch.setattr(native, "lib", lambda: object())
+    big = 1 << 16  # 65536 * 65536 == 2**32, past the ceiling
+    match = type("FakeArr", (), {"shape": (big, big)})()
+    out = np.empty((1, 1), dtype=np.uint8)
+    scratch = np.empty(1, dtype=np.int32)
+    with pytest.raises(AssertionError, match="2\\*\\*31"):
+        native.flood(match, out, scratch, (0, 0))

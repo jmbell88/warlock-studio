@@ -1087,7 +1087,7 @@ def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
 
 
 def test_every_step_of_every_tour_builds(app_ctx, imgui_ctx):
-    """Nineteen steps, each drawn for real, in a real GL frame.
+    """Every step of every tour, drawn for real, in a real GL frame.
 
     The tour is data plus one renderer, so the thing that can break is a step
     the renderer cannot draw -- a body it cannot wrap, a chapter link on a step
@@ -2579,6 +2579,87 @@ def test_the_review_panes_build_with_nothing_recorded(app_ctx, imgui_ctx):
             app._review_verdict(app_ctx, state, review_mode),
         ),
     )
+
+
+def test_the_sweep_list_is_blinded_in_both_the_filter_and_the_row_text(app_ctx, imgui_ctx):
+    """H: the sweep row used to match and print ``sweep["label"]`` -- the raw
+    DB value -- even under blinding, un-blinding the very list the toggle
+    beside it exists to hide. ``bucket_label`` is the one spelling of the
+    blinding rule (``review_mode.bucket_label``'s own docstring); this asserts
+    the pane actually calls it rather than the dict key directly."""
+    from warlock.studio import controls, review_mode
+
+    app = _ReviewApp()
+    state = _review_state(app_ctx)
+    # ``list_filter`` only draws (and consults) its box once a list clears its
+    # minimum -- padded past that here so the filter assertions below actually
+    # exercise the needle rather than the always-"" short-list path.
+    state.sweeps += [
+        {"id": f"pad{i}", "label": f"padding {i}", "prompt": "", "units": [], "todo": 0}
+        for i in range(8)
+    ]
+    review_mode.set_blind(app_ctx, True)
+    blinded = review_mode.bucket_label(state, state.sweeps[1])
+    assert "lora sweep" not in blinded  # the fixture's raw label
+
+    seen: list[str] = []
+    real_selectable = controls.selectable
+
+    def _spy(label, *args, **kwargs):
+        seen.append(label)
+        return real_selectable(label, *args, **kwargs)
+
+    from unittest import mock
+
+    with mock.patch.object(controls, "selectable", side_effect=_spy):
+        _frame(imgui_ctx, lambda: app._review_runs(app_ctx, state, review_mode))
+
+    # The row text: the raw label never reaches a selectable, and the blinded
+    # one does.
+    assert not any("lora sweep" in label for label in seen)
+    assert any(label.startswith(f"{blinded}##") for label in seen)
+
+    # The filter: a query that only matches the raw label finds nothing, and
+    # one that matches the blinded id still selects the row.
+    app_ctx.state.list_filters["sweeps"] = "lora sweep"
+    seen.clear()
+    with mock.patch.object(controls, "selectable", side_effect=_spy):
+        _frame(imgui_ctx, lambda: app._review_runs(app_ctx, state, review_mode))
+    assert not any(label.startswith(f"{blinded}##") for label in seen)
+
+    app_ctx.state.list_filters["sweeps"] = blinded.lstrip("#").lower()
+    seen.clear()
+    with mock.patch.object(controls, "selectable", side_effect=_spy):
+        _frame(imgui_ctx, lambda: app._review_runs(app_ctx, state, review_mode))
+    assert any(label.startswith(f"{blinded}##") for label in seen)
+
+
+def test_the_verdict_headers_second_line_is_blinded_too(app_ctx, imgui_ctx):
+    """L: that line used to print ``unit["job_id"]`` in full regardless of
+    blinding, handing back the id the truncated ``#abcdef`` label above it was
+    withholding."""
+    from warlock.studio import review_mode, widgets
+
+    app = _ReviewApp()
+    state = _review_state(app_ctx)
+    review_mode.set_blind(app_ctx, True)
+    unit = review_mode.current(state)
+    assert unit is not None
+
+    seen: list[str] = []
+    real_muted = widgets.muted
+
+    def _spy(text, *args, **kwargs):
+        seen.append(text)
+        return real_muted(text, *args, **kwargs)
+
+    from unittest import mock
+
+    with mock.patch.object(widgets, "muted", side_effect=_spy):
+        _frame(imgui_ctx, lambda: app._review_verdict(app_ctx, state, review_mode))
+
+    assert not any(unit["job_id"] in text for text in seen)
+    assert any(review_mode.label(state, unit) in text for text in seen)
 
 
 def _label_pass(ctx, stage="blank", rows=3):

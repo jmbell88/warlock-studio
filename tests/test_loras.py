@@ -201,6 +201,85 @@ def test_the_service_registers_imported_adapters_at_startup(svc, tmp_path):
     assert out["key"] in models.STYLE_LORAS
 
 
+def test_concurrent_register_and_iterate_does_not_raise(tmp_path):
+    """models.STYLE_LORAS is mutated in place from a worker thread while the
+    frame thread reads it every frame (settings_2d, main.ctx.style_loras,
+    models.loras_by_base/catalog). Before the STYLE_LORAS_LOCK +
+    style_loras_snapshot() fix, a reader iterating the live dict while a
+    writer inserted/popped could raise ``RuntimeError: dictionary changed
+    size during iteration`` -- rare under the GIL, but real, since a
+    dict-comprehension's iterator yields control between elements.
+
+    This drives register/remove on one thread and every full-table reader on
+    another for a few hundred rounds each; the assertion is simply that
+    nothing raised.
+    """
+    import threading
+
+    root = tmp_path / "loras"
+    root.mkdir()
+    keys = [f"concurrent_lora_{i}" for i in range(12)]
+    manifests = [
+        {
+            "key": key,
+            "label": key,
+            "family": models.FAMILY_SDXL,
+            "trigger_text": "",
+            "tuned_weight": models.DEFAULT_LORA_WEIGHT,
+            "license": "",
+            "commercial": True,
+            "source": "test",
+            "checksum": "",
+            "filename": f"{key}.safetensors",
+            "schema_version": 1,
+        }
+        for key in keys
+    ]
+    (root / "manifests.json").write_text(
+        json.dumps({"version": 1, "manifests": manifests}), encoding="utf-8"
+    )
+    config = Config(t2i_model_root=root.parent)
+
+    errors: list[BaseException] = []
+    rounds = 300
+
+    def _writer() -> None:
+        try:
+            for i in range(rounds):
+                key = keys[i % len(keys)]
+                if i % 2 == 0:
+                    generation.remove_imported_lora(config, key)
+                else:
+                    # Restore the manifest row this pass removed, then
+                    # re-register so insert and pop both fire under load.
+                    (root / "manifests.json").write_text(
+                        json.dumps({"version": 1, "manifests": manifests}), encoding="utf-8"
+                    )
+                    generation._forget_manifests(root / "manifests.json")
+                    generation.register_imported_loras(config)
+        except BaseException as exc:  # noqa: BLE001 -- captured for the assertion below
+            errors.append(exc)
+
+    def _reader() -> None:
+        try:
+            for _ in range(rounds):
+                list(models.style_loras_snapshot().values())
+                models.loras_by_base()
+                models.catalog()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_writer), threading.Thread(target=_reader)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    for key in keys:
+        models.STYLE_LORAS.pop(key, None)
+
+
 # --- the training door -------------------------------------------------------------------
 
 

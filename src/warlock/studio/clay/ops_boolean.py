@@ -53,6 +53,36 @@ from .document import Obj
 #: rule Merge Objects already establishes.
 KINDS: tuple[str, ...] = ("union", "difference", "intersection")
 
+#: ``glbimport.MAX_TRIANGLES`` caps a single *imported* mesh at 2M triangles,
+#: but a boolean has no cap on how many objects are selected at once --
+#: ``manifold3d`` builds one arrangement over every input together, so N
+#: objects at the import ceiling is N * 2M triangles handed to the kernel in
+#: one call, allocated on the frame thread with no way to refuse partway
+#: through. Set to the same 2M: one mesh at the ceiling is exactly what one
+#: import already allows through, so the budget is "no worse than importing
+#: the equivalent geometry as a single object," not a new, lower bar.
+MAX_BOOLEAN_TRIANGLES = 2_000_000
+
+
+def _refuse_complexity(meshes: Sequence[bm.Mesh], kind: str) -> None:
+    """Refuse before the kernel runs, from the triangle count it would face.
+
+    An ``n``-cornered face triangulates into ``n - 2`` triangles, so summing
+    ``len(mesh.loops) - 2 * face_count(mesh)`` over every input gives the exact
+    count :func:`_run` will hand to ``manifold3d`` -- without doing the
+    triangulation just to check. Summed across *all* inputs, not the largest
+    one, because the kernel's cost is the size of the combined arrangement.
+    """
+    from .elements import OpError
+
+    total = sum(len(m.loops) - 2 * bm.face_count(m) for m in meshes)
+    if total > MAX_BOOLEAN_TRIANGLES:
+        raise OpError(
+            f"This {kind} would need {total:,} triangles, past the "
+            f"{MAX_BOOLEAN_TRIANGLES:,} Clay works with. Select fewer objects, "
+            "or simplify them first."
+        )
+
 
 def union(objs: Sequence[Obj]) -> bm.Mesh:
     """The boolean union of several objects, in the **first** one's frame."""
@@ -107,6 +137,7 @@ def boolean(objs: Sequence[Obj], kind: str = "union") -> bm.Mesh:
     target = objs[0]
     meshes = [target.mesh] + [bm.transformed(o.mesh, _into(target, o)) for o in objs[1:]]
 
+    _refuse_complexity(meshes, kind)
     result = _run(meshes, [o.name for o in objs], kind)
     return _to_csr(result, target.mesh, kind)
 

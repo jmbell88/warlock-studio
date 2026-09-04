@@ -76,7 +76,7 @@ lyric-language stack are declared as the `music` extra in `pyproject.toml`.
 
 ## The modifications
 
-Three, each marked with a `WARLOCK n/3:` comment in the source. Every other
+Four, each marked with a `WARLOCK n/4:` comment in the source. Every other
 line is upstream's, byte for byte.
 
 1. **`cancel_event` and `on_step` threaded into the sampling loop**
@@ -113,6 +113,13 @@ line is upstream's, byte for byte.
    top of a dozen vendored modules — would make each of them undiffable against
    upstream for no gain. Only the music worker subprocess imports this package,
    so the bare name never appears in the app process.
+
+4. **`weights_only=True` on the two quantised-checkpoint `torch.load` calls**
+   (`pipeline_ace_step.py`, `load_quantized_checkpoint`). Upstream's default
+   `torch.load` unpickles arbitrary callables; the files it reads here arrive
+   through `warlock.fetch`, not as untrusted input, but restricting the load
+   to tensors costs nothing and closes the same class of risk the vendored
+   BiRefNet's `local_files_only=True` closes for downloads.
 
 ## Updating
 

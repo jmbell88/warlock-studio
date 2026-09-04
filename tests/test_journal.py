@@ -259,7 +259,13 @@ def test_one_broken_provider_does_not_stop_the_others(tmp_path, kind):
     assert journal.pump(ctx, now=10_000.0) == 1
 
 
-def test_an_encode_that_raises_writes_nothing_and_does_not_mark(tmp_path, kind):
+def test_an_encode_that_raises_writes_nothing_and_advances_only_the_debounce(tmp_path, kind):
+    """Renamed from ``..._and_does_not_mark``: it used to be true that nothing
+    moved on an encode failure, but that left a slot whose encode keeps raising
+    offered to ``_write_if_due`` again on every frame -- the retry-storm this
+    module's disk-failure path is careful to avoid for every *other* kind of
+    failure. ``at`` now advances the same way a refused submit's backpressure
+    does; ``name``/``head`` stay put because there is still no copy to claim."""
     ctx = _Ctx(tmp_path)
     slot = _Slot()
     slot.body = None  # encode returns non-bytes -> the write raises
@@ -277,6 +283,41 @@ def test_an_encode_that_raises_writes_nothing_and_does_not_mark(tmp_path, kind):
     journal.pump(ctx, now=10_000.0)
     assert ctx.submitted == []
     assert slot.journal_name == ""
+    assert slot.journal_head is None
+    assert slot.journal_at == 10_000.0
+
+
+def test_an_encode_that_keeps_raising_is_not_retried_every_frame(tmp_path, kind):
+    """The debounce advancing above has to actually stop the retry storm: a
+    second pump within ``JOURNAL_SECONDS`` of the failed attempt must not call
+    ``encode`` again."""
+    ctx = _Ctx(tmp_path)
+    slot = _Slot()
+    slot.body = None
+    kind.slots.append(slot)
+
+    calls: list[float] = []
+
+    def boom(_s):
+        calls.append(1)
+        raise RuntimeError("cannot encode")
+
+    journal.register(
+        journal.Provider(
+            **{**kind.provider.__dict__, "encode": boom},
+        )
+    )
+    journal.pump(ctx, now=9_000.0)  # arm
+    journal.pump(ctx, now=10_000.0)  # due; encode raises
+    assert len(calls) == 1
+
+    # Still within JOURNAL_SECONDS of the failed attempt: no retry yet.
+    journal.pump(ctx, now=10_000.0 + journal.JOURNAL_SECONDS - 1.0)
+    assert len(calls) == 1, "the failure backed the debounce off; this pump is not due"
+
+    # And the retry really arrives one interval later, not next frame.
+    journal.pump(ctx, now=10_000.0 + journal.JOURNAL_SECONDS + 1.0)
+    assert len(calls) == 2
 
 
 def test_a_failed_write_is_not_recorded_as_a_copy_that_exists(tmp_path, kind, monkeypatch):

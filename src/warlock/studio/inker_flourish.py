@@ -241,7 +241,14 @@ def land(ctx: Any, state: Any, done: Any, *, now: float) -> bool:
         ctx.toast("That effect was detached while it rendered; nothing landed.", "info")
         state.flourish_pending.pop(group, None)
         return False
-    counts = tab.doc.apply_flourish(group, baked, force=bool(result.get("force")))
+    try:
+        counts = tab.doc.apply_flourish(group, baked, force=bool(result.get("force")))
+    except ValueError as exc:
+        # A refusal from the document, not a crash: the linked-cel check is
+        # the one that fires here. Framed as a sentence about the regenerate
+        # (the house rule ``test_no_toast_forwards_a_bare_exception`` keeps).
+        ctx.toast(f"Could not regenerate the effect: {exc}", "warn")
+        return False
     pending = state.flourish_pending.get(group)
     if pending is not None and pending == baked.recipe:
         state.flourish_pending.pop(group, None)
@@ -875,7 +882,12 @@ def decode_restyle(
             pixels = key_out_black(pixels)  # the model painted on an opaque ground
         anchors[int(index)] = pixels
     first, last = pending["span"]
-    field = keyframes.field_from_recipe(recipe)
+    # ``size`` is the document's canvas -- what every anchor above was just
+    # resized to -- not the recipe's own, which is centred and offset inside
+    # it and can be smaller. The field has to share that shape or ``_shift``
+    # broadcasts a (recipe h, recipe w) displacement against a (doc h, doc w)
+    # plane (finding #12).
+    field = keyframes.field_from_recipe(recipe, size=size)
     planes = keyframes.interpolate(anchors, int(first), int(last), field)
     cels = {int(first) + i: plane for i, plane in enumerate(planes)}
     return {"pending": pending, "cels": cels}

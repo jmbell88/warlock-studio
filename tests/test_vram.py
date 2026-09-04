@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -682,3 +684,58 @@ def test_the_submit_refusal_carries_the_plan_and_the_dispatch_one_does_not():
     assert "smaller base model" not in vram.dispatch_shortfall_message(
         30.0, 4.0, 3.0, params, exclusive=False
     )
+
+
+# -- NVML init is a once-only race -------------------------------------------
+
+
+def test_nvml_init_runs_once_under_concurrent_callers(monkeypatch):
+    """``_nvml`` is called from both the frame-loop sampler and admission
+    checks on other threads. Without ``_nvml_lock``, two threads racing the
+    first call could both see the sentinel and both pay the (slow) init --
+    and on the failure branches, both could call ``nvmlShutdown`` on a handle
+    the other is still using. Force the race with several threads and a slow
+    fake init, and assert it only ran once."""
+    monkeypatch.setattr(vram, "_NVML_SESSION", vram._UNSET)
+    monkeypatch.setattr(vram.sys, "platform", "win32")
+
+    calls = []
+
+    class _FakeCDLL:
+        def __init__(self, name):
+            # Widen the window a racing thread has to land in, so a missing
+            # lock would show up as more than one call rather than getting
+            # lucky.
+            time.sleep(0.05)
+            calls.append(name)
+
+        def nvmlInit_v2(self):
+            return 1  # non-success: exercises the early-return branch too
+
+    monkeypatch.setattr(vram.ctypes, "CDLL", _FakeCDLL)
+
+    results: list[object] = []
+
+    def worker():
+        results.append(vram._nvml())
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert len(calls) == 1, "nvml.dll should be opened exactly once, even racing"
+    assert all(r is None for r in results)
+
+
+def test_dispatch_shortfall_held_is_clamped_when_free_exceeds_headroom():
+    """``held`` is ``headroom_gib - free_gib``: "how much of the headroom is
+    tied up in models Warlock already holds". free_gib is a fresh reading
+    taken at dispatch and can exceed the headroom_gib computed at submission
+    (another process exited in between, or the WDDM figure moved) -- and an
+    unclamped subtraction would print a negative figure for a quantity that
+    can never be negative."""
+    message = vram.dispatch_shortfall_message(10.0, 4.0, 6.0, {}, exclusive=False)
+    assert "0.0 GiB in models Warlock already holds" in message
+    assert "-0.0" not in message

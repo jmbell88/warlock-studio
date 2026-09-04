@@ -639,9 +639,9 @@ class TrellisServer:
                         # still decodes.
                         error_bytes = bytearray()
                         async for chunk in r.aiter_bytes():
-                            error_bytes.extend(chunk)
                             if len(error_bytes) >= MAX_ERROR_BYTES:
                                 break
+                            error_bytes.extend(chunk)
                         text = bytes(error_bytes).decode("utf-8", "replace")
                         detail = text[:500] if text else "(no body; see trellis.log)"
                         raise RuntimeError(f"trellis-server {r.status_code}: {detail}")

@@ -346,3 +346,45 @@ def test_an_existing_custom_database_is_never_overwritten(
     migrate.run(Config())
 
     assert elsewhere.read_bytes() == b"mine"
+
+
+def test_carry_the_database_copies_a_wal_only_commit(tmp_path):
+    """``_carry_the_database`` copies the moved-to directory's ``jobs.sqlite``
+    onto a custom ``WARLOCK_DB`` path. That store runs in WAL mode, so a
+    committed row can live only in the ``-wal`` sidecar until something
+    checkpoints it -- ``shutil.copy2`` of the ``.sqlite`` bytes alone would
+    silently drop it. Exercised directly against the function (rather than
+    through a full ``migrate.run``) because Windows will not let ``copytree``
+    read a database whose ``-shm`` file a live connection still has mapped,
+    and this is the smallest reproduction of the bug the docstring names: a
+    row that is committed but not yet checkpointed.
+    """
+    moved_dir = tmp_path / "moved_assets"
+    moved_dir.mkdir()
+    legacy_db = moved_dir / "jobs.sqlite"
+    writer = sqlite3.connect(str(legacy_db))
+    writer.execute("CREATE TABLE jobs (id TEXT)")
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("INSERT INTO jobs (id) VALUES ('wal-only')")
+    writer.commit()
+    assert (moved_dir / "jobs.sqlite-wal").exists()
+
+    store_path = tmp_path / "custom" / "jobs.sqlite"
+    # A stand-in rather than a real ``Config`` -- ``_carry_the_database`` reads
+    # only ``config.db_path``, and building a full ``Config`` would pull in
+    # every other root this test does not care about.
+    config = collections.namedtuple("FakeConfig", ["db_path"])(store_path)
+    try:
+        migrate._carry_the_database(config, [(moved_dir, moved_dir)])
+    finally:
+        writer.close()
+
+    assert store_path.exists()
+    conn = sqlite3.connect(str(store_path))
+    try:
+        rows = {row[0] for row in conn.execute("SELECT id FROM jobs")}
+    finally:
+        conn.close()
+    assert "wal-only" in rows
+    # Nothing half-written is left behind either.
+    assert not list(store_path.parent.glob("*.migrating"))

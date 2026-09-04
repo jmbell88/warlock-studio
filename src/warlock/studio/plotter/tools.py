@@ -61,7 +61,11 @@ def flood_mask(match: np.ndarray, x: int, y: int) -> np.ndarray:
     seen = np.zeros((height, width), dtype=bool)
     if not (0 <= x < width and 0 <= y < height) or not match[y, x]:
         return seen
-    if native.available() and height * width:
+    # The size bound mirrors native.flood's own assertion (an int32 queue
+    # index cannot address 2**31 cells or more): gating on it here, beside
+    # ``available()``, means a hypothetical map that large takes the numpy
+    # fallback below rather than tripping that assertion.
+    if native.available() and 0 < height * width < 2**31:
         wanted = np.ascontiguousarray(match, dtype=np.uint8)
         out = np.empty((height, width), dtype=np.uint8)
         scratch = np.empty(height * width, dtype=np.int32)

@@ -207,6 +207,40 @@ def test_apply_refuses_a_group_that_is_not_an_effect():
         doc.apply_flourish(999, B.bake(_recipe()))
 
 
+def test_regenerate_with_a_linked_cel_raises_before_mutating_anything():
+    """Finding #1. A linked cel used to be found mid-loop, after earlier
+    frames of the same track were already rewritten and no undo step was
+    pushed to cover them -- the raise that reached ``land`` left the document
+    half-rendered. Every target must be checked before any of them is
+    touched."""
+    doc = inker.Document.blank(32, 32)
+    first = B.bake(_recipe(seed=1))
+    group = doc.insert_flourish(first)
+    state = doc.flourish_state(group)
+    track_uid = next(iter(state.tracks.values()))
+    track_index = next(i for i, t in enumerate(doc.anim.tracks) if t.uid == track_uid)
+    # Link frame 5's cel to frame 0's, so the two share one object -- the
+    # regenerate must refuse it. Frame 0 is earlier in the render loop than
+    # frame 5, so mutation of the earlier frames is exactly what a mid-loop
+    # raise would have already done.
+    assert doc.link_cel(0, track_index=track_index, frame_index=5)
+    assert doc.anim.is_linked(track_uid, doc.anim.frames[5].uid)
+    head = doc.history.head
+    before_pixels = {
+        i: doc.anim.cels[(track_uid, f.uid)].pixels.copy()
+        for i, f in enumerate(doc.anim.frames)
+        if (track_uid, f.uid) in doc.anim.cels
+    }
+    second = B.bake(_recipe(seed=2))
+    with pytest.raises(ValueError, match="unlink"):
+        doc.apply_flourish(group, second)
+    # No undo step, and nothing -- including the frames the loop would have
+    # reached before the linked one -- was rewritten.
+    assert doc.history.head == head
+    for i, pixels in before_pixels.items():
+        assert np.array_equal(doc.anim.cels[(track_uid, doc.anim.frames[i].uid)].pixels, pixels)
+
+
 def test_the_recipe_survives_an_ora_round_trip(tmp_path):
     doc = inker.Document.blank(40, 40)
     rec = _recipe(seed=5)

@@ -50,12 +50,12 @@ import torchaudio
 from .cpu_offload import cpu_offload
 
 
-# WARLOCK 1/3: the exception the sampling loop below raises when its cancel
+# WARLOCK 1/4: the exception the sampling loop below raises when its cancel
 # event is set. Imported rather than defined here so that the *parent* -- which
 # has to catch it in order to report a cancel as a cancel rather than as a
 # failure -- can reach it without importing this module, and therefore without
 # importing torch. See ``pipelines/_workerio.py``.
-from ..._workerio import WarlockCancelled  # noqa: E402
+from .._workerio import WarlockCancelled  # noqa: E402
 
 
 torch.backends.cudnn.benchmark = False
@@ -179,7 +179,7 @@ class ACEStepPipeline:
                 checkpoint_dir_models = checkpoint_dir
         
         if checkpoint_dir_models is None:
-            # WARLOCK 2/3: upstream falls through to `snapshot_download` here.
+            # WARLOCK 2/4: upstream falls through to `snapshot_download` here.
             # This application never fetches at load time -- weights arrive
             # through `warlock.fetch` and its own subprocess -- so an
             # unpopulated directory is a refusal, not a download. Belt and
@@ -311,9 +311,15 @@ class ACEStepPipeline:
         self.ace_step_transformer.eval().to(self.dtype).to('cpu')
         self.ace_step_transformer = torch.compile(self.ace_step_transformer)
         self.ace_step_transformer.load_state_dict(
+            # WARLOCK 4/4: weights_only=True -- these are vendored-model
+            # checkpoints from warlock.fetch, not arbitrary input, but
+            # torch.load's default can unpickle and execute arbitrary
+            # callables. Restricting to tensors-only costs nothing here and
+            # closes that off regardless of where the file came from.
             torch.load(
                 os.path.join(ace_step_checkpoint_path, "diffusion_pytorch_model_int4wo.bin"),
                 map_location=self.device,
+                weights_only=True,
             ),assign=True
         )
         self.ace_step_transformer.torchao_quantized = True
@@ -322,9 +328,12 @@ class ACEStepPipeline:
         self.text_encoder_model.eval().to(self.dtype).to('cpu')
         self.text_encoder_model = torch.compile(self.text_encoder_model)
         self.text_encoder_model.load_state_dict(
+            # WARLOCK 4/4: weights_only=True, same reasoning as the transformer
+            # checkpoint above.
             torch.load(
                 os.path.join(text_encoder_checkpoint_path, "pytorch_model_int4wo.bin"),
                 map_location=self.device,
+                weights_only=True,
             ), assign=True
         )
         self.text_encoder_model.torchao_quantized = True
@@ -855,7 +864,7 @@ class ACEStepPipeline:
         audio2audio_enable=False,
         ref_audio_strength=0.5,
         ref_latents=None,
-        # WARLOCK 1/3: see ATTRIBUTION.md. Two hooks threaded through to the
+        # WARLOCK 1/4: see ATTRIBUTION.md. Two hooks threaded through to the
         # sampling loop below -- upstream has neither, and without the first
         # a running generation cannot be stopped.
         cancel_event=None,
@@ -1215,7 +1224,7 @@ class ACEStepPipeline:
 
             return sample
 
-        # WARLOCK 1/3: checked once before the loop, because load and encode
+        # WARLOCK 1/4: checked once before the loop, because load and encode
         # have no interruption point of their own and a cancel issued during
         # them must not be silently lost.
         if cancel_event is not None and cancel_event.is_set():
@@ -1223,7 +1232,7 @@ class ACEStepPipeline:
 
         for i, t in tqdm(enumerate(timesteps), total=num_inference_steps):
 
-            # WARLOCK 1/3: and once per step, which is the granularity a user
+            # WARLOCK 1/4: and once per step, which is the granularity a user
             # pressing Cancel expects.
             if cancel_event is not None and cancel_event.is_set():
                 raise WarlockCancelled
@@ -1459,7 +1468,7 @@ class ACEStepPipeline:
     def load_lora(self, lora_name_or_path, lora_weight):
         if (lora_name_or_path != self.lora_path or lora_weight != self.lora_weight) and lora_name_or_path != "none":
             if not os.path.exists(lora_name_or_path):
-                # WARLOCK 2/3: as above -- no runtime download.
+                # WARLOCK 2/4: as above -- no runtime download.
                 raise FileNotFoundError(
                     f"LoRA weights are not present at {lora_name_or_path!r}"
                 )
@@ -1515,7 +1524,7 @@ class ACEStepPipeline:
         save_path: str = None,
         batch_size: int = 1,
         debug: bool = False,
-        # WARLOCK 1/3: a `threading.Event` the sampling loop checks, and a
+        # WARLOCK 1/4: a `threading.Event` the sampling loop checks, and a
         # `(step, total)` callback it reports through. Both default to None,
         # so an unmodified caller sees upstream's behaviour exactly.
         cancel_event=None,
@@ -1676,7 +1685,7 @@ class ACEStepPipeline:
             )
         else:
             target_latents = self.text2music_diffusion_process(
-                # WARLOCK 1/3: forwarded from __call__'s two added kwargs.
+                # WARLOCK 1/4: forwarded from __call__'s two added kwargs.
                 cancel_event=cancel_event,
                 on_step=on_step,
                 duration=audio_duration,

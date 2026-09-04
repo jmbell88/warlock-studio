@@ -514,11 +514,23 @@ def flood(match: Any, out: Any, scratch: Any, seed: tuple[int, int]) -> None:
     because a cell is marked before it is pushed and so is pushed once.
     ``out`` is cleared by the kernel. A seed outside the array or on a
     non-matching cell reaches nothing.
+
+    ``h * w`` must be under 2**31: the kernel's queue holds a flat cell index
+    in each ``int32_t`` slot (see the ceiling note beside
+    ``warlockc_flood_u8`` in ``warlockc.h``), and an array at or beyond that
+    size would overflow the index rather than merely running slowly. No
+    caller is near this today -- a Plotter map is orders of magnitude smaller
+    -- so this is a documented ceiling, not a reachable path; the assertion
+    exists so a future caller with a much larger grid fails loudly here
+    instead of silently corrupting the reached set in C. Callers should keep
+    this bound alongside ``available()`` in their own gate so an oversized
+    grid takes the numpy fallback rather than raising.
     """
     handle = lib()
     if handle is None:  # pragma: no cover - callers check available() first
         raise RuntimeError("warlockc is not loaded")
     height, width = match.shape
+    assert height * width < 2**31, "flood: h * w must be < 2**31 (int32 queue index)"
     handle.warlockc_flood_u8(
         _ptr(match, ctypes.c_uint8),
         ctypes.c_int64(match.strides[0]),

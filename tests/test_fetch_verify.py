@@ -228,6 +228,33 @@ def test_a_directory_with_no_manifest_at_all_is_unknown(tmp_path: Path):
     assert fetch.verify_manifest(dest).status == fetch.VERIFY_UNKNOWN
 
 
+def test_a_digest_entry_that_escapes_the_install_directory_is_skipped(tmp_path: Path):
+    """A manifest is written by a completed download, but it is also just a
+    JSON file on disk by the time this runs -- and a digest key joined onto
+    ``dest`` unchecked would let a name like ``../../secrets.txt`` hash, and
+    report on, a file outside the model directory entirely. Treated as missing
+    rather than hashed: the same "skip the bad line" rule ``publish._contained``
+    states for a crash-recovery journal.
+    """
+    dest = _install(tmp_path, "thing", {"w.safetensors": b"weights"})
+    # A file that does exist, just not where the manifest is allowed to point.
+    secret = tmp_path / "escaped.bin"
+    secret.write_bytes(b"outside")
+    manifest = json.loads((dest / fetch.MANIFEST_NAME).read_text(encoding="utf-8"))
+    digests = manifest["repos"]["acme/thing"]["digests"]
+    digests["../escaped.bin"] = {
+        "size": len(b"outside"),
+        "sha256": hashlib.sha256(b"outside").hexdigest(),
+    }
+    (dest / fetch.MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = fetch.verify_manifest(dest)
+
+    assert result.status == fetch.VERIFY_BAD
+    assert "../escaped.bin" in result.missing
+    assert "../escaped.bin" not in result.bad
+
+
 def test_verify_all_walks_the_manifests_rather_than_the_registry(tmp_path, monkeypatch):
     """The question is "is what is installed intact", and a directory whose
     registry row has since been renamed is still a directory on this disk."""

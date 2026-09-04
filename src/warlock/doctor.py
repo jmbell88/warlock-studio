@@ -167,7 +167,11 @@ def _store_check(config: Config) -> Check:
         # store is created on demand, so absence is not a fault.
         return Check("job database", True, "not created yet", fatal=False)
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        # ``as_uri()`` percent-encodes the path -- a raw f-string breaks on
+        # anything a URI treats specially (``#`` truncates to a fragment,
+        # ``%`` starts an escape), and a home directory is exactly the kind of
+        # path a user picks without knowing that.
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
         try:
             row = conn.execute("PRAGMA quick_check(1)").fetchone()
         finally:

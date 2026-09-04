@@ -890,8 +890,11 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         ctx.base_models = [
             (k, f"{spec.label}{_suffix(spec)}") for k, spec in models.BASE_MODELS.items()
         ]
+        # Snapshot rather than iterate live: register_imported_loras/
+        # remove_imported_lora can mutate this table from another thread
+        # between frames (see models.STYLE_LORAS_LOCK).
         ctx.style_loras = [("", "no style LoRA")] + [
-            (k, spec.label) for k, spec in models.STYLE_LORAS.items()
+            (k, spec.label) for k, spec in models.style_loras_snapshot().items()
         ]
         # The Settings pane draws this and may not ask the service itself: it
         # is a pane, and ``recommended_base`` needs a resolved Plan. Empty when
@@ -1478,7 +1481,18 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
                     # re-submitted, re-failed and re-toasted at the frame rate.
                     matte_preview.on_task_failed(ctx, done)
                 continue
-            self._on_task_done(done)
+            try:
+                self._on_task_done(done)
+            except Exception:
+                # A handler that raises here used to end the session: this is
+                # the frame loop's own thread, and the outer ``try`` in
+                # ``App.run`` treats any escaped exception as the app dying,
+                # not one task's landing going wrong (finding #1). Logged and
+                # toasted the way ``guard`` announces a tripped pane -- the
+                # task itself already finished, so there is nothing left to
+                # retry, only the fact that its landing broke to report.
+                log.exception("landing task %r raised", done.key)
+                self.app_ctx.toast(f"That did not finish landing: {done.key}.", "error", "log")
 
     def _on_task_done(self, done: Any) -> None:
         ctx = self.app_ctx

@@ -1730,26 +1730,28 @@ class Worker(
                 error = errors.friendly(exc)
                 with contextlib.suppress(OSError):
                     errors.write_error_log(self.config.job_dir(job_id), exc)
-                # Both strings are extracted by now, so the traceback has no
-                # readers left -- and it is holding every frame between here and
-                # the raise, which on a failed conditioned job means the
-                # ControlNet (~2.5 GB) and the CLIP-ViT-H encoder (~1.2 GB)
-                # still have a live reference while the reclaim passes below
-                # run. The drop-every-reference doctrine had this one gap on the
-                # error path; ``_on_task_done`` already does exactly this to the
-                # task-side equivalent (MDL-16).
-                exc.__traceback__ = None
-                # And one pool pass now that nothing references those frames.
-                # The teardown inside ``_conditioned`` already ran a collect,
-                # but it ran *while the exception was propagating through it*,
-                # so the conditioning tensors were still reachable and it freed
-                # nothing. This is a trim and never an unload: a failed job is
-                # not a reason to throw away a checkpoint the next job wants
-                # warm, which is the same line ``_release_t2i`` draws.
-                t2i = self._text2image
-                if t2i is not None and t2i.loaded:
-                    with contextlib.suppress(Exception):
-                        await asyncio.to_thread(t2i.trim)
+            # Both strings are extracted by now (when this is the logging
+            # branch), so the traceback has no readers left -- and it is
+            # holding every frame between here and the raise, which on a
+            # failed conditioned job means the ControlNet (~2.5 GB) and the
+            # CLIP-ViT-H encoder (~1.2 GB) still have a live reference while
+            # the reclaim passes below run. The drop-every-reference doctrine
+            # had this gap on every path an exception can take here, not just
+            # the "not cancelled" one above -- a cancel that raced the commit
+            # and lost held the same frames just as long; ``_on_task_done``
+            # already does exactly this to the task-side equivalent (MDL-16).
+            exc.__traceback__ = None
+            # And one pool pass now that nothing references those frames.
+            # The teardown inside ``_conditioned`` already ran a collect, but
+            # it ran *while the exception was propagating through it*, so the
+            # conditioning tensors were still reachable and it freed nothing.
+            # This is a trim and never an unload: a failed job is not a
+            # reason to throw away a checkpoint the next job wants warm,
+            # which is the same line ``_release_t2i`` draws.
+            t2i = self._text2image
+            if t2i is not None and t2i.loaded:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(t2i.trim)
         finally:
             try:
                 if self._cancel.event.is_set() and not self._cancel.committed:

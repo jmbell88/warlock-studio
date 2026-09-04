@@ -377,13 +377,18 @@ class PaintOps:
             layer = self.layer_by_uid(layer_uid)
         except KeyError:
             return False
+        # Checked against ``layer`` -- the write's actual target -- and before
+        # the autovivify below, or a locked track got a real cel minted for a
+        # write that was about to be refused anyway (finding #9): the default
+        # of ``write_locked()`` is ``stack.active``, which is only ever this
+        # layer's target by coincidence (finding #2).
+        if self.write_locked(layer):
+            return False
         if self.anim is not None and self.anim.is_placeholder(layer):
             self._ensure_cel_for(layer_uid)
             layer = self.layer_by_uid(layer_uid)
             if self.anim.is_placeholder(layer):
                 return False
-        if self.write_locked():
-            return False
         self._refuse_tilemap_layer(layer_uid, "regenerating")
         box = self.clip(rect)
         if box is None:

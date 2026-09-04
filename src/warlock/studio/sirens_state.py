@@ -386,7 +386,7 @@ class SirensState:
         self.pattern = doc.patterns[0].uid if doc.patterns else None
         self.instrument = doc.instruments[0].uid if doc.instruments else None
 
-    def selection(self, tab: SongTab | None = None) -> tuple[int, int, int, int] | None:
+    def selection(self) -> tuple[int, int, int, int] | None:
         """The block as ``(row, channel, rows, channels)``, or ``None``.
 
         Normalised here rather than at four call sites: an anchor below the

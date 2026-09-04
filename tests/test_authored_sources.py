@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -113,6 +114,27 @@ def test_a_source_is_written_through_a_temporary(svc):
     svc_files.save_packwright_source(svc, job_id, _zip())
     names = {p.name for p in svc.job_dir(job_id).iterdir()}
     assert not [n for n in names if n.endswith(".tmp")]
+
+
+def test_two_concurrent_saves_do_not_share_a_staging_name(svc, monkeypatch):
+    """``_save_source`` writes through ``_staged_write``, the same helper
+    ``save_thumbnail`` and ``save_inker_working`` use -- not a fixed
+    ``dest.name + ".tmp"``. A shared name is exactly how two concurrent savers
+    of one job could tear each other's write or rename a half-written temp
+    onto the served file."""
+    job_id = _exported(svc, "plotter")
+    seen = []
+    real_replace = svc_files.os.replace
+
+    def spy(src, dst):
+        seen.append(Path(src).name)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(svc_files.os, "replace", spy)
+    svc_files.save_plotter_source(svc, job_id, _zip("a.json"))
+    svc_files.save_plotter_source(svc, job_id, _zip("b.json"))
+    assert len(seen) == 2
+    assert seen[0] != seen[1]
 
 
 def test_a_failed_write_leaves_no_staging_file(svc, monkeypatch):

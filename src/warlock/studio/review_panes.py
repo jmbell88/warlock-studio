@@ -288,13 +288,17 @@ class ReviewPanes:
         needle = widgets.list_filter(ctx, "sweeps", len(state.sweeps))
         shown = 0
         for sweep in state.sweeps:
-            if needle and needle not in str(sweep["label"]).lower():
+            # Blinded, like every other on-screen spelling of this row --
+            # ``sweep["label"]`` is the raw DB value and matching or showing it
+            # here would un-blind the row the toggle above just promised to hide.
+            named = review_mode.bucket_label(state, sweep)
+            if needle and needle not in named.lower():
                 continue
             shown += 1
             todo = sweep["todo"]
             total = len(sweep["units"])
             selected = sweep["id"] == state.sweep_id
-            if controls.selectable(f"{sweep['label']}##sweep-{sweep['id']}", selected)[0]:
+            if controls.selectable(f"{named}##sweep-{sweep['id']}", selected)[0]:
                 # Picking a sweep by hand leaves the pass: the pass is a walk
                 # over every outstanding bucket in a stated order, and a user
                 # who jumps out of that order is no longer on the walk its
@@ -841,7 +845,11 @@ class ReviewPanes:
             widgets.muted(review_mode.label(state, unit))
         else:
             widgets.section(review_mode.label(state, unit))
-        widgets.muted(f"{state.index + 1} of {len(state.units)}  -  {unit['job_id']}")
+        # ``review_mode.label`` again rather than the raw job_id: under blinding
+        # that id is the very thing being withheld, and printing it in full here
+        # would hand back what the truncated ``#abcdef`` above was hiding.
+        named = review_mode.label(state, unit)
+        widgets.muted(f"{state.index + 1} of {len(state.units)}  -  {named}")
 
         reference = review_mode.reference_path(unit)
         if reference is not None and ctx.textures is not None:

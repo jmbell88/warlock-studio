@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import ast
+import inspect
+
+import warlock.db as db_mod
 from warlock.db import JobStore
 
 
@@ -373,3 +377,82 @@ def test_merge_param_entry_does_not_lose_a_concurrent_sibling_entry(store):
     assert store.get(job_id)["params"]["notes"] == {"a": 1}
 
     assert store.merge_param_entry("nope", "followup_failures", "rig", {}) is None
+
+
+# Methods that touch ``self._conn`` deliberately outside ``self._lock``, and
+# why. Anything not listed here must guard every touch -- see the class
+# docstring at db.py:467.
+_LOCK_EXEMPT = {
+    # Takes a *separate* connection through sqlite3's own online-backup
+    # locking specifically so a page walk to disk never holds the store lock
+    # across blocking I/O -- see its own docstring at db.py:519.
+    "backup_to",
+}
+
+
+def test_every_public_jobstore_method_guards_self_conn_with_self_lock():
+    """Every public ``JobStore`` method that reaches ``self._conn`` does so only
+    inside a ``with self._lock:`` block, or is named in ``_LOCK_EXEMPT``.
+
+    The class docstring states this as the whole reason the lock exists --
+    ``check_same_thread=False`` disables sqlite3's own guard, so the lock is
+    the only thing left serialising writes from the executor pool a request
+    reaches this store through. A new method that reads or writes ``self._conn``
+    without taking the lock first would reintroduce exactly the race that
+    disabling ``check_same_thread`` opened up, silently, and nothing else in
+    the suite would catch it. Walked with ``ast`` rather than asserted by hand
+    per method so a future method is covered automatically.
+    """
+    source = inspect.getsource(db_mod)
+    tree = ast.parse(source)
+    (class_node,) = [
+        n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "JobStore"
+    ]
+
+    def is_self_lock(expr: ast.expr) -> bool:
+        return (
+            isinstance(expr, ast.Attribute)
+            and expr.attr == "_lock"
+            and isinstance(expr.value, ast.Name)
+            and expr.value.id == "self"
+        )
+
+    def is_self_conn(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "_conn"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        )
+
+    def guarded(n: ast.AST, parents: dict[ast.AST, ast.AST], stop: ast.AST) -> bool:
+        cur = parents.get(n)
+        while cur is not None and cur is not stop:
+            if isinstance(cur, ast.With) and any(
+                is_self_lock(item.context_expr) for item in cur.items
+            ):
+                return True
+            cur = parents.get(cur)
+        return False
+
+    violations = []
+    for node in class_node.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        name = node.name
+        if name.startswith("_") or name in _LOCK_EXEMPT:
+            continue
+
+        parents: dict[ast.AST, ast.AST] = {}
+        for parent in ast.walk(node):
+            for child in ast.iter_child_nodes(parent):
+                parents[child] = parent
+
+        for n in ast.walk(node):
+            if is_self_conn(n) and not guarded(n, parents, node):
+                violations.append(f"{name} (line {n.lineno})")
+
+    assert violations == [], (
+        "JobStore methods touching self._conn outside self._lock: "
+        f"{violations} -- add the guard, or allow-list with a reason in _LOCK_EXEMPT"
+    )

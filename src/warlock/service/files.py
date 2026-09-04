@@ -362,15 +362,13 @@ def _save_source(
     svc: Any, job_id: str, data: bytes, *, name: str, limit: int, what: str
 ) -> dict[str, Any]:
     """The write ``save_clay_source`` does, for the two documents that arrived
-    after it. Through a temp and ``os.replace`` for the same reason: the file is
-    read whole by its reader, and a torn one is a document that will not open.
+    after it. Through ``_staged_write`` for the same reason: the file is read
+    whole by its reader, and a torn one is a document that will not open --
+    and a fixed temp name is one concurrent saver away from a torn one anyway.
 
-    **The staging name is a dotfile and the cleanup is a ``finally``**, the same
-    rule ``plotter_mode._write`` follows. A failing write used to abandon
-    ``map.wmap.tmp`` in the job directory, where nothing removes it and the next
-    ``attach_files`` walk has to step over it. Written inline rather than
-    through ``pipelines.postprocess._staged``: ``derive`` imports this module at
-    module scope, so reaching the other way round is an import cycle.
+    Written inline rather than through ``pipelines.postprocess._staged``:
+    ``derive`` imports this module at module scope, so reaching the other way
+    round is an import cycle.
     """
     check_job_id(job_id)
     if svc.store.get(job_id) is None:
@@ -382,13 +380,7 @@ def _save_source(
         raise Invalid(f"the {what} must be a zip archive")
     dest = svc.job_dir(job_id) / name
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(f".{dest.name}.tmp")
-    try:
-        tmp.write_bytes(data)
-        os.replace(tmp, dest)
-    finally:
-        with contextlib.suppress(OSError):
-            tmp.unlink(missing_ok=True)
+    _staged_write(dest, data)
     return {"ok": True}
 
 

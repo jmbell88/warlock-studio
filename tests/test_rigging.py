@@ -454,6 +454,34 @@ def test_unknown_template_presets_raise():
         rigging.preset_poses("not-a-template")
 
 
+# --- clip libraries -----------------------------------------------------
+
+
+def test_parse_clip_library_rejects_duplicate_pose_names():
+    """The same rule ``_parse_template`` states for bone names: a library
+    internally inconsistent by name is a malformed file, not two poses
+    silently collapsing into one (the last write into ``poses[name]`` winning
+    over the first, with nothing said)."""
+    raw = {
+        "poses": [{"name": "rest", "bones": {}}, {"name": "rest", "bones": {}}],
+        "clips": [],
+    }
+    with pytest.raises(ValueError, match="duplicate pose names"):
+        rigging.parse_clip_library(raw)
+
+
+def test_parse_clip_library_rejects_duplicate_clip_names():
+    raw = {
+        "poses": [{"name": "a", "bones": {}}, {"name": "b", "bones": {}}],
+        "clips": [
+            {"name": "walk", "keys": ["a", "b"], "segments": [1]},
+            {"name": "walk", "keys": ["b", "a"], "segments": [1]},
+        ],
+    }
+    with pytest.raises(ValueError, match="duplicate clip names"):
+        rigging.parse_clip_library(raw)
+
+
 # --- pose payloads ----------------------------------------------------------
 
 

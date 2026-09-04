@@ -31,6 +31,7 @@ prefix: a key without one is a result delivered nowhere.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,17 @@ from .clay_state import ClayState, ClayTab
 log = logging.getLogger(__name__)
 
 WBLK_FILTER = ["Warlock Clay document (*.wblk)", "*.wblk"]
+
+
+def _path_key(path: Path) -> str:
+    """A short, stable id for a path, safe to fold into a task key.
+
+    ``hash(str(path))`` is salted per process (``PYTHONHASHSEED``) and, at 64
+    bits, two different paths in the same session can still land on the same
+    ``abs()`` value -- a collision silently drops the second open rather than
+    submitting it. sha1 has neither problem: same input, same digest, always.
+    """
+    return hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:12]
 
 
 def ensure(ctx: Any) -> ClayState:
@@ -209,7 +221,7 @@ def open_path(ctx: Any, path: Path) -> None:
         # Focus rather than fork: two tabs over one path would race on save.
         state.activate(existing.uid)
         return
-    ctx.submit(f"clay-open:{abs(hash(str(path)))}", _load, path)
+    ctx.submit(f"clay-open:{_path_key(path)}", _load, path)
 
 
 # --- importing --------------------------------------------------------------
@@ -234,7 +246,7 @@ def import_glb_path(ctx: Any, path: Path) -> None:
     def run() -> dict[str, Any]:
         return _parse_glb(_within_mesh_ceiling(path).read_bytes(), path.stem)
 
-    ctx.submit(f"clay-import:{abs(hash(str(path)))}", run)
+    ctx.submit(f"clay-import:{_path_key(path)}", run)
 
 
 def edit_asset_in_clay(ctx: Any, job: Any) -> None:
@@ -1069,7 +1081,7 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
     # the frame the Home pane is meant to appear on, and a ``.wblk`` is as
     # large as the model it holds. True means "submitted", the same answer the
     # Inker provider gives; ``on_task_done`` does the adopting.
-    ctx.submit(f"clay-recover:{abs(hash(str(path)))}", _load_recovery, Path(path), dict(meta))
+    ctx.submit(f"clay-recover:{_path_key(path)}", _load_recovery, Path(path), dict(meta))
     return True
 
 

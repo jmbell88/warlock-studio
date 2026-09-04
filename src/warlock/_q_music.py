@@ -170,13 +170,17 @@ class MusicOps:
         what every reader asks, and an unloaded client rebuilds its child on the
         next request, so keeping it is reuse rather than staleness.
 
-        ``trim`` first and unconditionally -- the op exists on the worker for
-        exactly this, so this path never has to branch on which kind of pipe it
-        holds. ``handoff`` and ``spec`` stay in the signature because the
-        argument above is written in terms of them, and a second term in
-        ``_music_needs_handoff`` would need them here.
+        No ``trim`` first: unlike ``_release_t2i``'s in-process pipe, this
+        client's ``unload`` kills the whole child (``MusicClient._stop_child``)
+        rather than freeing a cache inside a process that keeps running, so it
+        already gives back everything a trim would have -- both the device
+        VRAM and the child's own host-commit arenas. A trim first would be a
+        second IPC round-trip to a process about to be killed, one that can
+        itself log a failure for work the kill makes moot. ``handoff`` and
+        ``spec`` stay in the signature because the argument above is written in
+        terms of them, and a second term in ``_music_needs_handoff`` would need
+        them here.
         """
-        await asyncio.to_thread(client.trim)
         await asyncio.to_thread(client.unload)
 
     # --- progress -------------------------------------------------------------

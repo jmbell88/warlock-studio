@@ -437,6 +437,13 @@ class Text2ImageClient:
             if kind == "ready":
                 # A restart this request did not ask for; the child is fresh and
                 # the request that produced it was written before it died.
+                # Defensive and currently unreachable in practice: a fresh
+                # child's own "ready" marker is consumed inside
+                # ``_start_child`` before this loop ever runs, so no request
+                # here should see one on the happy path. Kept rather than
+                # deleted -- the two readers are different call sites, and a
+                # future change to either one should not have to rediscover
+                # that a "ready" can appear here at all.
                 continue
             self._publish(msg)
             if kind == "error" and not msg.get("cancelled"):

@@ -78,6 +78,38 @@ def test_the_recipe_field_is_logical_size_and_bounded():
     assert np.array_equal(dx, field(3)[0])
 
 
+def test_a_sized_field_matches_the_anchor_array_not_the_recipe():
+    """Finding #12. ``decode_restyle`` resizes every anchor to the document's
+    canvas, not the recipe's -- an effect lands centred and offset inside a
+    document that can be a different size. The field ``interpolate`` shifts
+    those anchors along has to share that shape, or ``_shift`` broadcasts a
+    (recipe h, recipe w) displacement against a (doc h, doc w) plane.
+    """
+    rec = dataclasses.replace(presets.load("smoke_puff"), width=24, height=20, supersample=2)
+    doc_size = (40, 32)  # bigger than the recipe, the ordinary case
+    field = keyframes.field_from_recipe(rec, size=doc_size)
+    dx, dy = field(3)
+    assert dx.shape == (doc_size[1], doc_size[0])
+    assert dy.shape == (doc_size[1], doc_size[0])
+
+    a = _plane((255, 255, 255, 255), doc_size)
+    b = np.zeros_like(a)
+    planes = keyframes.interpolate({0: a, 4: b}, 0, 4, field)
+    assert all(p.shape == a.shape for p in planes)
+
+
+def test_a_recipe_sized_field_cannot_shift_a_differently_sized_anchor():
+    """The bug #12 guards against: a field left at the recipe's own logical
+    size cannot be broadcast against an anchor the restyle door has already
+    resized to the document's canvas."""
+    rec = dataclasses.replace(presets.load("smoke_puff"), width=24, height=20, supersample=2)
+    field = keyframes.field_from_recipe(rec)  # no ``size`` -- the recipe's own
+    a = _plane((255, 255, 255, 255), (40, 32))
+    b = np.zeros_like(a)
+    with pytest.raises(ValueError):
+        keyframes.interpolate({0: a, 4: b}, 0, 4, field)
+
+
 # -- the snapshot track ----------------------------------------------------------------------
 
 
