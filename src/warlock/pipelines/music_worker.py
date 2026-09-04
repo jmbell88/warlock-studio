@@ -44,7 +44,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from ._workerio import lines_from
+from ._workerio import WarlockCancelled, lines_from
 
 MARKER = "@@warlock-music@@ "
 """Prefixed onto every response line.
@@ -163,8 +163,6 @@ class _Server:
         return {"kind": "done", **self._vitals()}
 
     def op_generate(self, req: dict[str, Any], emit: Any) -> dict[str, Any]:
-        from .acestep.pipeline_ace_step import WarlockCancelled
-
         pipe = self.pipe()
         output = Path(req["output"])
         output.parent.mkdir(parents=True, exist_ok=True)

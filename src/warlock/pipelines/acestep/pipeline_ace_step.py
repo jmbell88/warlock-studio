@@ -50,12 +50,12 @@ import torchaudio
 from .cpu_offload import cpu_offload
 
 
-class WarlockCancelled(RuntimeError):
-    """WARLOCK 1/3: raised out of the sampling loop when the event is set.
-
-    Defined here rather than imported from the application so that this file
-    still stands alone as vendored third-party source.
-    """
+# WARLOCK 1/3: the exception the sampling loop below raises when its cancel
+# event is set. Imported rather than defined here so that the *parent* -- which
+# has to catch it in order to report a cancel as a cancel rather than as a
+# failure -- can reach it without importing this module, and therefore without
+# importing torch. See ``pipelines/_workerio.py``.
+from ..._workerio import WarlockCancelled  # noqa: E402
 
 
 torch.backends.cudnn.benchmark = False

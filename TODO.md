@@ -820,6 +820,58 @@ character is measured not to work), and the rest goes in the release note.
 a known gap rather than a bug, and reports the right thing. It also converts
 P5, P6, P7 and P14 from work you owe yourself into work the beta can close.
 
+## P23. Hear Muse, and give its two VRAM figures real numbers
+
+**Why it is yours:** hardware twice over -- a card big enough to load an 8.3 GB
+model, and ears. It is P14's argument applied to the mode built beside Sirens,
+plus one measurement that a person has to start.
+
+Everything provable without a card is proved: the worker's protocol and the
+client's spawn/cancel/kill machinery run in the parallel suite with no weights
+anywhere (`tests/test_music_worker.py`, `tests/test_music_client.py`), the panes
+draw headless, and the door's refusals are asserted one field at a time. What
+none of that answers is whether the model produces music, whether a cancel
+actually interrupts a real sampling loop, and what the thing costs.
+
+**Do:**
+
+- `uv sync --extra music`, then download the weights from Settings -> Models and
+  confirm `uv run warlock doctor` flips the ACE-Step row from absent to present.
+- `uv run pytest tests/test_music_gpu.py -m gpu -n 0`. The seeded-checksum pair
+  is the parity check for the vendored code; the cancel test is the only proof
+  that `WARLOCK 1/3` reaches the loop rather than merely being in the file.
+- In the app: type style tags, ask for two takes at 60 s, and listen to both.
+  Is it music? Do the tags do anything -- does "sparse percussion, minor key"
+  produce something recognisably different from "upbeat chiptune, major"? Write
+  a lyric block with `[verse]`/`[chorus]` and confirm the words are sung rather
+  than approximated.
+- Cancel mid-generation. The child must die, the row must read **cancelled**
+  and not failed, and the next take must still run without a restart.
+- Kill the app mid-generation and confirm no `music_worker` process survives.
+- Press **Open in Sirens** on a take, then play the sample from the grid at
+  three pitches. This is the whole bridge, and the tests assert the doors it
+  goes through rather than the sound that comes out.
+
+**The measurement.** `models.MusicModel.vram_gib` (10.0) and `host_peak_gib`
+(12.0) are **documented estimates and nothing more**, which is the one thing in
+this feature that is knowingly unfinished: admission prices a music job off
+them, and under-pricing admits a job that OOMs at load -- the exact failure the
+door exists to prevent. `test_the_registry_figures_are_not_under_the_real_cost`
+prints both measured figures and asserts only the safe direction. Take them from
+a real run and publish `docs/measurements/<date>-ace-step-vram.md`, then replace
+the two constants with the measured numbers plus a citation, the way every other
+corpus-keyed constant in this repo carries one.
+
+**Also owed, if the measurement suggests it:** `cpu_offload` and
+`overlapped_decode` are class attributes on `music_worker._Server`, deliberately
+not `Config` fields -- a config field costs a `SETTINGS` row and a bidirectional
+test, and no measurement yet says they need to be knobs. Set them by hand in a
+GPU-lane experiment first; promote them only if the numbers say so.
+
+**Expected outcome:** either the mode is what chapters 16 and 35 say it is, or
+the first defect only a listener could find -- and two constants that are
+measured rather than guessed.
+
 ## Also owed, smaller
 
 - **Tutorial sample assets** (art): a 32×32 `.ora` sprite with a few layers

@@ -109,3 +109,20 @@ def lines_from(stdin: Any) -> Any:
         while b"\n" in buf:
             line, _, buf = buf.partition(b"\n")
             yield line.decode("utf-8", "replace") + "\n"
+
+
+class WarlockCancelled(RuntimeError):
+    """Raised out of a vendored sampling loop when its cancel event is set.
+
+    Here rather than beside the loop that raises it, and that placement is
+    load-bearing: ``music_worker.op_generate`` has to *catch* it in order to
+    answer "cancelled" rather than "failed", and importing it from
+    ``acestep.pipeline_ace_step`` would drag torch, transformers and loguru into
+    the catch -- which would mean the worker's whole protocol could only be
+    exercised on a machine with the `music` extra and 8 GiB of weights.
+
+    This module is the one place both sides can reach that costs nothing: it is
+    already the shared worker plumbing, and it imports only the standard
+    library. The vendored pipeline imports this name (WARLOCK 1/3 in its
+    ATTRIBUTION.md); everything else in that file stays upstream's.
+    """
