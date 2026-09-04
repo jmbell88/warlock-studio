@@ -79,6 +79,17 @@ lyric-language stack are declared as the `music` extra in `pyproject.toml`.
 Five, each marked with a `WARLOCK n/5:` comment in the source. Every other
 line is upstream's, byte for byte.
 
+**Not a sixth: the `\s` in `lyric_normalizer.py`.** `SPACE_PATTERN` is built
+from a non-raw string, so `\s` is an invalid escape and Python 3.12+ emits a
+`SyntaxWarning` on import; the line above it uses `r"..."` correctly, so it is
+plainly an upstream slip. It is left alone deliberately. The behaviour is
+identical — `"\s"` still evaluates to `\s` — the fault is upstream's to fix,
+and a modification made for a cosmetic warning buys a renumber of all five
+markers and a line of re-vendoring diff in exchange for nothing. This is the
+same trade as pinning `torchaudio<2.9` rather than patching the vendored
+`torchaudio.save` call. If the warning ever needs silencing, silence it at the
+import site rather than here.
+
 1. **`cancel_event` and `on_step` threaded into the sampling loop**
    (`pipeline_ace_step.py`). `ACEStepPipeline.__call__` takes no cancel hook of
    any kind, and this is the one modification the feature cannot work without:

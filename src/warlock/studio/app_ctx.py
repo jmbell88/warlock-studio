@@ -208,6 +208,18 @@ class Ctx:
     ) -> None:
         self.state.toast(text, level, action, action_arg)
 
+    def toast_once(
+        self,
+        text: str,
+        level: str = "info",
+        action: str | None = None,
+        action_arg: str | None = None,
+    ) -> bool:
+        """:meth:`toast`'s coalescing twin, forwarded for the same reason: a
+        caller holding a ctx should not have to know the state is where toasts
+        live. -> whether one was raised."""
+        return self.state.toast_once(text, level, action, action_arg)
+
     def open_log(self) -> None:
         """Hand ``warlock.log`` to whatever the user reads text files in.
 

@@ -755,19 +755,35 @@ def _sprite_layout(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     entry = sprite_action_entry(options, action)
     if entry is not None and layout not in generation.SPRITE_LEGACY_MODES:
         counts = [row["count"] for row in entry["directions"]]
-        changed, count = form_ui.segmented_choice(
-            "sprite_directions",
-            "Directions",
-            str(directions),
-            tuple((str(c), f"{c} ways") for c in counts),
-            help_text=(
-                "How many ways the character is drawn facing. One direction is "
-                "one generation, so eight of them is eight."
-            ),
-            compact=True,
+        help_text = (
+            "How many ways the character is drawn facing. One direction is "
+            "one generation, so eight of them is eight."
         )
-        if changed:
-            form["sheet_layout"] = sprite_layout_for(options, action, int(count))
+        # A segmented control with one segment is a control that cannot be
+        # operated: it reads as a choice and answers every click with the
+        # answer it already had. ``DIRECTION_COUNTS`` is (4, 8), but the
+        # discovery behind ``counts`` keeps only the kinds with a guide file on
+        # disk and this install ships ``*8.json`` alone -- so today every
+        # action offers exactly one count. State it as a fact instead, and let
+        # the selector come back on its own the day a 4-way guide ships.
+        if len(counts) < 2:
+            form_ui.readonly(
+                "sprite_directions",
+                "Directions",
+                f"{counts[0]} ways",
+                help_text=help_text,
+            )
+        else:
+            changed, count = form_ui.segmented_choice(
+                "sprite_directions",
+                "Directions",
+                str(directions),
+                tuple((str(c), f"{c} ways") for c in counts),
+                help_text=help_text,
+                compact=True,
+            )
+            if changed:
+                form["sheet_layout"] = sprite_layout_for(options, action, int(count))
     widgets.muted_wrapped(_sprite_cost(sprite_plan(form)))
 
 

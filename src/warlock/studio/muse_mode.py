@@ -562,6 +562,12 @@ def open_in_sirens(ctx: Any, job_id: str) -> bool:
     ``sirens_mode.adopt_sample`` adopts the result exactly as it does for a
     user's own drag-and-drop, so a generated track is not a special kind of
     sample and nothing in Sirens has to know where it came from.
+
+    **The window moves when the take lands, not when the button is pressed.**
+    The decode is a task and it can be refused; switching first meant a user
+    read "this sample could not be loaded" in the tracker, with the take they
+    were looking at a mode away. ``switch=True`` rides the task instead, and
+    ``sirens_mode.on_task_done`` calls the one ``set_mode`` after the adopt.
     """
     path = track_path(ctx, job_id)
     if not path.exists():
@@ -570,10 +576,7 @@ def open_in_sirens(ctx: Any, job_id: str) -> bool:
     tab = sirens_mode.active(ctx)
     if tab is None:
         tab = sirens_mode.new_document(ctx)
-    sirens_io.import_sample(ctx, tab, path)
-    # Through the one mode-switch implementation, never a direct assignment:
-    # ``set_mode`` is what runs the leave/enter work every mode relies on.
-    set_mode(ctx.state, "sirens")
+    sirens_io.import_sample(ctx, tab, path, switch=True)
     return True
 
 

@@ -90,9 +90,18 @@ typing here, and it is why the same letters do different jobs in different colum
 the first column and the hex digit twelve in the third, and `b` is a note in the first column and
 the jump effect in the fourth. Move between columns with the left and right arrow keys.
 
+**The line under the grid says what the keyboard does in the column the caret is in**, and changes
+as you move across. It names that column's keyboard — the piano rows, the hex digits, the effect
+letters — followed by the keys that mean the same thing everywhere, and it grows the block chords
+once a selection exists. It is there so that the paragraph above is answered on screen rather than
+only on this page.
+
 **Typing notes.** The keyboard is a piano in two rows, FamiTracker's layout: `zsxdcvgbhnjm` is the
 octave the Octave field names, and `q2w3er5t6y7u` is the one above it. The piano only fires in the
 note column, because `e` in the effect column is the letter of an effect rather than an E natural.
+Press a piano key anywhere else and the app names the column you are actually in and how many left
+arrows walk back to Note — a piano key outside the note column is not stray typing, it is somebody
+aiming at a note, and it is the one rejected key here worth a sentence.
 The backtick key writes a note-off (`===`), which **cuts** the voice dead; `Shift+Backtick` writes a
 release (`~~~`), which lets go of the note and plays the instrument's release tail instead. They are
 one key with and without Shift because they are one gesture with two endings, and the tilde is the
@@ -291,7 +300,9 @@ its own graph, so the editor never draws a file clipped and then paints over the
 
 An instrument of kind **sample** plays a recording instead of synthesising one, pitched from the note
 you play it at: `C-4` is its recorded speed, an octave up is twice as fast. Import a `.wav` from the
-instrument panel, or drop one on the window while Sirens is in front. A song holds 64.
+instrument panel, or drop one on the window while Sirens is in front. A song holds 64, and one
+sample runs to four minutes — long enough for a whole track from Muse, and past that the import is
+refused rather than trimmed.
 
 Two files with the same name are two samples rather than one overwriting the other. Removing a sample
 leaves the instruments that named it alone, and the instrument panel says, in as many words, that
@@ -402,11 +413,6 @@ you might reach for are absent on purpose rather than pending:
 - **No import of other trackers' formats.** A `.wsng` is written here or nowhere. `.wav` is the only
   format that comes in, and only as a sample.
 
-And one limit of the current build, stated plainly rather than left to be discovered:
-
-- **Playback has no scrub and no start-from-here.** `Space` plays the song from the beginning and
-  stops it. To hear one section, put it at the top of the order.
-
 ## When it goes wrong
 
 **Nothing plays and Play is greyed out.** This machine has no audio device that the app could open.
@@ -426,7 +432,9 @@ thing an envelope cannot stand in for.
 
 **Nothing happens when I type in the effect column.** That letter is not one the engine has an
 effect for, and a letter it cannot play is refused rather than written. The [Effects](#effects) table
-is the whole list. The same is true of an instrument number past `7F`: no song has that slot.
+is the whole list. The same is true of an instrument number past `7F`: no song has that slot. The
+exception is a letter that is also a piano key: that one is answered out loud, because it is far
+more likely to be a note aimed at the wrong column than an effect that does not exist.
 
 **A digit landed in the wrong cell.** The instrument and parameter columns take two digits, and the
 caret rings the one it is waiting for. If you moved between them the entry was ended, and the digit
@@ -449,6 +457,6 @@ export.
 **Export is greyed out.** The document has neither an order list nor a sound effect, so an export
 would be a folder of empty WAVs.
 
-See [Keyboard shortcuts](37-shortcuts.md#sirens) for every binding, and
+See [Keyboard shortcuts](38-shortcuts.md#sirens) for every binding, and
 [Making a soundtrack](14-making-a-soundtrack.md) for one path through the mode from an empty document
 to an exported WAV.

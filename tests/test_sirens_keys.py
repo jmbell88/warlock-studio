@@ -268,6 +268,21 @@ def test_a_stray_key_that_is_not_a_piano_key_says_nothing():
     assert not ctx.toasts
 
 
+def test_a_held_piano_key_earns_one_sentence_rather_than_one_per_repeat():
+    """``toast_once`` is the throttle the docstring claims it is.
+
+    Key repeat is what makes this matter: a key leant on sends its press over
+    and over, and the same sentence stacked twenty deep is the thing the
+    narrowness above was protecting against in the first place.
+    """
+    ctx = FakeCtx()
+    _tab(ctx)
+    _at(ctx, D.VOLUME)
+    for _ in range(5):
+        assert _press(ctx, "z")
+    assert len(ctx.toasts) == 1
+
+
 @pytest.mark.parametrize("effect", sorted(synth.EFFECT_NAMES))
 def test_every_effect_the_engine_implements_can_be_typed(effect):
     """The claim the manual's effect table makes, asserted rather than read."""

@@ -321,11 +321,13 @@ def test_health_reports_the_worker_and_the_doctor_checks(svc, worker):
     assert body["fatal"] is None
     # Fifteen fixed rows: eleven, plus "single instance" (RUN-01),
     # "environment" (RUN-03), "host memory" (the commit-headroom row) and
-    # "job database" (a quick_check over the store). Derived rather than
-    # hardcoded past that, so adding a model does not fail an assertion about
-    # something else.
+    # "job database" (a quick_check over the store). Then "text model", and
+    # "Muse (dependencies)" -- the row that asks whether the ``music`` extra is
+    # installed, which the per-model weights rows never answered. Derived
+    # rather than hardcoded past that, so adding a model does not fail an
+    # assertion about something else.
     assert len(body["checks"]) == (
-        16
+        17
         + len(models.BASE_MODELS)
         + len(models.STYLE_LORAS)
         + len(models.IP_ADAPTERS)

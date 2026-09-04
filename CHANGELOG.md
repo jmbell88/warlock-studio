@@ -16,6 +16,26 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
+## 0.0.32 — 2026-09-04
+
+- **A Muse take longer than a minute could not be opened in Sirens.** The bridge hands `track.wav`
+  through the tracker's *sample* door, whose ceiling was written for one-shot drum hits —
+  `MAX_SAMPLE_FRAMES` at sixty seconds of 48 kHz, and a byte door derived from it at 23,040,000
+  bytes. Muse writes 44.1 kHz stereo 16-bit and allows four minutes, so a take past ~65 s was
+  refused by the frame count and one past ~131 s by the byte door: the pairing worked at Muse's
+  default length and nowhere else, and the sentence the user got named a number of bytes rather
+  than a length of music. The ceiling is now sized by what Muse can actually hand it —
+  `_jobs_music.MAX_DURATION`, four minutes — and the two constants are asserted against each other
+  rather than written out separately, so raising what Muse may generate fails a test first. The
+  cost is recorded where the constant is: four minutes of mono `float32` is ~42 MB in the document
+  and an undo step copies both ends, making one such import the largest single step Sirens can take
+  (~84 MB against a 192 MiB soft budget).
+- **And it switched modes before it knew whether the import would work.** `open_in_sirens` called
+  `set_mode` at the press, so a refused decode — the ceiling above, or a file that is not a WAV —
+  was read in the tracker, a mode away from the take it was about. The switch now rides the task as
+  a flag beside the instrument it already carried, and happens only after the sample lands in the
+  document. A sample the document itself refuses (a full table) does not move the window either.
+
 ## 0.0.31 — 2026-09-03
 
 - **A cancel could leave Blender running to completion.** `request_cancel` reads the live subprocess

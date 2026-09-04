@@ -183,8 +183,10 @@ in. What Muse owns is a form and a tray, which is a workspace.
 
 ## The bridge to Sirens
 
-Press **Open in Sirens** and the app switches modes, and the track lands in the open song's sample
-table as a sample instrument. With no song open, one is started.
+Press **Open in Sirens** and the track lands in the open song's sample table as a sample instrument,
+and the app switches modes once it is in. With no song open, one is started. The switch waits on the
+import deliberately: if the file cannot be read, you are told so here, beside the take, rather than a
+mode away from it.
 
 It works because the formats already agreed: Muse writes a 44.1 kHz WAV and Sirens' sample
 instruments read 44.1 kHz WAVs. Nothing is converted, and a generated sample is not a special kind

@@ -19,7 +19,7 @@ jobs:
       - name: Install Python
         run: uv python install 3.13
       - name: Sync development environment
-        run: uv sync --frozen --extra studio --extra text2image --extra rig
+        run: uv sync --frozen --extra studio --extra text2image --extra rig --extra music
       - name: Version lockstep
         run: uv run python scripts/preflight.py --fast
       # **The worker count is the runner's, not the developer's.** ``addopts``

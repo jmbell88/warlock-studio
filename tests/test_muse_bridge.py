@@ -52,6 +52,21 @@ def test_the_two_engines_already_agree_about_the_sample_rate():
     assert synth.SAMPLE_RATE == 44100
 
 
+def test_the_sample_doors_admit_the_longest_take_muse_can_write():
+    """The bridge's other agreement, and the one that was broken until
+    2026-09-04: ``MAX_SAMPLE_FRAMES`` was sixty seconds of 48 kHz, so a take
+    over ~65 s was refused by the frame count and one over ~131 s by the byte
+    door -- the bridge worked at Muse's default length and nowhere else. Both
+    ceilings are asserted against ``MAX_DURATION`` rather than against numbers
+    written out here, so raising what Muse may generate fails here first.
+    """
+    frames = int(door.MAX_DURATION * synth.SAMPLE_RATE)
+    assert frames <= wavout.MAX_SAMPLE_FRAMES
+    # Stereo 16-bit is what the writer produces; the byte door is sized for the
+    # widest frame decoded, so it has room to spare over what Muse actually writes.
+    assert frames * 2 * 2 + 1024 <= wavout.MAX_SAMPLE_FRAMES * 8
+
+
 def test_a_sirens_render_is_a_wav_the_music_door_reads():
     with wave.open(io.BytesIO(_render())) as handle:
         assert handle.getframerate() == synth.SAMPLE_RATE

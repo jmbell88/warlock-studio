@@ -52,6 +52,14 @@ class FakeCtx:
     def toast(self, message: str, kind: str = "info", **_extra: Any) -> None:
         self.toasts.append((message, kind))
 
+    def toast_once(self, message: str, kind: str = "info", **_extra: Any) -> bool:
+        """The real one coalesces against the toasts still on screen; here
+        nothing expires, so it coalesces against all of them."""
+        if (message, kind) in self.toasts:
+            return False
+        self.toasts.append((message, kind))
+        return True
+
 
 class _AppState:
     def __init__(self) -> None:
@@ -377,15 +385,22 @@ def test_an_undo_clamps_the_caret_and_re_renders():
 
 def test_the_piano_row_only_types_in_the_note_column():
     """``e`` in the effect column is the letter of an effect, not an E-natural
-    -- a piano row that fired everywhere would make four columns untypable."""
+    -- a piano row that fired everywhere would make four columns untypable.
+
+    The key is consumed rather than ignored, because it is now *answered*: a
+    piano key outside the note column is the one rejected key this mode says
+    something about. What must stay true is that it writes nothing.
+    """
     import pygame
 
     ctx = FakeCtx()
     tab = _tab(ctx)
     state = sirens_mode.ensure(ctx)
     state.column = D.EFFECT
-    assert not sirens_mode.handle_key(ctx, _Event(pygame.K_z))
+    assert sirens_mode.handle_key(ctx, _Event(pygame.K_z))
     assert tab.doc.pattern(state.pattern).cells[0, 0, D.NOTE] == notes.EMPTY
+    assert tab.doc.pattern(state.pattern).cells[0, 0, D.EFFECT] == notes.EMPTY
+    assert ctx.toasts and "Effect column" in ctx.toasts[0][0]
 
 
 def test_space_is_bound_even_with_no_device():
@@ -601,6 +616,59 @@ def test_a_dropped_wav_lands_in_the_sample_table(tmp_path):
     assert ctx.submitted == [f"sirens-sample:{tab.uid}"]
     assert "kick" in tab.doc.samples
     assert tab.doc.samples["kick"].dtype.name == "float32"
+
+
+def test_the_switch_flag_moves_the_window_only_once_the_sample_is_in(tmp_path, monkeypatch):
+    """Muse's Open-in-Sirens leg. The flag rides the task rather than being a
+    ``set_mode`` beside the press, so the mode changes after the adopt."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    switched: list[str] = []
+    monkeypatch.setattr(sirens_mode, "set_mode", lambda state, mode: switched.append(mode))
+
+    sirens_mode.import_sample(ctx, tab, _wav(tmp_path / "track.wav"), switch=True)
+    assert switched == []
+    sirens_mode.on_task_done(ctx, _Done(f"sirens-sample:{tab.uid}", ctx.result))
+    assert switched == ["sirens"]
+    assert "track" in tab.doc.samples
+
+
+def test_a_sample_the_document_refused_does_not_move_the_window(tmp_path, monkeypatch):
+    """``adopt_sample`` returns "" when the table would not take it -- a full
+    song. Moving for that would put the refusal in a mode nobody asked for."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    switched: list[str] = []
+    monkeypatch.setattr(sirens_mode, "set_mode", lambda state, mode: switched.append(mode))
+
+    from warlock.studio import sirens_edit
+
+    monkeypatch.setattr(sirens_edit, "adopt_sample", lambda c, t, result: "")
+    sirens_mode.import_sample(ctx, tab, _wav(tmp_path / "track.wav"), switch=True)
+    sirens_mode.on_task_done(ctx, _Done(f"sirens-sample:{tab.uid}", ctx.result))
+    assert switched == []
+
+
+def test_a_dropped_wav_does_not_move_the_window(tmp_path, monkeypatch):
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    switched: list[str] = []
+    monkeypatch.setattr(sirens_mode, "set_mode", lambda state, mode: switched.append(mode))
+    _import(ctx, tab, _wav(tmp_path / "kick.wav"))
+    assert switched == []
+
+
+def test_a_file_past_the_byte_ceiling_is_refused_before_it_is_read(tmp_path, monkeypatch):
+    """The door in front of the decoder: ``read_wav``'s frame count is in a
+    header the file has to be *read* to reach, so what the file weighs is
+    answered first, off the same constant."""
+    from warlock.service.errors import ServiceError
+    from warlock.studio.sirens import wavout
+
+    monkeypatch.setattr(wavout, "MAX_SAMPLE_FRAMES", 1)
+    path = _wav(tmp_path / "album.wav")
+    with pytest.raises(ServiceError, match="past the 8 bytes"):
+        sirens_io._decode_sample(path, None)
 
 
 def test_an_imported_sample_is_resampled_to_the_render_rate(tmp_path):

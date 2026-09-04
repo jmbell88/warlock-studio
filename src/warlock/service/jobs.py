@@ -151,11 +151,22 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
 
         for name in request.references:
             try:
-                native_payloads.append(to_png(Path(name).read_bytes()))
+                # ``MAX_UPLOAD_BYTES + 1``, not ``read_bytes()``: one byte over
+                # the ceiling is all that is needed to refuse, and every other
+                # upload path already reads exactly this much (settings_2d,
+                # settings_3d). This one read the whole file into memory and
+                # then handed it to ``to_png`` to decode -- so an oversized
+                # reference was paid for twice before anything checked it.
+                with Path(name).open("rb") as fh:
+                    raw = fh.read(MAX_UPLOAD_BYTES + 1)
             except OSError as exc:
                 raise Invalid(
                     f"could not read reference {name!r}: {exc}", field="references"
                 ) from exc
+            if len(raw) > MAX_UPLOAD_BYTES:
+                raise TooLarge(f"reference {name!r} is over 20 MB")
+            try:
+                native_payloads.append(to_png(raw))
             except Exception as exc:
                 raise Invalid(f"could not decode reference {name!r}", field="references") from exc
     reference = uploads.get("reference")

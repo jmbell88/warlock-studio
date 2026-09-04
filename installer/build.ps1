@@ -105,7 +105,7 @@ if (Test-Path -LiteralPath $ExternallyManaged -PathType Leaf) {
     Remove-Item -LiteralPath $ExternallyManaged -Force
 }
 
-& uv export --frozen --no-dev --no-emit-project --extra studio --extra text2image --extra rig -o $Requirements
+& uv export --frozen --no-dev --no-emit-project --extra studio --extra text2image --extra rig --extra music -o $Requirements
 Assert-LastExit "uv export"
 
 & uv pip sync --python $StagedPython $Requirements

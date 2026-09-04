@@ -297,12 +297,13 @@ def test_is_playing_asks_the_mixers_tag_rather_than_the_stored_pointer(
 # --- the bridge --------------------------------------------------------------
 
 
-def test_open_in_sirens_goes_through_the_real_import_and_mode_doors(ctx, monkeypatch):
-    """Asserted through ``sirens_io.import_sample`` and ``state.set_mode``.
+def test_open_in_sirens_goes_through_the_real_import_door(ctx, monkeypatch):
+    """Asserted through ``sirens_io.import_sample`` by name.
 
-    Both by name, because the whole claim of the bridge is that it opens *no*
-    new doors: a generated track has to arrive through the one a user's own
-    drag-and-drop arrives through, or Sirens has two kinds of sample.
+    The whole claim of the bridge is that it opens *no* new doors: a generated
+    track has to arrive through the one a user's own drag-and-drop arrives
+    through, or Sirens has two kinds of sample. It asks for the mode switch by
+    the task's ``switch`` flag rather than making it here -- see the test below.
     """
     _finished(ctx, "abc123")
     imported: list[Any] = []
@@ -311,17 +312,37 @@ def test_open_in_sirens_goes_through_the_real_import_and_mode_doors(ctx, monkeyp
     from warlock.studio import sirens_mode as sirens
 
     monkeypatch.setattr(
-        sirens_io, "import_sample", lambda c, tab, path: imported.append(path)
+        sirens_io,
+        "import_sample",
+        lambda c, tab, path, instrument=None, switch=False: imported.append((path, switch)),
     )
     monkeypatch.setattr(muse_mode.sirens_io, "import_sample", sirens_io.import_sample)
     monkeypatch.setattr(sirens, "active", lambda c: object())
+
+    assert muse_mode.open_in_sirens(ctx, "abc123") is True
+    assert imported == [(muse_mode.track_path(ctx, "abc123"), True)]
+
+
+def test_the_bridge_does_not_switch_modes_before_the_take_has_landed(ctx, monkeypatch):
+    """The decode is a task and it can be refused -- a take past the sample
+    ceiling, a file that is not a WAV -- and switching at the press meant the
+    user read the refusal in the tracker, a mode away from the take it was
+    about. The switch rides the task instead."""
+    _finished(ctx, "abc123")
+
+    from warlock.studio import sirens_io
+    from warlock.studio import sirens_mode as sirens
+
+    monkeypatch.setattr(sirens, "active", lambda c: object())
+    monkeypatch.setattr(
+        sirens_io, "import_sample", lambda c, tab, path, instrument=None, switch=False: None
+    )
 
     switched: list[str] = []
     monkeypatch.setattr(muse_mode, "set_mode", lambda state, mode: switched.append(mode))
 
     assert muse_mode.open_in_sirens(ctx, "abc123") is True
-    assert imported == [muse_mode.track_path(ctx, "abc123")]
-    assert switched == ["sirens"]
+    assert switched == []
 
 
 def test_the_bridge_starts_a_song_when_there_is_nowhere_to_put_the_sample(
@@ -335,7 +356,9 @@ def test_the_bridge_starts_a_song_when_there_is_nowhere_to_put_the_sample(
 
     monkeypatch.setattr(sirens, "active", lambda c: None)
     monkeypatch.setattr(sirens, "new_document", lambda c: made.append("new") or object())
-    monkeypatch.setattr(sirens_io, "import_sample", lambda c, tab, path: None)
+    monkeypatch.setattr(
+        sirens_io, "import_sample", lambda c, tab, path, instrument=None, switch=False: None
+    )
     monkeypatch.setattr(muse_mode, "set_mode", lambda state, mode: None)
 
     assert muse_mode.open_in_sirens(ctx, "abc123") is True

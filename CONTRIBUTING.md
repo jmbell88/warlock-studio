@@ -5,7 +5,7 @@ Thanks for looking. A few things about this codebase will save you time.
 ## Getting set up
 
 ```powershell
-uv sync --extra studio --extra text2image --extra rig
+uv sync --extra studio --extra text2image --extra rig --extra music
 uv run pytest
 uv run ruff check .
 ```

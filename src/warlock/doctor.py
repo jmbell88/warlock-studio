@@ -73,7 +73,8 @@ def run_checks(
 
     ``static`` reuses a previous :func:`static_checks` result so a poller only
     pays for the volatile rows (C31); ``probe_slow=False`` skips the two
-    genuinely slow probes -- the torch import and the bpy subprocess -- and
+    genuinely slow probes -- the torch import, the bpy subprocess and the
+    ACE-Step import -- and
     reports them as still-checking rows instead (C29/C30). Startup uses both;
     the header health poll re-runs the slow probes once, off the frame thread,
     and their answers are cached from then on.
@@ -106,6 +107,7 @@ def static_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         *_text_checks(config),
         *_pose_checks(config, probe_slow=probe_slow),
         *_music_checks(config),
+        music_deps_check(probe=probe_slow),
         *_separation_checks(config),
         blender_check(probe=probe_slow),
     ]
@@ -796,13 +798,18 @@ def _music_checks(config: Config) -> list[Check]:
     Non-fatal for the reason every model row is: a machine with no music
     weights runs the whole application except one mode, and doctor's fatal
     checks are the ones that mean nothing works.
+
+    The row says weights and *only* weights. It used to read "Muse can
+    generate", which was a claim about two things it never checked: the second
+    is whether the ``music`` extra is installed at all, and that is
+    :func:`music_deps_check`'s question, one row further down.
     """
     checks: list[Check] = []
     for spec in models.MUSIC_MODELS.values():
         path = config.t2i_model_root / spec.dir_name
         ok = fetch.present(config, "music", spec)
         if ok:
-            detail = f"weights present at {path} -- Muse can generate"
+            detail = f"weights present at {path}"
         else:
             detail = (
                 f"not found at {path} -- Muse refuses at the door rather than "
@@ -813,6 +820,64 @@ def _music_checks(config: Config) -> list[Check]:
             Check(fetch.check_name("music", spec.label), ok, detail, fatal=False)
         )
     return checks
+
+
+MUSIC_PROBE_TIMEOUT = 120.0
+MUSIC_INSTALL_HINT = "Muse unavailable; install with: uv sync --extra music"
+
+_music_deps: Check | None = None
+_music_deps_lock = threading.Lock()
+_MUSIC_DEPS_PENDING = Check(
+    "Muse (dependencies)", True,
+    "still checking in the background -- Muse appears when it finishes",
+    fatal=False,
+)
+
+
+def music_deps_check(*, probe: bool = True) -> Check:
+    """Is the ``music`` extra actually installed? Probed in a child.
+
+    Structurally :func:`blender_check`, and here for a defect it would have
+    caught: ``music`` was missing from the installer and both CI workflows for
+    a release cycle, so a packaged build shipped Muse in the rail and failed
+    its first take with ``ModuleNotFoundError``. The weights rows said nothing,
+    because weights were never the thing that was missing.
+
+    In a child for the same reason the pipeline is: ACE-Step drags torch in,
+    and the app process deliberately never imports it. That constraint rules
+    out an in-process probe -- it does not rule out asking a subprocess, which
+    is the process the real job uses anyway.
+    """
+    global _music_deps
+    if _music_deps is not None:
+        return _music_deps
+    if not probe:
+        return _MUSIC_DEPS_PENDING
+    with _music_deps_lock:
+        if _music_deps is None:
+            _music_deps = _probe_music_deps()
+        return _music_deps
+
+
+def _probe_music_deps() -> Check:
+    try:
+        # winjob.run for the reason the bpy probe uses it: this can fire from
+        # startup, the import is seconds, and killing Warlock mid-probe used to
+        # strand the child.
+        proc = winjob.run(
+            [sys.executable, "-c", "import warlock.pipelines.acestep.pipeline_ace_step"],
+            capture_output=True, text=True, timeout=MUSIC_PROBE_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return Check("Muse (dependencies)", False, f"probe failed: {exc}", fatal=False)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip().splitlines()[-1:] or ["import failed"]
+        return Check(
+            "Muse (dependencies)", False, f"{detail[0]} -- {MUSIC_INSTALL_HINT}", fatal=False
+        )
+    return Check(
+        "Muse (dependencies)", True, "the ACE-Step pipeline imports in a child", fatal=False
+    )
 
 
 def _separation_checks(config: Config) -> list[Check]:

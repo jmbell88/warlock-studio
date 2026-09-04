@@ -91,9 +91,12 @@ def test_run_checks_returns_every_check(tmp_path):
     # a malformed image was the generic startup box on every launch with
     # nothing anywhere naming the file. The sixteenth is "text model": the
     # Flourish prompt's directory probe, a row with no registry entry behind
-    # it until the measurement that picks the model pins a revision.
+    # it until the measurement that picks the model pins a revision. The
+    # seventeenth is "Muse (dependencies)": the music weights rows answer for
+    # the disk, and nothing answered for the ``music`` extra until a packaged
+    # build shipped Muse with none of it installed.
     expected = (
-        16
+        17
         + len(model_registry.BASE_MODELS)
         + len(model_registry.STYLE_LORAS)
         + len(model_registry.IP_ADAPTERS)

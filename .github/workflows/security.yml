@@ -51,7 +51,7 @@ jobs:
       - name: Export the resolved dependency set
         run: >
           uv export --frozen --no-hashes --no-emit-project
-          --extra studio --extra text2image --extra rig
+          --extra studio --extra text2image --extra rig --extra music
           --format requirements-txt --output-file requirements-audit.txt
       - name: Audit
         # Not a gate on a red advisory alone. This project pins a CUDA-era

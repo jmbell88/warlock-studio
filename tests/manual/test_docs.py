@@ -272,3 +272,18 @@ def test_every_mode_is_named_in_the_manuals_own_list_of_them():
     section = overview.split("## The modes", 1)[1].split("\n## ", 1)[0]
     missing = [label for _key, label, _icon in modes.MODES if f"**{label}.**" not in section]
     assert not missing, f"the overview's mode list does not name {missing}"
+
+
+def test_the_readme_states_the_chapter_count_the_manual_actually_has():
+    """Same rule as the mode count above, for the number a reader meets first.
+
+    The README said 38 while 42 chapters shipped -- four tutorial additions
+    that each renumbered the series and none of which reached the one sentence
+    outside ``docs/manual`` that counts them. Derived here rather than kept in
+    step by hand, because "in step by hand" is what produced the drift.
+    """
+    chapters = len(EXPECTED_KEYS) - 1  # 00-index is the contents, not a chapter
+    readme = (_root() / "README.md").read_text(encoding="utf-8")
+    assert f"({chapters} chapters, also embedded in the app)" in readme, (
+        f"README's chapter count is stale; the manual has {chapters}"
+    )

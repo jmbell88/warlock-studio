@@ -131,8 +131,10 @@ class Confirm:
     # An optional widget drawn between the message and the buttons, for a
     # question that has a *parameter* rather than only an answer -- the prune
     # keep-count (O116). Deliberately a callable rather than a declared field
-    # type: a confirm is not a form builder, and the two or three questions
-    # that want one already know how to draw it.
+    # *type* -- a confirm is not a form builder, and the two or three questions
+    # that want one already know how to draw it. (The em dash is load-bearing:
+    # a line starting ``# type:`` is a type comment, and this one made mypy
+    # refuse to parse the file, which stopped the check on the whole tree.)
     body: Any = None
     _open: bool = field(default=False, repr=False)
     _focused: bool = field(default=False, repr=False)

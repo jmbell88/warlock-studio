@@ -136,7 +136,7 @@ def _sample_ceiling(path: Path) -> Path:
     return sizeguard.within_ceiling(path, wavout.MAX_SAMPLE_FRAMES * 8)
 
 
-def _decode_sample(path: Path, instrument: int | None) -> dict[str, Any]:
+def _decode_sample(path: Path, instrument: int | None, switch: bool = False) -> dict[str, Any]:
     """Blocking; task thread only. A ``.wav`` as the engine's own float mono.
 
     ``wavout.read_wav`` is the whole conversion -- mono, ``float32`` in
@@ -147,6 +147,10 @@ def _decode_sample(path: Path, instrument: int | None) -> dict[str, Any]:
     **It returns the name rather than the key.** Which key a sample lands under
     depends on what the document already holds, and the document is the frame
     thread's; deciding here would mean reading it from a task.
+
+    ``switch`` is carried, not acted on: it travels with the result the way
+    ``instrument`` does, so the caller that wants the window moved to Sirens
+    gets it moved *after* the decode lands rather than before it can fail.
     """
     from ..service.errors import invalid_from
     from .sirens import synth, wavout
@@ -160,19 +164,30 @@ def _decode_sample(path: Path, instrument: int | None) -> dict[str, Any]:
         raise invalid_from(
             ValueError("it has no audio in it"), "This sample could not be loaded", field="file"
         )
-    return {"pcm": pcm, "name": path.stem, "instrument": instrument}
+    return {"pcm": pcm, "name": path.stem, "instrument": instrument, "switch": switch}
 
 
-def import_sample(ctx: Any, tab: SongTab, path: Path, instrument: int | None = None) -> None:
+def import_sample(
+    ctx: Any,
+    tab: SongTab,
+    path: Path,
+    instrument: int | None = None,
+    switch: bool = False,
+) -> None:
     """Decode a ``.wav`` into the tab's sample table. What a drop does.
 
     Decoding is task work and not frame work: a minute of 48 kHz stereo is a
     resample over three million frames, which is not something to do between
     two draws.
+
+    ``switch`` asks for the window to land on Sirens once the sample is in --
+    what the Muse bridge wants, and the reason it is a flag on the task rather
+    than a ``set_mode`` beside this call: a refusal must be read where the file
+    was chosen, not in the mode the import never reached.
     """
     if tab is None or tab.busy:
         return
-    ctx.submit(f"{SAMPLE_PREFIX}{tab.uid}", _decode_sample, Path(path), instrument)
+    ctx.submit(f"{SAMPLE_PREFIX}{tab.uid}", _decode_sample, Path(path), instrument, switch)
 
 
 def ask_sample(ctx: Any, tab: SongTab, instrument: int | None = None) -> None:

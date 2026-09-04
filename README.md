@@ -130,10 +130,11 @@ Two steps in a terminal, then the app fetches its own weights.
 
 ```powershell
 # 1. Python deps. --extra studio is the app's window and renderer; add
-#    --extra text2image for text-to-3D (pulls torch cu128) and --extra rig
-#    for rigging/posing/sheets. Contributors running the test suite want all
-#    three -- a bare `uv sync` prunes the extras and breaks ~10 test files.
-uv sync --extra studio --extra text2image --extra rig
+#    --extra text2image for text-to-3D (pulls torch cu128), --extra rig
+#    for rigging/posing/sheets, and --extra music for Muse's ACE-Step
+#    subprocess. Contributors running the test suite want all four -- a bare
+#    `uv sync` prunes the extras and breaks ~10 test files.
+uv sync --extra studio --extra text2image --extra rig --extra music
 
 # 2. trellis.cpp CUDA server binary -> vendor/trellis/
 #    https://github.com/pwilkin/trellis.cpp/releases (trellis-cuda-windows-x64.zip)
@@ -240,7 +241,7 @@ The app is a single process: a pygame window, one ModernGL context, and [imgui-b
 
 Outputs land in `~/.warlock/assets/<job_id>/` (`input.png`, `model.glb`, `rig.glb`/`rig.json`, `poses/`, `sheets/`); the SQLite job store lives at `~/.warlock/assets/jobs.sqlite`. Everything the app generates — the library, benchmark runs, palettes and model weights — sits under that one home directory rather than inside the checkout; an install that predates it has its directories moved there on the next start (copy, verify, then delete), and `WARLOCK_HOME` or `WARLOCK_NO_MIGRATE` opts out. See [Data locations](docs/manual/40-configuration.md#data-locations).
 
-Where to read more: the user manual is [docs/manual/00-index.md](docs/manual/00-index.md) (38 chapters, also embedded in the app), the hard invariants and their measured reasoning are `docs/INVARIANTS.md`, measurement write-ups are `docs/measurements/`, and `CHANGELOG.md` tracks releases.
+Where to read more: the user manual is [docs/manual/00-index.md](docs/manual/00-index.md) (42 chapters, also embedded in the app), the hard invariants and their measured reasoning are `docs/INVARIANTS.md`, measurement write-ups are `docs/measurements/`, and `CHANGELOG.md` tracks releases.
 
 ## Licence
 

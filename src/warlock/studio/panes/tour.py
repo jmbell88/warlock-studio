@@ -121,17 +121,34 @@ def satisfied(ctx: Any, name: str, arg: str | None) -> bool:
         except (AttributeError, TypeError, ValueError):
             return False
     if name == "notes_at_least":
-        return _notes(ctx) >= _count(arg)
+        threshold = _count(arg)
+        return threshold is not None and _notes(ctx) >= threshold
     return False
 
 
-def _count(arg: str | None) -> int:
-    """A condition's numeric argument, or zero. Zero is satisfiable, which is
-    ``sfx_at_least``'s rule and the sane reading of a threshold."""
-    try:
-        return int(arg or 0)
-    except (TypeError, ValueError):
+def _count(arg: str | None) -> int | None:
+    """A condition's numeric argument, or ``None`` when it is not a number.
+
+    ``None`` rather than zero, and the difference is the whole point. This
+    returned zero and claimed to match ``sfx_at_least``'s rule -- but that
+    condition (and ``layers_at_least``) catch the same ``ValueError`` and
+    answer *not satisfied*, so the three never agreed. Zero is the worse half
+    of the disagreement: every one of these is a ``>=``, so a mistyped
+    threshold did not fail the step, it satisfied it immediately, and a tour
+    step that completes before the reader does anything is indistinguishable
+    from one they finished.
+
+    A missing arg is still zero -- an absent threshold is a step with nothing
+    to wait for, which is different from a threshold nobody can read.
+    ``tests/tour`` gates the authored ones statically, so this path is the
+    runtime backstop rather than the guard.
+    """
+    if arg is None or arg == "":
         return 0
+    try:
+        return int(arg)
+    except (TypeError, ValueError):
+        return None
 
 
 def _notes(ctx: Any) -> int:

@@ -369,7 +369,12 @@ def on_task_done(ctx: Any, done: Any) -> None:
         if isinstance(result, dict):
             from . import sirens_edit
 
-            sirens_edit.adopt_sample(ctx, tab, result)
+            # The mode switch is the *last* thing, and only on a key: a sample
+            # the document refused (a full table, a name it would not take) has
+            # not landed, and moving the window for it would put the sentence
+            # about the refusal in a mode the user did not ask to be in.
+            if sirens_edit.adopt_sample(ctx, tab, result) and result.get("switch"):
+                set_mode(ctx.state, "sirens")
         return
 
     if name == "sirens-export":
