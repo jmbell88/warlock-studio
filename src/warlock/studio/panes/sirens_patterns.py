@@ -26,7 +26,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, sirens_mode, theme, widgets
+from .. import (
+    anchors,
+    controls,
+    icons,
+    sirens_hints,
+    sirens_mode,
+    sirens_state,
+    theme,
+    widgets,
+)
 from ..sirens import document as D
 
 # ``synth`` at module level, not inside ``_cell_text``: that function runs once
@@ -68,6 +77,9 @@ _ADVANCE: dict[tuple[str, float], float] = {}
 
 def draw(ctx: Any) -> None:
 
+    # The largest surface in the mode, and the one a tour has most reason to
+    # ring: until this mark no step could point at the grid at all.
+    anchors.mark_window("sirens/grid")
     state = sirens_mode.ensure(ctx)
     tab = state.active
     # The pump, before anything can return: a frame that drew the empty state
@@ -200,6 +212,10 @@ def _channel_popup(ctx: Any, tab: Any, channel: Any, index: int) -> None:
             f"Pan##{tag}", float(channel.pan), -1.0, 1.0, enabled=not tab.busy,
             tooltip="-1 is hard left, +1 hard right.",
         )
+        # One gesture, one step: a drag reports on every frame the pointer
+        # moves, and ``update_channel`` pushes a step (and rebuilds a full
+        # per-pattern snapshot) per report without this.
+        controls.fold_undo(tab.doc.history)
         if changed:
             sirens_mode.update_channel(ctx, channel.uid, pan=float(pan))
         imgui.end_popup()
@@ -235,10 +251,26 @@ def _empty(ctx: Any) -> None:
         [
             ("New song", lambda: sirens_mode.new_document(ctx)),
             ("Open a file...", lambda: sirens_mode.ask_open(ctx)),
+            # The third is a ghost and is the odd one out in this app: no other
+            # mode offers its own tour from inside itself. This one does
+            # because a tracker is the mode a newcomer is least able to guess
+            # at, and the empty state is the one place they are guaranteed to
+            # be standing when they need it -- Ctrl+K is not knowledge somebody
+            # opening Sirens first has.
+            ("Take the tour", lambda: _start_tour(ctx)),
         ],
         recent_paths=sirens_mode.recent_paths(ctx),
         on_open=lambda path: sirens_mode.open_path(ctx, Path(path)),
     )
+
+
+def _start_tour(ctx: Any) -> None:
+    """``sirens-basics``, from the empty state. Imported here rather than at
+    module level because the tour pane draws imgui of its own and this pane is
+    the one every Sirens frame goes through."""
+    from . import tour as tour_pane
+
+    tour_pane.start(ctx, "sirens-basics")
 
 
 def first_channel(caret: int, count: int, fits: int, scroll: int) -> int:
@@ -492,6 +524,14 @@ def _toolbar(ctx: Any, state: Any) -> None:
         state.preview = bool(value)
     imgui.same_line()
     widgets.muted(f"{icons.AUDIO_WAVEFORM} row {state.row:03d}")
+    # **Which column the caret is in**, which is the one fact that decides what
+    # the next keystroke means and the one fact the grid never said: five
+    # columns of dots look alike, and a note typed into Volume is a hex digit.
+    # ``COLUMN_LABELS`` was written for exactly this and had no reader.
+    imgui.same_line()
+    widgets.muted(
+        f"|  {sirens_state.COLUMN_LABELS[state.column % len(sirens_state.COLUMN_LABELS)]}"
+    )
     # **What the grid is editing, said where the editing happens.** Adding a
     # sound effect repoints this grid at the effect's own pattern, and the
     # panel that did it is in another column; a reader who typed into the grid
@@ -501,3 +541,11 @@ def _toolbar(ctx: Any, state: Any) -> None:
     if label:
         imgui.same_line()
         widgets.muted(f"|  {label}")
+    # The keyboard in hand, on its own line under the strip. Muted and under
+    # rather than over, which is ``clay_hud.hint_line``'s rule: it is read when
+    # you are stuck, and a line over the grid covers the thing you are stuck on.
+    widgets.muted(
+        sirens_hints.hint(
+            state.column, has_selection=state.selection() is not None
+        )
+    )

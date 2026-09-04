@@ -793,6 +793,9 @@ def _layer_table(ctx: Any, doc: Any, layer: Any, editable: bool) -> None:
         changed, opacity = controls.slider_float(
             "##layer-opacity", float(layer.opacity), 0.0, 1.0
         )
+        # One gesture, one step: a drag reports on every frame the pointer
+        # moves, and ``set_layer_props`` pushes a step per report without this.
+        controls.fold_undo(doc.history)
         if changed:
             doc.set_layer_props(layer.uid, opacity=float(opacity))
 
@@ -815,6 +818,7 @@ def _layer_table(ctx: Any, doc: Any, layer: Any, editable: bool) -> None:
         changed, tint = controls.color_edit4(
             "##layer-tint", [channel / 255.0 for channel in layer.tint]
         )
+        controls.fold_undo(doc.history)
         if changed:
             doc.set_layer_props(
                 layer.uid,
@@ -1123,6 +1127,9 @@ def _object_fields(ctx: Any, doc: Any, state: Any, layer: Any, obj: MapObject) -
         changed, opacity = controls.slider_float(
             "##obj-opacity", float(obj.opacity), 0.0, 1.0
         )
+        # One gesture, one step: a drag reports on every frame the pointer
+        # moves, and ``set_object`` pushes a step per report without this.
+        controls.fold_undo(doc.history)
         if changed:
             doc.set_object(layer.uid, obj.uid, opacity=float(opacity))
 

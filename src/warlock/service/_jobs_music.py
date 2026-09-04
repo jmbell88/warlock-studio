@@ -38,6 +38,7 @@ from .validation import (
     MAX_SEED,
     check_job_id,
     check_prompt,
+    check_seed,
     check_vram,
     check_weights,
     not_done_message,
@@ -181,8 +182,7 @@ def create_music_job(
         value = float(given[field])
         if not low <= value <= high:
             raise Invalid(f"{field} must be between {low:g} and {high:g}", field=field)
-    if seed is not None and not 0 <= int(seed) <= MAX_SEED:
-        raise Invalid(f"seed must be between 0 and {MAX_SEED}", field="seed")
+    check_seed("seed", seed)
     if reference_wav is not None:
         if not reference_wav:
             raise Invalid("that render produced no audio", field="reference_wav")
@@ -409,8 +409,7 @@ def derive_music_job(
         raise Invalid("count must be a whole number", field="count")
     if not 1 <= count <= MAX_COUNT:
         raise Invalid(f"count must be between 1 and {MAX_COUNT}", field="count")
-    if seed is not None and not 0 <= int(seed) <= MAX_SEED:
-        raise Invalid(f"seed must be between 0 and {MAX_SEED}", field="seed")
+    check_seed("seed", seed)
 
     # The task block, built and bounded one task at a time. Each refusal names
     # the control that fixes it, which is what ``tests/test_jobs_music.py``'s

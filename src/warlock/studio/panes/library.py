@@ -1593,7 +1593,10 @@ def _bulk_action(ctx: Any, key: str, picked: list[str], hidden: int) -> None:
                 message=_delete_message(len(picked), hidden),
                 confirm_label="Move to trash",
                 cancel_label="Keep",
-                on_confirm=lambda: [delete_asset(ctx, j) for j in picked],
+                # One toast, one undo, N submits (see delete_assets) -- the
+                # per-row loop this replaced raised a separate "Moved to
+                # trash." with a separate Undo per row.
+                on_confirm=lambda: delete_assets(ctx, picked),
             )
         )
 

@@ -630,6 +630,14 @@ def render_from_layout(
 #: in. The layout is rebuilt whenever the mesh changes (it is a pure function of
 #: an immutable ``Mesh``), which is what makes "same layout object" the correct
 #: revision stamp here rather than any array's identity.
+#:
+#: Unsynchronized by construction, not oversight: every caller of
+#: ``render_from_layout``/``raw_face_normals`` runs on the frame thread --
+#: ``_view_drag.py``'s per-frame drag preview, ``_view_cache.py``'s mesh-cache
+#: build, and ``clay_mode.py``'s ``export_asset`` (whose docstring states the
+#: GLB and document are both built on the frame thread and only the service
+#: call goes to the task thread). A lock here would be guarding against a
+#: caller that does not exist.
 _RAW_CACHE: dict[int, tuple[RenderLayout, np.ndarray]] = {}
 
 

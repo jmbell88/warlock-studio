@@ -135,10 +135,17 @@ class ObjectAddEdit(Edit):
     Re-inserting the same object is what keeps its uid, and keeping its uid is
     what lets a mesh edit recorded before the delete still find its target
     after the undo. The index says only where to put it back.
+
+    Costs bytes for the same reason its mirror does, just on the other side of
+    the toggle: while this step is *undone* the object is in no document, and
+    ``self.obj`` is the only thing keeping its mesh alive.
     """
 
     index: int
     obj: Any
+
+    def __post_init__(self) -> None:
+        self.cost = mesh_bytes(self.obj.mesh)
 
     def undo(self, doc: Any) -> None:
         doc.objects.pop(doc.index_of(self.obj.uid))

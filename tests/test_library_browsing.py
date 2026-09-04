@@ -286,6 +286,16 @@ def test_delete_asset_trashes_and_purge_asset_deletes():
     assert "delete_job" in inspect.getsource(library.purge_asset)
 
 
+def test_bulk_delete_uses_the_batch_helper_for_one_toast_one_undo():
+    """The toolbar's Delete once looped ``delete_asset`` per ticked row --
+    N toasts and N undos for one act. It must go through ``delete_assets``
+    instead, which is exactly why that helper exists (see its docstring)."""
+    source = inspect.getsource(library._bulk_action)
+    body = source.split('key == "delete"', 1)[1]
+    assert "delete_assets(ctx, picked)" in body
+    assert "[delete_asset(ctx, j) for j in picked]" not in body
+
+
 def test_quick_open_never_offers_a_trashed_asset():
     """It does not go through the filter bar at all, so without its own rule it
     would be the one surface where a deleted asset still turns up."""

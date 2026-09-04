@@ -71,7 +71,19 @@ def frames_of_gif(path: Any) -> tuple[list[np.ndarray], list[int]]:
                     f"this gif composes to more than the {allowed} frames of"
                     f" {im.width}x{im.height} this build will hold"
                 )
-            planes.append(np.asarray(frame.convert("RGBA"), dtype=np.uint8).copy())
+            plane = np.asarray(frame.convert("RGBA"), dtype=np.uint8).copy()
+            if planes and plane.shape != planes[0].shape:
+                # ``np.concatenate`` below assumes every composed frame is the
+                # same (height, width) -- true of every well-formed GIF, since
+                # they share one logical screen, but a malformed one can still
+                # hand Pillow a frame that composites to a different size. Caught
+                # here rather than left to raise its own raw ``ValueError``.
+                raise ValueError(
+                    f"this gif's frames are not all the same size: frame"
+                    f" {len(planes)} is {plane.shape[1]}x{plane.shape[0]}, not"
+                    f" {planes[0].shape[1]}x{planes[0].shape[0]}"
+                )
+            planes.append(plane)
             duration = int(frame.info.get("duration") or 0)
             durations.append(duration if duration > 0 else DEFAULT_DURATION_MS)
     if not planes:

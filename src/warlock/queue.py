@@ -1606,6 +1606,14 @@ class Worker(
             # 3 GiB short of the offloaded klein entry's declared peak.
             mem = vram_gib()
             headroom += mem[1] if mem is not None else _resident_t2i_gib(self._t2i_key)
+        # No parallel branch for ``self._music_client``, even though
+        # ``vram.estimate_parts``'s music branch documents a checkpoint term
+        # to credit back: ``_release_music`` (``_q_music.py``) unloads
+        # unconditionally on every exit path, including a failed generate --
+        # unlike ``_text2image``, there is no trim-and-keep-loaded branch for
+        # a FAILED music job. So by the time the next dispatch check runs,
+        # ``self._music_client.loaded`` is always false and a credit here
+        # would never fire.
         if need > headroom:
             # The submit-time refusal's remedies, shared rather than restated
             # (N113): this is the check that fires *after* the user has waited

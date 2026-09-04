@@ -143,6 +143,8 @@ def test_an_edit_takes_the_new_words_as_the_rows_prompt(svc, parent):
         ({"task": "retake", "count": door.MAX_COUNT + 1}, "count"),
         ({"task": "retake", "count": 1.5}, "count"),
         ({"task": "retake", "seed": -1}, "seed"),
+        ({"task": "retake", "seed": True}, "seed"),
+        ({"task": "retake", "seed": 1.5}, "seed"),
         ({"task": "retake", "retake_variance": 1.5}, "retake_variance"),
         ({"task": "retake", "retake_variance": -0.1}, "retake_variance"),
         # An extension longer than the parent is silently zero-filled by the

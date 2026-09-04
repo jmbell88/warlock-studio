@@ -127,6 +127,8 @@ def test_the_recipe_is_stored_under_the_models_own_parameter_names(svc):
         ({"guidance_scale": -1.0}, "guidance_scale"),
         ({"omega_scale": 1000.0}, "omega_scale"),
         ({"seed": -1}, "seed"),
+        ({"seed": True}, "seed"),
+        ({"seed": 1.5}, "seed"),
         ({"music_model": "ace_step_v2"}, "music_model"),
     ],
 )

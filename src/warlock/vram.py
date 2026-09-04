@@ -239,11 +239,16 @@ def estimate_parts(
     purpose: the caller used to decide by kind (``kind == "text"``), and three
     kinds whose estimate does carry a checkpoint term -- ``pixel_sheet``,
     ``sprite_synthesis``, ``retexture`` -- were missing from that list, so on
-    the flagship 32 GiB coexist card the natural flow (generate a reference,
-    which leaves a ~7.5 GiB pipe warm *by design*, then start a sprite sheet)
-    computed need 26.7 against free 23.5 and refused a job that would have
-    **reused** the very pipe being counted against it. Waiting out the 600 s
-    idle eviction "fixed" it, which presents as a phantom VRAM leak.
+    the flagship 32 GiB coexist card the natural flow (a reference stage that
+    fails -- FAILED jobs ``trim()`` rather than ``unload()`` at
+    ``queue.py``'s failure handler, so the pipe is still resident for the
+    next dispatch check -- followed by a sprite sheet) computed need 26.7
+    against free 23.5 and refused a job that would have **reused** the very
+    pipe being counted against it. Waiting out the 600 s idle eviction
+    "fixed" it, which presents as a phantom VRAM leak. ``_release_t2i`` and
+    the ordinary end of a generate stage both ``unload()`` unconditionally now
+    -- nothing is left warm "by design" -- so a FAILED job's trim is the one
+    live reason a resident pipe still needs crediting back.
 
     Deriving it from the same expression that charges it means a new kind cannot
     be added to one half and forgotten in the other: whatever
@@ -359,15 +364,25 @@ def estimate_parts(
             str((params or {}).get("music_model") or models.DEFAULT_MUSIC_MODEL)
         )
         music = spec.vram_gib if spec is not None else 10.0
+        checkpoint = music
         # A task with a source pays for the DCAE encode of it on top. Added to
         # the *first* term only: the second is the resident-checkpoint credit,
         # and a transient encode is not resident weights.
         if (params or {}).get("task") in TASKS_WITH_SOURCE_AUDIO:
             music += MUSIC_SOURCE_GIB
-        # Returned as the second term as well: it is a resident checkpoint that
-        # ``queue._check_resources`` must credit back rather than charge twice,
-        # which is the whole contract of this function's second return value.
-        return (music if exclusive else music + TRELLIS_GIB), music
+        # ``checkpoint`` (pre-increment) is returned as the second term for
+        # the same *contract* every other kind above uses -- it names what a
+        # resident checkpoint has already been debited from free VRAM for --
+        # but nothing on the music path ever reads it back: ``_release_music``
+        # (``_q_music.py``) unloads the client unconditionally on every exit
+        # path, including a FAILED job's, so ``self._music_client.loaded`` is
+        # always false by the next dispatch check and
+        # ``queue._check_resources`` has no branch that credits this back.
+        # Kept as a real value rather than 0.0 so the contract stays uniform
+        # and a future trim-on-failure path (mirroring ``_text2image``'s) has
+        # a correct number waiting for it. The source-audio encode is a
+        # transient cost, not resident weights, so it must not appear here.
+        return (music if exclusive else music + TRELLIS_GIB), checkpoint
     if kind == "separate":
         # A one-shot child: it loads ~300 MB, separates, writes and exits.
         #

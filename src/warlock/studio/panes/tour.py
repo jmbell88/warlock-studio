@@ -468,6 +468,14 @@ def _card_body(ctx: Any, tour: Any, step: Any, state: Any) -> None:
     # A satisfied condition offers the step's exit rather than taking it: the
     # reader has just done the thing and the card would otherwise vanish
     # mid-sentence, which reads as the app having lost their place.
+    #
+    # Deliberately not gated on state.satisfied: for a non-manual `done`,
+    # satisfied() only changes the "Waiting for you." / "Done." sentence
+    # above -- Next/Finish stays enabled either way, so a reader can click
+    # past a step without doing the named thing and land on a later card
+    # whose copy assumes it happened. That is the accepted cost of tours
+    # being conventionally skippable, not an oversight; making Next actually
+    # wait on satisfied() is a product decision, not a bug fix.
     if widgets.primary_button(f"{label}##tour") or forward:
         advance(ctx)
         return

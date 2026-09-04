@@ -1825,26 +1825,27 @@ def _seed_row(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
         form["seed_locked"] = locked
 
 
-#: ``(frame, id(form)) -> problems``. The Reference stage asks the same
-#: question twice on every frame -- the command bar, to know whether Generate
-#: is live, and this footer, to list what is wrong -- and both answers have to
-#: agree, which one evaluation guarantees and two only tend to.
-_PROBLEMS_CACHE: tuple[tuple[int, int], list[widgets.Problem]] | None = None
-
-
 def problems_for(ctx: Any, form: dict[str, Any]) -> list[widgets.Problem]:
-    """Everything stopping a press, form problems first. Once per frame."""
+    """Everything stopping a press, form problems first. Once per frame.
 
-    global _PROBLEMS_CACHE
+    Cached as ``(frame, id(form)) -> problems`` on ``ctx.state`` rather than
+    at module scope: the Reference stage asks the same question twice on every
+    frame -- the command bar, to know whether Generate is live, and this
+    footer, to list what is wrong -- and both answers have to agree, which one
+    evaluation guarantees and two only tend to. Per-ctx because ``id(form)``
+    can be reused after GC; a module global keyed on it alone would let a
+    second ctx's form read the first ctx's stale verdict.
+    """
 
     key = (int(getattr(ctx.state, "frame_index", 0)), id(form))
-    if _PROBLEMS_CACHE is not None and _PROBLEMS_CACHE[0] == key:
-        return _PROBLEMS_CACHE[1]
+    cache = ctx.state.problems_cache
+    if cache is not None and cache[0] == key:
+        return cache[1]
     problems = validate(form)
     weight = weights_problem(ctx, form)
     if weight is not None:
         problems = [*problems, weight]
-    _PROBLEMS_CACHE = (key, problems)
+    ctx.state.problems_cache = (key, problems)
     return problems
 
 

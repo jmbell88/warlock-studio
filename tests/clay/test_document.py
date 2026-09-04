@@ -17,7 +17,7 @@ from warlock.studio.clay import elements as el
 from warlock.studio.clay import mesh as bm
 from warlock.studio.clay import ops_topo
 from warlock.studio.clay import primitives as bp
-from warlock.studio.clay.edits import MeshEdit, TransformEdit
+from warlock.studio.clay.edits import MeshEdit, TransformEdit, mesh_bytes
 from warlock.studio.undo import CompoundEdit
 
 
@@ -385,6 +385,22 @@ def test_a_mesh_edit_costs_both_meshes() -> None:
     doc.set_mesh(a.uid, bp.uv_sphere())
     edit = doc.history._done[-1]
     assert edit.cost > int(a.mesh.positions.nbytes)
+
+
+def test_an_undone_add_still_costs_the_mesh_it_keeps_alive() -> None:
+    """Undone, an ``ObjectAddEdit`` is the only thing keeping its object out of
+    the document alive -- the same case ``ObjectRemoveEdit`` costs bytes for,
+    just on the other side of the toggle. Before this was fixed the step
+    inherited ``Edit.cost = 0`` and a big import survived any number of
+    Ctrl+Z presses invisibly to the byte budget."""
+    doc = bd.ClayDoc()
+    a = doc.add_object(_obj("A", bp.uv_sphere()))
+    expected = mesh_bytes(a.mesh)
+    assert doc.history._done[-1].cost == expected
+
+    doc.undo()
+    assert doc.history._undone[-1].cost == expected
+    assert doc.history.bytes >= expected
 
 
 def test_the_generator_field_survives_a_regenerate() -> None:

@@ -964,7 +964,11 @@ def _loras(ctx: Any) -> None:
             imgui.same_line()
             widgets.muted(f'  trigger "{row.trigger_text}"')
         imgui.same_line()
-        if controls.small_button(f"Remove##lora-{row.key}") and not busy:
+        if controls.small_button(
+            f"Remove##lora-{row.key}",
+            enabled=not busy,
+            reason="Another LoRA operation is in progress.",
+        ):
             ctx.submit(f"lora:remove:{row.key}", svc_loras.remove_lora, ctx.svc, row.key)
             ctx.toast(f"Removed {row.label}.")
 

@@ -168,10 +168,49 @@ def handle_key(ctx: Any, event: Any) -> bool:
             return True
         return False
     if state.column == D.EFFECT:
-        return sirens_mode.write_effect(ctx, name)
+        # After the writer, never before it: half the effect letters are also
+        # piano keys (``b``, ``c``, ``d``), and a check in front of this would
+        # hijack the three of them to say they are not notes here -- which is
+        # true and would replace the effect they do write.
+        return sirens_mode.write_effect(ctx, name) or _piano_elsewhere(ctx, state, name)
     if len(name) == 1 and name in "0123456789abcdef":
         return sirens_mode.write_hex(ctx, int(name, 16))
-    return False
+    return _piano_elsewhere(ctx, state, name)
+
+
+def _piano_elsewhere(ctx: Any, state: SirensState, name: str) -> bool:
+    """The one rejected key worth saying something about. -> whether it was.
+
+    A rejected key is silent here and stays silent: most of them are ordinary
+    typing noise nobody expected to do anything, and a toast per keypress --
+    a newcomer running the piano row along the volume column would earn one
+    per letter -- is intolerable. The hint line under the grid
+    (:mod:`.sirens_hints`) is the general answer.
+
+    **A piano key pressed outside the note column is not noise.** It is
+    somebody trying to play a note in the wrong place, which is precisely the
+    confusion this mode has, and it is rare enough to afford one sentence
+    naming where they are and the key that gets them where they meant to be.
+    ``toast_once`` is the throttle: a held-down row coalesces to one.
+    """
+    if name not in PIANO_KEYS:
+        return False
+    # A plain index, not the defensive ``% len(...)`` this replaced: this
+    # function is only ever reached from the D.NOTE/D.EFFECT dispatch above
+    # with ``state.column != D.NOTE``, and ``clamp_caret``/``move_caret``
+    # already bound ``state.column`` to ``[0, D.COLUMNS - 1]`` before any key
+    # handler runs, so it cannot be out of range here.
+    label = sirens_state.COLUMN_LABELS[state.column]
+    # Each Left arrow press moves the caret back exactly one column, and
+    # Note sits at column 0 -- so ``state.column`` presses get there, never
+    # one, for any column but Instrument.
+    steps = state.column
+    presses = "once" if steps == 1 else f"{steps} times"
+    ctx.toast_once(
+        f"The caret is in the {label} column, where {name} is not a note."
+        f" Left arrow, pressed {presses}, walks back to Note."
+    )
+    return True
 
 
 def _ctrl_key(

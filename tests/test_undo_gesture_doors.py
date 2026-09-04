@@ -10,9 +10,12 @@ each door it was applied to.
 
 Three layers, cheapest first: the helper alone against a bare stack; the panes
 drawn in a real imgui frame with the item state scripted, so the door's own
-code runs and the document's own history is counted; and, for the two doors
-that only draw inside a context-menu popup, a source check that the fold sits
-between the field and the write.
+code runs and the document's own history is counted; and, for the doors that a
+headless frame cannot open -- a context-menu popup, or a panel drawn only in
+ordinary tab flow -- a source check that the fold sits between the field and
+the write. The 2026-09-04 audit added six rows to that last layer: Clay's
+material sliders, Plotter's layer and object opacity and tint, and Sirens's
+channel Pan had no ``fold_undo`` call in their files at all.
 """
 
 from __future__ import annotations
@@ -29,12 +32,15 @@ from test_sirens_panes_smoke import frames as frames  # noqa: F401, PLC0414
 
 from warlock.studio import controls, sirens_mode, undo, widgets
 from warlock.studio.panes import (
+    clay_props,
     inker_colors,
     inker_picker,
     inker_timeline,
+    plotter_layers,
     sirens_effects,
     sirens_instruments,
     sirens_orders,
+    sirens_patterns,
     sirens_transport,
 )
 
@@ -271,15 +277,36 @@ def test_a_picker_drag_over_a_free_colour_opens_no_gesture(monkeypatch, frames):
         (inker_timeline._cell_menu, '"Opacity##cel"', "set_cel_opacity("),
         (inker_timeline._cell_menu, '"Z##cel"', "set_cel_z("),
         (inker_colors._slots, 'color_edit4("Slot"', "recolour_slot("),
+        # The four the 2026-09-04 audit found still unfolded: none of these
+        # files called ``fold_undo`` at all, and each setter pushes per report.
+        (clay_props._material, '"base colour##bm"', "doc.set_material("),
+        (clay_props._material, '"metallic##bm"', "doc.set_material("),
+        (plotter_layers._layer_table, '"##layer-opacity"', "doc.set_layer_props("),
+        (plotter_layers._layer_table, '"##layer-tint"', "doc.set_layer_props("),
+        (plotter_layers._object_fields, '"##obj-opacity"', "doc.set_object("),
+        (sirens_patterns._channel_popup, 'f"Pan##{tag}"', "update_channel("),
     ],
-    ids=["group-opacity", "cel-opacity", "cel-z", "palette-slot"],
+    ids=[
+        "group-opacity",
+        "cel-opacity",
+        "cel-z",
+        "palette-slot",
+        "clay-base-colour",
+        "clay-metallic",
+        "layer-opacity",
+        "layer-tint",
+        "object-opacity",
+        "channel-pan",
+    ],
 )
 def test_the_popup_doors_fold_between_the_field_and_the_write(func, field, write):
     """These draw only inside ``begin_popup_context_item``, which a headless
     frame cannot open. The invariant is positional: draw, fold, act."""
     source = inspect.getsource(func)
     after_field = source.split(field, 1)[1]
-    fold = after_field.index("controls.fold_undo(doc.history)")
+    # ``fold_undo``'s argument differs by pane (``doc.history``,
+    # ``tab.doc.history``), so the call itself is what is looked for.
+    fold = after_field.index("controls.fold_undo(")
     assert fold < after_field.index(write), f"{write} runs before the fold"
 
 

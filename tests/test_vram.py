@@ -557,6 +557,24 @@ def test_a_sprite_synthesis_is_priced_and_never_silently_zero():
     assert coexist == pytest.approx(exclusive + vram.TRELLIS_GIB)
 
 
+def test_a_source_audio_task_charges_the_total_but_not_the_checkpoint_credit():
+    """``estimate_parts``'s music branch: the source-audio DCAE encode is a
+    transient cost that belongs in the total, not in the resident-checkpoint
+    figure ``queue._check_resources`` would credit back -- crediting it too
+    would be a 1 GiB overcredit against weights that were never loaded."""
+    key = models.DEFAULT_MUSIC_MODEL
+    spec = models.MUSIC_MODELS[key]
+    plain_total, plain_checkpoint = vram.estimate_parts(
+        "music", "model", {"music_model": key, "task": "generate"}, exclusive=True
+    )
+    source_total, source_checkpoint = vram.estimate_parts(
+        "music", "model", {"music_model": key, "task": "extend"}, exclusive=True
+    )
+    assert source_total == pytest.approx(plain_total + vram.MUSIC_SOURCE_GIB)
+    assert source_checkpoint == pytest.approx(plain_checkpoint)
+    assert source_checkpoint == pytest.approx(spec.vram_gib)
+
+
 def test_a_sprite_synthesis_is_priced_from_its_own_checkpoint():
     offloaded = next(
         key for key, spec in models.BASE_MODELS.items()

@@ -190,7 +190,7 @@ def test_the_reference_stage_validates_once_a_frame_not_twice():
     form = default_form_2d()
     create_assets.sync_legacy_fields(form)
     ctx = SimpleNamespace(state=AppState())
-    settings_2d._PROBLEMS_CACHE = None
+    ctx.state.problems_cache = None
     settings_2d.validate = counting
     try:
         first = settings_2d.problems_for(ctx, form)

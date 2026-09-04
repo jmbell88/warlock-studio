@@ -341,12 +341,17 @@ def _material(doc: Any, obj: Any) -> None:
     changed, colour = controls.color_edit4(
         "base colour##bm", list(material.base_color_factor)
     )
+    # One gesture, one step: a drag reports on every frame the pointer moves,
+    # and ``set_material`` pushes a step per report without this.
+    controls.fold_undo(doc.history)
     metal_changed, metallic = controls.slider_float(
         "metallic##bm", float(material.metallic_factor), 0.0, 1.0
     )
+    controls.fold_undo(doc.history)
     rough_changed, roughness = controls.slider_float(
         "roughness##bm", float(material.roughness_factor), 0.0, 1.0
     )
+    controls.fold_undo(doc.history)
     if changed or metal_changed or rough_changed:
         # A *replacement*, never an in-place edit. Identity is what the GPU
         # cache, ``to_model`` and the writer all de-duplicate on, so editing

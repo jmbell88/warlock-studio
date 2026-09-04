@@ -289,8 +289,8 @@ def retexture_job(
     # run through one resident pipe and that is a real budget question beside a
     # warm trellis -- and with "control" in params, check_vram prices the
     # ControlNet and check_weights refuses it undownloaded, both for free.
-    check_vram(svc, "retexture", "model", params)
     check_weights(svc, "text", params)
+    check_vram(svc, "retexture", "model", params)
     new_id = svc.store.create("retexture", text, params, uuid.uuid4().hex[:12])
     svc.wake_worker()
     return {"id": new_id, "source_job": job_id, "stale": stale_surface_artifacts(job_dir)}

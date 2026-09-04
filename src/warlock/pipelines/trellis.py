@@ -298,6 +298,15 @@ class TrellisServer:
             # window between Popen and this call is the only one in which a
             # parent crash can still orphan the child.
             winjob.assign(self._proc.pid)
+            # Tracked as well as assigned, unlike a child that only needs the
+            # job object's guarantee: the registry is what measured_pids()
+            # falls back to when CreateJobObject/SetInformationJobObject
+            # failed, and this child can hold up to ~16 GiB of host commit --
+            # exactly what that fallback exists to not lose. Paired with
+            # stop()'s untrack, called only once death is confirmed (not on
+            # the TrellisStopFailed path below, where the process is still
+            # alive and would otherwise vanish from the accounting first).
+            winjob.track(self._proc.pid, "trellis-server")
             # Recorded before the health poll, not after: a server that dies
             # during startup still held the port for a moment, and the claim is
             # what tells the *next* start that the corpse on that port is ours.
@@ -580,6 +589,12 @@ class TrellisServer:
                 with contextlib.suppress(OSError):
                     self._logfh.close()
                 self._logfh = None
+            if proc is not None:
+                # Confirmed dead (the TrellisStopFailed raise above returns
+                # before here) -- forgotten from winjob's registry the same
+                # way it was remembered, so measured_pids()'s fallback never
+                # counts a pid that no longer exists.
+                winjob.untrack(proc.pid)
             self._proc = None
             self._spawned_at = None
             # Only once the process is confirmed dead -- the raise above skips

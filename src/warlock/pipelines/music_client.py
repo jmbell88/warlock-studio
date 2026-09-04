@@ -266,6 +266,11 @@ class MusicClient:
             try:
                 for raw in stream:
                     lines.put(raw)
+            except (OSError, ValueError):
+                # _stop_child()/stop() can close proc.stdout from the main
+                # thread mid-iteration; on Windows that raises inside this
+                # generator. The sentinel below still unblocks any waiter.
+                pass
             finally:
                 lines.put(None)
 

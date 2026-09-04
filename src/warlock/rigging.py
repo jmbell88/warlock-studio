@@ -815,11 +815,20 @@ def run_worker(
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise subprocess.TimeoutExpired(proc.args, timeout)
-            try:
-                raw = lines.get(timeout=min(remaining, 1.0))
-            except queue.Empty:
-                continue
+                # The deadline can elapse in the same queue-poll tick the
+                # child's stdout closes -- drain whatever is already queued
+                # (the EOF sentinel, or a final line) before calling this a
+                # timeout, or a job that legitimately finished gets its
+                # result deleted and a spurious BlenderError raised.
+                try:
+                    raw = lines.get_nowait()
+                except queue.Empty:
+                    raise subprocess.TimeoutExpired(proc.args, timeout) from None
+            else:
+                try:
+                    raw = lines.get(timeout=min(remaining, 1.0))
+                except queue.Empty:
+                    continue
             if raw is None:
                 break
             line = raw.rstrip()
@@ -829,7 +838,11 @@ def run_worker(
             tail.append(line)
             if len(tail) > 200:
                 del tail[:100]
-        code = proc.wait(timeout=max(deadline - time.monotonic(), 0.0))
+        # A small floor on the final wait: the worker has already signalled
+        # done (EOF/sentinel seen above), but its exit may still be
+        # finalising -- deadline - now can be ~0 here and give the OS no
+        # grace to reap it, re-raising the very timeout we just avoided.
+        code = proc.wait(timeout=max(deadline - time.monotonic(), 1.0))
     except subprocess.TimeoutExpired:
         _terminate_worker(proc)
         result_path.unlink(missing_ok=True)

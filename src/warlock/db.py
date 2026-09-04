@@ -616,6 +616,18 @@ class JobStore:
         Unlike :meth:`deferred_commits`, this holds the connection lock for the
         block and rolls back when its body raises. It is for small admission
         batches whose rows must never become visible as a partial selection.
+
+        There is no explicit ``commit()`` here, unlike ``deferred_commits``
+        above -- and there does not need to be. At depth 0 the ``SAVEPOINT``
+        opened below is the outermost one, and sqlite3's implicit transaction
+        handling means ``RELEASE`` of that outermost savepoint *is* the
+        commit: it ends the underlying transaction and makes the writes
+        durable. Do not "tidy" this into a bare ``RELEASE`` plus a separate
+        ``commit()``, and do not remove the ``RELEASE`` believing it inert --
+        either change turns a durable write into one that lives only in the
+        in-memory connection until something else happens to commit, which is
+        silent until a crash produces a job directory on disk with no row for
+        it.
         """
         with self._lock:
             depth = getattr(self._defer, "depth", 0)
@@ -629,6 +641,7 @@ class JobStore:
                 self._conn.execute(f"RELEASE {savepoint}")
                 raise
             else:
+                # At depth 0 this RELEASE is the commit -- see the docstring.
                 self._conn.execute(f"RELEASE {savepoint}")
             finally:
                 self._defer.depth -= 1

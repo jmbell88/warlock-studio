@@ -227,8 +227,45 @@ def test_an_effect_letter_the_engine_does_not_have_writes_nothing():
     tab = _tab(ctx)
     _at(ctx, D.EFFECT)
     assert "e" not in {name.lower() for name, _ in synth.EFFECT_NAMES.values()}
-    assert not _press(ctx, "e")
+    # ``e`` is also a piano key, so the press is consumed by the one note this
+    # mode makes about a piano key in the wrong column. Nothing is written,
+    # which is what this test is about.
+    assert _press(ctx, "e")
     assert _cells(ctx, tab)[0, 0, D.EFFECT] == notes.EMPTY
+    # Effect is column 3 -- three presses of Left arrow to reach Note -- and
+    # the hint names that count rather than always claiming one press.
+    assert ctx.toasts and ctx.toasts[0][0] == (
+        "The caret is in the Effect column, where e is not a note."
+        " Left arrow, pressed 3 times, walks back to Note."
+    )
+
+
+def test_the_hint_names_the_right_press_count_from_a_different_column():
+    """Instrument is one column from Note, so the hint says "once" rather
+    than the "3 times" the effect column earns above -- the count is per
+    column, not a hard-coded guess."""
+    ctx = FakeCtx()
+    _tab(ctx)
+    _at(ctx, D.INSTRUMENT)
+    # "z" rather than a hex digit: the instrument column's own alphabet is
+    # 0-9a-f, and a hex digit would be consumed by ``write_hex`` before this
+    # function ever saw it.
+    assert _press(ctx, "z")
+    assert ctx.toasts and ctx.toasts[0][0] == (
+        "The caret is in the Instrument column, where z is not a note."
+        " Left arrow, pressed once, walks back to Note."
+    )
+
+
+def test_a_stray_key_that_is_not_a_piano_key_says_nothing():
+    """The narrowness is the point. A toast per rejected key would be a stack
+    of them for ordinary typing noise nobody expected to do anything; the hint
+    line under the grid is the general answer, and this is the one exception."""
+    ctx = FakeCtx()
+    _tab(ctx)
+    _at(ctx, D.VOLUME)
+    assert not _press(ctx, "p")
+    assert not ctx.toasts
 
 
 @pytest.mark.parametrize("effect", sorted(synth.EFFECT_NAMES))

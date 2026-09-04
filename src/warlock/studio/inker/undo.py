@@ -675,6 +675,11 @@ class FlourishEdit(Edit):
     def __post_init__(self) -> None:
         self.before = None if self.before is None else self.before.copy()
         self.after = None if self.after is None else self.after.copy()
+        # ``assets`` is deliberately not counted here: it holds shared arrays
+        # by convention (``FlourishState.copy()`` copies the dict, not the
+        # ndarrays in it), so every snapshot of a group's history points at
+        # the same texture bytes rather than a private copy each -- unlike
+        # ``digests``, which is small and genuinely duplicated per step.
         self.cost = 40 * sum(
             len(state.digests) for state in (self.before, self.after) if state is not None
         )

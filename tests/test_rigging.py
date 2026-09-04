@@ -833,6 +833,78 @@ def test_run_worker_never_waits_unbounded_after_a_kill(tmp_path, monkeypatch):
     assert all(timeout is not None for timeout in waits)
 
 
+def test_run_worker_honours_a_result_already_queued_when_the_deadline_elapses(
+    tmp_path, monkeypatch
+):
+    """A child that finished legitimately must not be treated as timed out
+    just because its EOF sentinel and the deadline land in the same tick.
+
+    ``threading.Thread`` is faked to run the reader synchronously, so the
+    EOF sentinel is already sitting in ``lines`` before the wait loop's
+    first ``remaining <= 0`` check ever runs -- exactly the race described
+    at rigging.py's run_worker. Before the fix this raised
+    ``TimeoutExpired`` and deleted the result the worker had already
+    written; now the drain-before-raise must let it through.
+    """
+    import io
+
+    result_path = tmp_path / "r.json"
+
+    class DoneProcess:
+        args = ["blender-worker"]
+        pid = 54321
+
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = io.StringIO("")  # closed immediately, like a finished worker
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+        def kill(self):
+            pass
+
+    class SyncThread:
+        """Runs its target inline on start() instead of on a real thread, so
+        the reader has fully drained stdout (and queued the None sentinel)
+        before run_worker's wait loop takes its first look at the clock."""
+
+        def __init__(self, target=None, args=(), kwargs=None, **_kw):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            self._target(*self._args, **self._kwargs)
+
+        def join(self, timeout=None):
+            pass
+
+    monkeypatch.setattr(rigging.subprocess, "Popen", lambda *_a, **_kw: DoneProcess())
+    monkeypatch.setattr(rigging, "threading", type("T", (), {"Thread": SyncThread}))
+    monkeypatch.setattr(rigging.winjob, "assign", lambda _pid: None)
+    monkeypatch.setattr(rigging.winjob, "track", lambda _pid, _label: None)
+    monkeypatch.setattr(rigging.winjob, "untrack", lambda _pid: None)
+
+    def on_start(_proc):
+        # Stands in for the worker having already written its result --
+        # run_worker unlinks result_path before spawning, so this is the
+        # earliest point in the call a fake worker can supply one.
+        result_path.write_text(json.dumps({"ok": True}))
+
+    # A deadline already in the past: the very first "remaining <= 0" check
+    # must fire, with the sentinel already queued by the synchronous reader.
+    payload = rigging.run_worker(
+        {"op": "rig", "result_path": str(result_path)},
+        timeout=-1.0,
+        on_start=on_start,
+    )
+    assert payload == {"ok": True}
+
+
 def test_run_worker_rejects_an_unknown_op(tmp_path):
     with pytest.raises(rigging.BlenderError, match="code 2"):
         rigging.run_worker(

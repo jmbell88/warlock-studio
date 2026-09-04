@@ -173,6 +173,15 @@ class ImguiRenderer:
             "registering without forgetting",
             len(self._textures),
         )
+        # Diagnostic-only: this raises the bar rather than resetting it, so a
+        # steady leak is mentioned at _warn_at, 2x, 4x, 8x... and then, once
+        # the doublings outrun a realistic session, effectively never again.
+        # That is intentional -- the point of this method is a log line, not
+        # a mitigation, and there is no sweep to re-arm (see the docstring
+        # above: guessing which entries are dead would free a texture a pane
+        # is about to draw). Do not mistake the doubling for a rate limiter
+        # that keeps re-triggering, and do not add a reset-on-shrink here --
+        # that would need a notion of "shrink" this registry does not have.
         self._warn_at = len(self._textures) * 2
 
     def register_texture(self, texture: moderngl.Texture) -> int:

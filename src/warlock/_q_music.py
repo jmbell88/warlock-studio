@@ -319,7 +319,7 @@ class MusicOps:
             await queue_mod._require_commit_headroom_settled(
                 f" before loading {spec.label}",
                 "Close other applications, or generate a shorter track.",
-                need_gib=spec.host_peak_gib or spec.vram_gib,
+                need_gib=queue_mod._host_peak_gib(spec),
             )
         return await self._get_music_client(spec), handoff
 

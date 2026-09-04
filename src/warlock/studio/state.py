@@ -848,6 +848,11 @@ class AppState:
     # because the list it belongs to is short today, would be a panel that
     # silently hides half its contents on launch.
     list_filters: dict[str, str] = field(default_factory=dict)
+    # ``(frame, id(form)) -> problems`` for the Reference stage's plan footer
+    # (``settings_2d.problems_for``). Per-ctx rather than a module global: a
+    # module-level cache keyed on ``id(form)`` alone would let a second ctx's
+    # form -- reusing a GC'd id -- read the first ctx's stale verdict.
+    problems_cache: tuple[tuple[int, int], list[Any]] | None = None
     # Which form control the last refusal named, and what it said (UX.md Phase
     # 3). ``service.errors.ServiceError`` has carried a ``field`` since it was
     # written, documented as "the UI highlights it", and nothing in ``studio/``

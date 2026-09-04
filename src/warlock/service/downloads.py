@@ -945,11 +945,21 @@ def _run_worker(
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise subprocess.TimeoutExpired(proc.args, timeout)
-                try:
-                    raw = lines.get(timeout=min(remaining, 1.0))
-                except queue.Empty:
-                    continue
+                    # The deadline can elapse in the same queue-poll tick the
+                    # fetch worker's stdout closes -- drain whatever is
+                    # already queued (the EOF sentinel, or a final line)
+                    # before calling this a timeout, or a download that
+                    # already moved and verified its files gets reported as
+                    # having timed out. Mirrors rigging.run_worker.
+                    try:
+                        raw = lines.get_nowait()
+                    except queue.Empty:
+                        raise subprocess.TimeoutExpired(proc.args, timeout) from None
+                else:
+                    try:
+                        raw = lines.get(timeout=min(remaining, 1.0))
+                    except queue.Empty:
+                        continue
                 if raw is None:
                     break
                 line = raw.strip()
@@ -970,7 +980,12 @@ def _run_worker(
                     # to abandon a download that is otherwise working.
                     continue
                 on_progress(percent, str(payload.get("label") or ""))
-            code = proc.wait(timeout=max(deadline - time.monotonic(), 0.0))
+            # A small floor on the final wait: the worker has already
+            # signalled done (EOF/sentinel seen above), but its exit may
+            # still be finalising -- deadline - now can be ~0 here and give
+            # the OS no grace to reap it, re-raising the timeout we just
+            # avoided above.
+            code = proc.wait(timeout=max(deadline - time.monotonic(), 1.0))
             winjob.untrack(proc.pid)
         except subprocess.TimeoutExpired:
             _kill_and_reap(proc)

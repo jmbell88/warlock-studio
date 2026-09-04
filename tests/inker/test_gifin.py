@@ -80,3 +80,26 @@ def test_a_gif_is_an_image_the_studio_will_open():
 
     assert ".gif" in filetypes.IMAGE_SUFFIXES
     assert ".gif" in inker_mode.OPENABLE
+
+
+def test_mismatched_frame_sizes_are_a_friendly_refusal(tmp_path, monkeypatch):
+    """A malformed GIF whose composed frames are not all the same shape must
+    not fall through to ``np.concatenate``'s raw ``ValueError`` -- it gets the
+    same descriptive refusal as the frame-count guard just above it."""
+    import PIL.ImageSequence
+
+    dest = _clip(tmp_path)
+
+    class _FakeFrame:
+        def __init__(self, size):
+            self._size = size
+            self.info: dict = {}
+
+        def convert(self, mode):
+            return Image.new(mode, self._size)
+
+    fakes = [_FakeFrame((8, 6)), _FakeFrame((4, 6))]
+    monkeypatch.setattr(PIL.ImageSequence, "Iterator", lambda im: iter(fakes))
+
+    with pytest.raises(ValueError, match="not all the same size"):
+        gifin.frames_of_gif(dest)

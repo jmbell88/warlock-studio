@@ -394,6 +394,13 @@ class FlourishOps:
             raise ValueError("that group is not a Flourish effect")
         if pixels.ndim != 3 or pixels.shape[2] != 4 or pixels.size == 0:
             raise ValueError("a texture is a non-empty RGBA plane")
+        # Not charged against ``FlourishEdit.cost`` (which counts ``digests``
+        # only), deliberately: assets are shared by convention -- ``copy()``
+        # is a shallow dict copy, so every snapshot from an insert to the
+        # latest edit holds the *same* array objects, not a duplicate per
+        # step. Byte-costing them the way ``digests`` is costed would charge
+        # the undo budget once per snapshot for memory that is in fact held
+        # once.
         after = state.copy()
         asset_id = after.next_asset_id(stem)
         after.assets[asset_id] = np.ascontiguousarray(pixels, dtype=np.uint8).copy()

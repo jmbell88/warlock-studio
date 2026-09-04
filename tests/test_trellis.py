@@ -581,6 +581,8 @@ class _CountingProc:
         self.stdout = None
         self.returncode = 0
         self.terminates = 0
+        # A real Popen always has one, and stop() untracks by it.
+        self.pid = 4242
 
     def poll(self):
         return self.returncode

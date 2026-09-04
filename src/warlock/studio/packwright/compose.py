@@ -25,6 +25,12 @@ from .sources import Sprite
 
 def _extrude(atlas: np.ndarray, frame: Frame, margin: int) -> None:
     x, y, w, h = frame.x, frame.y, frame.w, frame.h
+    # Guaranteed by ``PackSettings`` (``padding >= extrude * 2``) and by both
+    # layouts leaving a full ``padding`` on every edge, including the atlas's
+    # own border -- a hand-built ``Frame``/``Layout`` that bypasses that
+    # validation would otherwise wrap negative indices around silently and
+    # corrupt the atlas instead of failing loudly.
+    assert x >= margin and y >= margin, "frame has no room for its extrude margin"
     # Sides first: one-pixel-wide slices broadcast across the gutter's width.
     atlas[y : y + h, x - margin : x] = atlas[y : y + h, x : x + 1]
     atlas[y : y + h, x + w : x + w + margin] = atlas[y : y + h, x + w - 1 : x + w]
