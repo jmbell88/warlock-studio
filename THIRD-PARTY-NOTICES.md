@@ -47,11 +47,13 @@ inside the runtime tree the installer copies).
 | Component | Where | Upstream | Licence |
 |---|---|---|---|
 | BiRefNet modelling code | `src/warlock/pipelines/birefnet/` | <https://github.com/ZhengPeng7/BiRefNet> | MIT |
+| ACE-Step pipeline code | `src/warlock/pipelines/acestep/` | <https://github.com/ace-step/ACE-Step> | Apache-2.0 |
 
 Vendored rather than downloaded so that the application never executes Python it
 fetched at runtime. The pinned commit, the SHA-256 of every original file and a
-documented diff are in that directory's own
-[`ATTRIBUTION.md`](src/warlock/pipelines/birefnet/ATTRIBUTION.md).
+documented diff are in each directory's own `ATTRIBUTION.md`:
+[BiRefNet](src/warlock/pipelines/birefnet/ATTRIBUTION.md),
+[ACE-Step](src/warlock/pipelines/acestep/ATTRIBUTION.md).
 
 ## Test fixtures
 
@@ -99,6 +101,7 @@ commercial use of what you generate.
 | FLUX.2 klein / klein-base 4B | Black Forest Labs | Apache-2.0 | Permitted |
 | TRELLIS.2-4B | Microsoft | MIT | Permitted |
 | BiRefNet weights | ZhengPeng7 | MIT | Permitted |
+| ACE-Step v1 3.5B | ACE-Step | Apache-2.0 | Permitted |
 
 The application surfaces this per model: `warlock.models` carries a `license`
 field on every entry, the model picker and the download confirmation show it,

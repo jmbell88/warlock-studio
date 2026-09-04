@@ -1417,6 +1417,86 @@ POSE_MODELS: dict[str, PoseModel] = _table(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class MusicModel:
+    """A text-to-music model: style tags and a lyric block in, a WAV out.
+
+    Its own table for the reason ``MattingModel`` and ``PoseModel`` each have
+    one. Folding it into ``BaseModel`` would drag ``image_size``, ``scheduler``,
+    ``controlnet``, ``pag_scale`` and ``residency`` onto a model none of them
+    apply to -- and the whole point of that dataclass is that sampler settings
+    are part of a *checkpoint's* identity, which is an argument about diffusers
+    image pipelines and not about this.
+
+    Unlike matting and pose, a missing one costs a *job* rather than quality:
+    Muse has no fallback and is not supposed to have one, so
+    ``service.validation.check_weights`` refuses at the door instead.
+    """
+
+    key: str
+    label: str
+    dir_name: str
+    # Files (relative to the model directory) whose presence means
+    # "downloaded". Named rather than derived: ACE-Step has no top-level
+    # config.json and its four subfolders arrive separately, so a directory
+    # holding three of them must read as *absent* rather than as a model that
+    # fails at load.
+    probe: tuple[str, ...] = ()
+    fetch: tuple[Fetch, ...] = ()
+    # Both deliberately conservative, and both are estimates until the GPU lane
+    # publishes a docs/measurements/ document for them -- ``vram.estimate_parts``
+    # prices a music job off these, and under-pricing admits a job that OOMs at
+    # load, which is the exact failure the door exists to prevent.
+    vram_gib: float = 10.0
+    host_peak_gib: float = 12.0
+    description: str = ""
+    license: str = ""
+    commercial: bool = True
+    license_note: str = ""
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
+
+
+MUSIC_MODELS: dict[str, MusicModel] = _table(
+    MusicModel(
+        # v1 and not v1.5: the newer release declares Python 3.11-3.12 and this
+        # application's floor is 3.13, so shipping it would mean a second
+        # interpreter -- a concept this codebase does not have. The table is
+        # real, so adding that row later costs no reshaping of the worker.
+        "ace_step_v1",
+        "ACE-Step v1 (3.5B)",
+        "ace-step-v1-3.5b",
+        probe=(
+            "ace_step_transformer/config.json",
+            "music_dcae_f8c8/config.json",
+            "music_vocoder/config.json",
+            "umt5-base/config.json",
+        ),
+        fetch=(
+            Fetch(
+                "ACE-Step/ACE-Step-v1-3.5B",
+                "ace-step-v1-3.5b",
+                revision="82cd0d7b6322bd28cd4e830fe675ddb6180ce36c",
+                size_gib=8.28,
+            ),
+        ),
+        description=(
+            "Generates a finished piece of music from a comma-separated style "
+            "tag string and a lyric block.\n\n"
+            "The model behind Muse, and the only one: it runs offline in its "
+            "own subprocess on the same card the image pipeline uses. Its two "
+            "inputs are the two fields the mode presents, so nothing is "
+            "translated between what you type and what the model is asked for. "
+            "About 8.3 GiB on disk."
+        ),
+        license="Apache-2.0",
+        commercial=True,
+    ),
+)
+
+
 DEFAULT_MATTING = "birefnet"
 
 

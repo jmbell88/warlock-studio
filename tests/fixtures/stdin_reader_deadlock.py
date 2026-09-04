@@ -1,6 +1,6 @@
 """Reproduction harness for the stdin-reader / DLL-load deadlock.
 
-Runs `text2image_worker._lines_from` on a daemon thread, then imports a native
+Runs `_workerio.lines_from` on a daemon thread, then imports a native
 extension on the main thread -- the exact arrangement that hung the worker
 before the reader learned to peek. Prints one line per stage so the parent can
 tell "finished" from "never got there".
@@ -18,14 +18,14 @@ import time
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "src"))
 
-from warlock.pipelines import text2image_worker as worker  # noqa: E402
+from warlock.pipelines import _workerio  # noqa: E402
 
 BLOCKING = "--blocking" in sys.argv
 seen: list[str] = []
 
 
 def _pump() -> None:
-    source = sys.stdin if BLOCKING else worker._lines_from(sys.stdin)
+    source = sys.stdin if BLOCKING else _workerio.lines_from(sys.stdin)
     for line in source:
         seen.append(line.strip())
 
