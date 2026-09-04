@@ -39,9 +39,21 @@ restricted ones; this table is the same information in full.
 | **FLUX.2 klein / klein-base 4B** | Apache-2.0 | Yes |
 | **TRELLIS.2-4B** (the reconstruction engine) | MIT | Yes |
 | **BiRefNet** (matting) | MIT | Yes |
+| **ACE-Step v1 3.5B** (Muse) | Apache-2.0 | Yes |
+| **Hybrid Demucs** (stem separation) | MIT code, **CC BY-NC-SA 4.0 weights** | **No** — see below |
 
 The OpenRAIL family is commercially permissive but carries *use* restrictions —
 a list of things you may not generate. They are short; read them once.
+
+**Hybrid Demucs is the second restricted one, and it is the only optional
+download in this list.** The Demucs code is MIT, but Meta has stated the trained
+weights are provided for scientific purposes only, and the checkpoint here was
+trained the same way with no new grant. So stems you make with it are not
+cleanly licensed for a commercial release. Muse works without it — every take
+still generates, plays, exports and imports into Sirens; what you lose is the
+four stem files. Open-Unmix is not an escape: its code is MIT and MUSDB18-HQ is
+CC BY-NC-SA. The app marks the row and warns at the moment you agree to the
+download, and the decision is then yours.
 
 Style LoRAs, ControlNet, IP-Adapter, DINOv2 and ViTPose carry their own terms on
 their own repository pages. None of them is known to restrict commercial output,
@@ -236,6 +248,29 @@ Unlike the measuring models above there is no fallback: Muse refuses at the door
 download, rather than generating something worse. The pipeline code is vendored in this
 application (`src/warlock/pipelines/acestep/`) with its modifications documented beside it, so
 nothing is executed out of the downloaded directory — the same arrangement BiRefNet has.
+
+### Stem separation (optional)
+
+One entry, and the only optional model Muse has. It splits a finished take into drums, bass,
+vocals and everything else.
+
+```powershell
+# Hybrid Demucs (~320 MB): stem separation for Muse. NOT on Hugging Face -- a
+# single checkpoint file, pinned by digest rather than by a commit. The model
+# *class* ships inside torchaudio, which `--extra music` already installs, so
+# this is the trained weights and nothing else.
+curl -L -o $HOME/.warlock/models/hdemucs-high/hdemucs_high_trained.pt `
+  https://download.pytorch.org/torchaudio/models/hdemucs_high_trained.pt
+# then check its sha256 is
+#   a004b2790d73ffeaa535db458a1a79b539dfdbafbccc31f275d07e632ebd7816
+```
+
+**It is optional in a way the music model is not.** ACE-Step missing means Muse refuses at the
+door, because there is no fallback and there is not supposed to be one. This missing means only
+that the *Stems* button refuses; everything else about a take is unaffected.
+
+See the licence note above before you use its output commercially — this is the one download in
+this document whose weights are non-commercial.
 
 
 

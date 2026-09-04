@@ -167,6 +167,29 @@ class Fetch:
 
     repo_id: str
     local_dir: str
+    # A direct file URL, for an artifact that is not on the Hub at all, and the
+    # digest that pins it.
+    #
+    # **A second transport, inside the one process already allowed to touch the
+    # network.** ``fetch_worker`` is the single exception to the offline
+    # invariant, and this rides in it rather than beside it -- nothing else in
+    # the app gains a way out. Everything a Hub fetch gets from ``revision`` --
+    # "the bytes a Download click retrieves a year from now are the bytes this
+    # entry was written against" -- ``sha256`` gets here, and rather more
+    # strongly: a revision names an immutable commit and a digest *is* the
+    # artifact.
+    #
+    # Only the separation checkpoint uses it. It is a single ~320 MiB ``.pt`` on
+    # ``download.pytorch.org`` and the third-party Hub mirrors carry upstream
+    # Demucs' own ``.th``, not torchaudio's converted state dict -- so mirroring
+    # would cost conversion code and an unpinnable provenance story, which is
+    # worse than one more transport with a digest on it.
+    #
+    # ``repo_id`` is "" for such an entry and ``filename`` names what it lands
+    # as, under ``local_dir``.
+    url: str = ""
+    sha256: str = ""
+    filename: str = ""
     # The immutable commit this fetch pins, or "" for the repository's current
     # default branch.
     #
@@ -206,11 +229,20 @@ class Fetch:
         return dest if dest is not None else f"{DEFAULT_MODEL_ROOT_TEXT}/{self.local_dir}"
 
     def command(self, dest: str | None = None) -> str:
-        """The one-line `hf download` this record stands for.
+        """The one line this record stands for, as a person would run it.
 
         --include is repeated per pattern deliberately; see the note on
         BaseModel below.
+
+        A ``url`` record renders a ``curl`` instead, because that is what it
+        *is*: there is no repository to hand ``hf download``, and rendering one
+        anyway would put ``uvx hf download`` with an empty argument in front of
+        a user. The digest is not rendered into the command -- ``curl`` cannot
+        check one -- so :meth:`steps` states it as its own line, which is the
+        same shape the rename and the ``uv sync`` note already take.
         """
+        if self.url:
+            return f"curl -L -o {self.dest_text(dest)}/{self.filename} {self.url}"
         parts = [f"uvx hf download {self.repo_id}"]
         if self.revision:
             # Rendered into the pasted command as well as passed to the
@@ -227,6 +259,14 @@ class Fetch:
     def steps(self, dest: str | None = None) -> list[str]:
         """Every line a person has to run for this record, in order."""
         out = [self.command(dest)]
+        if self.sha256:
+            # The pin, said out loud. A Hub fetch's pin travels inside its
+            # command as ``--revision``; this one cannot, so a person following
+            # these steps by hand is told the digest their file has to have --
+            # otherwise the paste-able path is the one path with no pin on it,
+            # which is exactly the drift ``revision`` in the rendered command
+            # exists to prevent.
+            out.append(f"then check its sha256 is {self.sha256}")
         if self.rename is not None:
             src, dst = self.rename
             out.append(f"then rename {self.dest_text(dest)}/{src} to {dst}")
@@ -1519,6 +1559,112 @@ MUSIC_MODELS: dict[str, MusicModel] = _table(
         ),
         license="Apache-2.0",
         commercial=True,
+    ),
+)
+
+
+DEFAULT_SEPARATION = "hdemucs_high"
+
+
+@dataclass(frozen=True, slots=True)
+class SeparationModel:
+    """A model that splits a finished mix into its instrument stems.
+
+    **Its own table, and it agrees with ``MusicModel`` on one claim and not the
+    other.** On the first -- its own table rather than a ``BaseModel``, because
+    folding it in would drag ``image_size``, ``scheduler``, ``controlnet``,
+    ``pag_scale`` and ``residency`` onto a model none of them apply to -- it
+    agrees with all three existing auxiliary tables.
+
+    On the second it lands the other way. ``MusicModel`` says "unlike matting
+    and pose, a missing one costs a *job*": Muse has no fallback, so the door
+    refuses. A missing separation model costs a **feature**. Every take still
+    generates, plays, exports and imports into Sirens; what is lost is four
+    extra files. So ``check_weights`` refuses the *separation* job by name and
+    never the music job.
+
+    It matches no existing table either. Not ``MattingModel``, whose
+    distinguishing field is ``remote_code`` and which has no ``vram_gib`` at all
+    because matting is CPU work. Not ``PoseModel``, which carries no cost fields
+    whatsoever -- and a GPU job admission has to price cannot live in a table
+    with nothing to price it from.
+
+    ``sources`` and ``segment_seconds`` are registry data deliberately.
+    ``sources`` is simultaneously the model's constructor argument, the stem
+    filenames on disk and what ``files.MEDIA`` has to allow -- three readers of
+    one tuple. ``segment_seconds`` is the one knob trading wall clock against
+    VRAM, which is the figure ``vram_gib`` is a function of.
+    """
+
+    key: str
+    label: str
+    dir_name: str
+    # What the model separates a mix into, in the order it returns them. Also
+    # the stem filenames and the ``files.MEDIA`` keys -- see the class
+    # docstring.
+    sources: tuple[str, ...] = ("drums", "bass", "other", "vocals")
+    # How much audio is processed at once. The one knob trading wall clock
+    # against peak VRAM; ``vram_gib`` below is measured at this value, so the
+    # two move together.
+    segment_seconds: float = 10.0
+    probe: tuple[str, ...] = ()
+    fetch: tuple[Fetch, ...] = ()
+    # Both guesses, in ``MusicModel``'s tradition and flagged as such: the
+    # gpu-lane test that replaces them prints peak VRAM and wall clock for one
+    # separation and asserts only the safe direction. A one-shot child, so the
+    # host figure is what it peaks at rather than what it holds.
+    vram_gib: float = 4.0
+    host_peak_gib: float = 4.0
+    description: str = ""
+    license: str = ""
+    commercial: bool = True
+    license_note: str = ""
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
+
+
+SEPARATION_MODELS: dict[str, SeparationModel] = _table(
+    SeparationModel(
+        "hdemucs_high",
+        "Hybrid Demucs (MUSDB18-HQ+)",
+        "hdemucs-high",
+        probe=("hdemucs_high_trained.pt",),
+        fetch=(
+            Fetch(
+                "",
+                "hdemucs-high",
+                url=(
+                    "https://download.pytorch.org/torchaudio/models/"
+                    "hdemucs_high_trained.pt"
+                ),
+                sha256="a004b2790d73ffeaa535db458a1a79b539dfdbafbccc31f275d07e632ebd7816",
+                filename="hdemucs_high_trained.pt",
+                size_gib=0.32,
+            ),
+        ),
+        description=(
+            "Splits a finished take into drums, bass, vocals and everything "
+            "else.\n\n"
+            "The model class ships inside torchaudio, which this build already "
+            "installs for Muse -- so this download is the trained weights and "
+            "nothing else, about 320 MiB. Separation runs once per take in a "
+            "short-lived subprocess rather than a resident one: it is a "
+            "two-second load, not an 8 GiB pipe worth keeping warm.\n\n"
+            "Muse works without it. What you lose is the four stem files."
+        ),
+        license="MIT (code) / CC BY-NC-SA 4.0 (weights)",
+        commercial=False,
+        license_note=(
+            "The Demucs code is MIT, but Meta has stated the trained weights "
+            "are provided for scientific purposes only, and htdemucs was "
+            "trained the same way with no new grant. Open-Unmix is not an "
+            "escape: its code is MIT and MUSDB18-HQ is CC BY-NC-SA. So the "
+            "stems this model produces are not cleanly licensed for a "
+            "commercial release, and that is your decision to make rather "
+            "than one this app can make for you."
+        ),
     ),
 )
 

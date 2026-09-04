@@ -545,6 +545,35 @@ def check_weights(svc: Any, kind: str, params: dict[str, Any]) -> None:
                 rows=(f"music:{spec.key}",),
             )
         return
+    if kind == "separate":
+        # The separation model's own arm, and it is **never** reached by a
+        # music job -- which is the whole difference between the two. A missing
+        # music model refuses the generation, because Muse has no fallback; a
+        # missing separation model refuses only the separation, because every
+        # take still generates, plays, exports and imports into Sirens. What is
+        # lost is four extra files.
+        from .. import fetch, models
+
+        spec = models.SEPARATION_MODELS.get(
+            str(params.get("separation_model") or models.DEFAULT_SEPARATION)
+        )
+        if spec is None:
+            raise Invalid(
+                "that separation model is not one this build knows about",
+                field="separation_model",
+            )
+        if not fetch.present(svc.config, "separation", spec):
+            how = fetch.download_text(svc.config, "separation", spec)
+            raise Invalid(
+                f"The separation model {spec.label!r} cannot run: its weights are "
+                f"not downloaded. "
+                f"{install_remedy(spec.label, how)}",
+                field="separation_model",
+                # ``rows=`` is what carries the refusal to the Download button
+                # rather than leaving it a sentence about a file.
+                rows=(f"separation:{spec.key}",),
+            )
+        return
     if kind != "text":
         return
     from .. import fetch, models

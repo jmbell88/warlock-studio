@@ -22,7 +22,7 @@ from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
 from .. import controls, dialogs, icons, jobs_cache, motion, theme, tokens, toolbar, widgets
 from ..manual import render as manual_render
-from ..state import ACTIONS, QUERY_FIELDS, SORTS, primary_action
+from ..state import ACTIONS, QUERY_FIELDS, SORTS, card_kind, primary_action
 from ..tokens import sp
 from . import thumbs
 
@@ -403,6 +403,7 @@ KIND_OPTIONS = [
     ("sheet", "sheets"),
     ("sprite", "sprite sheets"),
     ("tilesheet", "tile sheets"),
+    ("music", "tracks"),
 ]
 
 
@@ -884,13 +885,10 @@ def _overflow(ctx: Any, job: Any) -> None:
     if copyable and controls.menu_item("Copy settings to form", "", False)[0]:
         copy_settings(ctx, job)
     if job["status"] in ("done", "error", "cancelled"):
-        # A hand-made reference has no generator behind it, so there is nothing
-        # a new seed could change; the service refuses it, and offering the
-        # menu item anyway only buys the user an error toast.
-        rerollable = not (
-            job["kind"] == "image" and job.get("stage") == "reference"
-        )
-        if rerollable and controls.menu_item("Reroll", "", False)[0]:
+        # ``service.jobs.rerollable``, not a predicate written here: this and
+        # the palette's command were two spellings of one rule, which is how
+        # they came to disagree. The service owns it now, beside the door.
+        if svc_jobs.rerollable(job) and controls.menu_item("Reroll", "", False)[0]:
             ctx.submit(f"rerun:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="reroll")
         if _remeshable(job) and controls.menu_item("Remesh", "", False)[0]:
             ctx.submit(f"remesh:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="remesh")
@@ -1609,12 +1607,49 @@ def _delete_message(total: int, hidden: int) -> str:
     return message
 
 
+#: What a ticked row contributes to a bulk export, by the kind the library
+#: calls it. Keyed on ``card_kind`` rather than on ``job["kind"]`` for that
+#: function's own reason: a text job that stopped at a reference and one that
+#: went on to a mesh are the same kind and two different things to export.
+#:
+#: A kind with no row here falls back to the mesh, which is where every kind
+#: was before this table existed.
+_EXPORT_NAMES: dict[str, tuple[str, ...]] = {
+    "music": ("track.wav",),
+    "reference": ("input.png",),
+    "tile": ("input.png",),
+    "tilesheet": ("input.png",),
+}
+_EXPORT_DEFAULT = ("model.glb",)
+
+
+def _export_names(jobs: list[Any], ids: list[str]) -> list[str]:
+    """Which artifact names a selection of rows is asking for.
+
+    ``bulk_export``/``collect`` were always name-driven and would have taken a
+    take or a reference happily; the pane simply never asked, so a ticked music
+    row exported nothing and said "nothing to export". ``collect`` already skips
+    what is not ready, so a mixed selection needs no special case here -- the
+    union is enough.
+    """
+    wanted = set(_EXPORT_DEFAULT)
+    chosen = set(ids)
+    for job in jobs:
+        if str(job.get("id")) in chosen:
+            wanted.update(_EXPORT_NAMES.get(card_kind(job), _EXPORT_DEFAULT))
+    return sorted(wanted)
+
+
 def _export_zip(ctx: Any, ids: list[str]) -> None:
+    # Read on the frame thread, off the cached rows: the task below must not
+    # touch ``ctx.cache``, which the frame loop rewrites underneath it.
+    names = _export_names(list(ctx.cache.jobs or []), ids)
+
     def run():
         dest = dialogs.save_file("Export selection", "warlock_export.zip", dialogs.ZIP_FILTER)
         if dest is None:
             return None
-        return svc_export.bulk_export(ctx.svc, ids, ["model.glb"], dest)
+        return svc_export.bulk_export(ctx.svc, ids, names, dest)
 
     ctx.submit("export-zip", run)
 

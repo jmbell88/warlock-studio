@@ -414,6 +414,25 @@ class JobOps:
         successful job because the user cancelled a rig.
         """
         params = job["params"]
+        if job["kind"] == "separate":
+            # This job's stems in the *source take's* directory, and only
+            # those. Safe because the names are fixed and the set is this run's
+            # by construction: a take has one ``stems/`` and re-splitting it
+            # overwrites, so a cancelled split can only ever be deleting its own
+            # half-written work. ``stems.json`` goes first -- it is the
+            # completion gate, so removing it is what makes the rest unreadable
+            # to ``files.ready`` even if an unlink below fails.
+            source = str(params.get("source_job") or "")
+            if not rigging.is_valid_id(source):
+                return
+            stems = self.config.job_dir(source) / "stems"
+            paths = [stems / "stems.json"] + [
+                stems / f"{name}.wav" for name in ("drums", "bass", "other", "vocals")
+            ]
+            for path in paths:
+                with contextlib.suppress(OSError):
+                    path.unlink(missing_ok=True)
+            return
         if job["kind"] in (
             "rig", "sheet", "charsheet", "pixel_sheet", "retexture", "sprite_synthesis",
             "remesh",
@@ -538,6 +557,20 @@ class JobOps:
             # a row recorded "cancelled" with most of its work still on disk.
             with contextlib.suppress(OSError):
                 shutil.rmtree(job_dir / "materials")
+        elif job["kind"] == "music":
+            # **Nothing.** Its own arm all the same, because the fall-through
+            # ``else`` below is a list of five *mesh* filenames -- harmless
+            # against a music row today, and precisely the branch that would
+            # eat a ``source.wav`` the day somebody added one to that list.
+            #
+            # ``track.wav`` is not deleted because it cannot be half-written
+            # here: ``_music`` commits the cancel token the moment the file
+            # lands, so a row that reaches this function has no track at all.
+            # ``source.wav`` is not deleted because it is an *input* the door
+            # wrote before the row existed -- ``tile_sheet``'s ``ref.png``
+            # argument, verbatim -- and it goes with the directory when the job
+            # is pruned, which is where an input belongs.
+            return
         elif job["kind"] == "lora_train":
             # The trainer writes adapter weights into its own directory as it
             # goes, so a cancel lands on a partial set of them. Its own

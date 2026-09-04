@@ -191,6 +191,11 @@ class GenerateOps:
             # machinery: everything below this line is about images and meshes.
             await self._music(job)
             return
+        if job["kind"] == "separate":
+            # Beside ``music`` because it is Muse's other queued kind, and it
+            # shares nothing else with the images and meshes below.
+            await self._separate(job)
+            return
         if job["kind"] == "rig":
             await self._rig(job)
             return

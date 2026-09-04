@@ -6,7 +6,7 @@ https://github.com/ace-step/ACE-Step
 Apache 2.0 License
 """
 
-# WARLOCK 3/4: see ATTRIBUTION.md. Upstream imports itself absolutely
+# WARLOCK 3/5: see ATTRIBUTION.md. Upstream imports itself absolutely
 # (`from acestep.models... import ...`), which cannot resolve from
 # `warlock.pipelines.acestep`. Registering this package under the bare name it
 # expects makes every one of those imports resolve to these files, and is the

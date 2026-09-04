@@ -76,7 +76,7 @@ lyric-language stack are declared as the `music` extra in `pyproject.toml`.
 
 ## The modifications
 
-Four, each marked with a `WARLOCK n/4:` comment in the source. Every other
+Five, each marked with a `WARLOCK n/5:` comment in the source. Every other
 line is upstream's, byte for byte.
 
 1. **`cancel_event` and `on_step` threaded into the sampling loop**
@@ -96,6 +96,12 @@ line is upstream's, byte for byte.
    `on_step(i + 1, total)` rides along in the same loop rather than earning a
    second modification of its own; without it a music job's progress bar has
    nothing between "load" and "done".
+
+   Both hooks are threaded into `flowedit_diffusion_process` as well, which is
+   the branch the `edit` task takes. It is a *second* sampling loop with no
+   shared base, so the pair genuinely has to be added twice — and an `edit`
+   that reached the door without it would ship a Cancel button that does
+   nothing and a bar frozen at its load fraction for minutes.
 
 2. **`get_checkpoint_path` and `load_lora` refuse rather than download.**
    Upstream falls through to `snapshot_download` when the directory is
@@ -121,12 +127,38 @@ line is upstream's, byte for byte.
    to tensors costs nothing and closes the same class of risk the vendored
    BiRefNet's `local_files_only=True` closes for downloads.
 
+5. **The written file is 44 100 Hz, 16-bit PCM** (`pipeline_ace_step.py`, at
+   two call sites — `__call__`'s `latents2audio(...)` and `save_wav_file`'s
+   `torchaudio.save(...)`; deliberately *not* the two method defaults, which
+   are public signatures and so a larger diff to re-apply).
+
+   Upstream writes 48 kHz IEEE-float. Both halves are wrong here. The vocoder
+   is natively 44 100 Hz, so `music_dcae.decode` genuinely resamples *up* to
+   reach the 48000 default — a generation loss for no gain. And float PCM is a
+   format Sirens cannot open at all: `studio/sirens/wavout.read_wav` is stdlib
+   `wave`, which raises `unknown format: 3` before the sample width is ever
+   reached, so "Open in Sirens" — the headline pairing of the two audio modes —
+   failed on every take the mode had ever produced.
+
+   16-bit rather than teaching the tracker to read float: the mixer is opened
+   at 44100/-16/2, `to_int16` writes 16-bit, and Muse's own audition clips to
+   int16 on the way to the speaker — so the float file's headroom is discarded
+   by every consumer in this application. The alternative was replacing the
+   tracker's one reader with a hand-rolled RIFF parse or a `soundfile` import,
+   and `studio/sirens/` is import-pinned to the standard library precisely so
+   that a render is byte-identical across a `uv sync`. Mastering-grade export,
+   if it is ever wanted, belongs in a derived artifact beside `track.wav`
+   rather than in the format the rest of the app has to read.
+
+   `tests/test_music_format.py` pins all of this without weights or a card,
+   including a source scan asserting the marker count matches this document.
+
 ## Updating
 
 If the model is ever re-pinned to a newer commit:
 
 1. Re-clone at the new commit, copy the same file set over this directory, and
-   re-apply the three modifications.
+   re-apply the five modifications.
 2. Update the commit, date and SHA-256 table above.
 3. Run `uv run pytest -m gpu -k music` — the seeded golden-checksum parity
    check is what will catch an arithmetic change.

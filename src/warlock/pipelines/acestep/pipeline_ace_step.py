@@ -50,7 +50,7 @@ import torchaudio
 from .cpu_offload import cpu_offload
 
 
-# WARLOCK 1/4: the exception the sampling loop below raises when its cancel
+# WARLOCK 1/5: the exception the sampling loop below raises when its cancel
 # event is set. Imported rather than defined here so that the *parent* -- which
 # has to catch it in order to report a cancel as a cancel rather than as a
 # failure -- can reach it without importing this module, and therefore without
@@ -179,7 +179,7 @@ class ACEStepPipeline:
                 checkpoint_dir_models = checkpoint_dir
         
         if checkpoint_dir_models is None:
-            # WARLOCK 2/4: upstream falls through to `snapshot_download` here.
+            # WARLOCK 2/5: upstream falls through to `snapshot_download` here.
             # This application never fetches at load time -- weights arrive
             # through `warlock.fetch` and its own subprocess -- so an
             # unpopulated directory is a refusal, not a download. Belt and
@@ -311,7 +311,7 @@ class ACEStepPipeline:
         self.ace_step_transformer.eval().to(self.dtype).to('cpu')
         self.ace_step_transformer = torch.compile(self.ace_step_transformer)
         self.ace_step_transformer.load_state_dict(
-            # WARLOCK 4/4: weights_only=True -- these are vendored-model
+            # WARLOCK 4/5: weights_only=True -- these are vendored-model
             # checkpoints from warlock.fetch, not arbitrary input, but
             # torch.load's default can unpickle and execute arbitrary
             # callables. Restricting to tensors-only costs nothing here and
@@ -328,7 +328,7 @@ class ACEStepPipeline:
         self.text_encoder_model.eval().to(self.dtype).to('cpu')
         self.text_encoder_model = torch.compile(self.text_encoder_model)
         self.text_encoder_model.load_state_dict(
-            # WARLOCK 4/4: weights_only=True, same reasoning as the transformer
+            # WARLOCK 4/5: weights_only=True, same reasoning as the transformer
             # checkpoint above.
             torch.load(
                 os.path.join(text_encoder_checkpoint_path, "pytorch_model_int4wo.bin"),
@@ -605,6 +605,12 @@ class ACEStepPipeline:
         n_max=1.0,
         n_avg=1,
         scheduler_type="euler",
+        # WARLOCK 1/5: the same two hooks the text2music loop takes. This
+        # branch is the ``edit`` task's, and without them an edit ships a
+        # Cancel button that does nothing and a bar that sits at its load
+        # fraction for minutes.
+        cancel_event=None,
+        on_step=None,
     ):
 
         do_classifier_free_guidance = True
@@ -679,7 +685,20 @@ class ACEStepPipeline:
 
         logger.info("flowedit start from {} to {}".format(n_min, n_max))
 
+        # WARLOCK 1/5: before the loop, for the reason the other loop gives.
+        if cancel_event is not None and cancel_event.is_set():
+            raise WarlockCancelled
+
         for i, t in tqdm(enumerate(timesteps), total=T_steps):
+
+            # WARLOCK 1/5: and once per step. Reported against ``T_steps``
+            # rather than ``T_steps - n_min``: the steps below ``n_min`` are
+            # skipped instantly, so a bar denominated in the remainder would
+            # jump from zero to a large fraction on its first update.
+            if cancel_event is not None and cancel_event.is_set():
+                raise WarlockCancelled
+            if on_step is not None:
+                on_step(i + 1, T_steps)
 
             if i < n_min:
                 continue
@@ -864,7 +883,7 @@ class ACEStepPipeline:
         audio2audio_enable=False,
         ref_audio_strength=0.5,
         ref_latents=None,
-        # WARLOCK 1/4: see ATTRIBUTION.md. Two hooks threaded through to the
+        # WARLOCK 1/5: see ATTRIBUTION.md. Two hooks threaded through to the
         # sampling loop below -- upstream has neither, and without the first
         # a running generation cannot be stopped.
         cancel_event=None,
@@ -1224,7 +1243,7 @@ class ACEStepPipeline:
 
             return sample
 
-        # WARLOCK 1/4: checked once before the loop, because load and encode
+        # WARLOCK 1/5: checked once before the loop, because load and encode
         # have no interruption point of their own and a cancel issued during
         # them must not be silently lost.
         if cancel_event is not None and cancel_event.is_set():
@@ -1232,7 +1251,7 @@ class ACEStepPipeline:
 
         for i, t in tqdm(enumerate(timesteps), total=num_inference_steps):
 
-            # WARLOCK 1/4: and once per step, which is the granularity a user
+            # WARLOCK 1/5: and once per step, which is the granularity a user
             # pressing Cancel expects.
             if cancel_event is not None and cancel_event.is_set():
                 raise WarlockCancelled
@@ -1450,8 +1469,17 @@ class ACEStepPipeline:
         if format == "ogg":
             backend = "sox"
         logger.info(f"Saving audio to {output_path_wav} using backend {backend}")
+        # WARLOCK 5/5: `encoding`/`bits_per_sample`. Upstream writes the float32
+        # tensor as IEEE-float PCM, which Sirens' stdlib `wave` reader refuses
+        # outright ("unknown format: 3"). See ATTRIBUTION.md.
         torchaudio.save(
-            output_path_wav, target_wav, sample_rate=sample_rate, format=format, backend=backend
+            output_path_wav,
+            target_wav,
+            sample_rate=sample_rate,
+            format=format,
+            backend=backend,
+            encoding="PCM_S",
+            bits_per_sample=16,
         )
         return output_path_wav
 
@@ -1468,7 +1496,7 @@ class ACEStepPipeline:
     def load_lora(self, lora_name_or_path, lora_weight):
         if (lora_name_or_path != self.lora_path or lora_weight != self.lora_weight) and lora_name_or_path != "none":
             if not os.path.exists(lora_name_or_path):
-                # WARLOCK 2/4: as above -- no runtime download.
+                # WARLOCK 2/5: as above -- no runtime download.
                 raise FileNotFoundError(
                     f"LoRA weights are not present at {lora_name_or_path!r}"
                 )
@@ -1524,7 +1552,7 @@ class ACEStepPipeline:
         save_path: str = None,
         batch_size: int = 1,
         debug: bool = False,
-        # WARLOCK 1/4: a `threading.Event` the sampling loop checks, and a
+        # WARLOCK 1/5: a `threading.Event` the sampling loop checks, and a
         # `(step, total)` callback it reports through. Both default to None,
         # so an unmodified caller sees upstream's behaviour exactly.
         cancel_event=None,
@@ -1682,10 +1710,14 @@ class ACEStepPipeline:
                 n_max=edit_n_max,
                 n_avg=edit_n_avg,
                 scheduler_type=scheduler_type,
+                # WARLOCK 1/5: forwarded from __call__'s two added kwargs, as
+                # for the other branch.
+                cancel_event=cancel_event,
+                on_step=on_step,
             )
         else:
             target_latents = self.text2music_diffusion_process(
-                # WARLOCK 1/4: forwarded from __call__'s two added kwargs.
+                # WARLOCK 1/5: forwarded from __call__'s two added kwargs.
                 cancel_event=cancel_event,
                 on_step=on_step,
                 duration=audio_duration,
@@ -1729,6 +1761,9 @@ class ACEStepPipeline:
             target_wav_duration_second=audio_duration,
             save_path=save_path,
             format=format,
+            # WARLOCK 5/5: the vocoder is native 44 100 Hz; the 48000 default
+            # makes `decode` resample up for nothing. See ATTRIBUTION.md.
+            sample_rate=44100,
         )
 
         # Clean up memory after generation

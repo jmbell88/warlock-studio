@@ -85,17 +85,34 @@ def test_the_download_text_is_what_doctor_prints():
 
 
 def test_every_registry_entry_has_a_fetch_and_a_download_line():
+    """Every row is downloadable and says how, in a line a person can run.
+
+    Two transports, not one. Almost every entry is a Hub fetch and renders
+    ``uvx hf download``; the separation checkpoint is a single file on
+    ``download.pytorch.org`` that is not on the Hub at all and renders a
+    ``curl``. What is asserted is the property both have to keep -- a real
+    destination, a declared size, and a first line that is the command -- and
+    not the transport, which was only ever one because there was only one.
+    """
     for entry in fetch.entries():
         assert entry.fetch, f"{entry.row_key} has nothing to download"
-        assert entry.spec.download.startswith("uvx hf download "), entry.row_key
+        first = entry.spec.download.splitlines()[0]
+        assert first.startswith(("uvx hf download ", "curl -L -o ")), entry.row_key
         for one in entry.fetch:
-            assert one.repo_id and one.local_dir, entry.row_key
+            assert one.local_dir, entry.row_key
+            assert one.repo_id or one.url, f"{entry.row_key} names neither a repo nor a URL"
+            assert not (one.repo_id and one.url), (
+                f"{entry.row_key} names both a repo and a URL, so which one "
+                "the worker takes is a coin toss"
+            )
             assert one.size_gib > 0, f"{entry.row_key} declares no size"
 
 
 # --- the pins (MDL-03) --------------------------------------------------------
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
+#: A sha256, which is how the one non-Hub fetch pins its artifact.
+DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 
 def test_every_fetch_pins_an_immutable_commit():
@@ -108,12 +125,17 @@ def test_every_fetch_pins_an_immutable_commit():
     two checkpoints under one label. The pins were recovered from the
     ``.metadata`` sidecars beside the already-downloaded files, so each one is
     the commit this host is actually running.
+
+    A URL fetch pins with a **sha256 instead of a revision**, and that is the
+    stronger half of the same promise rather than an exemption: a revision
+    names an immutable commit, a digest *is* the artifact. What this test
+    forbids is a record with neither.
     """
     unpinned = [
-        f"{entry.row_key} -> {one.repo_id}"
+        f"{entry.row_key} -> {one.repo_id or one.url}"
         for entry in fetch.entries()
         for one in entry.fetch
-        if not SHA.match(one.revision or "")
+        if not (SHA.match(one.revision or "") or DIGEST.match(one.sha256 or ""))
     ]
     assert unpinned == []
 
@@ -126,6 +148,11 @@ def test_two_records_for_one_repository_agree_about_the_commit():
     by_repo: dict[str, set[str]] = {}
     for entry in fetch.entries():
         for one in entry.fetch:
+            if one.url:
+                # No repository to share. Its ``repo_id`` is "", so keying on
+                # it would make every URL entry look like one repository with
+                # as many "commits" as there are entries.
+                continue
             by_repo.setdefault(one.repo_id, set()).add(one.revision)
     disagreeing = {repo: shas for repo, shas in by_repo.items() if len(shas) > 1}
     assert disagreeing == {}
@@ -154,11 +181,21 @@ def test_a_merge_refuses_two_different_commits():
         fetch._merge(job, second)
 
 
-def test_every_rendered_command_carries_its_revision():
+def test_every_rendered_command_carries_its_pin():
     """A hand-run download that silently took the branch tip would defeat the
-    pin for exactly the user most likely to be reproducing something."""
+    pin for exactly the user most likely to be reproducing something.
+
+    The URL transport cannot carry its pin *inside* the command -- ``curl``
+    checks no digest -- so ``steps`` states it as a line of its own, which is
+    the shape the rename and the ``uv sync`` note already take. Either way the
+    person following the printed instructions is told what they must end up
+    with.
+    """
     for entry in fetch.entries():
         for one in entry.fetch:
+            if one.url:
+                assert any(one.sha256 in step for step in one.steps()), one.url
+                continue
             assert f"--revision {one.revision}" in one.command(), one.repo_id
 
 

@@ -377,6 +377,69 @@ def remesh_job(
     return {"id": new_id, "source_job": job_id, "stale": stale_rig_artifacts(job_dir)}
 
 
+def separate_job(
+    svc: WarlockService,
+    job_id: str,
+    *,
+    separation_model: str | None = None,
+) -> dict[str, Any]:
+    """Queue a split of a finished take into its instrument stems.
+
+    **A fourth sibling here rather than an action on a task thread**, and
+    ``retexture_job``'s docstring is the deciding sentence: "a TaskRunner thread
+    racing the worker for VRAM is the OOM that only reproduces under load."
+    ``remesh_job`` makes the parallel point for a job that needs the queue but
+    not the resident pipe, which is this one exactly -- the separation child is
+    short-lived and holds nothing, but it wants a card the music pipe may still
+    be giving back.
+
+    That single decision inherits admission, cancellation, the progress phases,
+    the per-card progress bar, ``_require_no_dependents`` and ``asset_open``
+    routing for free.
+
+    The stems land in the **source take's** directory, at
+    ``stems/{name}.wav``, with ``stems.json`` written last as the completion
+    gate -- ``rig.json``'s rule and ``sheet.json``'s, stated identically. So
+    this is a follow-up in ``asset_open``'s sense: it writes into another job's
+    directory and its own is never created.
+
+    A note for the manual rather than for the code: **Sirens also exports into
+    a folder called ``stems/``.** Same word, two unrelated places. They
+    deliberately do not share a constant -- ``service/files.py`` must not reach
+    into ``studio/`` -- so one sentence in the chapter is what prevents the
+    confusion.
+    """
+    check_job_id(job_id)
+    job = svc.require_job(job_id)
+    if job.get("kind") != "music":
+        raise Invalid("only a track can be split into stems", field="source_job")
+    if job["status"] in ("queued", "running"):
+        raise Conflict(f"job is {job['status']}; split it once it finishes")
+    _require_no_dependents(svc, job_id, "separate")
+    job_dir = svc.job_dir(job_id)
+    if not (job_dir / "track.wav").exists():
+        # ``muse_mode.play``'s sentence and ``derive_music_job``'s, so all
+        # three surfaces say the same thing about the same missing file.
+        raise Invalid("that take has no audio on disk", field="source_job")
+
+    key = str(separation_model or models.DEFAULT_SEPARATION)
+    if key not in models.SEPARATION_MODELS:
+        raise Invalid(
+            "that separation model is not one this build knows about",
+            field="separation_model",
+        )
+    params: dict[str, Any] = {"source_job": job_id, "separation_model": key}
+    # Both halves of admission, in ``create_job``'s order. ``check_weights``
+    # refuses *this* job by name when the model is absent and never the music
+    # job -- see ``SeparationModel``: a missing separation model costs a
+    # feature, not a job.
+    check_weights(svc, "separate", params)
+    check_vram(svc, "separate", "music", params)
+    new_id = svc.store.create("separate", job["prompt"], params, uuid.uuid4().hex[:12])
+    svc.wake_worker()
+    return {"id": new_id, "source_job": job_id}
+
+
 def _require_no_dependents(svc: WarlockService, job_id: str, what: str) -> None:
     """Refuse while another job is still writing into this one's directory.
 

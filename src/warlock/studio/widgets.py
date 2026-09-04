@@ -441,6 +441,12 @@ STAGE_BADGES: dict[str, tuple[str, str]] = {
     # it is Packwright's mode glyph and a sprite draft's thumbnail -- so the
     # picture is borrowed rather than invented.
     "tilesheet": (icons.LAYERS, "tile sheet"),
+    # Muse's rows have carried ``stage="music"`` since the mode shipped, but not
+    # a badge -- so every take drew the fallback CIRCLE and the raw stage string.
+    # MUSIC rather than AUDIO_WAVEFORM: the waveform is the player's picture,
+    # and a badge that borrowed it would read as "this is a waveform" beside a
+    # pane that actually draws one.
+    "music": (icons.MUSIC, "track"),
 }
 
 

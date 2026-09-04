@@ -67,17 +67,20 @@ from ._jobs_list import (  # noqa: F401  -- the facade's re-export
 )
 from ._jobs_music import (  # noqa: F401  -- the facade's re-export
     create_music_job,
+    derive_music_job,
 )
 from ._jobs_resubmit import (  # noqa: F401  -- the facade's re-export
     keep_candidate,
     promote_candidates,
     promote_to_model,
+    rerollable,
     rerun_job,
 )
 from ._jobs_rework import (  # noqa: F401  -- the facade's re-export
     optimize_job,
     remesh_job,
     retexture_job,
+    separate_job,
     stale_rig_artifacts,
     stale_surface_artifacts,
 )

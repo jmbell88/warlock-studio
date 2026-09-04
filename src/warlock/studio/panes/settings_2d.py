@@ -1669,7 +1669,7 @@ def _licence_note(key: str) -> None:
         # among muted sentences is a sentence nobody reads.
         widgets.wrapped(
             theme.WARN,
-            f"Licence: {spec.license}. Images from this model may NOT be used "
+            f"Licence: {spec.license}. Output from this model may NOT be used "
             f"commercially. {spec.license_note}".strip(),
         )
         return

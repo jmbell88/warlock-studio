@@ -21,12 +21,13 @@ import pytest
 from test_muse_mode import FakeCtx
 
 from warlock.studio import muse_brief, muse_mode
-from warlock.studio.panes import muse_recipe, muse_results
+from warlock.studio.panes import muse_player, muse_recipe, muse_results
 
 PANES = (
     ("muse-brief", muse_brief),
     ("muse-recipe", muse_recipe),
     ("muse-results", muse_results),
+    ("muse-player", muse_player),
 )
 
 #: Wide enough that the brief draws its count control and narrow enough to be a
@@ -185,6 +186,62 @@ def test_the_tray_is_newest_first(tmp_path):
     assert [job["id"] for job in muse_results.plan_for(ctx)] == ["new", "old"]
 
 
+def _with_player(ctx, seconds: float = 6.0):
+    """Put a decoded take under the strip, the way an audition would.
+
+    The player draws a *buffer*, not a row, so a tray full of finished takes is
+    not enough to exercise it -- which is also why ``should_draw`` gates on the
+    buffer rather than on the rows.
+    """
+    import numpy as np
+
+    from warlock.studio import muse_state
+    from warlock.studio.muse import waveform
+
+    rate = 44100
+    t = np.arange(int(seconds * rate), dtype=np.float32) / rate
+    tone = (np.sin(2 * np.pi * 220.0 * t) * 12000).astype(np.int16)
+    pcm = np.stack([tone, tone], axis=1)
+    state = muse_mode.ensure(ctx)
+    state.player = muse_state.Player(
+        job="a", pcm=pcm, rate=rate, env=waveform.peaks(pcm), duration=seconds
+    )
+    return state.player
+
+
+def test_the_player_draws_with_a_take_under_it(frames, tmp_path):
+    ctx = _ctx(tmp_path, [_take("a")])
+    _with_player(ctx)
+    assert muse_player.should_draw(ctx) is True
+    frames(lambda: muse_player.draw(ctx))
+
+
+def test_the_player_draws_with_a_region_and_candidates(frames, tmp_path):
+    """The branch with every control on it: markers, the fill, the candidate
+    buttons, the crossfade slider and both exports."""
+    from warlock.studio.muse.loops import Candidate
+
+    ctx = _ctx(tmp_path, [_take("a")])
+    one = _with_player(ctx)
+    muse_mode.set_region(ctx, 1.0, 4.0)
+    one.candidates = [Candidate(0, 44100, 0.1), Candidate(44100, 88200, 0.2)]
+    frames(lambda: muse_player.draw(ctx))
+
+
+def test_the_player_draws_while_the_finder_is_running(frames, tmp_path):
+    ctx = _ctx(tmp_path, [_take("a")])
+    _with_player(ctx).finding = True
+    frames(lambda: muse_player.draw(ctx))
+
+
+def test_the_strip_is_absent_until_a_take_has_been_auditioned(tmp_path):
+    """A mode that reserved 148 dp for a picture it has no samples for is a
+    mode with a hole in it -- so the two columns get the whole height until
+    there is something to put under them."""
+    ctx = _ctx(tmp_path, [_take("a")])
+    assert muse_player.should_draw(ctx) is False
+
+
 def test_no_control_appears_in_both_the_bar_and_the_column():
     """The one-owner rule, enforced by reading the two files.
 
@@ -202,3 +259,51 @@ def test_no_control_appears_in_both_the_bar_and_the_column():
     for field in ("infer_step", "guidance_scale", "scheduler_type", "cfg_type"):
         assert f'form["{field}"]' in column, f"the column should own {field}"
         assert f'form["{field}"]' not in bar, f"{field} is in both panes"
+
+    # The third surface. ``panes/muse_results`` draws the derive popup, whose
+    # controls are about *one finished take* rather than about the next press
+    # -- so it must not touch the brief at all. Without this the popup is a
+    # third place to look for a generation setting, which is the failure the
+    # bar/column split exists to prevent, one surface further on.
+    tray = Path(muse_results.__file__).read_text(encoding="utf-8")
+    for field in ("prompt", "lyrics", "duration", "count", "infer_step",
+                  "guidance_scale", "scheduler_type", "cfg_type", "omega_scale"):
+        assert f'form["{field}"]' not in tray, (
+            f"{field} is a brief control and the tray must not own one"
+        )
+
+
+def test_every_task_the_menu_offers_has_controls_and_a_door():
+    """Three tables that have to agree, and nothing else makes them.
+
+    ``DERIVE_ITEMS`` is what the menu offers, ``muse_mode.DERIVE_CONTROLS`` is
+    what the popup draws for each, and ``_jobs_music.TASKS`` is what the door
+    accepts. A task in the first and not the third is a menu item that always
+    refuses; one in the third and not the first is capability with no way in.
+    """
+    from warlock.service._jobs_music import TASKS
+    from warlock.studio import muse_mode
+
+    offered = [one[0] for one in muse_results.DERIVE_ITEMS]
+    assert sorted(offered) == sorted(TASKS)
+    assert sorted(muse_mode.DERIVE_CONTROLS) == sorted(TASKS)
+    assert len(set(offered)) == len(offered)
+
+
+def test_every_derive_control_is_drawn_by_something():
+    """A key in ``DEFAULT_DERIVE`` that no task lists is a value nobody can set.
+
+    The reverse is the one that bites: a control named in ``DERIVE_CONTROLS``
+    with no entry in ``DEFAULT_DERIVE`` is a ``KeyError`` the first time that
+    task's popup opens, and no smoke test would reach it -- the popup only
+    draws once a take exists and a menu item has been pressed.
+    """
+    from warlock.studio import muse_mode
+    from warlock.studio.muse_state import DEFAULT_DERIVE
+
+    named = {name for names in muse_mode.DERIVE_CONTROLS.values() for name in names}
+    assert named <= set(DEFAULT_DERIVE)
+    assert set(DEFAULT_DERIVE) - named == {"task", "count"}
+    # The numeric ones each need a label and a bound; the two edit fields are
+    # text and are drawn by their own branch.
+    assert named - set(muse_results.DERIVE_FIELDS) == {"edit_prompt", "edit_lyrics"}

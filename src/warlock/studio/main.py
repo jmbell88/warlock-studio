@@ -1158,7 +1158,12 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         # cursor crawled down the pattern at 12 fps while the audio ran at full
         # speed -- the one readout that says *where in the song you are*,
         # visibly disagreeing with what you can hear.
-        if state.mode == "sirens":
+        #
+        # **Muse, word for word.** Its player draws a playhead from the same
+        # clock across the same kind of picture, and nothing else on that
+        # screen moves either. The two audio modes share one predicate because
+        # they share one argument.
+        if state.mode in ("sirens", "muse"):
             from . import sirens_audio
 
             if sirens_audio.playing():
@@ -3775,12 +3780,24 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         The bar is a full-width pane above both, which is ``create_brief``'s
         arrangement -- except that it is unconditional, because Muse has no
         stages for it to be absent on.
+
+        The player is a fourth pane along the bottom, full width:
+
+            [ muse-brief                                        ]
+            [ the takes                       ]  [ muse-recipe  ]
+            [ muse-player                                       ]
+
+        Full width for the reason its own docstring gives -- 240 seconds across
+        a 260 dp sidebar is a second per pixel, and a loop marker dragged at
+        that scale is a guess. Drawn only once a take has been auditioned, so
+        the two columns get the whole height until there is something to put
+        under them.
         """
         from imgui_bundle import imgui
 
         from . import layout as layout_mod
         from . import muse_brief
-        from .panes import muse_recipe, muse_results
+        from .panes import muse_player, muse_recipe, muse_results
 
         ctx = self.app_ctx
         right_w = layout_mod.sidebar_width("right")
@@ -3795,10 +3812,18 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             if visible:
                 muse_brief.draw(ctx)
 
+        # The two columns are bounded rather than filling, so the strip has a
+        # row to be in. Measured here rather than passed as a negative height:
+        # the strip is conditional, and "what is left" has to be the whole
+        # remainder on the frames where there is no strip at all.
+        strip = muse_player.should_draw(ctx)
+        body = imgui.get_content_region_avail().y
+        body_h = body - tokens.sp(muse_player.STRIP_H) if strip else 0.0
+
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
         with layout_mod.pane(
             "muse-centre",
-            (layout_mod.centre_width() + layout_mod.sidebar_width("left"), 0),
+            (layout_mod.centre_width() + layout_mod.sidebar_width("left"), body_h),
             layout_mod.PaneRole.CONTENT,
             window_flags=flags,
         ) as visible:
@@ -3808,12 +3833,15 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         _column_boundary(self.layouts, "muse", "right")
         with layout_mod.pane(
             "muse-recipe",
-            (right_w, 0),
+            (right_w, body_h),
             layout_mod.PaneRole.SIDEBAR,
             edge=layout_mod.PaneEdge.LEFT,
         ) as visible:
             if visible:
                 muse_recipe.draw(ctx)
+
+        if strip:
+            muse_player.draw(ctx)
 
     def _sirens_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton every other mode uses:

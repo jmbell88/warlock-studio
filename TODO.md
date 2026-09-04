@@ -839,7 +839,18 @@ actually interrupts a real sampling loop, and what the thing costs.
   confirm `uv run warlock doctor` flips the ACE-Step row from absent to present.
 - `uv run pytest tests/test_music_gpu.py -m gpu -n 0`. The seeded-checksum pair
   is the parity check for the vendored code; the cancel test is the only proof
-  that `WARLOCK 1/3` reaches the loop rather than merely being in the file.
+  that `WARLOCK 1/5` reaches the loop rather than merely being in the file.
+  **Its first job is now confirming the writer fix on hardware.** `WARLOCK 5/5`
+  makes a take 44.1 kHz 16-bit PCM instead of 48 kHz float, which is what makes
+  "Open in Sirens" work at all -- it had never worked, for the mode's whole life,
+  because nothing exercised the real reader. `tests/test_music_format.py` pins it
+  without weights; what this lane adds is that a take the *model* produced (rather
+  than a synthetic tensor) opens in the tracker.
+- `uv run pytest tests/test_music_gpu.py -m gpu -n 0` again for the derived
+  tasks, which are the new surface: retake at 0.2 and at 0.8, an extend of a
+  60 s take, a repaint of one phrase, an edit of the tags alone. Cancel each one
+  mid-run -- the `edit` especially, since its cancel hook is a *second* loop and
+  has never been exercised.
 - In the app: type style tags, ask for two takes at 60 s, and listen to both.
   Is it music? Do the tags do anything -- does "sparse percussion, minor key"
   produce something recognisably different from "upbeat chiptune, major"? Write
@@ -871,6 +882,97 @@ GPU-lane experiment first; promote them only if the numbers say so.
 **Expected outcome:** either the mode is what chapters 16 and 35 say it is, or
 the first defect only a listener could find -- and two constants that are
 measured rather than guessed.
+
+## P24. Judge the loop finder, and hear a stem split
+
+**Why it is yours:** ears, again, and a card. Everything here is arithmetic that
+runs and produces *an* answer; whether the answer is any good is a listening
+question, and no test can be written for it.
+
+**The loop finder.** `studio/muse/loops.py` searches a take for the two positions
+where the music most nearly repeats. Its machinery is tested against signals
+whose right answer is a fact -- a tone that repeats, silence, a phrase structure
+built to have one join -- but real generated music is not that, and three of its
+constants were **chosen by ear and ship saying so**: `W_CONTEXT` (1.5),
+`W_LEVEL` (0.6) and `W_LENGTH` (2.0).
+
+**Do:** generate a dozen takes across a few styles, run **Find loop points** on
+each, and listen to the best candidate looping four or five times. Then, for a
+handful, try the numbered alternatives. Questions worth answering: does the top
+candidate usually beat the others? Does the finder favour quiet moments (which
+would mean `W_LEVEL` is doing too much) or moments that merely share a spectrum
+(which would mean `W_CONTEXT` is doing too little)? Is `MIN_SPAN` (0.35) too
+generous for a two-minute take?
+
+Then either write `docs/measurements/<date>-loop-weights.md` -- a dozen takes,
+which weighting each chose, which a listener preferred -- or leave the constants
+alone with their honest "unmeasured" comments. **An honest unmeasured constant
+beats a measured-sounding one**, so leaving them is a real outcome and not a
+failure to finish.
+
+Also worth an ear: the **crossfade**. 40 ms is the default; does a seam at 0 ms
+click on real material, and does 500 ms audibly duck?
+
+**Stem separation.** Ship-labelled non-commercial, and the code is written and
+tested down to the door -- but no separation has ever been run.
+
+**Do:**
+
+- Download it from Settings -> Models. Confirm the red non-commercial marker and
+  its warning appear at the moment you agree (this is the wording fix's only
+  visual check), and that `uv run warlock doctor` flips the row.
+- Split three or four takes -- something percussive, something with vocals,
+  something ambient -- and listen to each of the four stems for **bleed**. A
+  hi-hat in the "other" stem or a synth pad in "vocals" is the failure mode, and
+  the manual currently promises "a little bleed", which is a claim a listener has
+  to confirm or correct.
+- Cancel a split mid-run. The row must read cancelled, no child may survive, and
+  no half-written stem may be left where `files.ready` would serve it (the
+  sidecar is deleted first for exactly this reason -- confirm the take reads as
+  unsplit afterwards rather than as partly split).
+
+**The measurements this owes.** `SeparationModel.vram_gib` (4.0) and
+`host_peak_gib` (4.0) are guesses in `MusicModel`'s tradition, as is
+`vram.MUSIC_SOURCE_GIB` (1.0, what encoding a reference costs on top of the
+pipe). Take all three from real runs -- the third from an `extend` of a 240 s
+take, which is the largest encode the mode can be asked for -- and publish
+`docs/measurements/<date>-hdemucs-separation.md` with the wall clock beside them.
+`segment_seconds` (10.0) is the knob that trades wall clock against peak VRAM; if
+separation is slower than about a minute for a four-minute take, that is the
+figure to move.
+
+**Expected outcome:** three measured constants instead of three guesses, a
+verdict on the three loop weights, and either a confirmation of the bleed
+sentence in chapter 35 or a better one.
+
+## P25. Decide: is a non-commercial stem model worth shipping at all
+
+**Why it is yours:** it is a licensing judgement about what this app is *for*,
+and I have made the reversible half of it rather than the whole.
+
+Hybrid Demucs ships **labelled** `commercial=False`, with a `license_note` and
+the red marker the download dialog already draws. The reasoning is in
+`docs/MODELS.md`: the code is MIT, but Meta stated the trained weights are for
+scientific purposes only and this checkpoint was trained the same way with no new
+grant. Open-Unmix is not an escape (MIT code, CC BY-NC-SA dataset).
+
+That makes it the second non-commercial entry in the registry, beside
+SDXL-Turbo -- and unlike Turbo it is *optional*, so a user who never presses
+**Stems** never touches it.
+
+**The question:** for an app whose stated purpose is making assets people sell,
+is "labelled and optional" the right answer, or should the feature not be offered
+at all? Shipping it says stems are worth having on non-commercial terms; removing
+it says a tool for selling assets should not have a button whose output cannot be
+sold.
+
+**If the answer is remove:** the surface is small and named -- the
+`SeparationModel` table, `pipelines/separation_worker.py`, `separate_job`, the
+`separate` arms in `_q_music`/`_q_jobs`/`vram`/`validation`/`progress`, the four
+`files.MEDIA` keys, the tray button, and chapter 35's Stems section. The
+`url`/`sha256` transport in `models.Fetch` should **stay** either way: it is the
+only thing in the registry that can pin a non-Hub artifact, and the next one will
+want it.
 
 ## Also owed, smaller
 

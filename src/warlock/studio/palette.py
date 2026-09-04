@@ -344,15 +344,12 @@ def commands(ctx: Any) -> list[Command]:
             )
 
     def rerollable(ctx: Any) -> bool:
-        # The same terms the context menu's own ``rerollable`` applies
-        # (panes/library.py). Two spellings of one rule is how the menu and the
-        # palette came to disagree in the first place.
+        # ``service.jobs.rerollable``, the one spelling. This and the context
+        # menu's own copy (panes/library.py) were the two that disagreed.
+        from ..service import jobs as svc_jobs
+
         job = _selected(ctx)
-        return bool(
-            job
-            and job["status"] in ("done", "error", "cancelled")
-            and not (job["kind"] == "image" and job.get("stage") == "reference")
-        )
+        return bool(job and svc_jobs.rerollable(job))
 
     def delete(ctx: Any) -> None:
         from . import dialogs

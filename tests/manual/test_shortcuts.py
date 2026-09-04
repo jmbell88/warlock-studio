@@ -39,6 +39,7 @@ SECTIONS = {
     "Plotter": "Plotter",
     "Packwright": "Packwright",
     "Troupe": "Troupe",
+    "Muse": "Muse",
     "Sirens": "Sirens",
 }
 

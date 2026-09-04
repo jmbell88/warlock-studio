@@ -81,6 +81,10 @@ in from your own disk would.
 What it is for: playing a generated phrase as a one-shot under a chiptune arrangement, chopping a
 pad into a sustained instrument, or using a finished track as a reference to write against.
 
+**And back again.** In Sirens, **Compose in Muse...** renders the open song and hands it to the
+model as a reference — you write the shape of the piece in the tracker and ask the model to perform
+it. See [Muse](35-muse.md#composing-from-a-song).
+
 ## Where the file is
 
 Every take is a job row like any other, so it is in the [library](36-library-and-jobs.md) with its

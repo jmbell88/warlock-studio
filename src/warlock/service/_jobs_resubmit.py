@@ -47,6 +47,29 @@ from .validation import (
 log = logging.getLogger(__name__)
 
 
+def rerollable(job: dict[str, Any]) -> bool:
+    """Whether "give me another" means anything for this row. **Pure.**
+
+    Here rather than in the panes because it was two spellings of one rule --
+    ``panes/library``'s context menu and ``palette``'s command -- and the second
+    one's comment already said so ("two spellings of one rule is how the menu
+    and the palette came to disagree in the first place"). A predicate the
+    *service* owns is a predicate that cannot disagree with the door it guards.
+
+    Answered from the cached row alone: no ``svc``, no stat, so the frame
+    thread may ask it per card. It is deliberately weaker than
+    :func:`rerun_job`'s own refusals -- it exists to stop the app *offering* a
+    press that would only buy an error toast, not to be the gate.
+    """
+    if job.get("status") not in ("done", "error", "cancelled"):
+        return False
+    if job.get("params", {}).get("built"):
+        # No generator behind a built asset: nothing a new seed could change.
+        return False
+    # A hand-made reference has no generator behind it either.
+    return not (job.get("kind") == "image" and job.get("stage") == "reference")
+
+
 def rerun_job(
     svc: WarlockService,
     job_id: str,
@@ -87,6 +110,27 @@ def rerun_job(
         # ``promote_to_model``'s sentence for a tile, restated for the thing a
         # tile sheet is sixty-four of.
         raise Invalid("a tile sheet has no subject to reconstruct")
+
+    if source["kind"] == "separate":
+        # Both modes, by name. A separation has no generator behind it at all:
+        # the whole request is "split that take", it is deterministic, and
+        # running it again would write the identical four files over
+        # themselves. The way to get different stems is a different take.
+        raise Invalid(
+            "a stem split has no seed to change; split a different take, or "
+            "delete these stems and split this one again"
+        )
+
+    if mode == "remesh" and source["kind"] == "music":
+        # Refused by name, and only in this mode -- the tile sheet's shape
+        # exactly. A *reroll* of a take is precisely meaningful: the whole
+        # request is a prompt, a duration and a seed, which is the argument
+        # ``primary_action`` already makes for a tile sheet, and refusing it
+        # would remove the one loop a generative mode exists for. What cannot
+        # happen is a reconstruction: a remesh is an image job at stage
+        # "model", so a take taken through here would buy two minutes of
+        # trellis turning nothing into a lumpy plane.
+        raise Invalid("a track has no subject to reconstruct")
 
     if mode == "remesh" and source["stage"] == "tile":
         # The other door onto a reconstruction, and it has to be shut for the
@@ -149,6 +193,20 @@ def rerun_job(
     else:
         params["reference_seed"] = fresh
         params["mesh_seed"] = fresh
+    if kind == "music":
+        # Music has one stage, so neither of the two seeds written above means
+        # anything here -- and writing them was provenance claiming *mesh*
+        # seeds for a track. Removed rather than skipped, because a row rerun
+        # before this arm existed carries them.
+        params.pop("reference_seed", None)
+        params.pop("mesh_seed", None)
+        if "retake_seed" in params:
+            # A derived take varies on ``retake_seed``, not on ``seed``. Left
+            # alone, a reroll of a retake re-runs the identical variation --
+            # the exact failure ``DERIVED_PARAMS``' comment warns about, on the
+            # one key that tuple deliberately does not strip. See
+            # ``_jobs_music.TASK_PARAMS`` for why it does not.
+            params["retake_seed"] = random_seed()
     params["rerun_of"] = job_id
     # A reroll of a reference-stage job is "try another": it must stop at the
     # reference again, not fall through to the default "model" stage and
@@ -309,8 +367,13 @@ def rerun_job(
     # is why the except below now covers a case it never did.
     src_ref = svc.job_dir(job_id) / "ref.png"
     carry_ref = mode == "reroll" and src_ref.exists()
+    # A derived take reads a ``source.wav`` the *door* wrote, so a reroll of one
+    # has to bring it along or the child dispatches into a missing file. The
+    # ``input.png`` argument on a different noun.
+    src_wav = svc.job_dir(job_id) / "source.wav"
+    carry_wav = kind == "music" and src_wav.exists()
     try:
-        if kind == "image" or carry_ref:
+        if kind == "image" or carry_ref or carry_wav:
             # Before the row exists, for the same reason create_job does it:
             # next_queued can otherwise claim the job in the gap and find no
             # input.png on disk.
@@ -320,7 +383,18 @@ def rerun_job(
                 shutil.copyfile(src_png, new_dir / "input.png")
             if carry_ref:
                 shutil.copyfile(src_ref, new_dir / "ref.png")
-        svc.store.create(kind, source["prompt"], params, new_id, stage=stage)
+            if carry_wav:
+                shutil.copyfile(src_wav, new_dir / "source.wav")
+        # A derived take's lineage survives its reroll: "another one of these"
+        # is still a derivation of the same parent, and dropping the column
+        # would orphan the child in the tray that groups by it. Only music
+        # carries one through here -- for every other kind ``parent_id`` names
+        # a *reference* a mesh was promoted from, and a reroll of that mesh is
+        # a fresh attempt rather than a second promotion.
+        parent = source.get("parent_id") if kind == "music" else None
+        svc.store.create(
+            kind, source["prompt"], params, new_id, stage=stage, parent_id=parent
+        )
     except Exception:
         # The other half of writing the dir first: a row that exists owns its
         # directory, so only an insert (or copy) that never landed cleans up

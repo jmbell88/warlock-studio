@@ -96,10 +96,17 @@ T2I_PHASES = {
 }
 
 MUSIC_PHASES = {
-    # One entry, because the music worker emits one state. Its own table rather
-    # than a shared one all the same: these strings are what the child sends,
-    # and the two children are free to grow different vocabularies.
+    # Two entries, because the music worker emits two states. Its own table
+    # rather than a shared one all the same: these strings are what the child
+    # sends, and the two children are free to grow different vocabularies.
     "load": ("music_load", "Loading music model"),
+    # Mapped onto ``music_load`` rather than earning a phase of its own -- the
+    # way T2I_PHASES maps "condition" -- so ``progress.PHASES_MUSIC`` needs no
+    # change and the ETA model is untouched. What it buys is the *label*: a
+    # task with a source spends tens of seconds in ``infer_latents`` after the
+    # load has finished, and a bar still reading "Loading music model" through
+    # it is a bar telling the user the wrong thing.
+    "encode": ("music_load", "Reading the source audio"),
 }
 
 # Whether reference.prepare recentres and rescales the subject, or merely
@@ -1032,10 +1039,16 @@ class Worker(
             # ensure_started reaps or refuses.
             with contextlib.suppress(TrellisStopFailed):
                 await asyncio.to_thread(self.trellis.stop)
-        elif phase in ("rig", "sheet", "views", "project", "remesh", "train"):
+        elif phase in ("rig", "sheet", "views", "project", "remesh", "train", "separate"):
             # Same story as trellis: bpy is inside a C weighting solve (or an
             # EEVEE render) and checks nothing, so killing the subprocess is
             # the only abort.
+            #
+            # ``separate`` joins them for a *different* reason and the same
+            # remedy: its child is one-shot, so cancelling costs a ~300 MB load
+            # and two seconds rather than a warm 8.3 GiB pipe. That is exactly
+            # why it has no in-loop cancel hook to check -- see
+            # ``pipelines/separation_worker``.
             proc = self._blender
             if proc is not None and proc.poll() is None:
                 with contextlib.suppress(OSError):

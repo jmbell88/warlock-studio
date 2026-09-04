@@ -89,6 +89,18 @@ def draw(ctx: Any) -> None:
         "an exported WAV tells a game engine; this is for listening."
     )
 
+    # **The device's level, and Muse's player draws the same one.** There is one
+    # reserved channel, so there is one volume: two per-mode sliders writing it
+    # would be a control that disagrees with itself the moment the other mode
+    # set it. ``sirens_audio`` owns the number for the reason it owns the
+    # channel -- see ``set_volume``. Two views, one value.
+    imgui.set_next_item_width(-1)
+    changed, level = controls.slider_float(
+        "##sirens-volume", sirens_audio.volume(), 0.0, 1.0, "Volume %.2f"
+    )
+    if changed:
+        sirens_audio.set_volume(level)
+
     if not device:
         widgets.muted_wrapped(sirens_audio.unavailable_reason())
     elif tab.render_error:

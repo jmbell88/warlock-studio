@@ -117,6 +117,20 @@ def get_file(
                     # "this model has no textures" is a fact about the mesh,
                     # not a fault -- the artifact simply cannot exist.
                     raise NotReady(str(exc)) from exc
+    if name in files.DERIVED_AUDIO and not path.exists():
+        # The same lazy derivation as the mesh exports above, from the other
+        # source. No freshness test: nothing rewrites ``track.wav`` after the
+        # run, so existence is the whole question -- see ``DERIVED_AUDIO``.
+        from ..pipelines import audioout
+
+        with svc.convert_lock(job_id, name):
+            if not path.exists():
+                _staged(
+                    job_dir,
+                    name,
+                    lambda tmp: audioout.convert(job_dir / "track.wav", tmp, name),
+                )
+
     # Freshness rather than existence: a hand edit or a revert rewrites
     # input.png in place, and an artifact older than it is a picture of pixels
     # that are gone. files.fresh_2d answers "missing" and "stale" the same way

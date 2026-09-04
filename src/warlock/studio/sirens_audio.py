@@ -135,6 +135,50 @@ def available() -> bool:
     return _available
 
 
+#: How loud the one channel is, 0.0 to 1.0.
+#:
+#: **App-wide, and here rather than in a Config field.** One reserved channel
+#: means one ``set_volume``, so a per-mode volume would be a control that
+#: disagrees with itself the moment the other mode set it -- and two of them
+#: writing one device is the "two spellings of one thing" shape this repo
+#: writes tests against. It lives in this module because this module owns the
+#: device and that exclusivity *is* the contract; a pane reaching for
+#: ``pygame.mixer.Channel(0)`` to set a level would be the second door.
+#:
+#: Not a Settings row either: a volume is a thing you reach for while listening,
+#: not a preference you configure, and it costs a Config field plus a SETTINGS
+#: row plus the bidirectional test that pairs them to say otherwise.
+_volume: float = 1.0
+
+
+def volume() -> float:
+    """The level every mode's transport draws. See :data:`_volume`."""
+    return _volume
+
+
+def set_volume(value: float) -> None:
+    """Set the one channel's level. Safe with no device."""
+    global _volume
+    _volume = min(max(float(value), 0.0), 1.0)
+    _apply_volume()
+
+
+def _apply_volume() -> None:
+    """Push :data:`_volume` at the channel, if there is one.
+
+    Called on every change *and* from inside :func:`play`, because a device
+    that was re-opened -- ``_reset`` then ``available`` -- comes back with a
+    fresh channel at 1.0, and a level the user set before that would be
+    silently forgotten the first time the mixer was rebuilt.
+    """
+    if _channel is None:
+        return
+    try:
+        _channel.set_volume(_volume)
+    except Exception:  # pragma: no cover -- a device lost mid-session
+        log.exception("sirens: the device refused a volume")
+
+
 def play(pcm: Any, rate: int = RATE, *, tag: str = "", loops: int = 0) -> bool:
     """Play an ``int16`` buffer. -> whether it started.
 
@@ -168,6 +212,7 @@ def play(pcm: Any, rate: int = RATE, *, tag: str = "", loops: int = 0) -> bool:
     try:
         _sound = pygame.sndarray.make_sound(buffer)
         stop()
+        _apply_volume()
         _channel.play(_sound, loops=int(loops))
     except Exception:
         log.exception("sirens: the device refused a buffer")

@@ -417,6 +417,25 @@ Changing animation starts the new one from its first frame.
 There is nothing else. Troupe holds no document — the sheet it plays was published by a job and
 lives in that job's directory — so there is no save, no undo and no tab to close.
 
+## Muse
+
+Undocumented since the mode shipped, which is the honest note to open on: Space, the arrows and
+Ctrl+Enter were all bound and none of them was written down anywhere.
+
+| Keys | Action |
+| --- | --- |
+| Space | Play or stop the selected take |
+| Up / Down | Move the tray's selection |
+| Ctrl+Enter | Generate, from wherever the caret is |
+| Left / Right | Nudge the playhead a second. Hold Shift for ten |
+| Home | Playhead back to the start |
+| `[` / `]` | Set the loop's start or end at the playhead |
+| L | Look for loop points |
+
+The last four need a take under the player, which appears once you have pressed Play on one. The
+bracket keys place a marker exactly where you are listening — the thing a mouse is bad at. See
+[Muse](35-muse.md#the-player).
+
 ## Sirens
 
 | Keys | Action |

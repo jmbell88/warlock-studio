@@ -190,6 +190,44 @@ def _verify_staged(staging: Path, spec: dict[str, Any]) -> None:
         )
 
 
+def _fetch_url(staging: Path, spec: dict[str, Any]) -> None:
+    """Download one file by URL into ``staging``, verifying its digest.
+
+    **The digest is not optional**, and refusing without one is the point: this
+    transport has no ``revision`` to pin it, so a spec that reached here with an
+    empty ``sha256`` would be a download of whatever that URL serves today,
+    installed as if it were pinned. Refusing is a bug in a registry entry
+    surfacing at the one moment it can still be caught.
+
+    Streamed in chunks and hashed as it goes, so a 320 MiB artifact is never
+    held in memory twice, and the ``_Sampler`` watching the staging tree gets a
+    growing file to measure exactly as it does for a Hub fetch.
+    """
+    import hashlib
+    import urllib.request
+
+    digest = str(spec.get("sha256") or "").lower()
+    if not digest:
+        raise ValueError(f"{spec.get('url')} has no sha256 to verify against")
+    name = str(spec.get("filename") or "") or Path(str(spec["url"])).name
+    if "/" in name or "\\" in name or name in ("", ".", ".."):
+        # It becomes a path. A registry entry is not user input, but this is
+        # one join away from the model root and the check costs a line.
+        raise ValueError(f"{name!r} is not a filename this fetch may write")
+
+    out = staging / name
+    running = hashlib.sha256()
+    with urllib.request.urlopen(str(spec["url"]), timeout=60) as response, out.open("wb") as handle:
+        while chunk := response.read(1 << 20):
+            running.update(chunk)
+            handle.write(chunk)
+    if running.hexdigest() != digest:
+        raise ValueError(
+            f"{name} downloaded with digest {running.hexdigest()}, "
+            f"which is not the {digest} this build pins"
+        )
+
+
 def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
     """Run one fetch. Raises on failure, having removed the staging tree."""
     from huggingface_hub import snapshot_download
@@ -217,26 +255,39 @@ def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
         # which the matting pipeline then loads with
         # ``trust_remote_code=True`` (MDL-03). ``None`` for an unpinned entry
         # keeps the previous behaviour exactly rather than inventing a default.
-        revision = str(spec.get("revision") or "") or None
-        snapshot_download(
-            repo_id=str(spec["repo_id"]),
-            revision=revision,
-            local_dir=str(staging),
-            allow_patterns=patterns or None,
-            ignore_patterns=ignore or None,
-        )
-        # Verified here: after the download, before the rename, before the
-        # .cache subtree that carries the expected digests is deleted, and
-        # before anything is published (MDL-08).
-        #
-        # Mandatory rather than opt-in, and this is the one place it can be:
-        # a truncated or corrupt file that reaches ``dest`` reads as a
-        # finished model forever, because every presence probe is a handful of
-        # ``Path.exists()`` calls. Raising here goes through the same unwind
-        # every other failure does -- the staging tree is removed and nothing
-        # is installed -- so a failed verify costs the download and nothing
-        # else.
-        _verify_staged(staging, spec)
+        if spec.get("url"):
+            # The second transport. An artifact that is not on the Hub at all
+            # -- today only the separation checkpoint -- and it rides *inside*
+            # this child rather than beside it, so nothing else in the app
+            # gains a way out to the network. Its digest does what ``revision``
+            # does for a repo, and rather more strongly: a revision names an
+            # immutable commit, a digest is the artifact. See ``models.Fetch``.
+            #
+            # It verifies itself, so it does not reach ``_verify_staged``
+            # below -- that function reads ``snapshot_download``'s own
+            # ``.metadata`` sidecars, which a plain HTTP GET never writes.
+            _fetch_url(staging, spec)
+        else:
+            revision = str(spec.get("revision") or "") or None
+            snapshot_download(
+                repo_id=str(spec["repo_id"]),
+                revision=revision,
+                local_dir=str(staging),
+                allow_patterns=patterns or None,
+                ignore_patterns=ignore or None,
+            )
+            # Verified here: after the download, before the rename, before the
+            # .cache subtree that carries the expected digests is deleted, and
+            # before anything is published (MDL-08).
+            #
+            # Mandatory rather than opt-in, and this is the one place it can
+            # be: a truncated or corrupt file that reaches ``dest`` reads as a
+            # finished model forever, because every presence probe is a handful
+            # of ``Path.exists()`` calls. Raising here goes through the same
+            # unwind every other failure does -- the staging tree is removed
+            # and nothing is installed -- so a failed verify costs the download
+            # and nothing else.
+            _verify_staged(staging, spec)
         rename = spec.get("rename")
         if rename:
             src, dst = rename

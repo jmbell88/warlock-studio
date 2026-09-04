@@ -1,7 +1,7 @@
 """Sirens' right-bottom pane: where this song lives, and the undo stack.
 
 ``plotter_bridge``'s shape and its reasoning: the facts about the file, the two
-history verbs, and the recent list. New/Open/Save are the Song menu's rows,
+history verbs, and the recent list. New/Open/Save are the File menu's rows,
 which is where a user looks for them.
 
 **Export is here rather than in the transport**, next to Save and the file's
@@ -78,6 +78,27 @@ def _export(ctx: Any, tab: Any) -> None:
         ),
     ):
         sirens_mode.export_files(ctx, tab)
+    # The reverse bridge, beside the export because it is the same gesture --
+    # "take this song somewhere" -- and the two destinations are a folder and
+    # the other audio mode. ``muse_mode.open_in_sirens`` is the leg the manual
+    # already documented; this is the one it called deliberately unbuilt.
+    if widgets.disabled_button(
+        f"{icons.MUSIC} Compose in Muse...",
+        bool(doc.order) and not tab.busy,
+        (-1, 0),
+        reason=(
+            "This song is being written; the button comes back when it lands."
+            if doc.order
+            else "There is nothing in the order list to compose from."
+        ),
+        tooltip=(
+            "Render this song and hand it to the music model as a reference. "
+            "Your loop points travel with it."
+        ),
+    ):
+        from .. import muse_mode
+
+        muse_mode.compose_from_sirens(ctx, tab)
     counts = [f"{len(doc.channels)} stem(s)"]
     if doc.oneshots:
         counts.append(f"{len(doc.oneshots)} effect(s)")

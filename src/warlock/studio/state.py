@@ -620,6 +620,18 @@ def card_kind(job: dict[str, Any]) -> str:
     """
     if job.get("kind") in ("rig", "sheet"):
         return job["kind"]
+    if job.get("kind") == "separate":
+        # Filed under "music" with the take it belongs to, rather than given a
+        # kind of its own -- the charsheet-under-"sheet" argument: what the
+        # filter is for is "show me the tracks", and a split *is* one, in the
+        # same directory, played by the same mode. What makes it a split is a
+        # property of its artifacts, not of the row.
+        return "music"
+    if job.get("kind") == "music":
+        # Its own kind rather than falling through to "model", which is what it
+        # did until now: a take is neither 2D nor a mesh, and a workshop
+        # filtered to meshes was listing every track the user had ever made.
+        return "music"
     if job.get("kind") == "charsheet":
         # Filed under "sheet" with the pose sheets rather than given a kind of
         # its own: what the filter is for is "show me the sprite sheets this
@@ -1325,6 +1337,18 @@ def primary_action(job: dict[str, Any], *, rigging_available: bool = True) -> st
     if status != "done":
         return None
     files = job.get("files") or []
+    if job.get("kind") == "separate":
+        # Muse, and by way of the take rather than of this row: a split writes
+        # into the source take's directory and has no artifacts of its own, so
+        # "Open" means "show me the take that now has stems".
+        params = job.get("params") if isinstance(job.get("params"), dict) else {}
+        return "muse" if params.get("source_job") else None
+    if job.get("kind") == "music":
+        # Muse, for the tile sheet's reason: the deliverable is the take, and
+        # the mode it belongs to is where it is played, named and derived from.
+        # Without this arm a finished take walks the whole ladder looking for a
+        # ``model.glb`` it will never have and offers no action at all.
+        return "muse" if "track.wav" in files else None
     params = job.get("params") if isinstance(job.get("params"), dict) else {}
     intent = params.get("asset_intent")
     if intent == "tileset" and "input.png" in files:

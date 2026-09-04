@@ -196,6 +196,15 @@ PHASES_MUSIC: dict[str, tuple[float, float]] = {
     "music_sample": (0.25, 1.00),
 }
 
+#: Required rather than optional, and that is worth stating: an unregistered
+#: kind falls through ``phases_for`` to ``PHASES_IMAGE``, whose phase names this
+#: job never emits -- so the bar would sit at zero for the whole run and then
+#: jump to done. The load is a small fraction because it is a ~300 MB
+#: checkpoint and two seconds, unlike the music model's 8.3 GiB.
+PHASES_SEPARATE: dict[str, tuple[float, float]] = {
+    "separate": (0.00, 1.00),
+}
+
 _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "text": PHASES_TEXT,
     "image": PHASES_IMAGE,
@@ -209,6 +218,7 @@ _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "tile_sheet": PHASES_TILE_SHEET,
     "charsheet": PHASES_CHARSHEET,
     "music": PHASES_MUSIC,
+    "separate": PHASES_SEPARATE,
 }
 
 

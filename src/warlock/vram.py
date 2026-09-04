@@ -92,6 +92,30 @@ A card whose every byte is handed to the models still has to draw a window.
 COEXIST_GIB = TRELLIS_GIB + SDXL_GIB
 """What the default (coexist) mode asks a card to hold at once."""
 
+MUSIC_SOURCE_GIB = 1.0
+"""What encoding a source recording into latents costs on top of the pipe.
+
+**A guess, in P23's tradition, and it is written down as one.** The DCAE
+encoder runs over up to four minutes of 44.1 kHz stereo and its activations are
+transient -- they are gone before the sampler starts -- but they peak *while*
+the 8.3 GiB pipe is resident, which is the moment admission has to survive. One
+GiB is chosen the way every other unmeasured figure here is: erring high, since
+under-pricing is the direction that OOMs at load rather than merely refusing a
+job that would have fitted.
+
+``docs/measurements/`` owes the real number, and the gpu-lane test that will
+replace it is the one that prints peak VRAM for an ``extend`` of a 240 s take.
+"""
+
+TASKS_WITH_SOURCE_AUDIO = frozenset({"extend", "repaint", "edit", "loop", "audio2audio"})
+"""Which Muse tasks hand the model a recording to read.
+
+``retake`` is deliberately absent: it re-runs from the parent's *seed*, not
+from its audio, so it costs exactly what a fresh generation costs. That is the
+same distinction ``_q_music._task_kwargs`` draws, and the two must agree --
+pricing a retake for an encode it never does would refuse jobs that fit.
+"""
+
 
 def _resolution(params: dict[str, Any] | None) -> int:
     raw = (params or {}).get("resolution")
@@ -335,10 +359,30 @@ def estimate_parts(
             str((params or {}).get("music_model") or models.DEFAULT_MUSIC_MODEL)
         )
         music = spec.vram_gib if spec is not None else 10.0
+        # A task with a source pays for the DCAE encode of it on top. Added to
+        # the *first* term only: the second is the resident-checkpoint credit,
+        # and a transient encode is not resident weights.
+        if (params or {}).get("task") in TASKS_WITH_SOURCE_AUDIO:
+            music += MUSIC_SOURCE_GIB
         # Returned as the second term as well: it is a resident checkpoint that
         # ``queue._check_resources`` must credit back rather than charge twice,
         # which is the whole contract of this function's second return value.
         return (music if exclusive else music + TRELLIS_GIB), music
+    if kind == "separate":
+        # A one-shot child: it loads ~300 MB, separates, writes and exits.
+        #
+        # The interesting figure is the *second* one, which is 0.0 rather than
+        # the cost. That return value is the resident-checkpoint credit
+        # ``queue._check_resources`` gives back, and a process that dies at the
+        # end of the job has nothing to credit -- pricing it like the music
+        # pipe would tell the queue a permanent 4 GiB had been freed.
+        from . import models
+
+        spec = models.SEPARATION_MODELS.get(
+            str((params or {}).get("separation_model") or models.DEFAULT_SEPARATION)
+        )
+        cost = spec.vram_gib if spec is not None else 4.0
+        return (cost if exclusive else cost + TRELLIS_GIB), 0.0
     if kind not in ("text", "image"):
         # rig / pose / sheet / charsheet are Blender, out of process and
         # CPU-side -- and the character sheet's pixel-art pass after it is

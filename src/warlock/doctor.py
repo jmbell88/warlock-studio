@@ -106,6 +106,7 @@ def static_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         *_text_checks(config),
         *_pose_checks(config, probe_slow=probe_slow),
         *_music_checks(config),
+        *_separation_checks(config),
         blender_check(probe=probe_slow),
     ]
 
@@ -810,6 +811,37 @@ def _music_checks(config: Config) -> list[Check]:
             )
         checks.append(
             Check(fetch.check_name("music", spec.label), ok, detail, fatal=False)
+        )
+    return checks
+
+
+def _separation_checks(config: Config) -> list[Check]:
+    """One row per stem-separation model: are its weights on disk?
+
+    ``_music_checks``' loop, with no load probe for its reason exactly -- the
+    model runs only inside its own subprocess and the app process deliberately
+    never imports torch.
+
+    What differs is the *sentence*, because the consequence differs. A missing
+    music model refuses a job at the door; a missing separation model refuses
+    only the separation. Every take still generates, plays, exports and imports
+    into Sirens -- what is lost is four extra files, and a row that said "Muse
+    refuses" would be telling the user their mode was broken when it is not.
+    """
+    checks: list[Check] = []
+    for spec in models.SEPARATION_MODELS.values():
+        path = config.t2i_model_root / spec.dir_name
+        ok = fetch.present(config, "separation", spec)
+        if ok:
+            detail = f"weights present at {path} -- takes can be split into stems"
+        else:
+            detail = (
+                f"not found at {path} -- Muse works without it; what is lost is "
+                f"splitting a take into stems. Download with:\n"
+                f"  {fetch.download_text(config, 'separation', spec)}"
+            )
+        checks.append(
+            Check(fetch.check_name("separation", spec.label), ok, detail, fatal=False)
         )
     return checks
 

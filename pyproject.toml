@@ -39,6 +39,13 @@ dependencies = [
     # reference before the trellis upload, and that path never touches torch.
     # The headless build on purpose: the GUI one drags in Qt.
     "opencv-python-headless>=4.10",
+    # Reading and writing audio files outside the music extra. Muse's audition
+    # decodes a finished take in the app process, and the loop/stem exports
+    # write from it -- neither path touches torch, and both must work on the
+    # documented dev install, which does not include `music`. Core for the same
+    # reason scipy and opencv are: a small self-contained wheel on a path that
+    # would otherwise raise ModuleNotFoundError at call time.
+    "soundfile>=0.12",
     # The fetch worker imports snapshot_download directly.  Keeping this as a
     # direct dependency prevents model downloads from depending on whichever
     # optional ML package happens to pull the Hub client in transitively.
@@ -84,16 +91,32 @@ music = [
     "transformers>=4.44",
     "accelerate>=0.34",
     "peft>=0.13",
-    "torchaudio>=2.7",
+    # <2.9: as of 2.9 torchaudio.save dropped the soundfile/sox backends for
+    # TorchCodec-only encoding, and the vendored pipeline_ace_step.py calls
+    # torchaudio.save(..., backend="soundfile") -- upstream ACE-Step code, so
+    # the fix is pinning the dependency rather than patching the vendor copy
+    # (see acestep/ATTRIBUTION.md).
+    #
+    # There is a second, independent reason, and it is here so that a future
+    # bump made to fix the first one does not silently delete a feature:
+    # `torchaudio.models.hdemucs_high` is the stem separator behind Muse's
+    # Separate action. It is a model class, not a backend, and it is gone from
+    # the same release. Bumping past 2.9 means vendoring it under
+    # `pipelines/hdemucs/` the way ACE-Step is vendored.
+    "torchaudio>=2.7,<2.9",
     "librosa>=0.10",
-    "soundfile>=0.12",
+    # soundfile is a core dependency; the extra inherits it.
     "loguru>=0.7",
     # The lyric-language stack. Heavy for a first cut that may only ever see
     # English lyrics, but `pipeline_ace_step` imports `language_segmentation`
     # and the lyric tokenizer unconditionally, so trimming it would mean a
     # fourth vendored modification -- and silently mangling non-English lyrics
     # with no error is worse than the install size.
-    "py3langid>=0.2",
+    # 0.4 renamed LanguageIdentifier.from_pickled_model to from_model_file;
+    # the vendored language_segmentation/LangSegment.py is upstream ACE-Step
+    # byte-for-byte and still calls the old name (see acestep/ATTRIBUTION.md --
+    # patching it would be an undocumented fourth vendored modification).
+    "py3langid>=0.2,<0.4",
     "pypinyin>=0.53",
     "num2words>=0.5",
     "hangul-romanize>=0.1",
@@ -208,6 +231,9 @@ torch = [{ index = "pytorch-cu128" }]
 # another CUDA build of torch fails at import with an operator-registry error,
 # which reads as a broken install rather than a mismatched wheel.
 torchvision = [{ index = "pytorch-cu128" }]
+# Same reasoning: an unrouted torchaudio resolves to PyPI's CPU-only wheel,
+# which then chokes on the CUDA tensors the rest of the pipeline hands it.
+torchaudio = [{ index = "pytorch-cu128" }]
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

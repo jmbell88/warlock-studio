@@ -44,6 +44,96 @@ DEFAULT_FORM: dict[str, Any] = {
 }
 
 
+#: The derive popup's defaults. ``_jobs_music``'s bounds are the authority; as
+#: with :data:`DEFAULT_FORM`, what must agree is that every value here is one
+#: the door accepts -- a bound, not a value.
+#:
+#: ``repaint_start``/``repaint_end`` open on a window the door refuses for a
+#: 60 s take only if it is the whole take, which it is not: 0-8 s is the first
+#: phrase, which is the window a user most often wants and the one the loop
+#: task reads as "eight seconds of joint".
+DEFAULT_DERIVE: dict[str, Any] = {
+    "task": "retake",
+    "count": 1,
+    "retake_variance": 0.5,
+    "extend_left": 0.0,
+    "extend_right": 30.0,
+    "repaint_start": 0.0,
+    "repaint_end": 8.0,
+    "edit_prompt": "",
+    "edit_lyrics": "",
+    "ref_audio_strength": 0.5,
+}
+
+
+#: The default crossfade at a loop seam, in milliseconds.
+#:
+#: **A control, not a tuned constant**, which is why there is a default rather
+#: than a figure: it trades two things the user can hear against each other. A
+#: short fade keeps every transient at the seam and can click; a long one is
+#: certainly smooth and audibly ducks the music through the join. 40 ms is
+#: under a frame of most game audio and long enough to swallow a phase
+#: mismatch the zero-crossing snap could not close.
+DEFAULT_XFADE_MS = 40.0
+
+#: The longest crossfade the player will offer. Half a second is already long
+#: enough to hear as a dip rather than a join; past it the control is asking
+#: for a different effect.
+MAX_XFADE_MS = 500.0
+
+
+@dataclass
+class Player:
+    """One decoded take, and where the player is in it.
+
+    Held rather than re-read because the read is ~40 MB off disk -- which is
+    why :func:`muse_mode.play` submits it to a task in the first place. **One
+    take at a time**: four minutes of 44.1 kHz stereo int16 is ~42 MB, and a
+    cache of every take the tray has ever shown would be a mode that grows
+    without bound while the user auditions candidates. It is dropped in
+    ``sync`` when its take leaves the Library.
+    """
+
+    #: Whose take this is. "" when nothing has been loaded yet.
+    job: str = ""
+
+    #: The decoded frames, ``int16``, at ``sirens_audio.RATE``. The mixer's
+    #: buffer and the player's picture come from the one array.
+    pcm: Any = None
+    rate: int = 0
+
+    #: ``muse.waveform.peaks`` of :attr:`pcm`, computed once on the same task
+    #: thread that did the read. The pane windows it per frame.
+    env: Any = None
+
+    #: The take's length in seconds, from the frame count -- never from
+    #: ``params["duration"]``, which is what the worker was *asked* for.
+    duration: float = 0.0
+
+    #: Where in the take the buffer currently on the channel began.
+    #:
+    #: ``SongTab.play_offset`` a second time, and for its reason: seeking is
+    #: slice-and-replay (``sirens_play.play_from_caret``), so the mixer's own
+    #: clock is relative to the slice and this is what makes it absolute again.
+    #: ``sirens_audio`` deliberately gains no offset of its own -- it does not
+    #: own the caller's buffer, and a second module tracking the same number is
+    #: how the two come to disagree.
+    play_offset: float = 0.0
+
+    #: The loop region, in seconds. ``None`` until a region is set.
+    loop_start: float | None = None
+    loop_end: float | None = None
+
+    #: The crossfade at the seam, in milliseconds. See :data:`DEFAULT_XFADE_MS`.
+    xfade_ms: float = DEFAULT_XFADE_MS
+
+    #: What ``muse.loops.find`` last offered, best first, and whether a search
+    #: is in flight. A list rather than one answer because the finder is a
+    #: heuristic over material nobody composed to loop -- see that module.
+    candidates: list[Any] = field(default_factory=list)
+    finding: bool = False
+
+
 @dataclass
 class MuseState:
     """The mode's whole memory."""
@@ -65,6 +155,23 @@ class MuseState:
     #: The take the tray has selected, or "". Space auditions this one, which
     #: is why it is state rather than a hover.
     selected_job: str = ""
+
+    #: The decoded take under the player strip, or ``None``. Built on the first
+    #: audition and replaced whenever a different take is played.
+    player: Player | None = None
+
+    #: Which take the derive popup is open over, or "". One at a time by
+    #: construction: a popup per card would be six sets of controls on screen
+    #: at once, all but one of them about a take the user is not looking at.
+    derive_job: str = ""
+
+    #: The derive popup's own form. **Deliberately separate from ``form``**,
+    #: which is the *brief* -- what the next Generate will ask for. A derivation
+    #: is a statement about one finished take, so mixing the two would make
+    #: opening a popup silently rewrite the brief, and closing it leave the
+    #: brief wearing a repaint window. Reset from :data:`DEFAULT_DERIVE` every
+    #: time the popup opens, for the same reason.
+    derive_form: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_DERIVE))
 
 
 def ensure(ctx: Any) -> MuseState:

@@ -41,7 +41,7 @@ from typing import Any, NamedTuple
 class Route(NamedTuple):
     """Where one row opens. Pure data, so :func:`route` needs no ``ctx``."""
 
-    #: ``"create"`` or ``"troupe"``.
+    #: ``"create"``, ``"troupe"`` or ``"muse"``.
     mode: str
     #: A key of ``create_stages.STAGES``; ``""`` when the mode is not Create.
     stage: str
@@ -116,6 +116,22 @@ def route(job: Any) -> Route:
     # blob edited by hand -- falls through to the ordinary arm rather than
     # routing nowhere. The blank stage is still better than a click that does
     # nothing, and no door any current version ships can mint one.
+    if kind == "separate":
+        # To the *take*, not to this row -- ``FOLLOWUP_STAGES``' whole rule on
+        # a mode instead of a stage: a split's artifacts land in the source
+        # take's directory and its own is never created, so routing it by
+        # itself would open Muse on a row with nothing in it.
+        return Route("muse", "", source or str(job.get("id") or ""), "", "")
+
+    if kind == "music":
+        # Muse, not a Create stage -- Troupe's shape exactly. A take's surface
+        # is the mode that plays it, and routing it by ``stage_for`` landed on
+        # Create's Mesh stage holding a row with no mesh, which is the blank
+        # arrival this module exists to stop. Checked before the follow-up arm
+        # because a derived take carries a ``source_job``-shaped parent and is
+        # still opened in Muse rather than beside its parent.
+        return Route("muse", "", str(job.get("id") or ""), "", "")
+
     if source:
         if kind == "charsheet":
             return Route("troupe", "", source, detail, "")
@@ -159,6 +175,13 @@ def open_asset(ctx: Any, job_or_id: Any) -> None:
         return
 
     target = route(job)
+    if target.mode == "muse":
+        from . import muse_mode
+        from .state import set_mode
+
+        muse_mode.ensure(ctx).selected_job = target.job_id
+        set_mode(ctx.state, "muse")
+        return
     if target.mode == "troupe":
         if troupe_mode.open_sheet(ctx, target.job_id, target.detail):
             return

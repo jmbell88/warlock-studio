@@ -1386,8 +1386,13 @@ def licence_note(row: dict[str, Any]) -> str:
     if not licence:
         return ""
     if not row.get("commercial", True):
+        # "Output", not "Images". This sentence was written when every
+        # restricted row was an image checkpoint, and the stem separator is the
+        # first one that is not -- so it told a user about images while they
+        # were agreeing to download an audio model. The registry's own
+        # ``license_note`` carries whatever else is specific to the row.
         return (
-            f"Licence: {licence}. Images from this model may NOT be used "
+            f"Licence: {licence}. Output from this model may NOT be used "
             f"commercially. {row.get('license_note') or ''}"
         ).strip()
     note = str(row.get("license_note") or "")

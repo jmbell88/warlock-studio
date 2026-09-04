@@ -26,6 +26,7 @@ nothing upstream had to change to satisfy it.
 
     {"op": "generate", "prompt": ..., "lyrics": ..., "output": ..., ...}
       -> marker {"kind": "state", "text": "load"}
+      -> marker {"kind": "state", "text": "encode"}   (a task with a source)
       -> marker {"kind": "step", "step": 3, "total": 60}
       -> marker {"kind": "done", "path": ..., "recipe": {...}, ...}
       -> marker {"kind": "error", "error": ..., "cancelled": false}
@@ -90,13 +91,25 @@ def _scalar_kwargs(req: dict[str, Any]) -> dict[str, Any]:
         "task": str(req.get("task", "text2music")),
         "retake_seeds": [int(s) for s in retake_seeds] if retake_seeds else None,
         "retake_variance": float(req.get("retake_variance", 0.5)),
-        "repaint_start": int(req.get("repaint_start", 0)),
-        "repaint_end": int(req.get("repaint_end", 0)),
+        # ``float``, not ``int``: the pipeline turns these into latent frames
+        # by multiplying by 44100/512/8, so an ``int`` here throws away every
+        # sub-second boundary -- and a waveform control produces nothing else.
+        # A repaint of bars 3-4 asked for at 5.4 s would have started at 5.0.
+        "repaint_start": float(req.get("repaint_start", 0.0)),
+        "repaint_end": float(req.get("repaint_end", 0.0)),
         "src_audio_path": req.get("src_audio_path"),
         "edit_target_prompt": req.get("edit_target_prompt"),
         "edit_target_lyrics": req.get("edit_target_lyrics"),
         "edit_n_min": float(req.get("edit_n_min", 0.0)),
         "edit_n_max": float(req.get("edit_n_max", 1.0)),
+        # audio2audio: "something like this" from a reference recording, and
+        # the one task whose source is *not* sent as ``src_audio_path``.
+        # ``__call__`` asserts that path implies repaint/edit/extend, so
+        # sending both trips an assertion inside the child -- see
+        # ``_q_music._task_kwargs``, which is the one place that knows.
+        "audio2audio_enable": bool(req.get("audio2audio_enable", False)),
+        "ref_audio_strength": float(req.get("ref_audio_strength", 0.5)),
+        "ref_audio_input": req.get("ref_audio_input"),
     }
 
 
@@ -168,6 +181,13 @@ class _Server:
         output.parent.mkdir(parents=True, exist_ok=True)
         kwargs = _scalar_kwargs(req)
         emit({"kind": "state", "text": "load"})
+        if kwargs.get("src_audio_path") or kwargs.get("ref_audio_input"):
+            # A second state, emitted only when there is a source to read.
+            # ``infer_latents`` on four minutes of audio is tens of seconds
+            # during which the bar would otherwise still say "Loading music
+            # model" -- the load having finished long before. The phase table
+            # maps it back onto ``music_load``, so the ETA model is untouched.
+            emit({"kind": "state", "text": "encode"})
         try:
             pipe(
                 format="wav",

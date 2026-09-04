@@ -32,6 +32,22 @@ MEDIA = {
     # of what the model made -- the same reason a reference job has only
     # input.png.
     "track.wav": "audio/wav",
+    # The compressed and lossless re-encodings of it, derived on first request
+    # exactly the way the mesh exports derive from model.glb -- so every take
+    # already on disk gains them. ``pipelines/audioout`` is the whole
+    # implementation and libsndfile is the whole dependency.
+    "track.flac": "audio/flac",
+    "track.mp3": "audio/mpeg",
+    "track.ogg": "audio/ogg",
+    # The four stems, as *literal* keys rather than a ``stems/{name}.wav``
+    # pattern -- the reason the pixel sizes are literals. MEDIA is the allowlist
+    # that keeps a caller-supplied string off the filesystem, and a pattern is
+    # a hole in exactly that. ``SeparationModel.sources`` is the same four names
+    # from the other side; ``tests/test_separation.py`` asserts they agree.
+    "stems/drums.wav": "audio/wav",
+    "stems/bass.wav": "audio/wav",
+    "stems/other.wav": "audio/wav",
+    "stems/vocals.wav": "audio/wav",
     # The trellis response model.glb is derived from, kept downloadable so a
     # user can take the full-density reconstruction if they want it.
     "source.glb": "model/gltf-binary",
@@ -625,6 +641,32 @@ def measure_storage(data_dir: Path) -> dict[str, Any]:
 # model.glb itself is ready, and never independently of it.
 DERIVED = ("model.stl", "model_obj.zip", "collision.glb", "textures.zip", "model.fbx")
 
+#: Where a take's stems land, inside the *take's* own directory.
+#:
+#: **A note for the manual, not a shared constant.** Sirens also exports into a
+#: folder called ``stems/``. Same word, two unrelated places -- and they
+#: deliberately do not share a name in code, because ``service/files.py`` must
+#: not reach into ``studio/``. One sentence in the chapter prevents the
+#: confusion; a shared import would create a dependency to prevent it.
+STEMS_DIR = "stems"
+
+#: The audio re-encodings, derived from ``track.wav`` on first request.
+#:
+#: Its own tuple beside ``DERIVED`` and ``DERIVED_2D`` rather than a member of
+#: either: those two are keyed on ``model.glb`` and ``input.png``, and which
+#: source an artifact is derived *from* is the thing ``ready`` and
+#: ``unready_reason`` branch on. A fourth name in ``DERIVED`` would make a music
+#: job's FLAC wait for a mesh it will never have.
+#:
+#: **No staleness rule**, deliberately, and it is stated rather than left out:
+#: ``input.png`` has three writers, which is what ``fresh_2d`` exists for, and
+#: ``track.wav`` has one that never touches it again. Existence is the test.
+DERIVED_AUDIO = ("track.flac", "track.mp3", "track.ogg")
+
+#: The stem artifacts, as the names ``MEDIA`` and ``LISTED`` know them.
+#: Derived from ``MEDIA`` rather than re-typed, so the two cannot drift.
+STEM_FILES = tuple(f"{STEMS_DIR}/{name}.wav" for name in ("drums", "bass", "other", "vocals"))
+
 # Everything that is a pure function of a *reference's* input.png. Kept apart
 # from DERIVED rather than merged into it: the two sets have different sources,
 # different readiness rules and different jobs they apply to, and one tuple
@@ -722,6 +764,12 @@ LISTED = (
     "rig.glb",
     "rig_qa.png",
     "thumb.png",
+    # A finished take. Absent until now, which meant a done music job reported
+    # no files anywhere outside Muse's own tray: the Library could neither list
+    # it nor offer it, and ``state.primary_action`` fell through the whole
+    # ladder to ``None`` -- a finished card with no action at all.
+    "track.wav",
+    *STEM_FILES,
     "error.log",
 )
 
@@ -815,6 +863,20 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
             and job.get("status") == "done"
             and (job_dir / "input.png").exists()
         )
+    if name in STEM_FILES:
+        # Gated on the sidecar for ``rig.glb``'s reason: the stems land in this
+        # job's directory but are written by a *different* job, one at a time,
+        # so existence alone can hand a reader three of four. ``stems.json`` is
+        # written last as the completion gate.
+        return (job_dir / STEMS_DIR / "stems.json").exists() and path.exists()
+    if name in DERIVED_AUDIO:
+        # Derivable, not present -- ``DERIVED``'s arm on the other source.
+        return ready(job, job_dir, "track.wav")
+    if name == "track.wav":
+        # Gated on status for model.glb's reason: the worker writes the file
+        # through the vendored pipeline and the row is marked done afterwards,
+        # so existence alone can hand a reader a half-encoded take.
+        return job.get("status") == "done" and path.exists()
     if name in DERIVED:
         # Derivable, not present: the caller still has to produce it.
         return ready(job, job_dir, "model.glb")
@@ -843,7 +905,10 @@ def unready_reason(job: dict[str, Any], job_dir: Path, name: str) -> str:
     """
     status = job.get("status")
     derived_from_a_run = (
-        name in ("model.glb", "source.glb") or name in DERIVED or name in DERIVED_2D
+        name in ("model.glb", "source.glb", "track.wav")
+        or name in DERIVED
+        or name in DERIVED_2D
+        or name in DERIVED_AUDIO
     )
     if status in ("queued", "running", "error", "cancelled") and derived_from_a_run:
         return not_done_message(f"{name} is not available yet: this job", str(status))
@@ -863,6 +928,10 @@ def unready_reason(job: dict[str, Any], job_dir: Path, name: str) -> str:
         return f"{name} is derived from the reference image, which is not on disk."
     if name in DERIVED and not (job_dir / "model.glb").exists():
         return f"{name} is derived from the mesh, which is not on disk."
+    if name in DERIVED_AUDIO and not (job_dir / "track.wav").exists():
+        return f"{name} is derived from the track, which is not on disk."
+    if name in STEM_FILES:
+        return "This take has not been split into stems yet."
     return f"{name} is not on disk for this job."
 
 
@@ -878,7 +947,7 @@ def attach_files(job: dict[str, Any], job_dir: Path, *, cache: dict | None = Non
 
     ``cache`` is an optional ``{job_id: (stamp, names)}`` the caller owns, and
     it exists because this is the frame loop's single largest syscall cost:
-    ``LISTED`` is ten names and ``ready`` stats one or two files for each, so
+    ``LISTED`` is eleven names and ``ready`` stats one or two files for each, so
     a two-hundred row page costs upwards of two thousand ``stat`` calls -- twice
     a second, on the thread that must not block, growing without limit as
     "load more" widens the window.

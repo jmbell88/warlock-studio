@@ -108,6 +108,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # is exempt rather than targeted: it is the surface the mode is *about*, the
     # way the pattern grid and the two canvases are.
     "muse-recipe": ("35-muse", "the-window"),
+    "muse-player": ("35-muse", "the-player"),
     # Troupe's four panes. Four entries rather than one chapter-wide target
     # because the questions differ per pane: what a sheet *is* is the cast's
     # question, what the options mean is the form's, why the preview never

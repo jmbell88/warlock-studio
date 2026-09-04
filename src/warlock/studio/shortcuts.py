@@ -286,6 +286,18 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
         ],
     )
     table(
+        "Muse",
+        [
+            ("Space", "Play or stop the selected take"),
+            ("Up / Down", "Move the tray's selection"),
+            ("Ctrl+Enter", "Generate, from wherever the caret is"),
+            ("Left / Right", "Nudge the playhead a second (Shift: ten)"),
+            ("Home", "Playhead back to the start"),
+            ("[ / ]", "Set the loop's start / end at the playhead"),
+            ("L", "Look for loop points"),
+        ],
+    )
+    table(
         "Sirens",
         [
             ("Space", "Play the song, or stop it if it is sounding"),

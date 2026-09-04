@@ -71,6 +71,7 @@ KINDS: tuple[Kind, ...] = (
     Kind("pose", models.POSE_MODELS, "pose model: ", "Measurement"),
     Kind("matting", models.MATTING_MODELS, "host matting: ", "Measurement"),
     Kind("music", models.MUSIC_MODELS, "music model: ", "Music models"),
+    Kind("separation", models.SEPARATION_MODELS, "stem separation: ", "Music models"),
 )
 
 CHECK_PREFIXES: dict[str, str] = {kind.key: kind.check_prefix for kind in KINDS}
@@ -290,6 +291,12 @@ class Job:
     ignore_patterns: tuple[str, ...] = ()
     rename: tuple[str, str] | None = None
     size_gib: float = 0.0
+    # The direct-URL transport, carried through from ``models.Fetch`` the way
+    # ``revision`` is: one string with one owner, from the registry entry to
+    # the worker's download. Empty for every Hub fetch, which is all but one.
+    url: str = ""
+    sha256: str = ""
+    filename: str = ""
 
     def spec(self) -> dict[str, Any]:
         """The JSON the worker reads on stdin.
@@ -307,6 +314,9 @@ class Job:
             "ignore_patterns": list(self.ignore_patterns),
             "rename": list(self.rename) if self.rename else None,
             "size_gib": self.size_gib,
+            "url": self.url,
+            "sha256": self.sha256,
+            "filename": self.filename,
         }
 
 
@@ -354,6 +364,13 @@ def _merge(into: Job, one: models.Fetch) -> Job:
         ignore_patterns=_union(into.ignore_patterns, one.ignore_patterns),
         rename=into.rename or one.rename,
         size_gib=into.size_gib + one.size_gib,
+        # A URL fetch is never merged in practice -- its ``repo_id`` is "" and
+        # it is the only such entry, so its key is unique -- but carrying the
+        # three fields is what stops that being an accident. ``revision``'s own
+        # comment records what it cost when it was dropped here.
+        url=into.url or one.url,
+        sha256=into.sha256 or one.sha256,
+        filename=into.filename or one.filename,
     )
 
 
@@ -395,6 +412,9 @@ def plan(config: Config, chosen: list[Entry]) -> list[Job]:
                 ignore_patterns=one.ignore_patterns,
                 rename=one.rename,
                 size_gib=one.size_gib,
+                url=one.url,
+                sha256=one.sha256,
+                filename=one.filename,
             )
     return [jobs[k] for k in order]
 
@@ -788,7 +808,10 @@ def suspect_files(config: Config, kind: str, spec: Any) -> list[str]:
         candidates = [
             p
             for p in base.rglob("*")
-            if p.is_file() and p.suffix in (".safetensors", ".gguf", ".bin")
+            # ``.pt`` for the separation checkpoint, which is one file and
+            # nothing else -- so a zero-length one is the whole model missing
+            # while every presence probe says it is installed.
+            if p.is_file() and p.suffix in (".safetensors", ".gguf", ".bin", ".pt")
         ]
     for path in candidates:
         try:
@@ -839,6 +862,12 @@ def present(config: Config, kind: str, spec: Any) -> bool:
         # model absent forever. Every probe entry, so a fetch interrupted
         # between subfolders reads as absent rather than as a model that raises
         # halfway through a load.
+        return all((root / spec.dir_name / name).is_file() for name in spec.probe)
+    if kind == "separation":
+        # Named files, for the music arm's reason and a sharper one: this
+        # download is a single ``.pt`` with no ``config.json`` beside it at all,
+        # so the tail's ``dir_name/config.json`` test -- and its
+        # ``rglob("*.safetensors")`` -- would report it absent forever.
         return all((root / spec.dir_name / name).is_file() for name in spec.probe)
     # metric / pose / matting: every entry in those tables downloads
     # config.json plus safetensors weights, and the weights are the multi-GB

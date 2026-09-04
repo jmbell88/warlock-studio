@@ -51,6 +51,170 @@ def _music_needs_handoff(*, exclusive: bool) -> bool:
     return exclusive
 
 
+#: Which ACE-Step task each Muse task is spelled as on the wire.
+#:
+#: Two of the six are renames rather than passthroughs. ``loop`` is **Muse's
+#: own name** for a repaint across a rolled joint -- upstream has no cyclic
+#: objective and no loop task, and calling it ``repaint`` in the UI would name
+#: the mechanism instead of the intent. ``audio2audio`` is a flag rather than a
+#: task upstream, so it maps to plain ``text2music`` and turns the flag on.
+_UPSTREAM_TASK = {
+    "retake": "retake",
+    "extend": "extend",
+    "repaint": "repaint",
+    "edit": "edit",
+    "loop": "repaint",
+    "audio2audio": "text2music",
+}
+
+
+def _task_kwargs(params: dict[str, Any], job_dir: Any) -> dict[str, Any]:
+    """The extras a derived music job sends, or ``{}`` for an ordinary one.
+
+    Module level and pure for ``_music_needs_handoff``'s stated reason: so the
+    *reasoning* has somewhere to live, and so it can be tested without a
+    client, a card or a queue.
+
+    ``{}`` for a row with no ``task`` is not a convenience -- it is the
+    guarantee that every job minted before this existed takes a byte-identical
+    path through ``client.generate``.
+    """
+    task = str(params.get("task") or "")
+    if not task:
+        return {}
+    upstream = _UPSTREAM_TASK.get(task)
+    if upstream is None:
+        # A stored row naming a task this build no longer has. Refused rather
+        # than silently downgraded to text2music, which would record a recipe
+        # that never ran -- ``_music``'s own rule for an unknown model.
+        raise RuntimeError(f"unknown music task: {task!r}")
+
+    out: dict[str, Any] = {"task": upstream}
+    source = job_dir / "source.wav"
+
+    if task == "audio2audio":
+        # **Never ``src_audio_path``.** ``__call__`` asserts that that path
+        # implies repaint/edit/extend, so sending both trips an assertion
+        # inside the child rather than refusing at the door. The reference
+        # travels as ``ref_audio_input``, which is a different argument
+        # entirely and the reason this function exists rather than a dict
+        # comprehension over params.
+        out["audio2audio_enable"] = True
+        out["ref_audio_input"] = str(source)
+        out["ref_audio_strength"] = float(params.get("ref_audio_strength", 0.5))
+        return out
+
+    if task == "retake":
+        # No source at all: a retake is a re-run from the parent's *noise
+        # draw*, blended toward a fresh one. ``__call__`` sets the repaint
+        # window to the whole duration itself for this task, so sending one
+        # here would be a second, disagreeing spelling of the same thing.
+        out["retake_variance"] = float(params.get("retake_variance", 0.5))
+        return out
+
+    out["src_audio_path"] = str(source)
+
+    if task == "extend":
+        # Upstream spells the pads as a *negative* repaint window: the head pad
+        # runs from -left to 0 and the tail from duration to duration+right.
+        # The door has already refused a pad longer than the parent (the pads
+        # are sliced out of a tensor allocated at the source's frame length, so
+        # a longer one is silently zero-filled -- silence, not music).
+        left = float(params.get("extend_left", 0.0))
+        right = float(params.get("extend_right", 0.0))
+        out["repaint_start"] = -left
+        out["repaint_end"] = float(params.get("parent_duration", 0.0)) + right
+        return out
+
+    if task == "edit":
+        # The *target* conditioning is the new brief; the source conditioning
+        # stays the parent's, which is what makes FlowEdit keep the take's
+        # identity rather than composing a new piece to the new words.
+        out["edit_target_prompt"] = str(params.get("edit_prompt") or "")
+        out["edit_target_lyrics"] = str(params.get("edit_lyrics") or "")
+        out["edit_n_min"] = float(params.get("edit_n_min", 0.0))
+        out["edit_n_max"] = float(params.get("edit_n_max", 1.0))
+        return out
+
+    # repaint and loop. The window is the same argument pair; what differs is
+    # that ``derive_music_job`` has already written a *rolled* source for a
+    # loop and centred the window on the joint. See ``_roll_wav``.
+    out["repaint_start"] = float(params.get("repaint_start", 0.0))
+    out["repaint_end"] = float(params.get("repaint_end", 0.0))
+    return out
+
+
+def _roll_wav(data: bytes, seconds: float) -> bytes:
+    """Rotate a WAV's frames by ``seconds``. -> the rolled file's bytes.
+
+    **Why a loop is a rolled repaint.** ACE-Step has no cyclic objective, and a
+    plain repaint of the tail does not condition on the head, because the mask
+    is positional: the model sees "regenerate the last four seconds" and has no
+    idea the first four are what they must join onto. Rolling the take by half
+    its length puts the head/tail joint in the *middle* of the file, where a
+    repaint across it has the music on both sides as context. Rolling back
+    afterwards is exact -- a rotation loses nothing -- so the roll is the entire
+    difference between a joint the model wrote and a cut.
+
+    It still does not make the first and last samples equal. That is what the
+    player's loop point and its crossfade are for, and the manual has to say
+    both halves or it promises something the model cannot do.
+    """
+    import io
+    import wave as wave_mod
+
+    import numpy as np
+
+    with wave_mod.open(io.BytesIO(data)) as handle:
+        params = handle.getparams()
+        raw = handle.readframes(handle.getnframes())
+
+    # Stdlib ``wave`` on both sides, and deliberately not ``sirens.wavout``:
+    # the queue may not import ``studio`` (``test_queue`` enforces it), and
+    # ``read_wav`` would be the wrong tool anyway -- it downmixes to mono and
+    # resamples to a target rate, and a roll has to be exact and reversible.
+    # Round-tripping the same ``getparams`` is what makes it lossless: no
+    # float conversion, no re-quantisation, the identical frames in a new
+    # order. ``WARLOCK 5/5`` makes the width 16-bit by construction.
+    if params.sampwidth != 2 or params.nchannels < 1:
+        raise RuntimeError("source.wav is not the 16-bit PCM this build writes")
+    frames = np.frombuffer(raw, dtype="<i2").reshape(-1, params.nchannels)
+    shift = int(round(seconds * params.framerate)) % max(len(frames), 1)
+    rolled = np.roll(frames, -shift, axis=0)
+
+    out = io.BytesIO()
+    with wave_mod.open(out, "wb") as handle:
+        handle.setparams(params)
+        handle.writeframes(rolled.astype("<i2").tobytes())
+    return out.getvalue()
+
+
+def _write_stems_sidecar(out_dir: Any, spec: Any, result: dict[str, Any], job_id: str) -> None:
+    """``stems.json``, written **last**, as the completion gate.
+
+    ``rig.json``'s rule and ``sheet.json``'s: the four WAVs land one at a time,
+    so their existence cannot say the set is finished, and a reader that took
+    it that way would offer a take with three stems as a take with four.
+
+    Staged and renamed like every other write onto a name something else reads.
+    What it records is what a reader of the directory could not otherwise
+    reconstruct: which job produced these, and with which model.
+    """
+    import json
+
+    payload = {
+        "job": job_id,
+        "model": spec.key,
+        "sources": list(spec.sources),
+        "files": list(result.get("files") or []),
+        "rate": result.get("rate"),
+    }
+    path = out_dir / "stems.json"
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
 class MusicOps:
     """The music generation stage, mixed into :class:`~.queue.Worker`."""
 
@@ -69,6 +233,10 @@ class MusicOps:
             # would record a recipe that never ran.
             raise RuntimeError(f"unknown music model: {model_key!r}")
         spec = models.MUSIC_MODELS[model_key]
+
+        # Raised before the acquire, so a row naming an unknown task fails
+        # without having loaded 8.3 GiB to find out.
+        extra = _task_kwargs(params, job_dir)
 
         assert self._cancel is not None
         client, handoff = await self._acquire_music(spec)
@@ -89,8 +257,28 @@ class MusicOps:
                     on_state=lambda s: self._music_state(job_id, s),
                     on_step=lambda i, n: self._music_step(job_id, i, n),
                     cancel_event=self._cancel.event,
+                    # ``{}`` for every row minted before tasks existed, which
+                    # is what keeps their path through here byte-identical.
+                    # ``MusicClient.generate`` takes these as ``**extra`` and
+                    # deliberately names none of them -- see its docstring.
+                    **extra,
                 )
             )
+            if params.get("task") == "loop":
+                # Roll the finished take back. The source was rolled by half
+                # its length at the door so that the joint sat in the middle,
+                # where the repaint could see the music on both sides of it;
+                # rolling back by the same amount is exact and puts the joint
+                # where the user asked for it -- at the ends.
+                #
+                # Before the commit, because the commit is the point at which
+                # the artifact becomes final: a take committed still rolled is
+                # a take whose bars start in the wrong place.
+                await asyncio.to_thread(
+                    lambda: output.write_bytes(
+                        _roll_wav(output.read_bytes(), -float(params.get("roll", 0.0)))
+                    )
+                )
             # The moment the WAV is on disk and nothing else can undo it. A
             # cancel that arrives after this point would leave a finished
             # artifact under a cancelled row, which the library has no way to
@@ -203,3 +391,99 @@ class MusicOps:
 
     def _music_step(self: Worker, job_id: str, step: int, total: int) -> None:
         self._step_progress(job_id, "music_sample", "Composing", step, total)
+
+    async def _separate(self: Worker, job: dict[str, Any]) -> None:
+        """Split a finished take into stems, in a child that then exits.
+
+        **The one stage in this file that acquires nothing.** ``_music`` takes
+        the resident pipe, hands off against trellis and gives it all back in a
+        ``finally``; this spawns a ~300 MB child, waits, and the child dies. So
+        there is no ``_acquire``/``_release`` pair to mirror, and adding one
+        would be ceremony around a process that holds nothing between jobs --
+        see ``pipelines/separation_worker``'s docstring for why it is one-shot.
+
+        Its artifacts land in the **source take's** directory, not this job's,
+        which is what makes it a follow-up in ``asset_open``'s sense -- the rig
+        and the sheets already work this way, and ``dependent_jobs`` is built on
+        the same fact.
+        """
+        from . import rigging
+
+        params = job["params"]
+        source = str(params.get("source_job") or "")
+        if not rigging.is_valid_id(source):
+            # Validated, not merely non-empty: this becomes a path, and an
+            # empty one makes ``job_dir`` return the assets root.
+            raise RuntimeError(f"separate job has no usable source_job: {source!r}")
+
+        spec_model = models.SEPARATION_MODELS.get(
+            str(params.get("separation_model") or models.DEFAULT_SEPARATION)
+        )
+        if spec_model is None:
+            # ``_music``'s rule for an unknown model: refused rather than
+            # substituted, because a substitution records a run that never was.
+            raise RuntimeError(
+                f"unknown separation model: {params.get('separation_model')!r}"
+            )
+
+        source_dir = self.config.job_dir(source)
+        # ``service.files.STEMS_DIR``, restated because **the queue may not
+        # import the service** (``test_queue`` enforces it) -- the same reason
+        # ``VECTOR_PARAMS`` lives in ``warlock/vectors.py``. One literal, and
+        # ``tests/test_separation.py`` asserts the two agree.
+        out_dir = source_dir / "stems"
+        job_dir = self.config.job_dir(job["id"])
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        self.progress.update(
+            job["id"],
+            phase="separate",
+            label="Splitting into stems",
+            inner=0.0,
+            inner_next=1.0,
+            nominal=60.0,
+            detail="",
+        )
+
+        spec = {
+            "source": str(source_dir / "track.wav"),
+            "out_dir": str(out_dir),
+            "model_dir": str(self.config.t2i_model_root / spec_model.dir_name),
+            "sources": list(spec_model.sources),
+            "segment_seconds": spec_model.segment_seconds,
+            "result_path": str(job_dir / "separate.json"),
+        }
+
+        def on_progress(fraction: float, label: str) -> None:
+            self.progress.update(
+                job["id"],
+                phase="separate",
+                label=label or "Splitting into stems",
+                inner=fraction,
+                inner_next=1.0,
+                nominal=60.0,
+                detail="",
+            )
+
+        result = await asyncio.to_thread(
+            functools.partial(
+                rigging.run_worker,
+                spec,
+                on_progress=on_progress,
+                on_start=self._note_blender,
+                timeout=self.config.pose_timeout,
+                module="warlock.pipelines.separation_worker",
+                marker="separate",
+                name="Stem separation",
+            )
+        )
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "separation failed")
+
+        # ``stems.json`` **last**, as the completion gate -- ``rig.json``'s rule
+        # and ``sheet.json``'s, stated identically: the four WAVs appear one at
+        # a time, so their existence cannot say the set is finished.
+        self._cancel.commit()
+        await asyncio.to_thread(
+            _write_stems_sidecar, out_dir, spec_model, result, job["id"]
+        )
