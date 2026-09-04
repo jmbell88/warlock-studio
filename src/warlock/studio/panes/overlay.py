@@ -477,6 +477,11 @@ PLACEHOLDERS: dict[str, tuple[str, str, str]] = {
         "Nothing to pack",
         "Add images, or pull the frames out of a document open in Inker.",
     ),
+    "muse": (
+        icons.MUSIC,
+        "No takes yet",
+        "Describe the music you want above, then press Generate.",
+    ),
     "sirens": (
         icons.AUDIO_WAVEFORM,
         "No song open",

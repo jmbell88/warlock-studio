@@ -10,6 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from .tour import scripts as tour_scripts
+
 
 @dataclass(frozen=True)
 class MenuSpec:
@@ -34,6 +36,10 @@ _COMMAND_PATHS: dict[str, tuple[str, ...]] = {
     "new-clay": ("File",),
     "new-map": ("File",),
     "new-atlas": ("File",),
+    # The fifth, and missing for the same reason the palette's ``new-map`` was:
+    # a New that is not in the File menu reads as the mode not having one, and
+    # falls into the contextual per-mode menu instead.
+    "new-song": ("File",),
     "save": ("File",),
     "save-as": ("File",),
     "export": ("File",),
@@ -53,6 +59,12 @@ _COMMAND_PATHS: dict[str, tuple[str, ...]] = {
     "shortcuts": ("Help",),
     "open-log": ("Help",),
 }
+
+# The tours, which ``palette`` mints one command per and which had no path at
+# all -- so ``roots()`` dropped every one of them and the only way to a tour was
+# Ctrl+K or Home's offer card. Derived from ``TOURS`` rather than written out,
+# so a fifth tour is not a second table to keep in agreement.
+_COMMAND_PATHS.update({f"tour:{one.key}": ("Help",) for one in tour_scripts.TOURS})
 
 
 def _checked(ctx: Any, key: str) -> bool:

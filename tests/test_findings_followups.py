@@ -81,8 +81,8 @@ _WORKSPACE_WORDS = {
     "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
 }
 
-#: "seven workspaces", "seven creative workspaces" -- the two phrasings the
-#: docs use. Deliberately *not* "N of the seven workspaces", which is a
+#: "eight workspaces", "eight creative workspaces" -- the two phrasings the
+#: docs use. Deliberately *not* "N of the eight workspaces", which is a
 #: different sentence and correct with any N.
 _WORKSPACE_PHRASE = re.compile(
     r"\b(" + "|".join(_WORKSPACE_WORDS) + r")\s+(?:creative\s+)?workspaces\b",

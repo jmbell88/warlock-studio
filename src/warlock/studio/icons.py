@@ -77,6 +77,7 @@ MAGNET = "\uE2B5"  # magnet
 MAXIMIZE = "\uE116"  # maximize
 MINUS = "\uE120"  # minus
 MOVE = "\uE125"  # move
+MUSIC = "\uE126"  # music
 PAINT_BUCKET = "\uE2E6"  # paint-bucket
 PALETTE = "\uE1DD"  # palette
 PENCIL = "\uE1F9"  # pencil

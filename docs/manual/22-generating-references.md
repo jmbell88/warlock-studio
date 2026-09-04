@@ -22,7 +22,7 @@ twenty prompts, most recent first and deduplicated — it appears once you have 
 reference, so there is history to show. Picking one replaces what is in the box. The history is per
 session and per prompt text only — if you want a whole recipe back, use **Copy settings to form**
 from a job's overflow menu instead, which is described in [Rerun and
-promotion](35-library-and-jobs.md#rerun-and-promotion).
+promotion](36-library-and-jobs.md#rerun-and-promotion).
 
 Under **Avoid**, further down the pane, is a second box listing what the image must not
 contain. It is pre-filled with the things that most often ruin a reconstruction, and it is yours:
@@ -227,11 +227,11 @@ leaves the score exactly what it would have been without it:
   when there is one.
 - **Human preference** — how likely a person is to pick this image for this prompt, from PickScore.
   Optional; see [Optional measuring and helper
-  models](38-installation.md#optional-measuring-and-helper-models).
+  models](39-installation.md#optional-measuring-and-helper-models).
 
 **Nothing here rejects anything.** The score sorts, and that is all it does — a low-scoring
 candidate is still generated, still kept, and still promotable to a mesh. Turn the whole thing off
-with `WARLOCK_RANK=off` (see [Configuration](39-configuration.md#environment-variables)) and the
+with `WARLOCK_RANK=off` (see [Configuration](40-configuration.md#environment-variables)) and the
 gallery falls back to submission order.
 
 ## Conditioning on an image
@@ -325,7 +325,7 @@ supplied, and **Dither** (offered only with one) mixes two nearby entries where 
 pick one.
 
 A palette is a file you drop into the palette directory (`~/.warlock/palettes/` by default — see
-[Configuration](39-configuration.md)), in any of the four formats palette sites and editors publish:
+[Configuration](40-configuration.md)), in any of the four formats palette sites and editors publish:
 Lospec's `.hex`, one `rrggbb` per line, GIMP's `.gpl`, Paint Shop Pro's `.pal` or Paint.NET's
 `.txt`. Nothing ships with the app, because a palette is
 art direction rather than a default. Colours are matched perceptually (in Oklab) rather than by raw
@@ -348,7 +348,7 @@ the artifact is derived, so it is rebuilt whenever the settings above make the c
 and a document that saved back over it would have that edit thrown away — the first `Ctrl+S` is a
 Save As. **Export as PNG** writes the size selected here to wherever you choose. Both derive the
 artifact first if it does not exist yet, so neither waits on **Preview pixels**. The
-[downloads grid](35-library-and-jobs.md) exports the same files; what these add is that they act on
+[downloads grid](36-library-and-jobs.md) exports the same files; what these add is that they act on
 the size you are looking at.
 
 Both settings are app preferences rather than properties of the job, so they persist across
@@ -557,7 +557,7 @@ colours this particular render happened to contain. It is the single highest-lev
 the program: a derived table is the average of whatever came back, which is where "muddy" comes
 from, while a designed ramp is a decision. The picker appears once you have palette files
 installed — `.hex`, `.gpl`, `.pal` or `.txt` in the palette folder (see
-[Configuration](39-configuration.md)) — and also when the form names a palette that is no longer
+[Configuration](40-configuration.md)) — and also when the form names a palette that is no longer
 there, listed and marked rather than silently reverting to *Derived from the render*. Naming the
 same palette on each run is how a set of sheets is kept on one set of colours.
 

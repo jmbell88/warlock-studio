@@ -291,7 +291,7 @@ def test_no_split_key_is_used_by_two_splits():
 
 
 def test_every_split_has_a_handle_and_every_handle_a_split():
-    """Six of seven workspaces drew a proportion with no way to change it.
+    """Six of the workspaces drew a proportion with no way to change it.
 
     ``_split_column`` derives the handle's id from ``split_id``, so the check
     is that nothing builds a split outside it -- a hand-built ``lay.share``

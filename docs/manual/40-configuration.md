@@ -8,7 +8,7 @@ running has no effect until a restart.
 One thing does persist to a file, and it is deliberately not on this page: the app's own UI
 preferences — theme, UI scale, pane layout and the form fields it remembers — live in
 `studio_settings.json` in the data directory, written by the app itself. They are edited in
-[App settings](40-app-settings.md), never by hand, and nothing in the table below is stored there.
+[App settings](41-app-settings.md), never by hand, and nothing in the table below is stored there.
 
 ## Environment variables
 
@@ -29,13 +29,13 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_TRELLIS_IDLE` | `600` | Seconds of queue inactivity before resident models are evicted to free VRAM. |
 | `WARLOCK_TRELLIS_WEBP` | `off` | Ask the engine for WebP textures instead of PNG. Off is correct: WebP output declares `EXT_texture_webp` as *required*, which Godot's glTF importer refuses rather than skips. |
 | `WARLOCK_TRELLIS_TEX_RES` | `512` | Texture resolution. Pinned rather than left on the engine's `auto`, which bakes visible per-texel noise into the base colour atlas at 1024 and 1536. |
-| `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](41-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
+| `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](42-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
 | `WARLOCK_TRELLIS_GSS` | unset | Guidance strength for the engine's sparse-structure stage. Unset omits the flag and runs the engine's own default, which it does not print. A sweep axis for the hole question, not a setting to tune by hand. |
 | `WARLOCK_TRELLIS_GSH` | unset | Guidance strength for the structured-latent stage. Same rule as `GSS`. |
 | `WARLOCK_TRELLIS_MAX_TOKENS` | unset | The high-resolution token budget (the engine ships at 49152). Unset omits the flag. A sweep axis; a winning rung becomes a default only through a measurement document. |
 | `WARLOCK_TRELLIS_DECIM` | unset | The engine's own decimation. Unset runs its default, a quadric simplify to about 300k faces at resolution 1024 (150k at 512) — which is what "Raw" has always meant. `0` turns that pass off and ships the full reconstruction, tens of millions of faces at 1024; a positive number selects the legacy cluster-grid pass at that grid. A sweep axis for the detail question (`docs/measurements/2026-09-03-trellis-detail-sweep.md`). |
 | `WARLOCK_TRELLIS_ATLAS` | unset | The UV atlas edge in pixels for the baked textures. Unset runs the engine's default, 2048 at resolution 1024 and 1024 at 512. The texture-detail twin of `TEX_RES`, and a sweep axis for the same document. |
-| `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary. Vendored by hand like the engine — `vendor/` is git-ignored, so a fresh clone has neither (see [gltfpack](38-installation.md#gltfpack)). Point this elsewhere to use another copy; without it jobs ship the raw reconstruction rather than failing. |
+| `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary. Vendored by hand like the engine — `vendor/` is git-ignored, so a fresh clone has neither (see [gltfpack](39-installation.md#gltfpack)). Point this elsewhere to use another copy; without it jobs ship the raw reconstruction rather than failing. |
 | `WARLOCK_MESH_PROFILE` | `raw` | Default triangle profile for a new job. `raw` means no second pass — the engine has already simplified the mesh to about 300k faces (see `WARLOCK_TRELLIS_DECIM`). The decimating tiers all run now, but none has been qualified, so `raw` stays the default and the only tier the generate form offers. Set this to try one; the inspector's **Triangle budget** panel is the safer place to. |
 | `WARLOCK_BENCH_DIR` | `~/.warlock/bench` | Where the benchmark writes its runs. Outside the data directory on purpose, so a run survives pruning. |
 | `WARLOCK_T2I_ROOT` | `~/.warlock/models` | Where every image model lives, with style LoRAs under its `loras/` subdirectory. |
@@ -199,7 +199,7 @@ So the variable is the right tool for exactly one case: swapping in another dist
 that wants the same sampler settings. A model that needs different settings wants a registry entry
 in `models.py` instead, which carries its own image size, step count, guidance scale, variant,
 scheduler and always-on step-distillation LoRA — because those are properties of the checkpoint, not
-of the user's preference. [Adding an image model](44-extending.md#adding-an-image-model) is the
+of the user's preference. [Adding an image model](45-extending.md#adding-an-image-model) is the
 procedure.
 
 Every other base model always resolves under `WARLOCK_T2I_ROOT`, by the directory name its registry
@@ -209,4 +209,4 @@ entry declares.
 
 The handful of preferences that are the app's rather than a job's -- UI scale, pane layout, and the
 model list with its Download buttons -- have a chapter of their own: [App
-settings](40-app-settings.md).
+settings](41-app-settings.md).

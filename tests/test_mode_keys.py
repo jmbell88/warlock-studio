@@ -440,6 +440,7 @@ _WORKSPACE_ARMS = {
     "plotter": "plotter_mode",
     "packwright": "packwright_mode",
     "troupe": "troupe_mode",
+    "muse": "muse_mode",
     "sirens": "sirens_mode",
 }
 

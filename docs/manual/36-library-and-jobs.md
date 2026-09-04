@@ -184,7 +184,7 @@ asset to the next: there is no separate store of saved styles to keep in step.
 
 Every job owns a directory under `~/.warlock/assets/`, named for its job id, and the SQLite job
 store lives at `~/.warlock/assets/jobs.sqlite`. That home directory is outside the source tree on
-purpose; see [Data locations](39-configuration.md#data-locations). A job directory holds:
+purpose; see [Data locations](40-configuration.md#data-locations). A job directory holds:
 
 - `input.png` — the reference image the mesh was made from.
 - `source.glb` — the raw reconstruction, kept forever.
@@ -202,7 +202,7 @@ foot of the library shows a **storage meter**: how many job directories exist an
 they occupy. It is measured on a background thread, so it never stalls the window.
 
 The two ways to make that number smaller live in
-[Settings → Storage](40-app-settings.md#storage), not here: a button under a scrolling list of assets
+[Settings → Storage](41-app-settings.md#storage), not here: a button under a scrolling list of assets
 reads as an action on the assets you can see, and neither of these is.
 
 **Prune...** deletes everything but the newest N jobs, after a confirm — the confirm

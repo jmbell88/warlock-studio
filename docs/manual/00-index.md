@@ -27,6 +27,7 @@ Part IV explains how it is built.
 - [Putting it in a game](13-putting-it-in-a-game.md) — exports, engines, and the interop caveats.
 - [Making a soundtrack](14-making-a-soundtrack.md) — Sirens: a bassline, an envelope, a sound effect, a WAV.
 - [Casting a spell](15-casting-a-spell.md) — Flourish: a fireball from a recipe, a colour changed, a painted cell kept through a re-render.
+- [Generating a soundtrack](16-generating-a-soundtrack.md) — Muse: a description to a finished track, and into Sirens as a sample.
 
 ## Using Warlock Studio
 
@@ -45,19 +46,20 @@ Part IV explains how it is built.
 - [Packwright](32-packwright.md) — packing sprites into an atlas, and the sidecar that describes it.
 - [Troupe](33-troupe.md) — character sprite sheets: a prompt to a rigged mesh to 256 animated cells.
 - [Sirens](34-sirens.md) — the chiptune tracker: patterns, instruments, sound effects and WAV export.
-- [The library and jobs](35-library-and-jobs.md) — job status, filters, rerunning, storage and pruning.
-- [Review](36-review.md) — judging finished meshes, parameter sweeps, and the findings the verdicts add up to.
-- [Keyboard shortcuts](37-shortcuts.md) — every binding the app answers to.
+- [Muse](35-muse.md) — generated music: style tags, lyrics, takes, and the bridge into Sirens.
+- [The library and jobs](36-library-and-jobs.md) — job status, filters, rerunning, storage and pruning.
+- [Review](37-review.md) — judging finished meshes, parameter sweeps, and the findings the verdicts add up to.
+- [Keyboard shortcuts](38-shortcuts.md) — every binding the app answers to.
 
 ## Setup & operations
 
-- [Installation](38-installation.md) — requirements, dependencies and the one-time model downloads.
-- [Configuration](39-configuration.md) — environment variables, data locations and VRAM modes.
-- [App settings](40-app-settings.md) — UI scale, pane layout, and the model list with its downloads.
-- [Troubleshooting](41-troubleshooting.md) — what the diagnostics say and what to do about it.
+- [Installation](39-installation.md) — requirements, dependencies and the one-time model downloads.
+- [Configuration](40-configuration.md) — environment variables, data locations and VRAM modes.
+- [App settings](41-app-settings.md) — UI scale, pane layout, and the model list with its downloads.
+- [Troubleshooting](42-troubleshooting.md) — what the diagnostics say and what to do about it.
 
 ## Architecture
 
-- [Architecture](42-architecture.md) — the process, the threads, the job store and the service layer.
-- [Pipelines](43-pipelines.md) — how a job travels from prompt to GLB.
-- [Extending Warlock Studio](44-extending.md) — adding a model, a style or a skeleton.
+- [Architecture](43-architecture.md) — the process, the threads, the job store and the service layer.
+- [Pipelines](44-pipelines.md) — how a job travels from prompt to GLB.
+- [Extending Warlock Studio](45-extending.md) — adding a model, a style or a skeleton.

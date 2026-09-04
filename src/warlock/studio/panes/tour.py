@@ -120,7 +120,48 @@ def satisfied(ctx: Any, name: str, arg: str | None) -> bool:
             return len(tab.doc.oneshots) >= int(arg or 0)
         except (AttributeError, TypeError, ValueError):
             return False
+    if name == "notes_at_least":
+        return _notes(ctx) >= _count(arg)
     return False
+
+
+def _count(arg: str | None) -> int:
+    """A condition's numeric argument, or zero. Zero is satisfiable, which is
+    ``sfx_at_least``'s rule and the sane reading of a threshold."""
+    try:
+        return int(arg or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _notes(ctx: Any) -> int:
+    """How many real pitches the active song holds, over every pattern.
+
+    ``notes.EMPTY`` is -1 and the two sentinels are *above* the pitch range, so
+    "is a note" is ``0 <= value <= MAX_NOTE`` rather than ``!= EMPTY``: a
+    note-off is something the reader typed, but it is not a note they wrote.
+
+    Swallows the three shapes of missing attribute rather than raising --
+    ``sfx_at_least``'s rule, and its reason: a traceback in the frame loop is
+    worse than a tour that will not advance.
+    """
+    sirens = getattr(ctx.state, "sirens", None)
+    tab = getattr(sirens, "active", None) if sirens is not None else None
+    if tab is None:
+        return 0
+    try:
+        import numpy as np
+
+        from ..sirens import document as D
+        from ..sirens import notes as N
+
+        total = 0
+        for pattern in tab.doc.patterns:
+            column = np.asarray(pattern.cells)[:, :, D.NOTE]
+            total += int(np.count_nonzero((column >= 0) & (column <= N.MAX_NOTE)))
+        return total
+    except (AttributeError, TypeError, ValueError, IndexError):
+        return 0
 
 
 #: The names :func:`satisfied` answers. Written out rather than derived from the
@@ -135,6 +176,7 @@ HANDLED: frozenset[str] = frozenset(
         "layers_at_least",
         "animated",
         "sfx_at_least",
+        "notes_at_least",
     }
 )
 

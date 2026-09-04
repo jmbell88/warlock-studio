@@ -12,7 +12,7 @@ The generation pipeline:
 
 ## The modes
 
-A rail down the left of the window chooses between **twelve** top-level modes
+A rail down the left of the window chooses between **thirteen** top-level modes
 (`src/warlock/studio/modes.py` is the authoritative list, and `RAIL_GROUPS` is
 the grouping) in three sections: **Pipeline**, **Workspaces**, and an
 unlabelled footer. There is no per-mode key — the `Ctrl+K` command palette is
@@ -119,7 +119,7 @@ Everything but the primary artifacts is derived lazily on first request and cach
 - **16 GB VRAM** for 3D reconstruction (`vram.py`'s `TRELLIS_GIB = 16.0`). Tested on an RTX 5090 / 32 GB; a 4080/5080-class card or better is the comfortable range.
 - **32 GB system RAM.** More than the GPU figure suggests it should need: Windows charges trellis's ~16 GiB device allocation against *host* commit, so admission control refuses jobs at 96% commit on a 63.5 GB machine even with 24 GB physically free. 16 GB will fight you.
 - **~23 GB disk before the first asset** — 16.1 GB of TRELLIS.2 GGUF weights plus 7.0 GB for SDXL 1.0 — then roughly 35–50 MB per generated 3D job. There is no automatic age-out; pruning is manual.
-- **A 1920×1080 display or larger at 100% scaling.** The window opens at 1600×950 (scaled by your DPI setting) and is clamped to the desktop, so it fits smaller panels, but below that the seven workspaces get cramped.
+- **A 1920×1080 display or larger at 100% scaling.** The window opens at 1600×950 (scaled by your DPI setting) and is clamped to the desktop, so it fits smaller panels, but below that the eight workspaces get cramped.
 - [uv](https://docs.astral.sh/uv/) and **Python 3.13** — `bpy` ships CPython 3.13 wheels only, and rigging is not optional enough to support a Python it can never run on. The floor was 3.12 until 2026-09-03, when the CI leg testing that claim was read for the first time and was not green. On 3.14 or later the rig extra installs nothing, `warlock doctor` reports rigging unavailable, and the app hides the rig controls; everything else works unchanged.
 
 **How long a generation takes:** roughly two minutes of GPU per 3D attempt on the tested card — a reference image in seconds, then the reconstruction. Budget for more than one attempt: the approval gate exists because the first reference is often not the one you want.
@@ -220,7 +220,7 @@ uv run warlock doctor   # checks dependencies, weights, and configuration
 
 ### Configuration
 
-There is no *engine* config file — every path, port, timeout and mode is a `WARLOCK_*` env var, and the full table lives in [docs/manual/39-configuration.md](docs/manual/39-configuration.md). Studio's own UI preferences (theme, UI scale, pane layout, remembered form fields) are a separate thing and do persist, in `studio_settings.json` in the data directory; they are edited in the app rather than in a file. The main knobs: `WARLOCK_DATA_DIR` (where assets and the job store live), `WARLOCK_EXPORT_DIR`, `WARLOCK_T2I_ROOT`/`WARLOCK_T2I_MODEL` (image-model home and default), and `WARLOCK_VRAM_EXCLUSIVE`.
+There is no *engine* config file — every path, port, timeout and mode is a `WARLOCK_*` env var, and the full table lives in [docs/manual/40-configuration.md](docs/manual/40-configuration.md). Studio's own UI preferences (theme, UI scale, pane layout, remembered form fields) are a separate thing and do persist, in `studio_settings.json` in the data directory; they are edited in the app rather than in a file. The main knobs: `WARLOCK_DATA_DIR` (where assets and the job store live), `WARLOCK_EXPORT_DIR`, `WARLOCK_T2I_ROOT`/`WARLOCK_T2I_MODEL` (image-model home and default), and `WARLOCK_VRAM_EXCLUSIVE`.
 
 On VRAM: the trellis server subprocess starts on the first 3D job and by default stays resident alongside the image model (~16 GB + ~7 GB on a 32 GB card); both are evicted after 10 minutes idle. `WARLOCK_VRAM_EXCLUSIVE=1` restores sequential VRAM use for text jobs (trellis stopped → image model loads, generates, unloads → trellis restarts) — needed for smaller GPUs, resolution 1536, or a resident FLUX.
 
@@ -238,7 +238,7 @@ Run that lane before changing model loading, VRAM accounting or conditioning.
 
 The app is a single process: a pygame window, one ModernGL context, and [imgui-bundle](https://github.com/pthom/imgui_bundle) panels drawn through that same context (the 3D viewport is a texture the panels show). Three threads — the frame loop, an asyncio worker for the GPU queue, and a task pool for blocking calls; jobs run one at a time. `warlock.service` is the single business-logic layer the panes and the tests both call. Model loads that would bloat the app process run in subprocesses that end (Blender, BiRefNet matting, the fetch worker), all tied to a kill-on-close job object.
 
-Outputs land in `~/.warlock/assets/<job_id>/` (`input.png`, `model.glb`, `rig.glb`/`rig.json`, `poses/`, `sheets/`); the SQLite job store lives at `~/.warlock/assets/jobs.sqlite`. Everything the app generates — the library, benchmark runs, palettes and model weights — sits under that one home directory rather than inside the checkout; an install that predates it has its directories moved there on the next start (copy, verify, then delete), and `WARLOCK_HOME` or `WARLOCK_NO_MIGRATE` opts out. See [Data locations](docs/manual/39-configuration.md#data-locations).
+Outputs land in `~/.warlock/assets/<job_id>/` (`input.png`, `model.glb`, `rig.glb`/`rig.json`, `poses/`, `sheets/`); the SQLite job store lives at `~/.warlock/assets/jobs.sqlite`. Everything the app generates — the library, benchmark runs, palettes and model weights — sits under that one home directory rather than inside the checkout; an install that predates it has its directories moved there on the next start (copy, verify, then delete), and `WARLOCK_HOME` or `WARLOCK_NO_MIGRATE` opts out. See [Data locations](docs/manual/40-configuration.md#data-locations).
 
 Where to read more: the user manual is [docs/manual/00-index.md](docs/manual/00-index.md) (38 chapters, also embedded in the app), the hard invariants and their measured reasoning are `docs/INVARIANTS.md`, measurement write-ups are `docs/measurements/`, and `CHANGELOG.md` tracks releases.
 

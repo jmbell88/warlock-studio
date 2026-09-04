@@ -332,7 +332,7 @@ class Layout:
             share = 0.55
         self.settings_share = min(max(share, SHARE_MIN), SHARE_MAX)
         # **One share per split, not one for the whole app.** ``settings_share``
-        # above is a single number that seven workspaces read and one -- Inker
+        # above is a single number that eight workspaces read and one -- Inker
         # -- can write, from two handles. So dragging Inker's toolbox handle
         # silently re-split Create, Clay, Plotter, Packwright, Troupe and
         # Review, and Inker's own right column besides: a handle that resizes
@@ -668,7 +668,7 @@ def pane_child(pane_id: str, size: tuple[float, float], window_flags: int = 0) -
 def sidebar_width(side: str = "left") -> float:
     """A sidebar's width this frame, in physical px. Narrowed to fit (UX-01).
 
-    What the seven workspaces call instead of ``sp(SIDEBAR_W)``. Same value
+    What the eight workspaces call instead of ``sp(SIDEBAR_W)``. Same value
     whenever there is room, which is the ordinary case; the difference only
     shows at high UI scale in a small window, which is exactly the case a user
     who enlarged the UI to read it is in.

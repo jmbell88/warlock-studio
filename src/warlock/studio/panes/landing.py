@@ -545,15 +545,28 @@ def _tour_offer(ctx: Any) -> None:
 
     It stands down once the tour it offers has been finished, so the reader is
     not invited to a thing they have already done.
+
+    **The dismissal is per tour.** "Not now" wrote one global flag, so a single
+    press retired the card for all four tours permanently -- including the two
+    Sirens ones, which sit behind the other two in the list and which most
+    readers would therefore never be offered at all. It is now the set of tours
+    that have been declined, and a legacy ``"1"`` still means all of them, so an
+    installed user who already pressed it does not get the card back.
     """
     from ..tour import scripts as tour_scripts
 
     state = getattr(ctx.state, "tour", None)
     if state is None or state.running:
         return
-    if str(ctx.settings.get(TOUR_DISMISSED_KEY, "") or ""):
-        return
-    offer = next((one for one in tour_scripts.TOURS if one.key not in state.finished), None)
+    dismissed = _dismissed(ctx)
+    offer = next(
+        (
+            one
+            for one in tour_scripts.TOURS
+            if one.key not in state.finished and one.key not in dismissed
+        ),
+        None,
+    )
     if offer is None:
         return
     widgets.section("New here?")
@@ -564,7 +577,19 @@ def _tour_offer(ctx: Any) -> None:
         tour_pane.start(ctx, offer.key)
     imgui.same_line()
     if controls.button("Not now##tour-offer", role=controls.ButtonRole.GHOST):
-        ctx.settings.set(TOUR_DISMISSED_KEY, "1")
+        ctx.settings.set(TOUR_DISMISSED_KEY, sorted(dismissed | {offer.key}))
+
+
+def _dismissed(ctx: Any) -> set[str]:
+    """Which tours have been declined. A list-valued setting -- ``tours_finished``
+    is already one -- with the old ``"1"`` read as "all of them"."""
+    from ..settings import as_list
+    from ..tour import scripts as tour_scripts
+
+    stored = ctx.settings.get(TOUR_DISMISSED_KEY, None)
+    if isinstance(stored, str):
+        return {one.key for one in tour_scripts.TOURS} if stored else set()
+    return {str(one) for one in as_list(stored)}
 
 
 def _header(ctx: Any) -> None:
@@ -1109,6 +1134,21 @@ def start_packwright(ctx: Any) -> None:
         packwright_mode.new_document(ctx)
 
 
+def start_sirens(ctx: Any) -> None:
+    """Sirens from Home, and a song to type into when it arrives.
+
+    The four document modes' shape rather than Troupe's: a tracker with no
+    document is a grid of nothing, and ``new_song`` is deliberately not an
+    empty document -- five channels, a pattern and an order that points at it,
+    so the first note typed makes a sound.
+    """
+    from .. import sirens_mode
+
+    set_mode(ctx.state, "sirens")
+    if not sirens_mode.ensure(ctx).docs:
+        sirens_mode.new_document(ctx)
+
+
 def start_troupe(ctx: Any) -> None:
     """Troupe from Home. It asks for nothing and invents nothing.
 
@@ -1125,8 +1165,8 @@ def start_troupe(ctx: Any) -> None:
     troupe_mode.ensure(ctx)
 
 
-#: The seven things this app can start from nothing, in the order the menu offers
-#: them. "New 3D model" and "New Model" used to sit side by side and the second
+#: The eight things this app can start from nothing, in the order the menu
+#: offers them. "New 3D model" and "New Model" used to sit side by side and the second
 #: one meant *Clay* -- two buttons whose labels differ by a word neither of them
 #: defines, one of which generates a mesh from a prompt and the other opens a
 #: modelling workspace (UX-23). Named for what they do instead: the mode is the
@@ -1143,5 +1183,6 @@ NEW_ITEMS: tuple[tuple[str, str, str, object], ...] = (
     ("clay", "New Clay model", icons.RULER, start_clay),
     ("plotter", "New tile map", icons.GRID, start_plotter),
     ("packwright", "New sprite atlas", icons.LAYERS, start_packwright),
+    ("sirens", "New song", icons.AUDIO_WAVEFORM, start_sirens),
     ("troupe", "New character", icons.PERSON_STANDING, start_troupe),
 )

@@ -17,7 +17,7 @@ from . import icons
 # (key, label, icon). The key is what lands in ``AppState.mode``.
 #
 # **The order is the rail's order** (the UI redesign, wave 3): where you start and
-# what you look at, then the seven creative workspaces, then Settings. It used to
+# what you look at, then the eight creative workspaces, then Settings. It used to
 # be the *segmented control's* order, grouped by a predicate over
 # ``WORK_MODES`` -- a rule that rendered correctly and explained nothing, and
 # which put Library and Review on the far side of a break from the panes they
@@ -29,7 +29,7 @@ from . import icons
 # is consulted *about* a screen, so taking that screen away to show it answered
 # the question by removing it -- it is ``manual.render.draw_overlay`` now,
 # raised by F1 and by every ``help_button``. ``profiles`` was a shelf of saved
-# settings in the top-level navigation beside seven creative workspaces, which
+# settings in the top-level navigation beside the creative workspaces, which
 # said that "manage my styles" is a place you travel to; it became a sheet over
 # the Reference stage and was then deleted outright -- a recipe is copied off a
 # finished result, not curated in a second store.
@@ -69,19 +69,41 @@ MODES: list[tuple[str, str, str]] = [
     ("troupe", "Troupe", icons.PERSON_STANDING),
     ("plotter", "Plotter", icons.GRID),
     ("packwright", "Packwright", icons.LAYERS),
+    # Muse: the thirteenth mode, and the one whose output is a **job row**.
+    #
+    # Sirens' comment below justifies its own workspace status partly with
+    # "nothing it produces is a job row", and that sentence is about Sirens and
+    # stays true. So this one has to say why a mode whose results *are* job rows
+    # is still a workspace and not a stage of Create: because a Create stage is
+    # a position on ``create_stages.STAGES``, and the rail above that column
+    # computes over things Muse has none of. There is no ``create_stage`` a take
+    # advances to, no asset viewport to frame it in, and no lineage -- a track
+    # is not promoted into anything and nothing is reconstructed from it. What
+    # Muse owns is a form and a tray of results, which is a workspace.
+    #
+    # It sits *before* Sirens: generative first, then the tracker that edits by
+    # hand. That also keeps ``RAIL_GROUPS[1][-1] == "sirens"``, which a test
+    # asserts -- and the ordering was chosen for the first reason, not the
+    # second.
+    #
+    # The glyph is a *note* against Sirens' waveform, which reads as the right
+    # distinction: a waveform is sound you build, a note is a song you ask for.
+    ("muse", "Muse", icons.MUSIC),
     # Sirens: the twelfth mode, and the first thing in this app that makes a
     # sound. A workspace rather than a stage of Create for the reason Plotter
     # and Packwright are: it owns a document type (``.wsng``), it has its own
     # tabs and its own undo stack, and nothing it produces is a job row. It
-    # sits at the end of the Workspaces group because it is the newest and
-    # because the group has no other ordering to respect -- the six before it
-    # are not a pipeline.
+    # sits at the end of the Workspaces group because it was the newest when
+    # it landed and because the group has no other ordering to respect -- the
+    # rest are not a pipeline. Muse arrived later and went *before* it all the
+    # same, for the reason written against Muse: those two are a pair, and the
+    # pair has an order the rest of the group does not.
     ("sirens", "Sirens", icons.AUDIO_WAVEFORM),
     # Review is footer matter, beside Settings, and shares its glyph history
     # with the Library above (both were Home tiles). It is the one place you
     # go to *judge* rather than to make, and it is entered rarely and left
     # again -- which is the same shape as Settings and not the shape of the
-    # seven workspaces it used to sit among.
+    # workspaces it used to sit among.
     ("review", "Review", icons.CIRCLE_CHECK),
     ("settings", "Settings", icons.SETTINGS),
 ]
@@ -107,7 +129,7 @@ MODES: list[tuple[str, str, str]] = [
 # drawing path.
 RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
     ("home", "library", "create"),
-    ("inker", "clay", "poser", "troupe", "plotter", "packwright", "sirens"),
+    ("inker", "clay", "poser", "troupe", "plotter", "packwright", "muse", "sirens"),
     ("review", "settings"),
 )
 
@@ -129,7 +151,10 @@ RAIL_GROUP_LABELS: tuple[str, ...] = ("Pipeline", "Workspaces", "")
 # submit and no viewport to frame, which is why they take no keyboard
 # shortcuts at all.
 WORK_MODES = frozenset(
-    {"create", "inker", "clay", "poser", "review", "plotter", "packwright", "troupe", "sirens"}
+    {
+        "create", "inker", "clay", "poser", "review", "plotter", "packwright",
+        "troupe", "muse", "sirens",
+    }
 )
 
 # The subset that draws the *asset* viewport, and therefore the only modes
@@ -149,13 +174,16 @@ VIEWPORT_MODES = frozenset({"create"})
 
 # Neither one pane nor the asset viewport: a mode that fills the window with
 # its own three-column workspace. Inker, Clay, Poser, Review, Plotter,
-# Packwright, Troupe and Sirens are the eight; Library is a single pane, not a
-# workspace, and joins Home/Manual/Settings there. The three categories
+# Packwright, Troupe, Muse and Sirens are the nine; Library is a single pane,
+# not a workspace, and joins Home/Manual/Settings there. The three categories
 # partition KEYS exactly -- which matters because ``_build_ui``'s dispatch ends
 # in a bare ``else``, so an unlisted mode would draw one of these rather than
 # fail.
 WORKSPACE_MODES = frozenset(
-    {"inker", "clay", "poser", "review", "plotter", "packwright", "troupe", "sirens"}
+    {
+        "inker", "clay", "poser", "review", "plotter", "packwright", "troupe",
+        "muse", "sirens",
+    }
 )
 
 # The modes that bind the arrow keys or Space themselves, and so keep them from
@@ -170,20 +198,23 @@ WORKSPACE_MODES = frozenset(
 # Troupe joins them for its own version of the same clash: Space toggles
 # playback and Left/Right step one frame of a clip, so one press must not also
 # move a focus ring through the direction buttons.
+# Muse joins them for the mildest version: Space auditions the selected take,
+# which must not also activate whatever button the focus ring is on.
 # Sirens joins them for the sharpest version of the clash: all four arrows move
 # the pattern caret, Space starts and stops playback, and Page Up/Down move a
 # bar -- so every key imgui would use to walk a focus ring is a key the grid
 # has already spoken for.
 NAV_KEY_MODES = frozenset(
-    {"home", "library", "review", "inker", "plotter", "troupe", "sirens"}
+    {"home", "library", "review", "inker", "plotter", "troupe", "muse", "sirens"}
 )
 
 KEYS = tuple(key for key, _label, _icon in MODES)
 
 #: One line saying what each mode is *for*, shown as the rail item's tooltip.
 #:
-#: The rail is the primary navigation and seven of its twelve labels -- Inker,
-#: Clay, Poser, Troupe, Plotter, Packwright, Sirens -- are invented names. A new user
+#: The rail is the primary navigation and eight of its thirteen labels --
+#: Inker, Clay, Poser, Troupe, Plotter, Packwright, Muse, Sirens -- are
+#: invented names. A new user
 #: hovering one got a word and an icon, because ``rail._item`` suppresses its
 #: accessible-name tooltip once the label is legible (correctly: a tooltip
 #: repeating a word already on screen is noise) and no call site had anything
@@ -202,6 +233,7 @@ PURPOSE: dict[str, str] = {
     "troupe": "Render a 3D character to an animated sprite sheet.",
     "plotter": "Paint tile maps and export them to Tiled.",
     "packwright": "Pack loose sprites into an atlas with a manifest.",
+    "muse": "Generate finished music from a description and a lyric sheet.",
     "sirens": "Write chiptune music and sound effects in a tracker grid.",
     "review": "Judge and grade finished assets side by side.",
     "settings": "Models, folders, appearance and hardware.",

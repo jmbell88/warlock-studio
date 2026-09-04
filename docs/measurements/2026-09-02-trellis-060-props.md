@@ -35,7 +35,7 @@ the tree; the steps are written out so the swap is a copy, not a decision.
    release changed them, the CUDA redistributables in `vendor/trellis/`.
 4. Regenerate `installer/runtime-manifest.json` (sizes and sha256 per file;
    `installer/verify_runtime.py` consumes it).
-5. Version string in `README.md`, `../manual/38-installation.md` and
+5. Version string in `README.md`, `../manual/39-installation.md` and
    `installer/build.ps1`.
 6. Capture one cold res-1024 run's stdout as
    `tests/fixtures/trellis_1024_v060.log` and run `tests/test_progress*.py`

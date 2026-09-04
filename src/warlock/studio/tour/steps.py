@@ -41,6 +41,13 @@ CONDITIONS: tuple[str, ...] = (
     # rather than about hearing one -- a tour step may never wait on audio,
     # because the machine running it may have no device at all.
     "sfx_at_least",
+    # ``arg`` is a count: the active Sirens song holds at least that many
+    # *notes* -- actual pitches, counted over every pattern in the document,
+    # which is the song's patterns and each sound effect's own together. That
+    # is the right meaning for a step that asks the reader to type: the grid
+    # edits both, and a count filtered to the order list would sit at zero
+    # while somebody typed a blip into an effect. A note-off is not a note.
+    "notes_at_least",
 )
 
 

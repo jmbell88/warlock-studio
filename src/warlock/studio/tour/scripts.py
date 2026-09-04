@@ -1,6 +1,6 @@
 """The tours themselves. Data, not code.
 
-Three of them, and each is chosen rather than convenient.
+Four of them, and each is chosen rather than convenient.
 
 ``first-hour`` orients someone who has just opened the app, and **every step of
 it runs on a machine with no GPU and no weights** -- the one step that could ask
@@ -12,12 +12,13 @@ rather than a lesson.
 it was picked over Create for the same reason: drawing needs no card, no weights
 and no subprocess, so every reader can finish it and so can the smoke test.
 
-``sirens-basics`` is beside it and for that same reason -- a tracker needs no
-GPU, no weights and no subprocess either -- with one honest difference: the mode
+``sirens-basics`` and ``sirens-sfx`` are beside it and for that same reason --
+a tracker needs no GPU, no weights and no subprocess either -- with one honest
+difference: the mode
 is about a *sound*, and a machine with no audio device cannot make one. So no
 step of it waits on hearing anything. Every ``done`` condition here is a mode, a
-document or the reader's own Next, which is what lets somebody on a silent box
-finish the tour and still have written a bar.
+document, or notes the reader has written -- never a sound -- which is what
+lets somebody on a silent box finish the tour and still have written a bar.
 
 Each tour ends by handing the reader to the chapter that goes deeper. The link
 runs one way -- a step names a chapter, a chapter never names a step -- which is
@@ -50,7 +51,7 @@ FIRST_HOUR = Tour(
             title="The rail",
             body=(
                 "Everything lives behind these. The top group is the pipeline that turns "
-                "an idea into a finished asset; the group under it is the seven workspaces "
+                "an idea into a finished asset; the group under it is the eight workspaces "
                 "you edit in. Settings sits at the bottom.\n\n"
                 "Ctrl+K opens the command palette, which reaches every one of them by "
                 "name -- it is the keyboard's way through this tour and through the app."
@@ -324,6 +325,7 @@ SIRENS_BASICS = Tour(
                 "in the third."
             ),
             mode="sirens",
+            anchor="sirens/grid",
             chapter=("34-sirens", "the-pattern-grid"),
         ),
         Step(
@@ -337,6 +339,13 @@ SIRENS_BASICS = Tour(
                 "e in the effect column is the letter of an effect."
             ),
             mode="sirens",
+            anchor="sirens/grid",
+            # The pivotal step, and the one that had no business advancing on
+            # Next: it asks for four notes, so it waits for four notes. Counted
+            # over the whole document rather than the bar the step names --
+            # somebody who typed their four somewhere else has still learned
+            # the thing this step teaches.
+            done=Condition("notes_at_least", "4"),
             chapter=("14-making-a-soundtrack", "a-bassline-on-the-triangle"),
         ),
         Step(
@@ -510,6 +519,9 @@ SIRENS_SFX = Tour(
                 "falling pair as a hit."
             ),
             mode="sirens",
+            # "Type two notes", so: two. The count is the step's own text
+            # rather than a number picked to be easy.
+            done=Condition("notes_at_least", "2"),
             chapter=("14-making-a-soundtrack", "a-sound-effect"),
         ),
         Step(
@@ -585,8 +597,101 @@ SIRENS_SFX = Tour(
     ),
 )
 
+MUSE_BASICS = Tour(
+    key="muse-basics",
+    title="Generating a track in Muse",
+    blurb=(
+        "Five minutes. Tags, a take, an audition, and the track opened in Sirens. "
+        "Needs the ACE-Step weights."
+    ),
+    steps=(
+        Step(
+            id="open-muse",
+            title="Open Muse",
+            body=(
+                "The other audio mode. Sirens is a tracker you write note by note; this "
+                "one is a model you describe a piece of music to.\n\n"
+                "It needs about 8.3 GB of weights on disk. Without them it refuses at the "
+                "door and names the download rather than making something worse."
+            ),
+            anchor="rail/muse",
+            done=Condition("mode_is", "muse"),
+        ),
+        Step(
+            id="tags",
+            title="Describe it in tags",
+            body=(
+                "Comma-separated style tags, not a sentence. The model was trained on tag "
+                "strings, and a paragraph of prose gets you a vaguer result than the same "
+                "mood in tags.\n\n"
+                "Try: dark ambient, dungeon, low strings, slow, minor key."
+            ),
+            mode="muse",
+            anchor="muse/tags",
+            chapter=("35-muse", "what-it-takes"),
+        ),
+        Step(
+            id="lyrics",
+            title="Leave the lyrics empty",
+            body=(
+                "The second field takes a lyric block marked up with [verse] and [chorus]. "
+                "Empty means an instrumental, which is what game music almost always is -- "
+                "so this is the one field here you can ignore entirely."
+            ),
+            mode="muse",
+            anchor="muse/lyrics",
+            chapter=("35-muse", "what-it-takes"),
+        ),
+        Step(
+            id="generate",
+            title="Ask for two takes",
+            body=(
+                "Set the count to 2 and press Generate.\n\n"
+                "Two is not twice the value of one: they are the same request at two "
+                "seeds, and comparing them tells you which problem you have. Both wrong "
+                "the same way is your tags. One right and one not is the seed."
+            ),
+            mode="muse",
+            anchor="muse/generate",
+            chapter=("35-muse", "the-window"),
+        ),
+        Step(
+            id="audition",
+            title="Listen to them",
+            body=(
+                "Each finished take gets a card with a Play button. Press it, then press "
+                "the other one -- starting a second take stops the first, because there is "
+                "one sound card and this app does not pretend otherwise.\n\n"
+                "With no sound device the button says so rather than doing nothing."
+            ),
+            mode="muse",
+            chapter=("35-muse", "the-takes"),
+        ),
+        Step(
+            id="into-sirens",
+            title="Take it into Sirens",
+            body=(
+                "Open in Sirens imports the track into the tracker as a sample "
+                "instrument.\n\n"
+                "It works because nothing had to be built for it: Muse writes a 44.1 kHz "
+                "WAV and Sirens' sample instruments read 44.1 kHz WAVs, so a generated "
+                "track arrives through exactly the door a file you dragged in arrives "
+                "through."
+            ),
+            mode="muse",
+            chapter=("35-muse", "the-bridge-to-sirens"),
+        ),
+    ),
+)
+
 #: Every tour, in offer order.
-TOURS: tuple[Tour, ...] = (FIRST_HOUR, INKER_BASICS, SIRENS_BASICS, SIRENS_SFX)
+TOURS: tuple[Tour, ...] = (
+    FIRST_HOUR,
+    INKER_BASICS,
+    MUSE_BASICS,
+    SIRENS_BASICS,
+    SIRENS_SFX,
+)
 
 
 def find(key: str) -> Tour | None:
@@ -601,6 +706,7 @@ def find(key: str) -> Tour | None:
 __all__ = [
     "FIRST_HOUR",
     "INKER_BASICS",
+    "MUSE_BASICS",
     "SIRENS_BASICS",
     "SIRENS_SFX",
     "TOURS",

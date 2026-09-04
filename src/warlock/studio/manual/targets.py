@@ -17,12 +17,12 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # The Rig stage's own column (the UI redesign, wave 5). Rigging was three
     # buttons in three places and no pane of its own, so it had no (?) either.
     "settings-rig": ("25-rigging-and-posing", "rigging-a-mesh"),
-    "library": ("35-library-and-jobs", None),
+    "library": ("36-library-and-jobs", None),
     "inspector": ("23-generating-meshes", "exports"),
     "retarget": ("23-generating-meshes", "triangle-budget"),
     "retexture": ("23-generating-meshes", "surface-texture"),
     "remesh": ("23-generating-meshes", "game-ready-remesh"),
-    "loras": ("40-app-settings", "your-style-loras"),
+    "loras": ("41-app-settings", "your-style-loras"),
     "pose": ("25-rigging-and-posing", "posing"),
     "poser-library": ("26-poser", "the-pose-library"),
     "poser-controls": ("26-poser", "posing-a-skeleton"),
@@ -101,6 +101,13 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "sirens-envelopes": ("34-sirens", "the-envelope-editor"),
     "sirens-effects": ("34-sirens", "sound-effects"),
     "sirens-bridge": ("34-sirens", "exporting-the-audio"),
+    # Muse's one target. The recipe column carries it, because that is the pane
+    # whose controls a reader has a question about; the brief is a bar and
+    # carries none, exactly as ``create_brief`` does -- a (?) in a one-row
+    # command bar competes with the button the bar exists for. The results tray
+    # is exempt rather than targeted: it is the surface the mode is *about*, the
+    # way the pattern grid and the two canvases are.
+    "muse-recipe": ("35-muse", "the-window"),
     # Troupe's four panes. Four entries rather than one chapter-wide target
     # because the questions differ per pane: what a sheet *is* is the cast's
     # question, what the options mean is the form's, why the preview never
@@ -111,8 +118,8 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "troupe-preview": ("33-troupe", "watching-it"),
     "troupe-sheets": ("33-troupe", "the-sheet-panel"),
     "troupe-bridge": ("33-troupe", "taking-it-somewhere"),
-    "review": ("36-review", None),
-    "app-settings": ("40-app-settings", None),
+    "review": ("37-review", None),
+    "app-settings": ("41-app-settings", None),
     # The chooser the app opens on (F56/O118): the one pane a first run
     # certainly sees, and the only one that had no way into the manual at all.
     "home": ("21-home", None),
@@ -127,4 +134,4 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
 # are a red banner, a popup and a Home row, none of which is a pane with a (?).
 # Named once rather than spelled at each of the three, so a chapter that moved
 # does not have to be found in three places (F57).
-TROUBLESHOOTING: tuple[str, str | None] = ("41-troubleshooting", None)
+TROUBLESHOOTING: tuple[str, str | None] = ("42-troubleshooting", None)

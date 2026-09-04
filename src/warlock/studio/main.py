@@ -294,7 +294,7 @@ def _split_column(
       id is derived from it (``f"{split_id}-share"``) rather than passed. So
       the two can no longer disagree, and a second column cannot be given the
       first one's key by copying the block.
-    * **A handle at all.** Six of the seven workspaces drew a proportion the
+    * **A handle at all.** Six of the workspaces drew a proportion the
       user could not change, because only the three columns that had a
       ``splitter`` call got one. It is drawn here, so having a split *is*
       having a handle.
@@ -1649,6 +1649,11 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             if isinstance(done.result, dict) and done.result.get("exported_asset"):
                 self._capture_clay_thumbnail(done.result["job_id"])
             return
+        if key.startswith("muse-"):
+            from . import muse_mode
+
+            muse_mode.on_task_done(ctx, done)
+            return
         if key.startswith("sirens-"):
             from . import sirens_mode
 
@@ -2702,6 +2707,16 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             # ahead of it; a scan test now pins every workspace mode's arm.
             packwright_mode.handle_key(ctx, event)
             return
+        if ctx.state.mode == "muse":
+            from . import muse_mode
+
+            # Unconditional and returning, for the reason every workspace arm
+            # here is: ``handle_key`` answers False for every key it does not
+            # bind, and letting that fall through would let the shared 2D/3D
+            # block act on a library and a viewport Muse has replaced -- Delete
+            # would trash the selected *library* asset, from a results tray.
+            muse_mode.handle_key(ctx, event)
+            return
         if ctx.state.mode == "sirens":
             from . import sirens_mode
 
@@ -3309,6 +3324,8 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
                         self._plotter_workspace()
                     elif mode == "packwright":
                         self._packwright_workspace()
+                    elif mode == "muse":
+                        self._muse_workspace()
                     elif mode == "sirens":
                         self._sirens_workspace()
                     elif mode == "troupe":
@@ -3728,6 +3745,61 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             width=right_w,
             handle_length=right_w,
         )
+
+    def _muse_workspace(self) -> None:
+        """The brief across the top, the takes in the middle, the recipe beside:
+
+            [ muse-brief                                        ]
+            [ the takes                       ]  [ muse-recipe  ]
+
+        Composed by hand rather than through ``skeletons``, and **one** sidebar
+        rather than the pair that table is built for. Packwright is the
+        precedent that hand composition here is current rather than legacy; the
+        reason it applies is that Muse has nothing to put in a second column.
+        Two columns of which one is empty is a worse answer than one column.
+
+        The bar is a full-width pane above both, which is ``create_brief``'s
+        arrangement -- except that it is unconditional, because Muse has no
+        stages for it to be absent on.
+        """
+        from imgui_bundle import imgui
+
+        from . import layout as layout_mod
+        from . import muse_brief
+        from .panes import muse_recipe, muse_results
+
+        ctx = self.app_ctx
+        right_w = layout_mod.sidebar_width("right")
+
+        with layout_mod.pane(
+            "muse-brief",
+            (0, tokens.sp(muse_brief.BAR_H)),
+            layout_mod.PaneRole.CONTENT,
+            edge=layout_mod.PaneEdge.BOTTOM,
+            title="The brief bar",
+        ) as visible:
+            if visible:
+                muse_brief.draw(ctx)
+
+        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        with layout_mod.pane(
+            "muse-centre",
+            (layout_mod.centre_width() + layout_mod.sidebar_width("left"), 0),
+            layout_mod.PaneRole.CONTENT,
+            window_flags=flags,
+        ) as visible:
+            if visible:
+                muse_results.draw(ctx)
+
+        _column_boundary(self.layouts, "muse", "right")
+        with layout_mod.pane(
+            "muse-recipe",
+            (right_w, 0),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                muse_recipe.draw(ctx)
 
     def _sirens_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton every other mode uses:

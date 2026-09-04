@@ -35,6 +35,11 @@ NO_HELP_BUTTON = {
     # sirens-orders. Same rule as the two canvases above: it is the surface the
     # mode is about rather than a panel with a heading to hang a (?) beside.
     "sirens_patterns",
+    # The takes themselves. Same rule as the pattern grid and the two canvases
+    # above: it is the surface the mode is about rather than a panel with a
+    # heading to hang a (?) beside, and its two panes -- muse-brief and
+    # muse-recipe -- carry the mode's help between them.
+    "muse_results",
     "plotter_textures",  # a texture cache, drawn by nobody
     "packwright_preview",  # the atlas itself; its controls are packwright-settings
     "packwright_textures",  # a texture cache, drawn by nobody
@@ -84,8 +89,8 @@ NO_HELP_BUTTON = {
     # ``App._overlays``, and every one of its steps already carries its own way
     # into the manual -- a "Read more" that opens the chapter the step is
     # about, which is a (?) with the target chosen per step instead of per
-    # pane. A pane-level help button would have to pick one chapter for all
-    # nineteen of them.
+    # pane. A pane-level help button would have to pick one chapter for every
+    # step of every tour.
     "tour",
     # Not a pane: one job's picture, drawn *inside* whatever card or cell asked
     # for it (the UI redesign, wave 4.3). It has no section, no heading and no

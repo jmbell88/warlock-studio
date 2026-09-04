@@ -1044,6 +1044,11 @@ class AppState:
     # built on first use by ``sirens_mode.ensure``. Untyped and None for the
     # reason the four above are.
     sirens: Any = None
+    # Muse's brief, its recipe and which take is auditioning, built on first
+    # use by ``muse_state.ensure``. Untyped and None for the reason the others
+    # are -- and, like Troupe's, holding no document: a take is a job row a
+    # worker wrote, so the store owns it and there is nothing here to lose.
+    muse: Any = None
     # Troupe's selection and its preview clock, built on first use by
     # ``troupe_mode.ensure``. Untyped and None for the reason the others are --
     # and the only one of them that holds no document: it is a selection over
