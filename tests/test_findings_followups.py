@@ -70,8 +70,11 @@ def test_the_shortcut_sheet_lists_the_sirens_clipboard():
 
 #: Files that record what was true on a date rather than claiming what is
 #: true now. A count in one of them is correct as history and must not be
-#: "fixed" -- ``FINDINGS.md`` quotes the very sentences it wants corrected.
-_HISTORIES = {"CHANGELOG.md", "FINDINGS.md"}
+#: "fixed". ``FINDINGS.md`` was here for the same reason -- it *quoted* the
+#: wrong sentences it was asking somebody to fix -- and went on 2026-09-04
+#: when its last open section closed, per the repo's "a finished plan is
+#: deleted rather than ticked" rule.
+_HISTORIES = {"CHANGELOG.md"}
 
 #: Number words this project actually writes, for the workspace-count sweep.
 _WORKSPACE_WORDS = {
@@ -95,10 +98,9 @@ def _prose_files():
     ``INSTALL.md``) are both there, and both said "six creative workspaces"
     while this test watched two directories that did not contain them.
 
-    ``CHANGELOG.md``, ``FINDINGS.md`` and ``docs/measurements/`` are left out
-    on purpose -- they are records of what was true on a date, and a count in
-    them is correct as history. ``FINDINGS.md`` earns its place in that list
-    the hard way: it *quotes* the wrong sentences it is asking somebody to fix.
+    ``CHANGELOG.md`` and ``docs/measurements/`` are left out on purpose --
+    they are records of what was true on a date, and a count in them is
+    correct as history.
     """
     root = Path(__file__).resolve().parents[1]
     for path in sorted(root.glob("*.md")):

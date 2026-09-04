@@ -447,6 +447,80 @@ class SongDoc:
         block = np.where(fits, moved, block)
         return self.set_cells(pattern, row, channel, NOTE, block)
 
+    def shift_rows(
+        self, pattern: int, row: int, channel: int, chans: int, by: int
+    ) -> bool:
+        """Insert or delete whole rows in a run of channels. One undo step.
+
+        ``by == 1`` opens a blank row *at* ``row`` and pushes everything below
+        it down; ``by == -1`` takes ``row`` out and pulls everything below it
+        up. Either way the pattern keeps its length -- the row pushed off the
+        bottom is gone and the room made at the bottom is blank -- because a
+        pattern's row count is what the order list and every other pattern are
+        written against, and an Insert that silently lengthened it would move
+        the downbeat of everything after it.
+
+        Scoped to a run of channels rather than to the whole pattern for the
+        reason the tracker convention is: rows are where a *part* is written,
+        and shifting all five to fix the bass line's timing is how a bar of
+        drums gets a hole in it.
+        """
+        target = self._require(pattern, self.pattern, MISSING_PATTERN)
+        row, channel = int(row), int(channel)
+        chans = min(int(chans), target.channels - channel)
+        span = target.rows - row
+        if chans <= 0 or span <= 0 or by == 0:
+            return False
+        block = np.full((span, chans, COLUMNS), notes.EMPTY, dtype=np.int16)
+        source = target.cells[row : target.rows, channel : channel + chans, :]
+        if by > 0:
+            block[1:] = source[:-1]
+        else:
+            block[:-1] = source[1:]
+        return self.set_cells(pattern, row, channel, 0, block)
+
+    #: The columns :meth:`interpolate` writes a ramp into: the note, the volume
+    #: and the effect parameter. Not the instrument -- ids are a set with no
+    #: order, so a ramp between instrument 01 and 07 names five slots nobody
+    #: chose -- and not the effect letter, which is not a number at all.
+    RAMP_COLUMNS = (NOTE, VOLUME, PARAM)
+
+    def interpolate(
+        self, pattern: int, row: int, channel: int, rows: int, chans: int
+    ) -> bool:
+        """Fill the rows between the ends of a selection with a straight ramp.
+
+        The tracker verb: type a volume at the top of a block and another at the
+        bottom, and this writes the fade between them. Per column and per
+        channel, and **only where both ends hold a value** -- a ramp needs two
+        endpoints, and inventing one from an empty cell is how a fade turns into
+        a note nobody typed. Everything strictly between the ends is
+        overwritten; a column whose ends do not both answer is left alone.
+        """
+        target = self._require(pattern, self.pattern, MISSING_PATTERN)
+        row, channel = int(row), int(channel)
+        rows = min(int(rows), target.rows - row)
+        chans = min(int(chans), target.channels - channel)
+        if rows < 3 or chans <= 0:
+            return False
+        block = target.cells[row : row + rows, channel : channel + chans, :].copy()
+        steps = np.arange(1, rows - 1, dtype=np.float64) / float(rows - 1)
+        for index in range(chans):
+            for column in self.RAMP_COLUMNS:
+                first = int(block[0, index, column])
+                last = int(block[rows - 1, index, column])
+                if first < 0 or last < 0:
+                    continue
+                if column == NOTE and not (
+                    notes.is_note(first) and notes.is_note(last)
+                ):
+                    # A cut or a release is an event, not a pitch. Ramping
+                    # from one would produce notes between "stop" and a C.
+                    continue
+                ramp = np.rint(first + (last - first) * steps).astype(np.int16)
+                block[1 : rows - 1, index, column] = ramp
+        return self.set_cells(pattern, row, channel, 0, block)
+
     def _apply_cells(self, pattern: int, row: int, channel: int, column: int, block: Any) -> None:
         target = self.pattern(pattern)
         if target is None:

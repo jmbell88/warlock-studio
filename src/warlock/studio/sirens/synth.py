@@ -24,6 +24,23 @@ a tick counter and asks :meth:`~.instruments.Sequence.index_at`, because a
 cursor per sequence is a second copy of the position and the copies drift the
 first time a note is retriggered mid-envelope.
 
+## An effect runs until it is cancelled
+
+The six voice effects -- ``0xy`` ``1xx`` ``2xx`` ``3xx`` ``4xy`` ``Axy`` -- are
+**persistent**, which is FamiTracker's rule and the one every module tracker
+shares. A row whose effect column is empty says nothing, so a slide begun on
+row 4 is still sliding on row 5; a zero parameter is what stops it (``100``,
+``200``, ``300``, ``000``, ``4x0``, ``A00``), and every handler below already
+reads a zero as "off" for exactly that reason.
+
+They were row-scoped once, reset at the top of every :func:`_apply_row`. That is
+a defensible engine and an indefensible *interface*: the letters here are
+deliberately the tracker convention (see the block below), so a user who knows
+them writes ``103`` once and hears a slide that lasts a sixteenth note, with
+nothing on screen saying why. Persistence costs four deleted lines and makes the
+column mean what the person typing into it thinks it means. The three player
+effects (``Bxx`` ``Cxx`` ``Dxx``) are events rather than states and are unchanged.
+
 ## The output is a pure function of the document
 
 Same document, same bytes, on every machine and every numpy version this build
@@ -104,12 +121,16 @@ FX_TEMPO = 0xF
 #: or DefleMask already knows every one of them, and a fresh set of letters
 #: would be a dialect for no gain.
 EFFECT_NAMES: dict[int, tuple[str, str]] = {
-    FX_ARPEGGIO: ("0", "Arpeggio: cycle the note, +x, +y semitones each tick"),
-    FX_SLIDE_UP: ("1", "Slide the pitch up, xx cents per tick"),
-    FX_SLIDE_DOWN: ("2", "Slide the pitch down, xx cents per tick"),
-    FX_PORTAMENTO: ("3", "Slide to the note, xx cents per tick"),
-    FX_VIBRATO: ("4", "Vibrato: x is the speed, y the depth"),
-    FX_VOLUME_SLIDE: ("A", "Slide the volume, x up or y down per tick"),
+    FX_ARPEGGIO: ("0", "Arpeggio: cycle the note, +x, +y semitones each tick."
+                       " Runs until 000"),
+    FX_SLIDE_UP: ("1", "Slide the pitch up, xx cents per tick. Runs until 100"),
+    FX_SLIDE_DOWN: ("2", "Slide the pitch down, xx cents per tick."
+                         " Runs until 200"),
+    FX_PORTAMENTO: ("3", "Slide to the note, xx cents per tick. Every note that"
+                         " follows glides too, until 300"),
+    FX_VIBRATO: ("4", "Vibrato: x is the speed, y the depth. Runs until 4x0"),
+    FX_VOLUME_SLIDE: ("A", "Slide the volume, x up or y down per tick."
+                           " Runs until A00"),
     FX_JUMP: ("B", "Jump to order position xx"),
     FX_HALT: ("C", "Stop the song here"),
     FX_BREAK: ("D", "End this pattern, resume at row xx of the next"),
@@ -207,13 +228,12 @@ def _apply_row(doc: D.SongDoc, player: Player, cells: np.ndarray) -> None:
 
         # The effect first, because a portamento on the same row as a note means
         # "slide to it" rather than "play it", and the note handler has to know.
-        voice.arpeggio = (0, 0)
-        voice.slide = 0.0
-        voice.vibrato_depth = 0.0 if effect != FX_VIBRATO else voice.vibrato_depth
-        voice.volume_slide = 0.0
-        gliding = effect == FX_PORTAMENTO
+        # **Nothing is reset here**: see "an effect runs until it is cancelled"
+        # in the module docstring. A row with an empty effect column changes
+        # nothing about what the voice is already doing.
         if effect != notes.EMPTY:
             _apply_effect(player, voice, effect, max(0, param))
+        gliding = voice.portamento > 0.0
 
         if instrument != notes.EMPTY:
             found = _instrument_for(doc, instrument)
@@ -604,6 +624,51 @@ def render_pattern(
         tempo=doc.tempo if tempo is None else tempo,
         speed=doc.speed if speed is None else speed,
         rate=rate,
+    )
+    return out
+
+
+def render_note(
+    doc: D.SongDoc,
+    instrument: int,
+    note: int,
+    *,
+    kind: str = "pulse",
+    rows: int = 4,
+    rate: int = SAMPLE_RATE,
+) -> np.ndarray:
+    """One note on one voice, held for ``rows`` and then released.
+
+    What the grid plays back when a note is typed into it -- the preview every
+    tracker has and the absence of which made writing a melody a game of type,
+    press Space, wait for a re-render, listen, undo.
+
+    **A scratch document rather than a second tick loop.** The note is written
+    into a one-channel, one-pattern song that borrows this document's
+    instruments and samples, and the ordinary renderer runs over it. A
+    hand-rolled "just tick one voice" path would be a second engine to keep in
+    step with the first, and the first is the one that decides what the song
+    sounds like -- ``render_only``'s argument, and the reason a preview cannot
+    drift from playback.
+    """
+    found = _instrument_for(doc, instrument)
+    if found is None or not notes.is_note(int(note)):
+        return np.zeros((0, 2), dtype=np.float32)
+    rows = max(2, int(rows))
+    cells = D.empty_cells(rows, 1)
+    cells[0, 0, D.NOTE] = int(note)
+    cells[0, 0, D.INSTRUMENT] = int(instrument)
+    cells[rows - 1, 0, D.NOTE] = notes.NOTE_RELEASE
+    scratch = D.SongDoc(
+        channels=[D.Channel(uid=1, name="preview", kind=kind)],
+        instruments=list(doc.instruments),
+        patterns=[D.Pattern(uid=1, cells=cells)],
+        samples=dict(doc.samples),
+        tempo=doc.tempo,
+        speed=doc.speed,
+    )
+    out, _loop, _marks = _render(
+        scratch, [1], tempo=doc.tempo, speed=doc.speed, rate=rate
     )
     return out
 

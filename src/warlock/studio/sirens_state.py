@@ -234,6 +234,20 @@ class SirensState:
     #: anybody does with Space is watch it.
     follow: bool = True
 
+    #: Whether typing a note plays it. On, because a tracker that does not is
+    #: one where writing a melody is type, press Space, wait for a re-render,
+    #: listen, undo -- and off is a real preference on a machine whose audio is
+    #: routed somewhere else. View state: it changes nothing about the song, so
+    #: it is never written to a ``.wsng``.
+    preview: bool = True
+
+    #: How far the leftmost drawn channel is from the first, in channels. Kept
+    #: on the state rather than derived per frame because a pane that scrolled
+    #: to the caret would jump back the moment the caret was off screen for a
+    #: different reason -- see ``sirens_patterns._first_channel``, which is what
+    #: writes it.
+    chan_scroll: int = 0
+
     #: Channel uids the mix is playing without, and the one channel it is
     #: playing *alone* (``-1`` for none). **View state, not the song**: a mute
     #: is how a person listens to what they are writing, and a ``.wsng`` that

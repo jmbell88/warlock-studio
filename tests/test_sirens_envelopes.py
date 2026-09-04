@@ -135,13 +135,16 @@ def test_a_press_away_from_both_handles_paints():
 
 
 def test_shortening_a_sequence_brings_its_markers_with_it():
-    short = env._resized(inst.Sequence(values=tuple(range(20)), loop=15, release=18), 4)
+    short = env.resized(inst.Sequence(values=tuple(range(20)), loop=15, release=18), 4)
     assert short.values == (0, 1, 2, 3)
-    assert (short.loop, short.release) == (3, 3)
+    # The release lands on the last step; the loop stops one short of it,
+    # because the loop repeats the *held* half and a loop point inside the
+    # tail is a handle the graph does not draw and the engine never reaches.
+    assert (short.loop, short.release) == (2, 3)
 
 
 def test_lengthening_a_sequence_holds_its_last_value():
-    long = env._resized(inst.Sequence(values=(9, 4)), 5)
+    long = env.resized(inst.Sequence(values=(9, 4)), 5)
     assert long.values == (9, 4, 4, 4, 4)
 
 

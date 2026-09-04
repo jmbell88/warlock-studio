@@ -434,8 +434,13 @@ lives in that job's directory — so there is no save, no undo and no tab to clo
 | Shift+Up / Shift+Down | Extend the selection by a row |
 | Shift+Left / Shift+Right | Extend the selection by a channel |
 | Page Up / Page Down | Move sixteen rows — four beats |
+| Home / End | Jump to the first / last row (Shift selects to it) |
+| Insert | Open a blank row at the caret, pushing the rest down |
+| Shift+Delete | Take the caret's row out, pulling the rest up |
 | Shift+1 / Shift+2 | Transpose the selection down / up a semitone |
 | Delete / Backspace | Clear the column under the caret, or the whole selection |
+| Ctrl+G | Interpolate: ramp the selected block between its two ends |
+| Ctrl+Up / Ctrl+Down | Previous / next instrument — what a typed note is stamped with |
 | Ctrl+C / Ctrl+X | Copy / cut the selection (or the caret's cell) as a block |
 | Ctrl+V | Paste the block at the caret |
 | Esc | Drop the selection |

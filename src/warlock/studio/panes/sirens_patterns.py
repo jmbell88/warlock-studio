@@ -28,7 +28,13 @@ from typing import Any
 
 from .. import controls, icons, sirens_mode, theme, widgets
 from ..sirens import document as D
-from ..sirens import notes
+
+# ``synth`` at module level, not inside ``_cell_text``: that function runs once
+# per visible cell per frame -- up to forty rows times eight channels -- and an
+# import statement there was a ``sys.modules`` lookup and a dict write per cell
+# for a table that never changes.
+from ..sirens import instruments as inst
+from ..sirens import notes, synth
 from ..tokens import sp
 
 #: One row's height and one column-group's width, in design pixels. Both are
@@ -83,11 +89,14 @@ def draw(ctx: Any) -> None:
         widgets.muted("This song has no patterns. Add one from the Order panel.")
         return
 
-    _headers(ctx, state, tab, pattern)
-    _grid(ctx, state, tab, pattern)
+    from imgui_bundle import imgui
+
+    left, fits = _window(state, pattern, imgui.get_content_region_avail().x)
+    _headers(ctx, state, tab, pattern, left, fits)
+    _grid(ctx, state, tab, pattern, left, fits)
 
 
-def _headers(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
+def _headers(ctx: Any, state: Any, tab: Any, pattern: Any, left: int, fits: int) -> None:
     """One button per channel, over the column it belongs to.
 
     **The channels had no names on screen at all**, which is the plainest thing
@@ -103,8 +112,15 @@ def _headers(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
     if not channels:
         return
     chan_w = sp(CHANNEL_W)
+    hidden_left, hidden_right = left, max(0, len(channels) - (left + fits))
+    # The gutter says how many channels are off to the left, because a grid
+    # that starts at channel 3 and looks exactly like one that starts at 0 is
+    # a grid you can type into the wrong part of.
     imgui.dummy((sp(GUTTER_W) - sp(4), 1))
-    for index, channel in enumerate(channels):
+    if hidden_left:
+        imgui.same_line()
+        widgets.muted(f"<{hidden_left}")
+    for index, channel in enumerate(channels[left : left + fits], start=left):
         imgui.same_line()
         muted, soloed, audible = sirens_mode.channel_state(ctx, channel.uid)
         name = channel.name or f"{channel.kind.capitalize()} {index + 1}"
@@ -133,6 +149,60 @@ def _headers(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
             ),
         ):
             sirens_mode.toggle_solo(ctx, channel.uid, tab)
+        _channel_popup(ctx, tab, channel, index)
+    if hidden_right:
+        imgui.same_line()
+        widgets.muted(f"{hidden_right}>")
+
+
+def _channel_popup(ctx: Any, tab: Any, channel: Any, index: int) -> None:
+    """Right-click a channel header: its name, its voice and where it sits.
+
+    **``SongDoc.update_channel`` had no caller.** The model could rename, repan
+    and re-kind a channel and nothing on screen could ask for any of the three
+    (the 2026-09-02 review, section 8), so a song's five voices were whatever
+    ``default_channels`` made them for the life of the file. Here rather than in
+    a panel of its own because this strip is the only surface that names a
+    channel, and a property sheet somewhere else is a second place to look.
+
+    Opened from the mute button's own id, so the right-click target is the thing
+    it is about. The name commits on Enter or on losing focus (``commit=True``)
+    for the reason every other name field in the app does: a rename is one undo
+    step, not one per character.
+    """
+    from imgui_bundle import imgui
+
+    tag = f"sirens-chan-menu-{channel.uid}"
+    if imgui.begin_popup_context_item(tag, imgui.PopupFlags_.mouse_button_right.value):
+        imgui.text(f"Channel {index + 1}")
+        imgui.set_next_item_width(sp(140))
+        changed, name = controls.input_text(
+            f"Name##{tag}", channel.name, enabled=not tab.busy, commit=True
+        )
+        if changed:
+            sirens_mode.update_channel(ctx, channel.uid, name=str(name)[: inst.MAX_NAME_LEN])
+        imgui.text("Voice")
+        imgui.set_next_item_width(sp(140))
+        # ``##``-hidden with the name above: imgui puts a combo's label to its
+        # right, where it is simply not drawn -- ``sirens_instruments``' note.
+        changed, kind = controls.combo(
+            f"##{tag}-kind",
+            channel.kind,
+            [(one, one.title()) for one in inst.KINDS],
+            enabled=not tab.busy,
+            tooltip="What this channel plays. The notes written on it stay"
+            " where they are -- the voice is how they sound, not what they are.",
+        )
+        if changed:
+            sirens_mode.update_channel(ctx, channel.uid, kind=str(kind))
+        imgui.set_next_item_width(sp(140))
+        changed, pan = controls.slider_float(
+            f"Pan##{tag}", float(channel.pan), -1.0, 1.0, enabled=not tab.busy,
+            tooltip="-1 is hard left, +1 hard right.",
+        )
+        if changed:
+            sirens_mode.update_channel(ctx, channel.uid, pan=float(pan))
+        imgui.end_popup()
 
 
 def _tabs(ctx: Any, state: Any) -> None:
@@ -171,6 +241,44 @@ def _empty(ctx: Any) -> None:
     )
 
 
+def first_channel(caret: int, count: int, fits: int, scroll: int) -> int:
+    """Which channel is drawn leftmost, given where the caret is. Pure.
+
+    **The pane used to draw whatever fitted and stop.** A song with more
+    channels than the column is wide had the rest simply absent -- no scrollbar,
+    no marker, nothing -- while Left and Right happily walked the caret into
+    them, so typing continued into a part of the song that was not on screen
+    (the 2026-09-02 review, section 8).
+
+    The window follows the caret rather than being dragged: a tracker's
+    horizontal axis is five columns wide, not five hundred, and a scrollbar for
+    two channels of overflow is a control to operate before you can type. The
+    remembered ``scroll`` is what keeps it still -- recomputing "centre on the
+    caret" every frame would slide the whole grid sideways on every Right.
+    """
+    fits = max(1, int(fits))
+    top = max(0, int(count) - fits)
+    scroll = max(0, min(int(scroll), top))
+    caret = max(0, min(int(caret), max(0, int(count) - 1)))
+    if caret < scroll:
+        scroll = caret
+    elif caret >= scroll + fits:
+        scroll = caret - fits + 1
+    return max(0, min(scroll, top))
+
+
+def _window(state: Any, pattern: Any, avail_x: float) -> tuple[int, int]:
+    """``(leftmost channel, how many fit)``, and the scroll remembered on the
+    state. Called once per frame from :func:`draw`, so the header strip and the
+    grid cannot come to disagree about which channels are on screen."""
+    fits = max(1, int((avail_x - sp(GUTTER_W)) // sp(CHANNEL_W)))
+    fits = min(fits, pattern.channels)
+    state.chan_scroll = first_channel(
+        state.channel, pattern.channels, fits, state.chan_scroll
+    )
+    return state.chan_scroll, fits
+
+
 def _cell_text(cells: Any, row: int, channel: int) -> tuple[str, ...]:
     """One cell's five columns, as the strings the grid draws.
 
@@ -179,8 +287,6 @@ def _cell_text(cells: Any, row: int, channel: int) -> tuple[str, ...]:
     finds the rows where *something* happens, and a blank there makes a pattern
     unreadable at a glance.
     """
-    from ..sirens import synth
-
     note = int(cells[row, channel, D.NOTE])
     instrument = int(cells[row, channel, D.INSTRUMENT])
     volume = int(cells[row, channel, D.VOLUME])
@@ -250,7 +356,7 @@ def _advance(imgui: Any, text: str) -> float:
     return got
 
 
-def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
+def _grid(ctx: Any, state: Any, tab: Any, pattern: Any, left: int, fits: int) -> None:
     from imgui_bundle import imgui
 
     cells = pattern.cells
@@ -293,10 +399,10 @@ def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
                 (origin.x, y), (origin.x + avail.x, y + row_h), accent
             )
         draw_list.add_text((origin.x, y), muted, f"{row:03d}")
-        for channel in range(pattern.channels):
-            x = origin.x + gutter + channel * chan_w
-            if x > origin.x + avail.x:
-                break
+        # Only the window ``_window`` chose: a channel past the right-hand edge
+        # was drawn nowhere and typed into all the same.
+        for channel in range(left, min(left + fits, pattern.channels)):
+            x = origin.x + gutter + (channel - left) * chan_w
             if selection is not None:
                 srow, schan, srows, schans = selection
                 if srow <= row < srow + srows and schan <= channel < schan + schans:
@@ -335,7 +441,7 @@ def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
     if imgui.is_item_hovered() and imgui.is_mouse_clicked(0):
         mouse = imgui.get_mouse_pos()
         row = top + int((mouse.y - origin.y) // row_h)
-        channel = int((mouse.x - origin.x - gutter) // chan_w)
+        channel = left + int((mouse.x - origin.x - gutter) // chan_w)
         if mouse.x >= origin.x + gutter:
             # The column too, measured off the cell that was actually drawn:
             # a press that moved the row and the channel and left the column
@@ -344,7 +450,7 @@ def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
             if 0 <= row < pattern.rows and 0 <= channel < pattern.channels:
                 parts = _cell_text(cells, row, channel)
                 column = column_at(
-                    mouse.x - (origin.x + gutter + channel * chan_w),
+                    mouse.x - (origin.x + gutter + (channel - left) * chan_w),
                     [_advance(imgui, part) for part in parts],
                     sp(6),
                 )
@@ -375,6 +481,15 @@ def _toolbar(ctx: Any, state: Any) -> None:
     changed, value = controls.checkbox("Follow", state.follow)
     if changed:
         state.follow = bool(value)
+    imgui.same_line()
+    changed, value = controls.checkbox(
+        "Preview",
+        state.preview,
+        tooltip="Play each note as it is typed. The song wins: a preview never"
+        " interrupts playback.",
+    )
+    if changed:
+        state.preview = bool(value)
     imgui.same_line()
     widgets.muted(f"{icons.AUDIO_WAVEFORM} row {state.row:03d}")
     # **What the grid is editing, said where the editing happens.** Adding a

@@ -51,6 +51,18 @@ mints one, so a `.wsng` has the five it was created with. Say so plainly rather 
 looked for: the arrangement is the constraint the idiom is written under, and working inside it is
 most of what makes a track sound like this.
 
+**Right-click a channel's name** — the buttons in the strip over the grid — to rename it, change
+which voice it plays, and pan it between the speakers. The notes written on a channel stay exactly
+where they are when its voice changes: the voice is how they sound, not what they are, so turning
+the noise channel into a second triangle is one click and no retyping. Left-click that button mutes
+the channel and the **S** beside it solos; both are about listening, so neither is saved into the
+`.wsng` — handing somebody else a song with a part missing is not a thing a file should be able to
+do.
+
+If the pane is too narrow for every channel, the ones that do not fit are counted in the margins
+(`<2` on the left, `3>` on the right) and the grid follows the caret sideways as you arrow into
+them.
+
 Two departures from the hardware are deliberate and both are audible. Tuning is equal-tempered
 rather than a period table, because a track written here has to sit under modern music without
 beating against it. And the voices are synthesised at four times the sample rate and filtered back
@@ -130,6 +142,27 @@ with its top-left corner at the caret — a block that runs off the bottom or th
 clipped, not refused. The clipboard belongs to the mode rather than the song, so a bar copied in one
 tab pastes into another, and a cut is one undo step.
 
+`Home` and `End` jump to the first and last row; hold Shift and they select to it. `Insert` opens a
+blank row at the caret and pushes the rest of that channel down; `Shift+Delete` takes the caret's
+row out and pulls the rest up. Neither changes how many rows the pattern has — the row pushed off
+the bottom is gone — because a pattern's length is what the order list and every other pattern are
+written against. With a block selected, both reach every channel the block covers rather than just
+the one under the caret.
+
+`Ctrl+G` **interpolates**: type a value at the top of a selected block and another at the bottom,
+and the rows between are filled with the straight line between them. It ramps the note, the volume
+and the effect parameter, and only where both ends actually hold a value — a fade needs two ends,
+and inventing one from an empty cell writes notes nobody typed. Instrument numbers are never ramped:
+they are a set with no order, so a "line" from `01` to `07` would name five slots you did not choose.
+
+`Ctrl+Up` and `Ctrl+Down` step the selected instrument — the one a typed note is stamped with —
+without leaving the keyboard.
+
+**Notes play as you type them**, on the instrument they were stamped with and through the voice the
+channel is, so writing a melody does not mean pressing Space after every note. Turn it off with
+**Preview** in the toolbar. A preview never interrupts playback: while the song is playing, the song
+is what you hear.
+
 Clicking anywhere in the grid moves the caret there, into the column you clicked: click on an
 effect's letter and the next key you press is an effect letter, not a note.
 
@@ -154,6 +187,22 @@ effect column will accept.
 | `Cxx` | Stop the song here |
 | `Dxx` | End this pattern, resume at row xx of the next |
 | `Fxx` | Set the tempo to xx beats per minute |
+
+**An effect runs until you cancel it.** The six voice effects — `0xy` `1xx` `2xx` `3xx` `4xy` `Axy`
+— keep doing what they were told on every row after the one you typed them on. An empty effect
+column says nothing, not "stop". To stop one, type it again with a zero parameter:
+
+| To stop | Type |
+| --- | --- |
+| An arpeggio | `000` |
+| A pitch slide, up or down | `100` or `200` |
+| A portamento (notes stop gliding and are struck again) | `300` |
+| A vibrato | `4x0` — any speed, depth zero |
+| A volume slide | `A00` |
+
+That is FamiTracker's rule and every module tracker's. The three player effects — `Bxx`, `Cxx`,
+`Dxx` — are events rather than states: they happen on the row they are on and nothing carries over.
+`Fxx` sets the tempo, which then stays set until another `Fxx`.
 
 **`Fxx` is a tempo here, and that is a departure.** In FamiTracker the same letter sets ticks per
 row, and changes the tempo as a side effect. In this engine a row is a sixteenth note by definition

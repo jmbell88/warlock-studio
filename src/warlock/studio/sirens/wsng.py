@@ -451,5 +451,13 @@ def _samples_from(zf: Any, manifest: dict) -> dict[str, np.ndarray]:
             raw = zf.read(member)
         except (KeyError, zipfile.BadZipFile) as exc:
             raise ValueError(f"this song is missing {member}") from exc
-        out[str(entry.get("key", f"sample{index}"))] = wavout.read_wav(raw, synth.SAMPLE_RATE)
+        key = str(entry.get("key", f"sample{index}"))
+        if key in out:
+            # Refused by name rather than collapsed. An instrument names its
+            # sample by this string, so two manifest entries claiming one key
+            # is a file that contradicts itself -- and the silent answer (the
+            # last one wins) is a song that opens and plays the wrong sound on
+            # whichever instrument lost, with nothing anywhere saying so.
+            raise ValueError(f"this song lists the sample {key!r} twice")
+        out[key] = wavout.read_wav(raw, synth.SAMPLE_RATE)
     return out
