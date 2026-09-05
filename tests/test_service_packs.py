@@ -213,6 +213,11 @@ def test_the_spec_carries_what_the_child_needs_and_the_result_comes_back(
     assert spec["wheels"][0]["url"].startswith("https://")
     assert spec["probe"] == ["bpy"]  # the pack's own imports, for the child to verify
     assert spec["pack_dir"].endswith("packs")
+    # The two directories, and they are not the same one: wheels are
+    # downloaded into the user's home, and the three that cannot be
+    # downloaded were staged with the application by the installer.
+    assert spec["bundled_dir"] == str(svc_packs.bundled_dir())
+    assert spec["bundled_dir"] != spec["pack_dir"]
 
 
 def test_a_child_that_fails_is_reported_in_its_own_words(manifest_at, svc, monkeypatch):

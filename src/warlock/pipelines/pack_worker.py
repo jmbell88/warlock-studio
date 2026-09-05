@@ -42,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import shutil
 import sys
 import time
 import urllib.request
@@ -92,6 +93,15 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _bundled(spec: dict[str, Any], name: str) -> Path | None:
+    """The staged copy of a wheel that cannot be downloaded, if it is there."""
+    where = str(spec.get("bundled_dir") or "")
+    if not where:
+        return None
+    found = Path(where) / name
+    return found if found.is_file() else None
+
+
 def collect(spec: dict[str, Any]) -> list[str]:
     """Download every wheel that is not already present and verified.
 
@@ -123,15 +133,40 @@ def collect(spec: dict[str, Any]) -> list[str]:
             continue
         if wheel.get("bundled"):
             # It publishes no Windows wheel, so the build compiled it and the
-            # installer was supposed to carry it. There is nowhere to fetch it
-            # from, and the file being absent means the install is broken
-            # rather than merely uncollected -- so say that, rather than
-            # failing later with a URL error about an empty string.
-            raise ValueError(
-                f"{name} ships with the application and is missing from "
-                f"{pack_dir}. This installation is incomplete; reinstall "
-                f"Warlock rather than retrying."
-            )
+            # installer carries it beside the manifest. Copied into the cache
+            # rather than installed from where it lies: pip is given one
+            # ``--find-links`` directory and the collected set has to be whole
+            # in it, and a copy is cheap next to the gigabytes around it.
+            #
+            # There is nowhere to fetch it from, so its absence means the
+            # install is broken rather than merely uncollected -- named as
+            # such, rather than failing later with a URL error about an empty
+            # string.
+            source = _bundled(spec, name)
+            if source is None:
+                raise ValueError(
+                    f"{name} ships with the application and is in neither "
+                    f"{pack_dir} nor the directory the installer stages. This "
+                    f"installation is incomplete; reinstall Warlock rather "
+                    f"than retrying."
+                )
+            if _sha256(source) != digest:
+                # The digest is checked on the *staged* file for the reason it
+                # is checked on a downloaded one: what is about to go into
+                # site-packages must be what this build pinned, and a wheel
+                # from a different build of the app is exactly the file that
+                # would otherwise pass unnoticed here.
+                raise ValueError(
+                    f"{name} ships with the application and does not match "
+                    f"the digest this build pins. This installation is "
+                    f"damaged; reinstall Warlock."
+                )
+            staged = target.with_name(target.name + ".part")
+            shutil.copyfile(source, staged)
+            staged.replace(target)
+            done += size
+            have.append(name)
+            continue
         if spec.get("offline") or not str(wheel.get("url") or ""):
             raise ValueError(f"{name} is not collected and this install may not download")
         staging = target.with_name(target.name + ".part")

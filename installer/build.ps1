@@ -8,7 +8,12 @@ Set-StrictMode -Version Latest
 $Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $BuildRoot = Join-Path $Root "build"
 $Stage = Join-Path $BuildRoot "stage"
+# Two resolutions, and the difference between them is what the packs are. The
+# first is every extra -- what the build measures and collects against; the
+# second is what the installer actually carries.
 $Requirements = Join-Path $BuildRoot "requirements.txt"
+$BaseRequirements = Join-Path $BuildRoot "requirements-base.txt"
+$PackDir = Join-Path $BuildRoot "packs"
 $Manifest = Join-Path $PSScriptRoot "runtime-manifest.json"
 $Verifier = Join-Path $PSScriptRoot "verify_runtime.py"
 $Iss = Join-Path $PSScriptRoot "warlock.iss"
@@ -124,6 +129,76 @@ if ($NeedsCudaRetry) {
 & $StagedPython -c "import torch; assert torch.version.cuda == '12.8', torch.version.cuda"
 Assert-LastExit "staged PyTorch CUDA 12.8 check"
 
+# --- the dependency packs ------------------------------------------------------
+#
+# The staged runtime above is the *full* resolution -- every extra, torch and
+# CUDA and the lyric-language stack -- and it is not what ships. It exists at
+# this point in the build for two things only, and the order is load-bearing:
+#
+#   1. `scripts/make_packs.py` measures what each distribution occupies
+#      *unpacked*, and the only place that figure exists is an installed tree.
+#      Measured after the prune below there would be nothing to measure, and
+#      `warlock.packs.installed_bytes` would withhold the whole install figure
+#      -- so the pane would offer a 3 GB download with nothing said about the
+#      6 GB it lands as.
+#   2. The CUDA 12.8 assertion above is what proves the wheels the packs are
+#      built from are the cu128 ones. The pinned-index retry is why that
+#      assertion can be made at all; a pack built from the default index would
+#      install a CPU torch into a user's runtime and fail at the first job.
+#
+# Then the runtime is synced *down* to `--extra studio`, which is what the
+# installer carries: `uv pip sync` is an exact sync, so the second call
+# uninstalls everything the base does not need. A user who only draws pixel art
+# never downloads torch, and Create, Poser, Troupe and Muse arrive from
+# Settings -> Packs when they are asked for.
+& uv run python scripts/make_packs.py --out $PackDir --python $StagedPython
+Assert-LastExit "scripts/make_packs.py"
+if (-not (Test-Path -LiteralPath (Join-Path $PackDir "packs.json") -PathType Leaf)) {
+    throw "the pack generator wrote no packs.json into $PackDir"
+}
+
+& uv export --frozen --no-dev --no-emit-project --extra studio -o $BaseRequirements
+Assert-LastExit "uv export (base)"
+& uv pip sync --python $StagedPython $BaseRequirements
+Assert-LastExit "uv pip sync (base)"
+# The assertion that the prune happened. Without it a `uv pip sync` that
+# quietly kept the previous resolution would produce today's 6.61 GB install
+# with a pack directory beside it, and nothing in the build would notice.
+& $StagedPython -c "import importlib.util, sys; sys.exit(1 if importlib.util.find_spec('torch') else 0)"
+if ($LASTEXITCODE -ne 0) {
+    throw "the staged runtime still carries torch after the base sync; it is not a base runtime"
+}
+
+# packs.json goes beside pyproject.toml because that is where
+# `service.packs.manifest_path` looks -- the same checkout-shaped root every
+# vendored binary resolves against (DST-01).
+Copy-Item -LiteralPath (Join-Path $PackDir "packs.json") -Destination $Stage -Force
+# And the three wheels that cannot be downloaded at all. `docopt`, `mojimoji`
+# and `unidic-lite` publish no Windows wheel, so the generator compiled them
+# and there is no URL a user's machine could fetch them from: the installer has
+# to carry them. `service.packs.bundled_dir` is this directory.
+#
+# **They are deliberately not added to runtime-manifest.json.** That file pins
+# files that are checked into the tree and change only when a human replaces
+# them, and `verify_runtime` reads it twice -- once against the checkout,
+# before anything is copied. These wheels do not exist at that point: they are
+# built by this script, minutes later, and their digests change with every
+# build. They are pinned by digest already, in packs.json, by the generator
+# that made them -- and `pack_worker` refuses a bundled wheel whose digest does
+# not match before it goes anywhere near site-packages.
+$StagedPacks = Join-Path $Stage "packs"
+New-Item -ItemType Directory -Path $StagedPacks -Force | Out-Null
+$PackManifest = Get-Content -LiteralPath (Join-Path $PackDir "packs.json") -Raw | ConvertFrom-Json
+$Bundled = @($PackManifest.wheels | Where-Object { $_.bundled })
+foreach ($Wheel in $Bundled) {
+    $From = Join-Path $PackDir $Wheel.filename
+    if (-not (Test-Path -LiteralPath $From -PathType Leaf)) {
+        throw "packs.json marks $($Wheel.filename) as bundled and the generator left no such file"
+    }
+    Copy-Item -LiteralPath $From -Destination $StagedPacks -Force
+}
+Write-Host "Collected $($PackManifest.wheels.Count) pack wheels, $($Bundled.Count) of them bundled"
+
 New-Item -ItemType Directory -Path (Join-Path $Stage "src") -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $Root "src\warlock") -Destination (Join-Path $Stage "src") -Recurse -Force
 New-Item -ItemType Directory -Path (Join-Path $Stage "docs") -Force | Out-Null
@@ -220,6 +295,36 @@ try {
     }
     & $StagedPython -c "import warlock.studio.main"
     Assert-LastExit "staged Studio import"
+    # The packs, read back through the app's own reader in the runtime that
+    # will read them. A manifest `warlock.packs` refuses is not a pack, and an
+    # installer that shipped one would offer three rows that all refuse on
+    # click -- with the three modes they unlock unreachable from a build that
+    # deliberately no longer carries their dependencies.
+    # A *literal* here-string: everything inside is Python, and `$pack.key`
+    # in an interpolating one would be expanded by PowerShell into nothing.
+    $PackCheck = @'
+from warlock import packs
+from warlock.service import packs as service_packs
+
+manifest = packs.load_manifest(service_packs.manifest_path())
+for pack in packs.PACKS:
+    plan = packs.plan(manifest, [pack.key])
+    if not plan:
+        raise SystemExit(f'the {pack.key} pack collected no wheels')
+    for wheel in plan:
+        if wheel.bundled and not (service_packs.bundled_dir() / wheel.filename).is_file():
+            raise SystemExit(f'{wheel.filename} is bundled and was not staged')
+    print(
+        f'{pack.key}: {len(plan)} wheels, '
+        f'{packs.gib(packs.total_bytes(plan)):.2f} GiB download, '
+        f'{packs.gib(packs.installed_bytes(plan)):.2f} GiB installed'
+    )
+'@
+    $PackOutput = (& $StagedPython -c $PackCheck 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "the staged pack manifest is not usable`n$PackOutput"
+    }
+    Write-Host $PackOutput
 }
 finally {
     if ($null -eq $PreviousWarlockHome) {

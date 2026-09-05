@@ -1388,12 +1388,15 @@ def test_the_settings_pane_draws_one_category_at_a_time(app_ctx, imgui_ctx, monk
     from warlock.studio.panes import app_settings
 
     drawn: list[str] = []
-    for name in ("_interface", "_models", "_storage", "_health", "_layout", "_config"):
+    for name in (
+        "_interface", "_models", "_packs", "_storage", "_health", "_layout", "_config"
+    ):
         monkeypatch.setattr(app_settings, name, lambda _ctx, _n=name: drawn.append(_n))
 
     for key, expected in [
         ("appearance", ["_interface"]),
         ("models", ["_models"]),
+        ("packs", ["_packs"]),
         ("storage", ["_storage"]),
         ("health", ["_health"]),
         ("advanced", ["_layout", "_config"]),
@@ -1409,6 +1412,31 @@ def test_the_settings_pane_draws_one_category_at_a_time(app_ctx, imgui_ctx, monk
     app_ctx.state.preview[app_settings.CATEGORY_SLOT] = "nonsense"
     _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
     assert drawn == ["_interface"]
+
+
+def test_the_packs_category_draws_a_pack_this_machine_has_not_got(app_ctx, imgui_ctx):
+    """Every row on the developer's own machine says "Installed", because a
+    checkout has every extra -- so the branch that draws a *missing* pack, with
+    its cost and its Install button, is the one nothing exercises by accident.
+    """
+    from warlock.studio.panes import app_settings
+
+    app_ctx.pack_rows = [
+        {
+            "key": "rig",
+            "label": "Rigging",
+            "summary": "Skeleton fitting and skinning.",
+            "modes": ["poser", "troupe"],
+            "present": False,
+            "missing": ["bpy"],
+            "manifest": True,
+            "wheels": 7,
+            "download_gib": 0.32,
+            "installed_gib": 0.63,
+            "install_hint": "uv sync --extra rig",
+        }
+    ]
+    _frame(imgui_ctx, lambda: app_settings._packs(app_ctx))
 
 
 def test_the_settings_column_is_bounded_and_centred(app_ctx, imgui_ctx):

@@ -4,11 +4,11 @@
 job's. They are stored in `studio_settings.json` beside everything else the app remembers, and none
 of them need a variable set before launch.
 
-The pane is one centred column with five categories across the top — **Appearance**, **Models**,
-**Storage**, **Health** and **Advanced**. The column keeps its width however wide the window is: everything here
-is a short labelled row, and a form stretched across a 5K display leaves the label and the control it
-belongs to at opposite ends of the desk. Which category you last had open is not remembered between
-launches — it is where you were, not something you chose.
+The pane is one centred column with six categories across the top — **Appearance**, **Models**,
+**Packs**, **Storage**, **Health** and **Advanced**. The column keeps its width however wide the
+window is: everything here is a short labelled row, and a form stretched across a 5K display leaves
+the label and the control it belongs to at opposite ends of the desk. Which category you last had
+open is not remembered between launches — it is where you were, not something you chose.
 
 ## Appearance
 
@@ -132,6 +132,44 @@ your trigger words. Your images never leave the machine.
 
 **Remove** beside an imported or trained style deletes its file and its entry. Built-in styles are
 not listed here and cannot be removed.
+
+## Packs
+
+Models are weights; **packs** are the code that reads them. The installed build carries the app, its
+renderer and the reconstruction engine — around a gigabyte — and the three heavy dependency sets
+arrive here, chosen:
+
+| Pack | What it turns on |
+| --- | --- |
+| **Image generation** | Create's reference stage, host-side matting, candidate ranking |
+| **Rigging** | Poser and Troupe |
+| **Music generation** | Muse, and stem separation |
+
+Each row says what the pack is for, which workspaces it unlocks, and what it costs — in two figures,
+because they land in two places: the download goes to a wheel cache under `~/.warlock/packs`, and
+the unpacked packages go into the app's own runtime, which on a per-user install is often another
+drive. Both are checked for free space before anything starts, and the whole pack is refused if
+either will not hold it.
+
+**Install** downloads and installs it, and the two phases are visible on the one bar. While it is
+downloading, **Cancel** stops it and costs you nothing: every wheel is verified against the digest
+this build pins and only then moved into place, so a stopped install leaves a part-file that the
+next attempt resumes from. Once the packages start going in, the Cancel button goes away — that
+half writes into the runtime the app is running out of, and interrupting it is the one thing that
+could leave the installation half-made. It is a separate process throughout; this one stays offline
+and never becomes able to download anything.
+
+When it finishes, the app re-runs every startup check and the workspaces the pack unlocks come to
+life without a restart. If something still cannot be imported the toast says so and asks for a
+restart, rather than leaving you with a mode that is greyed out for no stated reason.
+
+A pack cannot be removed from here. Uninstalling torch out from under a running application is not
+the same act as deleting a folder of weights, and the way to get the disk back is to reinstall the
+base app.
+
+On a source checkout there is nothing to install: no build ever generated a pack manifest, and each
+row prints the `uv sync --extra ...` line that does the same job. See
+[Installation](39-installation.md#if-you-installed-rather-than-cloned).
 
 ## Storage
 

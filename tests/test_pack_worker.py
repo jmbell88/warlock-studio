@@ -91,6 +91,54 @@ def test_a_bundled_wheel_that_is_present_is_simply_collected(tmp_path):
     assert got == ["mojimoji-0.0.13-cp313-cp313-win_amd64.whl"]
 
 
+def test_a_bundled_wheel_is_taken_from_where_the_installer_staged_it(tmp_path):
+    """The wiring between ``installer/build.ps1`` and the cache directory.
+
+    The three sdist-only distributions are compiled by the build and staged
+    into the application's own ``packs`` directory; the cache the child downloads into is under the
+    user's Warlock home, and on a per-user install those are routinely two
+    drives. Without this the music pack could only ever fail three wheels from
+    the end, on the user's machine, with everything else already downloaded.
+    """
+    staged = tmp_path / "app-packs"
+    staged.mkdir()
+    (staged / "mojimoji-0.0.13-cp313-cp313-win_amd64.whl").write_bytes(BODY)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    got = pack_worker.collect(
+        spec(
+            cache,
+            wheel("mojimoji-0.0.13-cp313-cp313-win_amd64.whl", bundled=True, url=""),
+            bundled_dir=str(staged),
+        )
+    )
+    assert got == ["mojimoji-0.0.13-cp313-cp313-win_amd64.whl"]
+    # In the cache, because that is the one directory pip is given.
+    assert (cache / "mojimoji-0.0.13-cp313-cp313-win_amd64.whl").read_bytes() == BODY
+
+
+def test_a_staged_bundled_wheel_from_another_build_is_refused(tmp_path):
+    """A bundled wheel is pinned by digest exactly as a downloaded one is: it
+    is about to go into the site-packages the app is running out of, and a
+    file left behind by a different build of Warlock is precisely the one that
+    would otherwise be installed without anyone noticing."""
+    staged = tmp_path / "app-packs"
+    staged.mkdir()
+    (staged / "mojimoji-0.0.13-cp313-cp313-win_amd64.whl").write_bytes(b"a different build")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    with pytest.raises(ValueError) as caught:
+        pack_worker.collect(
+            spec(
+                cache,
+                wheel("mojimoji-0.0.13-cp313-cp313-win_amd64.whl", bundled=True, url=""),
+                bundled_dir=str(staged),
+            )
+        )
+    assert "digest" in str(caught.value)
+    assert not list(cache.iterdir()), "a refused wheel must leave nothing behind"
+
+
 def test_the_install_cannot_reach_the_network_or_re_resolve(tmp_path, monkeypatch, has_pip):
     """``--no-index`` confines pip to the pack directory and ``--no-deps``
     gives it the list rather than a problem to solve. Both are load-bearing:

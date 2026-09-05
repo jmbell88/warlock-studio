@@ -70,6 +70,15 @@ crash *before* `_setup_logging` attaches closes silently — if that happens, ru
 SmartScreen's "More info → Run anyway" (code signing was answered no for the
 closed beta; see Closed records).
 
+**The installer changed under this entry on 2026-09-04** (P26): it stages
+`--extra studio` alone and the three heavy extras arrive as packs from
+Settings, so the 2.91 GB payload and 6.61 GB installed above are the *old*
+shape and one of the things this run measures is the new one. Two steps join
+the list: the base install must reach the window with no torch and no `bpy`
+(Create, Poser, Troupe and Muse present and saying what they need), and one
+pack must be installed from Settings on that machine — `rig` is the cheap one
+at 0.32 GiB — after which Poser opens without a restart.
+
 **Expected outcome:** a first **non-developer** install that generated an
 asset. Until a machine without `uv`, Python or a CUDA toolkit has installed
 this and made something, the project has no shippable artifact, whatever the
@@ -550,16 +559,16 @@ and 3 built. The rig pack has been collected and installed end to end into a
 base-only runtime (0.32 GiB download, 0.63 GiB installed, `import bpy` → 5.2.0
 LTS). The second offline exception is recorded in `docs/INVARIANTS.md`.
 
-**The decision.** Today's installer stages every extra: a 2.91 GB payload,
-6.61 GB installed (P1). Packs would take the base to roughly a third of that
-and let a user who only draws pixel art never download torch. Against: it is a
-second install path to support, and the audience is a closed beta of invited
-users for whom one big download is not obviously worse than two small ones.
-**If the answer is no, delete the four modules and this entry** — a half-built
-distribution mechanism is worse than none, and the measurements are in the
-commits either way.
+**The decision was taken on 2026-09-04: they ship.** The installer now stages
+`--extra studio` alone and the three heavy extras arrive from Settings, which
+takes the base download to roughly a third of 2.91 GB and lets a user who only
+draws pixel art never download torch. What that decision costs — a second
+install path to support — is real, and P1 is where it is met: every figure in
+that entry was measured against the all-extras installer and none of them is
+this build's any more.
 
-**Do, if yes** — each step is specified, none is started:
+**Do** — steps 2, 3 and 4 were built the day the decision was taken; what is
+left needs a person:
 
 1. **Decide where the three built wheels live.** `docopt`, `mojimoji` and
    `unidic-lite` publish no Windows wheel, so the build compiles them and they
@@ -570,22 +579,28 @@ commits either way.
    the first URL in this project that is ours) or dropping `cutlet`/`fugashi`
    and losing Japanese lyric romanisation. **This is the one open design
    question in the programme.**
-2. **Wire `installer/build.ps1`.** Export `--extra studio` alone for the staged
-   runtime, run `scripts/make_packs.py` after `uv pip sync`, stage `packs.json`
-   beside `pyproject.toml` and the bundled wheels into the pack directory.
-   `installer/runtime-manifest.json` pins native binaries by digest and should
-   gain the same treatment for the bundled wheels, or state why not.
-3. **The Settings pane.** `service.packs.rows` already returns everything a row
-   needs — label, summary, the modes it unlocks, `present`, wheel count,
-   download and installed sizes, and whether a manifest exists at all. The
-   model-download rows are the pattern to copy, progress bar included; the
-   child already emits `fetch_worker`'s progress protocol, verbatim.
-4. **Say what a finished install means.** `pack_worker.verify` proves the
-   modules import *in the child*; the running app has already cached their
-   absence. Either re-run `doctor.run_checks(force=True)` the way a finished
-   fetch does and let `modes.NEEDS_ROWS` re-gate, or tell the user to restart —
-   but decide, because a mode that stays grey after a successful install is the
-   failure the whole exercise exists to avoid.
+2. ~~**Wire `installer/build.ps1`.**~~ Built 2026-09-04. The build syncs the
+   full resolution first, collects the packs against it (unpacked sizes exist
+   nowhere but an installed tree, and the CUDA 12.8 assertion is what proves
+   the collected wheels are the cu128 ones), then syncs the staged runtime
+   down to `--extra studio`. `packs.json` is staged beside `pyproject.toml`
+   and the bundled wheels into `{app}\packs`, which is
+   `service.packs.bundled_dir`. `runtime-manifest.json` deliberately does
+   **not** gain them: it is verified against the *checkout* before anything is
+   built, and these three files do not exist at that point — they are pinned
+   by digest in `packs.json` instead, by the generator that made them, and
+   `pack_worker` refuses a bundled wheel that does not match before it goes
+   near site-packages.
+3. ~~**The Settings pane.**~~ Built 2026-09-04 as its own category beside
+   Models: models are weights and packs are the code that reads them. Rows
+   carry both volumes' figures; Cancel is offered while it downloads and
+   withdrawn once pip starts writing into the running site-packages.
+4. ~~**Say what a finished install means.**~~ Answered 2026-09-04, and it is
+   both, in that order: the landing re-runs `doctor.run_checks(force=True)`
+   the way a finished fetch does, and a module that still will not resolve in
+   *this* process (`service.packs.unresolved`, after the import caches are
+   invalidated) asks for a restart out loud rather than leaving a mode grey.
+
 5. **Collect the other two packs once, on a real line**, and record the
    figures. Only `rig` has ever been collected; `text2image` and `music` are
    multi-gigabyte and `music` is the only one that exercises the sdist build
@@ -593,9 +608,9 @@ commits either way.
    that will ever exercise the bundled-wheel branch of `pack_worker.collect`,
    which is today covered by tests alone.
 
-**Expected outcome:** either four deleted modules and a line in *Closed
-records*, or an installer whose base download is around a gigabyte and three
-packs a user chooses.
+**Expected outcome:** an installer whose base download is around a gigabyte,
+three packs a user chooses, and a figure for each of the two that have never
+been collected.
 
 ## Also owed, smaller
 

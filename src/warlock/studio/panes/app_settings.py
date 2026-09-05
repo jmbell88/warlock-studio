@@ -75,6 +75,7 @@ _THEME_LABELS = {
 CATEGORIES = [
     ("appearance", f"{icons.PALETTE} Appearance"),
     ("models", f"{icons.BOX} Models"),
+    ("packs", f"{icons.LAYERS} Packs"),
     ("storage", f"{icons.FOLDER_OPEN} Storage"),
     ("health", f"{icons.ACTIVITY} Health"),
     ("advanced", f"{icons.SETTINGS} Advanced"),
@@ -179,6 +180,8 @@ def _categories(ctx: Any, width: float) -> str:
 def _category_body(ctx: Any, category: str) -> None:
     if category == "models":
         _models(ctx)
+    elif category == "packs":
+        _packs(ctx)
     elif category == "storage":
         _storage(ctx)
     elif category == "health":
@@ -1553,3 +1556,205 @@ def _start(ctx: Any, row_keys: list[str], *, key: str) -> None:
 
     if ctx.submit(key, run):
         ctx.toast("Downloading...")
+
+
+# --- dependency packs ---------------------------------------------------------
+#
+# The other half of "what is on this machine". The Models category downloads
+# *weights*; this one installs the Python distributions that can read them --
+# torch, bpy and the lyric-language stack -- which the shipped installer no
+# longer carries (``warlock.packs``, ``installer/build.ps1``).
+#
+# Deliberately its own category rather than a block under Models. The two are
+# different substances with different failure modes: a missing weight is a
+# download into a directory the app only reads from, and a missing pack is a
+# capability the running interpreter does not have. Conflating them is how one
+# list would come to hold rows whose Install buttons mean different things.
+
+
+def pack_size_note(row: dict[str, Any]) -> str:
+    """What installing this pack costs, or "" when there is nothing to say.
+
+    Both figures, because they are different questions on a laptop: the
+    download lands in the wheel cache under the user's Warlock home and the
+    unpacked tree lands in the application runtime, which on a per-user install
+    is routinely another drive (``packs.disk_refusal`` budgets both). The
+    installed figure is omitted rather than shown as zero when the build never
+    measured it -- ``0`` there means unmeasured, not free.
+    """
+    if row.get("present") or not row.get("manifest"):
+        return ""
+    wheels = int(row.get("wheels") or 0)
+    if not wheels:
+        return ""
+    noun = "package" if wheels == 1 else "packages"
+    note = f"{wheels} {noun}, {float(row.get('download_gib') or 0.0):.1f} GB to download"
+    installed = float(row.get("installed_gib") or 0.0)
+    if installed > 0.0:
+        note += f", {installed:.1f} GB installed"
+    return note
+
+
+def pack_unlocks(row: dict[str, Any]) -> str:
+    """"Unlocks Poser and Troupe", in rail order. Empty when it gates no mode.
+
+    The mode *labels*, not the keys the registry stores: ``packs.Pack.modes``
+    is deliberately strings so that ``warlock.packs`` imports no ``studio``,
+    and this is the one place with both tables in front of it.
+    """
+    from .. import modes as modes_mod
+
+    labels = {key: label for key, label, _icon in modes_mod.MODES}
+    named = [labels.get(key, key.title()) for key in (row.get("modes") or ())]
+    if not named:
+        return ""
+    if len(named) == 1:
+        return f"Unlocks {named[0]}"
+    return f"Unlocks {', '.join(named[:-1])} and {named[-1]}"
+
+
+def pack_blocked(row: dict[str, Any]) -> str:
+    """Why this pack cannot be installed from here, or "" when it can.
+
+    A source checkout is the case this exists for, and it is not a fault: the
+    extras are installed with uv there and no build ever generated a manifest.
+    So the row still says what the pack *is* and what it unlocks, and the
+    remedy it offers is the command that actually works
+    (``packs.Pack.install_hint``, the one composed spelling of it).
+    """
+    if row.get("present") or row.get("manifest"):
+        return ""
+    hint = str(row.get("install_hint") or "")
+    return (
+        "This build carries no packs, so this one is installed with uv "
+        f"instead: {hint}"
+    )
+
+
+#: The percentage at and above which the child has stopped downloading and
+#: started writing into ``site-packages``. ``pack_worker`` caps the download
+#: bar at 89 and emits 92 as pip begins, so the two phases are distinguishable
+#: from the bar alone -- which is what lets Cancel be offered for one and not
+#: the other.
+PACK_INSTALL_PERCENT = 90.0
+
+
+def pack_cancellable(percent: float) -> bool:
+    """Whether stopping now is safe. True while it is still downloading.
+
+    **Cancel is deliberately withdrawn once pip starts.** Killing the child
+    mid-download costs a resumable ``.part`` file and nothing else -- a wheel
+    is renamed into place only once its digest matches. Killing it mid-install
+    leaves the application's own ``site-packages`` half written, which is the
+    state this whole mechanism exists to keep out of: a child does the writing
+    precisely so the app is never editing the library it is running out of, and
+    a Cancel that could interrupt the writing would hand that failure back.
+    """
+    return percent < PACK_INSTALL_PERCENT
+
+
+def _packs(ctx: Any) -> None:
+    # No heading: the lit segment says "Packs". See ``_interface``.
+    rows = list(getattr(ctx, "pack_rows", None) or [])
+    if not rows:
+        widgets.muted("No dependency packs are declared in this build.")
+        return
+    # One install at a time across the pane, for a sharper version of the
+    # Models category's reason: two packs share 27 distributions, torch among
+    # them, and two children unpacking torch into one site-packages at once is
+    # the worst concurrency this app could have.
+    busy = ctx.tasks.any_busy("pack:")
+    for row in rows:
+        _pack_row(ctx, row, busy)
+        imgui.dummy((0, sp(tokens.SP_2)))
+    widgets.muted_wrapped(
+        "A pack is downloaded and installed by a separate process; this one "
+        "stays offline. Everything a pack needs comes from the same places "
+        "the build got it, checked against the digests this build pins."
+    )
+
+
+def _pack_row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
+    """One pack: what it is, what it unlocks, what it costs, and its button."""
+    key = str(row["key"])
+    present = bool(row.get("present"))
+    label = str(row.get("label") or key)
+    if present:
+        widgets.text_colored(theme.MUTED, f"{icons.CIRCLE_CHECK} {label}")
+    else:
+        widgets.text_colored(theme.WARN, f"{icons.CIRCLE} {label}")
+    widgets.muted_wrapped(str(row.get("summary") or ""))
+    unlocks = pack_unlocks(row)
+    if unlocks:
+        widgets.muted(unlocks)
+    if present:
+        # Nothing to offer and nothing to warn about. A pack is deliberately
+        # not removable from here: uninstalling torch out from under a running
+        # app is not the same act as deleting a weights directory, and the
+        # remedy for "I want the disk back" is reinstalling the base app.
+        widgets.muted("Installed.")
+        return
+    blocked = pack_blocked(row)
+    if blocked:
+        widgets.muted_wrapped(blocked)
+        return
+    size = pack_size_note(row)
+    if size:
+        widgets.muted(size)
+
+    task_key = app_ctx.pack_key(key)
+    if ctx.tasks.is_busy(task_key):
+        found = ctx.progress(task_key)
+        percent = float(found.get("percent") or 0.0) if found else 0.0
+        widgets.progress_bar(percent)
+        if found and found.get("label"):
+            widgets.muted(str(found["label"]))
+        if pack_cancellable(percent):
+            _cancel_pack(ctx)
+        else:
+            widgets.muted("Installing -- this cannot be interrupted safely.")
+        return
+    gib = float(row.get("download_gib") or 0.0)
+    button = f"{icons.DOWNLOAD} Install##pack-{key}"
+    if gib > 0.0:
+        button = f"{icons.DOWNLOAD} Install ({gib:.1f} GB)##pack-{key}"
+    if widgets.disabled_button(button, not busy, reason="Another pack is being installed."):
+        _start_pack(ctx, key)
+
+
+def _cancel_pack(ctx: Any) -> None:
+    """Stop the download, by the reason the child was tracked under.
+
+    ``_cancel``'s mechanism with a different prefix, and the prefix is what
+    keeps it narrow: killing every tracked child here would take a live
+    Blender bake or the persistent matting worker with it.
+    """
+    imgui.same_line()
+    from ... import winjob
+
+    if controls.small_button("Cancel##cancel-pack"):
+        stopped = winjob.terminate_tracked("pack install")
+        ctx.toast("Stopping the install..." if stopped else "Nothing left to stop.")
+
+
+def _start_pack(ctx: Any, key: str) -> None:
+    """Submit the install. ``_start``'s shape, bound to this pack's task key.
+
+    The refusals -- a plan that would re-version the running runtime, a plan
+    that does not fit on either volume -- are the service's and are taken
+    inside the task, so what the user sees is the service's own sentence
+    rather than a pane's paraphrase of it.
+    """
+    from ...service import packs as svc_packs
+
+    task_key = app_ctx.pack_key(key)
+
+    def run() -> Any:
+        return svc_packs.install(
+            ctx.svc,
+            [key],
+            on_progress=lambda percent, label: ctx.tasks.set_progress(task_key, percent, label),
+        )
+
+    if ctx.submit(task_key, run):
+        ctx.toast("Installing...")

@@ -38,6 +38,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
+from importlib import invalidate_caches
 from importlib.metadata import distributions
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,21 @@ def manifest_path() -> Path:
     manifest from somewhere else is not a setting, it is a mismatch.
     """
     return PROJECT_ROOT / packs_mod.MANIFEST_NAME
+
+
+def bundled_dir() -> Path:
+    """Where the installer left the wheels that cannot be downloaded at all.
+
+    ``docopt``, ``mojimoji`` and ``unidic-lite`` publish no Windows wheel, so
+    ``installer/build.ps1`` compiles them and stages them here, beside the
+    manifest that pins their digests. Derived from ``PROJECT_ROOT`` for
+    ``manifest_path``'s reason: they are part of *this build*, not a setting,
+    and a bundled wheel from another build is a mismatch rather than a choice.
+
+    Absent in a source checkout, which is correct and not an error -- a
+    checkout installs the extras with uv and never reads this.
+    """
+    return PROJECT_ROOT / "packs"
 
 
 def cache_dir(svc: WarlockService) -> Path:
@@ -168,6 +184,25 @@ def rows(svc: WarlockService) -> list[dict[str, Any]]:
     return out
 
 
+def unresolved(keys: Sequence[str]) -> list[str]:
+    """Which of these packs' modules still do not import *in this process*.
+
+    ``pack_worker.verify`` already proved them in the child, which is the
+    honest place to prove an install finished -- but the app the user is
+    looking at is this process, and this one had already cached "absent" for
+    every name. ``install`` invalidates those caches, so this is normally
+    empty; when it is not, the pane has something true to say ("restart
+    Warlock") rather than leaving a mode grey after a successful install.
+    """
+    invalidate_caches()
+    missing: list[str] = []
+    for pack in packs_mod.chosen_packs(keys):
+        for name in packs_mod.missing(pack):
+            if name not in missing:
+                missing.append(name)
+    return missing
+
+
 def plan_for(keys: Sequence[str]) -> list[packs_mod.Wheel]:
     """Every wheel these packs need, each once. Raises on an unknown key."""
     return packs_mod.plan(load(), keys)
@@ -226,6 +261,13 @@ def install(
         return {"ok": True, "collected": [], "installed": [], "already": True}
     spec: dict[str, Any] = {
         "pack_dir": str(cache_dir(svc)),
+        # The read-only half of the pair: the cache is where wheels are
+        # downloaded to, this is where the three that cannot be downloaded
+        # already are. Two directories rather than one because the cache lives
+        # with the user's work and survives a reinstall, and a bundled wheel
+        # belongs to the build -- an upgrade replaces it and must not have to
+        # find it under a home directory it does not own.
+        "bundled_dir": str(bundled_dir()),
         "wheels": [
             {
                 "filename": w.filename,
@@ -239,7 +281,15 @@ def install(
         "probe": sorted({name for pack in chosen for name in pack.probe}),
         "collect_only": collect_only,
     }
-    return _run_worker(spec, on_progress=on_progress or (lambda _p, _l: None), timeout=timeout)
+    result = _run_worker(spec, on_progress=on_progress or (lambda _p, _l: None), timeout=timeout)
+    # This process has already asked ``find_spec`` about every module in the
+    # pack and been told, truthfully at the time, that it was absent -- and the
+    # answer is cached in ``sys.path_importer_cache`` against a site-packages
+    # directory whose contents just changed underneath it. Without this the
+    # pane would redraw the row it just installed as still missing, and the
+    # only remedy on offer would be a restart the install does not need.
+    invalidate_caches()
+    return result
 
 
 def _kill_and_reap(proc: subprocess.Popen[str]) -> None:

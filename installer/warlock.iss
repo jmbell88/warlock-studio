@@ -51,6 +51,11 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\python\Lib\site-packages"
 Type: filesandordirs; Name: "{app}\src"
+; The bundled wheels of the *previous* version. Their filenames carry a
+; version, so an upgrade would otherwise leave last release's docopt beside
+; this one's -- files nothing will ever install, pinned by a manifest that no
+; longer names them. packs.json is replaced in place by [Files].
+Type: filesandordirs; Name: "{app}\packs"
 
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

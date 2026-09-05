@@ -924,6 +924,19 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             # startup, the same posture the rig-template probe below takes.
             log.exception("could not list the downloadable models")
             ctx.model_rows = []
+        # The other half of "what is on this machine": the Python distributions
+        # that can read the weights. Refreshed here rather than once at startup
+        # for this function's own reason -- a pack installed from the Settings
+        # pane makes ``bpy`` or ``torch`` importable while the app runs, and
+        # every pack answer in the ctx is derived from a ``find_spec`` this
+        # process has already cached.
+        from ..service import packs as svc_packs
+
+        try:
+            ctx.pack_rows = svc_packs.rows(self.svc)
+        except Exception:
+            log.exception("could not list the dependency packs")
+            ctx.pack_rows = []
 
     # -- the loop ----------------------------------------------------------
 
@@ -1603,6 +1616,39 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             # shows up on its own -- but the cached textures are keyed by draft
             # id and would otherwise outlive the files they decoded.
             ctx.cache.invalidate()
+            return
+        if key.startswith("pack:"):
+            # What a finished install *means*, decided rather than left to the
+            # user to discover: the same wholesale re-probe a finished download
+            # gets (``force=True``, off the frame thread), because the child
+            # wrote into the site-packages this process is running out of and
+            # every model, rigging and mode answer in the ctx was derived from
+            # a probe taken before it did.
+            #
+            # The re-probe is not always enough, and this says so rather than
+            # leaving a mode grey after an install that reported success:
+            # ``service.packs`` invalidates the import caches, so a pack whose
+            # modules still do not resolve here is one that genuinely needs a
+            # restart -- and that is a sentence, not a silence.
+            from ..service import packs as svc_packs
+            from ..service import system as svc_system
+
+            ctx.submit(VERIFY_KEY, svc_system.current_checks, self.svc, force=True)
+            ctx.tasks.set_progress(VERIFY_KEY, 0.0, "Verifying installation...")
+            pack = key.partition(":")[2]
+            try:
+                stubborn = svc_packs.unresolved([pack])
+            except Exception:  # noqa: BLE001 -- a toast must not end the frame
+                log.exception("could not re-probe the %r pack", pack)
+                stubborn = []
+            if stubborn:
+                ctx.toast(
+                    f"The {pack} pack installed, but Warlock has to restart "
+                    "before it can use it.",
+                    "warn",
+                )
+            else:
+                ctx.toast(f"The {pack} pack is installed.", "success")
             return
         if key.startswith(("download:", "remove:")):
             # Re-probe wholesale, exactly as the "health" task above replaces

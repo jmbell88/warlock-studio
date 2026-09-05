@@ -158,10 +158,45 @@ def test_build_script_stages_and_verifies_the_checkout_without_downloading_model
     ):
         assert required in source
     assert source.count("$Verifier --root") == 2
+
     assert not any(
         forbidden.lower() in source.lower()
         for forbidden in ("snapshot_download", "hf download", "Invoke-WebRequest", "curl.exe")
     )
+
+
+def test_the_build_collects_the_packs_and_then_ships_the_base_runtime() -> None:
+    """The whole point of the packs: the installer stages ``--extra studio``
+    alone, and torch, bpy and the music stack arrive from Settings -> Packs.
+
+    The *order* is what this pins. The full resolution has to be installed when
+    ``make_packs`` runs -- unpacked sizes exist nowhere but an installed tree,
+    and the CUDA 12.8 assertion above it is what proves the collected wheels
+    are the cu128 ones -- and the prune has to happen after it. A build that
+    lost either half would still produce an installer: one carrying 6.61 GB of
+    extras *and* a pack directory, or one whose packs advertise no install
+    size at all.
+    """
+    source = (INSTALLER / "build.ps1").read_text(encoding="utf-8")
+    collect = source.index("scripts/make_packs.py")
+    prune = source.index("--extra studio -o $BaseRequirements")
+    cuda = source.index("staged PyTorch CUDA 12.8 check")
+    assert cuda < collect < prune, "collect against the full runtime, then prune it"
+    # And the prune is asserted rather than assumed, because a sync that
+    # quietly kept the previous resolution is invisible in every other output.
+    assert "find_spec('torch')" in source
+    assert "packs.json" in source and "bundled" in source
+
+
+def test_the_installer_carries_the_wheels_that_cannot_be_downloaded() -> None:
+    """``docopt``, ``mojimoji`` and ``unidic-lite`` publish no Windows wheel,
+    so there is no URL a user's machine could fetch them from: the build
+    compiles them and the installer has to carry them. An upgrade clears the
+    previous version's copies, whose filenames no manifest will name again."""
+    source = (INSTALLER / "build.ps1").read_text(encoding="utf-8")
+    assert 'Join-Path $Stage "packs"' in source
+    iss = (INSTALLER / "warlock.iss").read_text(encoding="utf-8")
+    assert r'Type: filesandordirs; Name: "{app}\packs"' in iss
 
 
 def test_inno_setup_is_per_user_relocatable_and_leaves_user_data_alone() -> None:

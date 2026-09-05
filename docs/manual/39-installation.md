@@ -60,6 +60,23 @@ that day and disagreed — six of its fourteen failures were rig paths that fail
 when `bpy` is missing. Since the Windows installer packs its own 3.13 runtime, nobody running the
 shipped product was ever on 3.12 anyway.
 
+### If you installed rather than cloned
+
+Everything above is what a *source checkout* does. The Windows installer works the other way round:
+it carries the app, its renderer and the reconstruction engine, and nothing else. The three heavy
+extras — `text2image`, `rig` and `music` — travel as **packs**, and each is a button in
+[Settings → Packs](41-app-settings.md#packs). The download is around a gigabyte instead of three,
+and someone who only ever draws pixel art never downloads torch at all.
+
+A pack is the same resolution the installer was built from, wheel for wheel: it comes out of one
+`uv.lock`, every file is pinned by SHA-256, and installing one adds packages rather than replacing
+any. The three distributions that publish no Windows wheel (`docopt`, `mojimoji`, `unidic-lite`, all
+of them Muse's) are compiled by the build and ship inside the installer, because there is nowhere to
+fetch them from.
+
+Packs are not a thing a checkout has, and Settings says so: on a clone the same rows name the pack,
+say what it unlocks, and print the `uv sync --extra ...` line that installs it instead.
+
 ## The trellis binary
 
 The reconstruction engine is `trellis-server.exe`, a compiled CUDA binary from

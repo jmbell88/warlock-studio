@@ -95,6 +95,18 @@ def remove_key(row_key: str) -> str:
     return f"remove:{row_key}"
 
 
+def pack_key(key: str) -> str:
+    """The task key for "install this dependency pack".
+
+    Its own namespace beside ``download_key`` and for the same reason: the
+    app-Settings pane disables every pack's button while ``any_busy("pack:")``
+    is true -- two packs share distributions, and two children installing torch
+    into one ``site-packages`` at once is the worst concurrency in the tree --
+    and the App's task-done handler claims the result by this prefix.
+    """
+    return f"pack:{key}"
+
+
 @dataclass
 class Ctx:
     svc: Any
@@ -178,6 +190,11 @@ class Ctx:
     # Every downloadable registry row, with a real ``present`` flag rather than
     # the word "missing" inside a label -- see ``service.downloads.rows``.
     model_rows: list[dict[str, Any]] = field(default_factory=list)
+    # Every dependency pack, with a real ``present`` flag and what installing
+    # it would cost -- see ``service.packs.rows``. Refreshed wholesale beside
+    # ``model_rows``, because an install changes what this interpreter can
+    # import and every pack answer in the ctx is derived from that.
+    pack_rows: list[dict[str, Any]] = field(default_factory=list)
     # Which rows the app-Settings pane has ticked. Frame-thread state and
     # deliberately not persisted: it is a selection for one action, and a
     # remembered one would offer to re-download something already on disk.

@@ -18,6 +18,30 @@ the release you are actually running.
 
 ## 0.0.32 — 2026-09-04
 
+- **The installer no longer carries torch, bpy and the music stack; Settings installs them.** The
+  build stages `--extra studio` alone and the three heavy extras travel as *packs*
+  (`warlock.packs`, `scripts/make_packs.py`, `pipelines/pack_worker.py`, `service/packs.py`, all
+  built over the preceding days and until now reachable from nothing). `installer/build.ps1` still
+  syncs the full resolution first — unpacked sizes exist nowhere but an installed tree, and the
+  CUDA 12.8 assertion is what proves the collected wheels are the cu128 ones — then collects the
+  packs against it and syncs the staged runtime back down to the base. `packs.json` is staged
+  beside `pyproject.toml`, where `service.packs.manifest_path` looks, and the three distributions
+  that publish no Windows wheel (`docopt`, `mojimoji`, `unidic-lite`) are compiled by the build and
+  staged into `{app}\packs`, because there is no URL a user's machine could fetch them from. They
+  are pinned by digest in `packs.json` rather than in `runtime-manifest.json`: that file is checked
+  against the *checkout* before anything is built, and these files do not exist at that point.
+- **Settings gained a Packs category**, beside Models and deliberately not inside it: models are
+  weights and packs are the code that reads them. Each row says what the pack unlocks, in rail
+  labels rather than mode keys, and what it costs on both volumes — the wheel cache under
+  `~/.warlock/packs` and the application runtime, which on a per-user install is routinely another
+  drive. Cancel is offered while it downloads, where stopping costs a resumable part-file, and
+  withdrawn once pip starts, where stopping would leave the site-packages the app is running out of
+  half written. A finished install re-runs every startup check the way a finished download does, so
+  the modes it unlocks come to life without a restart; when a module still will not resolve in this
+  process the toast says so and asks for one, rather than leaving a mode grey after an install that
+  reported success. On a source checkout — no manifest, and none is a fault — the same rows print
+  the `uv sync --extra ...` line instead.
+
 - **A Muse take longer than a minute could not be opened in Sirens.** The bridge hands `track.wav`
   through the tracker's *sample* door, whose ceiling was written for one-shot drum hits —
   `MAX_SAMPLE_FRAMES` at sixty seconds of 48 kHz, and a byte door derived from it at 23,040,000
