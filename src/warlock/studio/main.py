@@ -705,6 +705,18 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         # arrows and Space, which five surfaces already bind -- see
         # ``_NAV_KEYS`` there for the rule and why it lives at that door.
         imgui.get_io().config_flags |= imgui.ConfigFlags_.nav_enable_keyboard.value
+        # Click a drag widget and type into it, with no modifier held.
+        # Typed entry has always worked on every slider and drag here --
+        # ``controls._clamp_typed_entry`` puts ``clamp_on_input`` on all of
+        # them and ``controls.TYPED_ENTRY_HINT`` says so in every one of their
+        # tooltips -- but a hover tooltip is a place to *confirm* an
+        # affordance, not to discover one, and a user who has not hovered has
+        # no reason to guess that Ctrl is the key. This costs the drags
+        # nothing: a drag still drags, and only a press that moved no pixels
+        # opens the box. Sliders keep Ctrl+click, since a click on a slider
+        # already means "jump the handle here" and imgui offers no flag to
+        # have it both ways.
+        imgui.get_io().config_drag_click_to_input_text = True
         try:
             fonts.load(imgui)
         except fonts.FontsUnavailable as exc:

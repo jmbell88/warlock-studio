@@ -22,15 +22,33 @@ SWATCH = 20.0
 # imgui's own picker rather than hand-rolled hex and HSV fields. It already has
 # both, plus a wheel and an eyedropper, and every one of those is a widget that
 # would otherwise have to be written and then kept agreeing with the others
-# about rounding. ``display_hex`` puts the hex box on the inline row too, so the
-# common case -- reading or typing a colour somebody sent you -- needs no popup
-# at all.
+# about rounding.
+#
+# **``no_inputs`` is deliberately absent, and used to be here.** The comment
+# that set it claimed ``display_hex`` "puts the hex box on the inline row
+# too" -- it does not, and cannot: ``no_inputs`` is what decides whether there
+# is an inline row at all, and ``display_hex`` only chooses what the box says
+# once there is one. So for as long as both were set, the two colours this app
+# is mostly about were a bare square, the hex the comment promised was behind a
+# click, and the only way to type a value was a popup nothing advertised. The
+# rows are the wider control now and that is the point of them; the small
+# swatches elsewhere (``inker_tools._CHIP_FLAGS``, the sheet and Flourish
+# pickers) keep ``no_inputs``, because a chip the width of a glyph has no room
+# for a field and ``inker_picker`` is the surface that gives every channel a
+# number.
 FLAGS = (
-    imgui.ColorEditFlags_.no_inputs.value
-    | imgui.ColorEditFlags_.alpha_bar.value
+    imgui.ColorEditFlags_.alpha_bar.value
     | imgui.ColorEditFlags_.display_hex.value
     | imgui.ColorEditFlags_.picker_hue_bar.value
 )
+
+#: :data:`FLAGS` for a swatch that does *not* have its line to itself. The
+#: inline fields are the whole point of ``FLAGS``, and they are also most of
+#: its width -- so a colour drawn with a ``same_line`` button after it (the
+#: filter popup's "use FG") needs the square back, or the button is pushed off
+#: the row. One constant derived from the other rather than two lists, so the
+#: alpha bar and the hex display cannot come to differ between them.
+COMPACT_FLAGS = FLAGS | imgui.ColorEditFlags_.no_inputs.value
 
 
 def _to_rgba(value: Any) -> tuple[int, int, int, int]:

@@ -166,9 +166,16 @@ def leading_selection(rect: tuple[Any, Any] | None = None) -> None:
 _leading_selection = leading_selection
 
 
-#: What every slider and drag adds to its tooltip. Ctrl+click-to-type is
-#: imgui's own default and has always worked here; nothing said so.
+#: What every slider adds to its tooltip. Ctrl+click-to-type is imgui's own
+#: default and has always worked here; nothing said so.
 TYPED_ENTRY_HINT = "Ctrl+click to type a value."
+
+#: The same sentence for a drag, which takes a plain click since ``main`` set
+#: ``config_drag_click_to_input_text``. Two strings rather than one hedged
+#: "Ctrl+click (or click a drag)": a hint naming a key the user does not need
+#: to hold is a hint that teaches the harder gesture, and the two families are
+#: already told apart here by ``kind``.
+DRAG_ENTRY_HINT = "Click to type a value."
 
 
 def _finish_item(
@@ -217,7 +224,11 @@ def _finish_item(
         # Every slider says so, in one place. A rule that has to be remembered
         # at each of 166 call sites is one that will be forgotten at the next
         # -- the argument ``widgets.combo``'s tooltip-as-accessible-name makes.
-        note = f"{note}\n{TYPED_ENTRY_HINT}" if note else TYPED_ENTRY_HINT
+        # Which gesture it names follows the widget: a drag takes a plain
+        # click and a slider still wants Ctrl, because a bare click on a
+        # slider already means "put the handle here".
+        hint = DRAG_ENTRY_HINT if kind.startswith("drag_") else TYPED_ENTRY_HINT
+        note = f"{note}\n{hint}" if note else hint
     if hovered and note:
         imgui.set_tooltip(note)
     try:
