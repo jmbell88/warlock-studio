@@ -74,7 +74,7 @@ def draw(ctx: Any) -> None:
     focus.begin(ctx.state, FOCUS_PANE)
 
     busy = ctx.busy("submit")
-    text_w, show_count = _row_widths()
+    text_w, show_count, generate_w = _row_widths()
 
     _tags(ctx, form, text_w)
     imgui.same_line()
@@ -83,12 +83,16 @@ def draw(ctx: Any) -> None:
         imgui.same_line()
         _count(ctx, form)
     imgui.same_line()
-    _generate(ctx, enabled=not busy)
+    # The count travels on the button when its own control was dropped (W3).
+    _generate(ctx, enabled=not busy, width=generate_w,
+              takes=None if show_count else int(form["count"]))
     _lyrics(ctx, form, text_w)
 
 
-def _row_widths() -> tuple[float, bool]:
-    """-> (text width, whether to draw the count). **The row's give-way order.**
+def _row_widths() -> tuple[float, bool, float]:
+    """-> (text width, whether to draw the count, Generate's width).
+
+    **The row's give-way order.**
 
     Stated, the way ``create_brief._row_widths`` states it, and for the reason
     that file learned the hard way: ``same_line`` past the pane edge draws a
@@ -100,6 +104,13 @@ def _row_widths() -> tuple[float, bool]:
     visible in the tray, as the number of cards a press produced. Duration and
     Generate never give way: the first is the parameter that decides what the
     press costs, and the second is what the bar is for.
+
+    **The number does not leave with the control (W3, 2026-09-05.)** Dropping
+    the count outright left the user pressing a button whose cost they could not
+    see -- four takes is four times the wait and four rows in the tray. So the
+    space the count gave up goes to Generate, which relabels itself *Generate 4
+    takes*: the figure stays on screen at every width, in the one place it
+    cannot be missed.
     """
     gap = imgui.get_style().item_spacing.x
     avail = imgui.get_content_region_avail().x
@@ -107,9 +118,8 @@ def _row_widths() -> tuple[float, bool]:
     count = sp(COUNT_W) + gap
     text = avail - fixed - count
     if text < sp(TEXT_MIN_W):
-        count = 0.0
-        text = avail - fixed
-    return max(sp(TEXT_MIN_W), text), count > 0
+        return max(sp(TEXT_MIN_W), avail - fixed), False, sp(GENERATE_W) + count
+    return max(sp(TEXT_MIN_W), text), True, sp(GENERATE_W)
 
 
 def _tags(ctx: Any, form: dict[str, Any], width: float) -> None:
@@ -216,8 +226,25 @@ def _step(form: dict[str, Any], field: str, values: tuple[int, ...], *, cast: An
         form[field] = cast(values[(here + 1) % len(values)])
 
 
-def _generate(ctx: Any, *, enabled: bool) -> None:
+def generate_label(takes: int | None) -> str:
+    """The button's text. -> ``"Generate"``, or the count-carrying form (W3).
+
+    A function rather than three lines inside the draw so the claim can be
+    asserted without an imgui frame: the number a press costs stays on screen
+    at every pane width, and one take says "Generate" because "Generate 1 take"
+    is a control apologising for itself.
+    """
+    return "Generate" if takes is None or int(takes) <= 1 else f"Generate {int(takes)} takes"
+
+
+def _generate(
+    ctx: Any, *, enabled: bool, width: float | None = None, takes: int | None = None
+) -> None:
     """The press. Always visible, which is the point of the bar.
+
+    ``takes`` is set only when the count control was dropped for width, and the
+    label carries the number instead (W3): a Generate whose cost is off screen
+    is a button pressed without knowing what it will do.
 
     Disabled while a submit is in flight, and **also when the music weights are
     not on this host**. An empty prompt is still left to the service, and the
@@ -237,8 +264,8 @@ def _generate(ctx: Any, *, enabled: bool) -> None:
     blocked = bool(model_gate.missing(ctx, svc_jobs.MUSIC_ROWS))
     with focus.item(ctx.state, FOCUS_PANE, "generate") as focused:
         pressed = widgets.primary_button(
-            "Generate",
-            (sp(GENERATE_W), sp(TAGS_H)),
+            generate_label(takes),
+            (sp(GENERATE_W) if width is None else float(width), sp(TAGS_H)),
             enabled=enabled and not blocked,
             reason=(
                 "The music model is not downloaded. See the Recipe panel."

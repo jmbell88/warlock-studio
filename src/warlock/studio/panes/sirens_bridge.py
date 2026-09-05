@@ -99,6 +99,7 @@ def _export(ctx: Any, tab: Any) -> None:
         from .. import muse_mode
 
         muse_mode.compose_from_sirens(ctx, tab)
+    _closeness(ctx)
     counts = [f"{len(doc.channels)} stem(s)"]
     if doc.oneshots:
         counts.append(f"{len(doc.oneshots)} effect(s)")
@@ -143,4 +144,28 @@ def _recent(ctx: Any) -> None:
     widgets.recent_files(
         sirens_mode.recent_paths(ctx),
         lambda path: sirens_mode.open_path(ctx, Path(path)),
+    )
+
+
+def _closeness(ctx: Any) -> None:
+    """*Closeness*, beside the button it governs (W1, 2026-09-05).
+
+    The same knob the derive door draws as *Closeness* on a take, and drawn
+    from the same table so there is one label, one range and one hint rather
+    than a second set that agrees today. It is here rather than in Muse's brief
+    because it is a property of *this hand-off*: how near the model stays to
+    the song being handed over says nothing about a brief generated from
+    scratch, whose Generate ignores it entirely.
+
+    Before this, the door wrote a hard-coded 0.5 and the manual sent the reader
+    to *Make more -> Something like this* to adjust it -- a control on a
+    different job, which is a documentation bug whether or not this ships.
+    """
+    from .. import muse_mode
+    from .muse_results import DERIVE_FIELDS
+
+    label, low, high, hint = DERIVE_FIELDS["ref_audio_strength"]
+    state = muse_mode.ensure(ctx)
+    _, state.compose_strength = widgets.labeled_slider_float(
+        label, float(state.compose_strength), low, high, help_text=hint
     )

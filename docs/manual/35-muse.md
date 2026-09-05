@@ -68,7 +68,9 @@ word rather than three vocabularies.
 ## The takes
 
 Each press queues *count* rows and the tray draws one card each, newest first. A card shows the
-tags, the status, the length, and two buttons.
+tags, the status, the length, the **seed** it was drawn with, and — for a take made from another —
+what kind of derivation it was and which take it came from. The seed is on the card because that is
+what tells two near-identical generations apart without going to the Library for it.
 
 **Play / Stop** auditions the take. Playback shares the one audio device with Sirens, so starting a
 take stops whatever the tracker was playing and vice versa — there is one sound card and this app
@@ -120,6 +122,9 @@ the file, repaints across it — where the music on both sides is context the mo
 rolls it back. The join is then something composed rather than a cut. What it does not do is make
 the first and last samples equal: ACE-Step has no cyclic objective and is not being asked for one.
 
+Loop points belong to the take, not to the player: audition another take and come back, and your
+region and crossfade are where you left them.
+
 **Find loop points** (on the player) is the other half. It searches the take for the two positions
 where the music most nearly repeats, judging each candidate on the moment itself, on the third of a
 second leading *into* it — which is what distinguishes "these two places sound alike" from "the
@@ -135,6 +140,10 @@ audibly even though both samples are zero.
 **Crossfade** trades two things you can hear. At zero the seam is a butt join and keeps every
 transient; longer is certainly smooth and audibly dips the music through the join. 40 ms is the
 default.
+
+A loop that is already seamless is left alone: Muse measures the join a repeat actually crosses
+before it fades anything, and if no fade would make that join smaller, it applies none — so raising
+the crossfade can never put a click into a loop that did not have one.
 
 ### The two exports, and why you cannot have both
 
@@ -205,7 +214,9 @@ instruments.
 
 Fill in the style tags in Muse first, because those are what the model is being asked *for*; the
 song is only what it is being asked to sound like. How closely it follows is the **Closeness**
-control, which you will find under *Make more → Something like this* on any take.
+slider under the button: at the low end the song is a loose suggestion, at the high end the model
+is performing your arrangement almost bar for bar. (The same control appears under *Make more →
+Something like this* on a take, where it governs that take instead.)
 
 Your loop points travel with the render, since they are written into the WAV the model reads. The
 rates already agree in this direction too — the tracker renders at 44.1 kHz.

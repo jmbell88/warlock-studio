@@ -1,4 +1,10 @@
-"""Multi-document state for Sirens, without imgui and without a sound device.
+"""Multi-document state for Sirens, without imgui and with one device call.
+
+The device call is :meth:`SirensState.activate`, which stops the mixer on a tab
+switch (S6) because there is one channel and the song left behind would go on
+sounding under the song brought forward. It is a local import inside that one
+method; everything else here is answerable on a box with no sound card, which
+is what lets the tests ask it.
 
 The ``inker_state`` / ``plotter_state`` / ``packwright_state`` split, fourth
 instance. What is here is everything the mode has to remember that is not in
@@ -18,11 +24,14 @@ three-minute song is several seconds of numpy over every tick, which is not
 frame-thread work. So the samples and the loop points live here, on the tab,
 adopted when the task lands.
 
-**``render_generation`` is what playback keys on.** A re-render replaces the
-buffer wholesale, and "should I hand this to the mixer again" gated on a hash
-or on the document's head either re-uploads a 50 MB buffer every frame or
-misses a change. A counter bumped in exactly one place is the only version of
-this that is both.
+**``render_generation`` names which render a sounding buffer came from.** A
+re-render replaces the buffer wholesale, and a counter bumped in exactly one
+place is the cheapest way to name one: a hash of a 50 MB buffer costs a frame,
+and the document's head misses a mute, which is a render change and not a
+document change. It is the identity :class:`Sounding` stamps itself with at the
+moment playback starts, which is the whole of what it is for -- the sentence
+here used to say playback *keyed* on it while nothing read it at all, and
+playback in fact keys on ``sirens_audio``'s tag (S2, 2026-09-05).
 """
 
 from __future__ import annotations
@@ -77,6 +86,55 @@ MIN_STEP, MAX_STEP = 0, 16
 DEFAULT_STEP = 1
 
 
+@dataclass(frozen=True)
+class Sounding:
+    """The render a buffer *now on the mixer* was built from. Immutable.
+
+    **The map has to be bound to the audio, not to the tab (S2, 2026-09-05).**
+    :meth:`SongTab.adopt_render` swaps ``pcm``, ``loop`` and ``marks`` while the
+    mixer is still playing a ``Sound`` made from the previous buffer -- the
+    device owns a copy, so a re-render cannot disturb it. The playhead used to
+    bisect the *live* fields, which passed its tag check and then read the new
+    map against the old audio: with follow mode on (the default) that walks the
+    caret onto a row nothing is playing. Recording the map at the moment
+    playback starts leaves ``adopt_render`` free to swap whenever it likes.
+
+    ``anchor`` is the song sample that buffer index 0 corresponds to -- zero for
+    an ordinary Play, the caret's own offset for "from the caret". ``wrap`` is
+    the buffer's length in samples when the buffer repeats (the mixer wraps
+    modulo its own length), or ``None`` for a one-shot play-through, which is
+    what lets a rotated looping buffer be unwound back into song time.
+    """
+
+    marks: tuple[tuple[int, int, int, int], ...] = ()
+    anchor: int = 0
+    wrap: int | None = None
+    generation: int = 0
+
+    def mark_at(self, seconds: float, rate: int) -> tuple[int, int, int] | None:
+        """Which ``(order index, pattern uid, row)`` is sounding at ``seconds``.
+
+        A bisect of :attr:`marks`, so the answer is what the renderer did rather
+        than an estimate: every order entry, every pattern length, every ``Fxx``
+        and every jump are already in the offsets. ``None`` before the first row
+        and after the last -- the tail of a song is its instruments decaying,
+        and highlighting the final row through it says the song is still on it.
+        """
+        marks = self.marks
+        if not marks:
+            return None
+        offset = int(self.anchor) + int(float(seconds) * int(rate))
+        if self.wrap:
+            offset %= int(self.wrap)
+        if offset < marks[0][0]:
+            return None
+        index = bisect.bisect_right(marks, (offset, _LAST, _LAST, _LAST)) - 1
+        if index < 0:
+            return None
+        _at, order_index, pattern, row = marks[index]
+        return order_index, pattern, row
+
+
 @dataclass
 class SongTab:
     """One tab: a song, where it came from, and the audio it last rendered to."""
@@ -102,15 +160,31 @@ class SongTab:
     # render has landed.
     pcm: np.ndarray | None = None
     loop: tuple[int, int] | None = None
-    #: Where in the rendered buffer the sound now playing started, in samples.
-    #: Non-zero after "play from here", so the playhead bisects against the
-    #: song rather than against the slice that was handed to the mixer.
-    play_offset: int = 0
-
     #: One ``(sample offset, order index, pattern uid, row)`` per row as the
-    #: renderer actually played it, ascending in the offset. What the playhead
-    #: bisects; see :func:`~.sirens.synth.render_marked`.
+    #: renderer actually played it, ascending in the offset. What a
+    #: :class:`Sounding` snapshots; see :func:`~.sirens.synth.render_marked`.
     marks: tuple[tuple[int, int, int, int], ...] = ()
+
+    #: The render whatever this tab last put on the mixer was built from, or
+    #: ``None``. Snapshotted at the moment playback starts, never re-read from
+    #: the live fields -- see :class:`Sounding` for the swap it survives.
+    sounding: Sounding | None = None
+
+    #: Channel uids this song's mix is playing without, and the one channel it
+    #: is playing *alone* (``-1`` for none). **View state, not the song**: a
+    #: mute is how a person listens to what they are writing, and a ``.wsng``
+    #: that remembered one would hand somebody else a song with a missing part.
+    #: It reaches the mix through the render (``synth.render_only``), so
+    #: toggling one re-renders exactly as an edit does.
+    #:
+    #: **Per tab, not per app (S5, 2026-09-05).** Channels are identified by
+    #: uid and ``document.reserve_uid`` starts each document's count over, so
+    #: two tabs opened from the same file carry identical channel uids: a mute
+    #: on ``SirensState`` silently applied to the other song's next render, and
+    #: because a tab switch does not re-render, the tab that was not touched
+    #: went on showing a mix that disagreed with the mask.
+    muted: set[int] = field(default_factory=set)
+    solo: int = -1
     # Bumped once, where a render is adopted. Playback keys on it.
     render_generation: int = 0
     # A render is in flight. Separate from ``saving`` because a re-render does
@@ -141,24 +215,13 @@ class SongTab:
     def mark_at(self, seconds: float, rate: int) -> tuple[int, int, int] | None:
         """Which ``(order index, pattern uid, row)`` is sounding at ``seconds``.
 
-        A bisect of :attr:`marks`, so the answer is what the renderer did
-        rather than an estimate: every order entry, every pattern length, every
-        ``Fxx`` and every jump are already in the offsets. ``None`` before the
-        first row and after the last -- the tail of a song is its instruments
-        decaying, and highlighting the final row through it says the song is
-        still on it.
+        Answered against :attr:`sounding` -- the render the buffer on the mixer
+        was actually built from -- and ``None`` when this tab has nothing on it.
+        Never against the live :attr:`marks`, which a re-render may already have
+        replaced underneath the audio still playing (S2).
         """
-        marks = self.marks
-        if not marks:
-            return None
-        offset = int(float(seconds) * int(rate)) + int(self.play_offset)
-        if offset < marks[0][0]:
-            return None
-        index = bisect.bisect_right(marks, (offset, _LAST, _LAST, _LAST)) - 1
-        if index < 0:
-            return None
-        _at, order_index, pattern, row = marks[index]
-        return order_index, pattern, row
+        one = self.sounding
+        return None if one is None else one.mark_at(seconds, rate)
 
     def mark_saved(self, head: int | None = None) -> None:
         self.doc.mark_saved(head)
@@ -209,6 +272,25 @@ class SirensState:
     channel: int = 0
     column: int = 0
 
+    #: Which *entry of the order list* the caret is in, or ``None`` when the
+    #: caret was put somewhere the order list did not choose. A fifth number
+    #: rather than a derived one, because :attr:`pattern` is a uid and a uid
+    #: does not answer the question: a chorus used at entries 00 and 03 is one
+    #: pattern at two places in the song, so "play from the caret" always
+    #: started at 00 and the playhead highlighted the grid during 00 while the
+    #: song was in 03 (S3, 2026-09-05). Both lookups prefer it and fall back to
+    #: pattern-only, which is what keeps a caret placed from the grid working.
+    order_index: int | None = None
+
+    #: Bumped by every request for something to sound, and by ``stop``. Carried
+    #: to a render task through ``Done.tag`` and compared on completion, so a
+    #: preview, a pattern or a sound effect that finishes rendering *after* the
+    #: user pressed Stop is dropped instead of starting the mixer (S1,
+    #: 2026-09-05). ``MuseState.audition_job``'s mechanism (M11); a counter
+    #: rather than a key because the four things that can sound here are not
+    #: all identified by a job id.
+    play_request: int = 0
+
     #: Which nibble of a multi-digit column the *next* hex key fills: ``0`` is
     #: the high one, ``1`` the low. A fifth number rather than a field on the
     #: pane, for the reason the other four are here: a pane is rebuilt from
@@ -247,15 +329,6 @@ class SirensState:
     #: different reason -- see ``sirens_patterns._first_channel``, which is what
     #: writes it.
     chan_scroll: int = 0
-
-    #: Channel uids the mix is playing without, and the one channel it is
-    #: playing *alone* (``-1`` for none). **View state, not the song**: a mute
-    #: is how a person listens to what they are writing, and a ``.wsng`` that
-    #: remembered one would hand somebody else a song with a missing part. It
-    #: reaches the mix through the render (``synth.render_only``), so toggling
-    #: one re-renders exactly as an edit does.
-    muted: set[int] = field(default_factory=set)
-    solo: int = -1
 
     #: Whether Play repeats the rendered song. View state like the mutes: the
     #: *document's* ``loop_order`` is what the exported WAV's ``smpl`` chunk
@@ -347,6 +420,19 @@ class SirensState:
 
     def activate(self, uid: str) -> None:
         if uid != self.active_uid:
+            # **The other song stops (S6, 2026-09-05).** There is one mixer
+            # channel, so tab A went on sounding under tab B: the playhead
+            # correctly declined to draw (the tag names A), but the transport
+            # read the *global* ``playing()`` and so offered B a Stop button
+            # that silenced A. The one import of a device in this module, and
+            # deliberately local: everything else here is answerable with no
+            # sound card, which is what lets the tests ask it.
+            from . import sirens_audio
+
+            sirens_audio.stop()
+            self.play_request += 1
+            for tab in self.docs:
+                tab.sounding = None
             self.active_uid = uid
             # The caret names a row of the *previous* song's pattern, and a
             # selection anchored in it. Both are meaningless here.
@@ -378,6 +464,7 @@ class SirensState:
         self.row = self.channel = self.column = 0
         self.digit = 0
         self.oneshot = None
+        self.order_index = None
         if tab is None:
             self.pattern = None
             self.instrument = None

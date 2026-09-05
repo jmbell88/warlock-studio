@@ -91,8 +91,24 @@ def _card(ctx: Any, job: dict[str, Any], width: float) -> None:
         widgets.muted_wrapped(widgets.fit_text(prompt, width) if prompt else "(no tags)")
         params = job.get("params") or {}
         duration = params.get("actual_duration") or params.get("duration")
-        if duration:
-            widgets.secondary(f"{float(duration):.0f}s")
+        line = [f"{float(duration):.0f}s"] if duration else []
+        # **Seed and lineage, because comparing two takes is the whole job (W2,
+        # 2026-09-05).** Both are already in the row -- the seed is written per
+        # take by ``create_music_job`` and the parent is a column -- so this is
+        # presentation and not a second query. Without it, telling two
+        # near-identical generations apart meant leaving for the Library.
+        seed = params.get("seed")
+        if seed is not None:
+            line.append(f"seed {int(seed)}")
+        if line:
+            widgets.secondary("  ".join(line))
+        parent = job.get("parent_id")
+        if parent:
+            # The task rather than the parent's id, because a twelve-hex-digit
+            # id is not something a person recognises and the *kind* of
+            # derivation is what they are comparing against the original.
+            task = str(params.get("task") or "derived")
+            widgets.muted(f"{task} of {str(parent)[:8]}")
         _actions(ctx, job, job_id)
 
 

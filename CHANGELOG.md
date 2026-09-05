@@ -16,6 +16,85 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
+## 0.0.34 — 2026-09-05
+
+The two audio modes, gone over properly. Muse's loop crossfade was making the
+seam it exists to fix measurably *worse* than doing nothing, and shipping those
+samples into exported loop files; a code read of Sirens — a mode nobody has yet
+heard, which is still true after this release — found six more defects, every
+one of them green under a passing suite. Eleven fixes, each with a regression
+test that fails against the code as it was.
+
+- **Muse's loop crossfade made the seam worse than applying no fade at all.**
+  The blend ended the loop body on `head[fade - 1]`, so playback wrapped to
+  `head[0]` and time jumped *backwards* by a whole fade every repeat. Measured
+  on a 440 Hz tone, region `[1000, 60000)`, 2048-sample fade: the seam stepped
+  14502 against an interior maximum of 1320, where doing nothing stepped 11695.
+  `muse_io.loop_body` feeds one buffer to both the audition and `export_loop`,
+  so this was in exported files. `loops.crossfade` now costs three candidate
+  joins in O(1) off the source — no fade, fade the tail toward the material
+  before the region, fade the material after it into the head — and takes the
+  smallest, because both fades work by making the wrap land on a join the take
+  itself already contains. The tone now seams at 832 against 1253. **A loop
+  that is already seamless is left alone**, which is what closes the original
+  repro: a constant plateau's wrap is already a zero step, and the previous
+  fix's own test could not see the defect because a plateau makes it
+  invisible. A wrap-continuous body also survives the seek rotation intact.
+- **Sirens played sounds after Stop.** A note preview, a pattern audition or a
+  sound effect is rendered on a task thread, and the completion handler passed
+  every successful one to the mixer with no freshness check whatever — so
+  pressing a key and then Stop played the key, a second later. Requests are
+  counted, `stop` withdraws them, and a completion carrying a stale count is
+  dropped. Nothing is cancelled: the render finishes and its samples are not
+  played.
+- **Sirens' playhead read the new row map against the old audio.** A re-render
+  swaps the buffer and its map while the device is still playing a copy of the
+  previous one, so the highlight — and, with follow mode on, the caret — moved
+  to a row nothing was playing. The map is now snapshotted at the moment
+  playback starts and bisected from there.
+- **A pattern used twice in the order list always played from the first
+  occurrence.** A chorus at entries 00 and 03 is one pattern uid at two places
+  in the song, so "From the caret" started at 00 however far down the song you
+  were working, and the grid highlight lit up during the wrong one. The caret
+  now records which order entry it is in.
+- **"From the caret" with loop playback looped the tail rather than the song.**
+  It repeated whatever was left from that row onward and never came back to bar
+  1 — the same defect fixed in Muse's player one release ago, still live here.
+  The whole buffer is rotated instead, and the rotation is unwound when
+  reporting position.
+- **A mute in one song muted the same-numbered channel in another.** Mute and
+  solo lived on the app state while channels are identified by uid, and uids
+  come out of the file — so the same song open in two tabs shared one mask, and
+  since a tab switch does not re-render, the other tab went on showing a mix
+  that disagreed with it. Both moved onto the document's tab.
+- **Switching tabs left the other song sounding.** There is one mixer channel,
+  so tab A played on under tab B — and because the transport read the global
+  "is anything playing", B offered a Stop button that silenced A. The device is
+  stopped on the switch, and the transport's label now names whose buffer is
+  actually on the channel.
+- **Closeness is a control on the Sirens → Muse hand-off, not a hard-coded
+  0.5.** Composing from a song wrote a fixed strength into the job while the
+  identical knob was a slider on the derive path, and the manual sent the
+  reader to *Make more → Something like this* to adjust it — a control that
+  governs a different job entirely. The slider is now beside the button it
+  governs, drawn from the same table, and the refusal for a strength that
+  leaves the model no sampling steps is shared by both doors rather than
+  written twice.
+- **Take cards show the seed and, for a derived take, what it came from.**
+  Both were already in the row; comparing two near-identical generations meant
+  leaving for the Library.
+- **The take count no longer vanishes from a narrow brief bar.** The count
+  control gives way first when the pane is short of width, which left the user
+  pressing a button whose cost was off screen. The space it gives up goes to
+  the button, which relabels itself *Generate 4 takes*.
+- **Loop markers survive a take switch.** The player holds one decoded take and
+  rebuilt it per load, so auditioning a second take discarded the first's
+  region, crossfade and candidates. A bounded record of three floats per take
+  brings them back — deliberately not the ~42 MB-per-take PCM cache the player
+  refuses to keep.
+- The `screenshots/` set was regenerated against this build: it predated Muse
+  and so had no picture of it, and every other mode's chrome had moved on.
+
 ## 0.0.33 — 2026-09-05
 
 Everything here comes out of a static audit run against 0.0.32 on 2026-09-04

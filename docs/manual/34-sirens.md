@@ -57,7 +57,8 @@ where they are when its voice changes: the voice is how they sound, not what the
 the noise channel into a second triangle is one click and no retyping. Left-click that button mutes
 the channel and the **S** beside it solos; both are about listening, so neither is saved into the
 `.wsng` — handing somebody else a song with a part missing is not a thing a file should be able to
-do.
+do. They belong to the song you set them on, so opening the same file in a second tab to compare
+two versions gives you two independent sets of mutes.
 
 If the pane is too narrow for every channel, the ones that do not fit are counted in the margins
 (`<2` on the left, `3>` on the right) and the grid follows the caret sideways as you arrow into
@@ -322,11 +323,18 @@ with no chance of a dropout because something else on the computer was busy.
 
 **From the caret** plays from the row the caret is on, in the song's own timing — writing bar 40 of
 a three-minute track does not mean hearing the first two minutes to check it. It plays the *song*,
-so a pattern the order list never reaches says so rather than starting from the top. **This
-pattern** plays the pattern the grid is editing, once, whether or not the order reaches it; it never
-touches the song's own buffer, so pressing Play afterwards plays the song. **Loop playback** repeats
-what was rendered — the loop *point* in the order list is what an exported WAV tells a game engine,
-while this is for listening.
+so a pattern the order list never reaches says so rather than starting from the top. When a pattern
+appears more than once in the order list, it starts at the entry you selected there, not at the
+first place that pattern is used — so writing the last chorus and pressing it plays the last chorus.
+**This pattern** plays the pattern the grid is editing, once, whether or not the order reaches it;
+it never touches the song's own buffer, so pressing Play afterwards plays the song. **Loop
+playback** repeats what was rendered — from the caret it still repeats the *whole* song rather than
+the part after the caret, so a loop is a loop of the piece however you started it. The loop *point*
+in the order list is what an exported WAV tells a game engine, while this is for listening.
+
+There is one sound device and one song on it. Switching to another tab stops what was playing rather
+than leaving it sounding under a transport belonging to a different song, and Stop always means the
+song you are looking at.
 
 **Tempo** and **Speed** in the transport belong to the song rather than to the transport: they are
 undoable and they re-arm the renderer. A tempo change you cannot take back is the one edit in a

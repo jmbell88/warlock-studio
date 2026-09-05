@@ -326,27 +326,56 @@ def find(pcm: np.ndarray, rate: int) -> list[Candidate]:
     return out
 
 
+def _wrap_step(a: np.ndarray, b: np.ndarray) -> float:
+    """How far the signal jumps going from sample ``a`` straight to sample ``b``.
+
+    Summed across channels rather than taken per channel, so the three
+    candidate joins below are ranked by one number: a stereo loop has one
+    seam, and picking a join that fixes the left channel by wrecking the right
+    is not an improvement anybody can hear as one.
+    """
+    lhs = np.asarray(a, dtype=np.float64)
+    rhs = np.asarray(b, dtype=np.float64)
+    return float(np.sum(np.abs(rhs - lhs)))
+
+
 def crossfade(pcm: np.ndarray, start: int, end: int, fade: int) -> np.ndarray:
-    """The loop body, with its own repeat seam made continuous. -> same dtype,
-    same length as ``end - start``.
+    """The loop body, joined at whichever seam is measurably smallest. -> same
+    dtype, same length as ``end - start``.
 
-    **Wrap-aware, and that is the fix (M07 review, finding M08).** A repeated
-    loop's audible seam is the *tail* of one repetition meeting the *head* of
-    the next -- and the head is the body's own first samples, unconditionally,
-    however the body was built. An earlier version of this function blended
-    material from *before* ``start`` into the head instead: that changes what
-    the loop's first instant sounds like, but does nothing about the join a
-    repeat actually plays across, since the tail was never touched. Measured on
-    a loop that was already seamless (a constant plateau, so the untreated
-    wrap has a zero-sample jump): that version introduced a click where there
-    had been none, because the pre-``start`` material need not resemble the
-    body's own end at all.
+    **The thing being minimised is the wrap, and a fade that does not reduce it
+    is not applied (2026-09-05, finding M08).** What a repeated loop plays
+    across is the join from the body's *last* sample straight back to its
+    *first*. That is the only discontinuity a repeat has, so it is the only
+    number worth spending a fade on -- and a fade is only worth applying when
+    it makes that number smaller. Two earlier versions each blended material in
+    somewhere and called the job done without ever measuring the wrap they were
+    supposedly fixing: the first blended pre-``start`` material into the head
+    (which changes the loop's first instant and leaves the tail exactly where
+    it was), and the second replaced the tail with ``tail * cos + head * sin``,
+    which ends the body on ``head[fade - 1]`` -- so playback wraps to
+    ``head[0]`` and time jumps *backwards* by ``fade`` samples every repeat.
+    Measured on a 440 Hz tone, region ``[1000, 60000)``, 2048-sample fade: that
+    version's seam stepped 14502 against an interior maximum of 1320, where
+    doing nothing at all stepped 11695. The fade was making the click worse.
 
-    So what is blended is the last ``fade`` samples of the body -- fading them
-    out -- against the first ``fade`` samples of the body -- fading them in --
-    replacing the tail in place. The head is left untouched, which is what
-    keeps the body's declared start ("the loop begins here") a real fact about
-    the file rather than a fact about whatever came before it.
+    So the three joins are costed first, all in O(1) off the source:
+
+    ==========================  ===============================  =============
+    choice                      resulting wrap                   needs
+    ==========================  ===============================  =============
+    no fade                     ``|data[end-1] - data[start]|``  --
+    fade tail toward pre-start  ``|data[start-1] - data[start]|`` ``start > 0``
+    fade post-end into head     ``|data[end-1] - data[end]|``    ``end < len``
+    ==========================  ===============================  =============
+
+    The two fades are the two ways to make the wrap land on a join that is
+    *already continuous in the source*: end the body on ``data[start - 1]``, or
+    begin it on ``data[end]``. Either way the repeat crosses a step the take
+    itself contains, which is generally tiny. The smallest of the three wins,
+    and when neither fade beats leaving it alone the body is returned untouched
+    -- which is what closes M08's own repro, a constant plateau whose untreated
+    wrap is already exactly zero and cannot be improved on.
 
     **Equal power, cos/sin, not linear.** Two decorrelated signals crossfaded
     linearly sum to about 0.71 of their level at the midpoint -- a ~3 dB dip,
@@ -354,10 +383,8 @@ def crossfade(pcm: np.ndarray, start: int, end: int, fade: int) -> np.ndarray:
     *power*, which is what two unrelated signals actually add as.
 
     **Duration policy.** ``fade`` is clamped to at most half the body's own
-    length, so the fading tail and the head it fades toward can never overlap
-    each other within one body -- a loop shorter than twice the requested fade
-    gets the longest fade that still keeps the two regions disjoint, rather
-    than a fade that reads samples out of order or twice.
+    length, so the faded region can never cover the body twice, and to however
+    much material the chosen side actually has outside the region.
     """
     data = np.asarray(pcm)
     dtype = data.dtype
@@ -367,14 +394,37 @@ def crossfade(pcm: np.ndarray, start: int, end: int, fade: int) -> np.ndarray:
     if fade <= 0 or n == 0:
         return body.astype(dtype)
 
+    # Cost every join before touching a sample. ``plain`` is the incumbent: a
+    # fade has to beat it outright, not merely tie, or it is churn.
+    plain = _wrap_step(data[end - 1], data[start])
+    candidates: list[tuple[float, str, int]] = []
+    if start > 0:
+        candidates.append((_wrap_step(data[start - 1], data[start]), "tail", min(fade, start)))
+    if end < data.shape[0]:
+        room = data.shape[0] - end
+        candidates.append((_wrap_step(data[end - 1], data[end]), "head", min(fade, room)))
+    usable = [c for c in candidates if c[2] > 0 and c[0] < plain]
+    if not usable:
+        return body.astype(dtype)
+    _, side, fade = min(usable, key=lambda c: c[0])
+
     angle = np.linspace(0.0, np.pi / 2.0, fade, dtype=np.float32)
     rising, falling = np.sin(angle), np.cos(angle)
     if body.ndim == 2:
         rising, falling = rising[:, None], falling[:, None]
 
-    tail = body[n - fade : n].copy()
-    head = body[:fade]
-    body[n - fade : n] = tail * falling + head * rising
+    if side == "tail":
+        # The body fades out into the material that immediately precedes the
+        # region, so it ends on ``data[start - 1]`` -- the sample the source
+        # itself puts before ``data[start]``.
+        lead_out = data[start - fade : start].astype(np.float32)
+        body[n - fade : n] = body[n - fade : n] * falling + lead_out * rising
+    else:
+        # The body begins on ``data[end]`` and fades into its own head, so the
+        # wrap crosses the source's own ``end - 1 -> end`` step.
+        lead_in = data[end : end + fade].astype(np.float32)
+        body[:fade] = lead_in * falling + body[:fade] * rising
+
     if np.issubdtype(dtype, np.integer):
         info = np.iinfo(dtype)
         body = np.clip(body, info.min, info.max)

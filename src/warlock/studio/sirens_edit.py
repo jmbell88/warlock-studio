@@ -127,18 +127,28 @@ def jump_row(ctx: Any, row: int, *, select: bool = False) -> None:
 
 
 def set_caret(ctx: Any, *, pattern: int | None = None, row: int | None = None,
-              channel: int | None = None, column: int | None = None) -> None:
+              channel: int | None = None, column: int | None = None,
+              order_index: int | None = None) -> None:
     """Put the caret somewhere absolute -- what a click and the order list do.
 
     Through here rather than by assignment so the clamp is not something four
     call sites remember; the selection is dropped for the same reason a tab
     switch drops it, because a rectangle with one corner in a pattern the user
     has left is not a rectangle.
+
+    ``order_index`` says *which entry of the order list* the caret is in, and is
+    the order list's to pass (S3, 2026-09-05): a pattern used twice is one uid
+    at two places in the song, so a caret that knows only the uid always played
+    and highlighted the first of them. A caret set from the grid passes none,
+    and the entry is cleared -- there is no honest answer there, and keeping the
+    previous entry would be worse than having none.
     """
     state = ensure(ctx)
     if pattern is not None and pattern != state.pattern:
         state.pattern = pattern
         state.anchor = None
+    if pattern is not None or order_index is not None:
+        state.order_index = None if order_index is None else int(order_index)
     if row is not None:
         state.row = int(row)
     if channel is not None:

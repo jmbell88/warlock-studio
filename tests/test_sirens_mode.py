@@ -36,16 +36,21 @@ class FakeCtx:
         self.viewer = None
         self.accept = accept
         self.result: Any = None
+        self.tag: Any = None
 
         self.busy_keys: set[str] = set()
 
     def busy(self, key: str) -> bool:
         return key in self.busy_keys
 
-    def submit(self, key: str, run: Any, *args: Any) -> bool:
+    def submit(self, key: str, run: Any, *args: Any, tag: Any = None) -> bool:
         self.submitted.append(key)
         if not self.accept:
             return False
+        # ``tag`` is kept, not dropped: it is how a completion says which
+        # request it belongs to (S1), and a fake that swallowed it would make
+        # the freshness check untestable.
+        self.tag = tag
         self.result = run(*args)
         return True
 
@@ -64,6 +69,9 @@ class FakeCtx:
 class _AppState:
     def __init__(self) -> None:
         self.sirens = None
+        # The Song file panel draws Muse's *Closeness* beside Compose (W1), so
+        # the slot the real ``AppState`` carries has to be here too.
+        self.muse = None
         self.mode = "home"
         self.preview: dict[str, Any] = {}
 
@@ -88,10 +96,15 @@ class _Confirms:
 
 
 class _Done:
-    def __init__(self, key: str, result: Any = None, message: str = "") -> None:
+    def __init__(
+        self, key: str, result: Any = None, message: str = "", tag: Any = None
+    ) -> None:
         self.key = key
         self.result = result
         self.message = message
+        # Which request this completion belongs to; ``TaskRunner`` carries the
+        # value ``submit`` was given (S1).
+        self.tag = tag
 
 
 class _Event:
@@ -971,9 +984,20 @@ def _two_pattern_song(ctx: FakeCtx) -> Any:
     return tab, first, second
 
 
-def _sounding(monkeypatch, tab: Any, seconds: float) -> None:
-    from warlock.studio import sirens_audio
+def _sounding(monkeypatch, tab: Any, seconds: float, *, anchor: int = 0) -> None:
+    """Put this tab's own render on the (fake) channel at ``seconds``.
 
+    The snapshot is what the playhead bisects since S2 -- the live ``marks`` may
+    already belong to a render the mixer has never heard -- so a test that only
+    faked the device would be asking about audio that, as far as the tab is
+    concerned, was never started.
+    """
+    from warlock.studio import sirens_audio
+    from warlock.studio.sirens_state import Sounding
+
+    tab.sounding = Sounding(
+        marks=tab.marks, anchor=anchor, generation=tab.render_generation
+    )
     monkeypatch.setattr(sirens_audio, "tag", lambda: tab.uid)
     monkeypatch.setattr(sirens_audio, "position", lambda: seconds)
 
@@ -1153,17 +1177,16 @@ def test_muting_a_channel_takes_it_out_of_the_mix_and_re_renders():
     ctx = FakeCtx()
     tab = _tab(ctx)
     doc = tab.doc
-    state = sirens_mode.ensure(ctx)
     _render(ctx, tab)
     assert tab.render_dirty is False
 
     second = doc.channels[1].uid
     assert sirens_mode.toggle_mute(ctx, second, tab) is True
     assert tab.render_dirty is True, "a mute the mix has not heard yet is not a mute"
-    assert sirens_mode.audible_channels(doc, state) == (0, 2, 3, 4)
+    assert sirens_mode.audible_channels(doc, tab) == (0, 2, 3, 4)
 
     assert sirens_mode.toggle_mute(ctx, second, tab) is False
-    assert sirens_mode.audible_channels(doc, state) == (0, 1, 2, 3, 4)
+    assert sirens_mode.audible_channels(doc, tab) == (0, 1, 2, 3, 4)
 
 
 def test_solo_wins_over_every_mute():
@@ -1172,25 +1195,23 @@ def test_solo_wins_over_every_mute():
     ctx = FakeCtx()
     tab = _tab(ctx)
     doc = tab.doc
-    state = sirens_mode.ensure(ctx)
     sirens_mode.toggle_mute(ctx, doc.channels[0].uid, tab)
     sirens_mode.toggle_mute(ctx, doc.channels[2].uid, tab)
 
     assert sirens_mode.toggle_solo(ctx, doc.channels[2].uid, tab) == doc.channels[2].uid
-    assert sirens_mode.audible_channels(doc, state) == (2,)
+    assert sirens_mode.audible_channels(doc, tab) == (2,)
 
     assert sirens_mode.toggle_solo(ctx, doc.channels[2].uid, tab) == -1
-    assert sirens_mode.audible_channels(doc, state) == (1, 3, 4), "the mutes stood"
+    assert sirens_mode.audible_channels(doc, tab) == (1, 3, 4), "the mutes stood"
 
 
 def test_a_solo_on_a_channel_the_song_no_longer_has_is_not_silence():
     ctx = FakeCtx()
     tab = _tab(ctx)
     doc = tab.doc
-    state = sirens_mode.ensure(ctx)
-    state.solo = 999_999
+    tab.solo = 999_999
 
-    assert sirens_mode.audible_channels(doc, state) == tuple(range(len(doc.channels)))
+    assert sirens_mode.audible_channels(doc, tab) == tuple(range(len(doc.channels)))
 
 
 def test_the_header_can_tell_muted_from_merely_unheard():
@@ -1263,7 +1284,7 @@ def test_playing_from_the_caret_slices_the_buffer_at_that_row(monkeypatch):
     pcm, kwargs = played[-1]
     assert len(pcm) == len(tab.pcm) - wanted[0]
     assert kwargs["tag"] == tab.uid
-    assert tab.play_offset == wanted[0]
+    assert tab.sounding.anchor == wanted[0]
 
 
 def test_the_playhead_is_still_the_songs_row_after_playing_from_the_caret(monkeypatch):
@@ -1328,3 +1349,200 @@ def test_loop_playback_asks_the_mixer_to_repeat(monkeypatch):
     state.loop_playback = True
     assert sirens_mode.play(ctx, tab) is True
     assert played[-1][1]["loops"] == -1
+
+
+# --- the 2026-09-05 playback defects (S1-S6) ---------------------------------
+#
+# Six defects found by a code read of a mode nobody has heard yet (TODO P14),
+# all of them green under the suite as it stood. Each test below is the claim
+# its name makes, and each fails against the code as it was.
+
+
+def test_a_pattern_that_finishes_rendering_after_stop_is_not_played(monkeypatch):
+    """S1. ``on_task_done`` handed every successful audition straight to the
+    mixer with no freshness check at all, so pressing a key and then Stop
+    played the sound anyway the moment its render landed. Against the unfixed
+    code this records one ``play`` call after an explicit Stop.
+    """
+    played = _audible(monkeypatch)
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    _render(ctx, tab)
+    state = sirens_mode.ensure(ctx)
+    state.pattern = tab.doc.patterns[0].uid
+
+    assert sirens_mode.play_pattern(ctx, tab) is True
+    requested, result = ctx.tag, ctx.result
+    sirens_mode.stop(ctx)  # the user changes their mind while it renders
+
+    sirens_mode.on_task_done(
+        ctx, _Done(f"sirens-pattern:{tab.uid}", result, tag=requested)
+    )
+    assert played == [], "a withdrawn request does not sound"
+
+
+def test_the_audition_the_user_is_still_waiting_for_does_play(monkeypatch):
+    """S1's other half: the freshness check must not swallow the ordinary
+    case, or Sirens would simply go silent."""
+    played = _audible(monkeypatch)
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    _render(ctx, tab)
+    state = sirens_mode.ensure(ctx)
+    state.pattern = tab.doc.patterns[0].uid
+
+    assert sirens_mode.play_pattern(ctx, tab) is True
+    sirens_mode.on_task_done(
+        ctx, _Done(f"sirens-pattern:{tab.uid}", ctx.result, tag=ctx.tag)
+    )
+    assert len(played) == 1
+
+
+def test_the_playhead_bisects_the_render_the_mixer_is_actually_playing(monkeypatch):
+    """S2. ``adopt_render`` swaps ``pcm``, ``loop`` and ``marks`` while the
+    device is still playing a ``Sound`` built from the *previous* buffer, and
+    the playhead used to bisect the live fields -- passing its tag check and
+    then reading the new map against the old audio, which with follow mode on
+    walks the caret to a row nothing is playing. Against the unfixed code this
+    reports the replacement map's row 7 instead of the sounding render's.
+    """
+    played = _audible(monkeypatch)
+    ctx = FakeCtx()
+    tab, _first, second = _two_pattern_song(ctx)
+    assert sirens_mode.play(ctx, tab) is True
+    assert played
+
+    from warlock.studio import sirens_audio
+
+    monkeypatch.setattr(sirens_audio, "tag", lambda: tab.uid)
+    monkeypatch.setattr(sirens_audio, "position", lambda: 0.0)
+    sounding_now = sirens_mode.playhead_mark(ctx, tab)
+    assert sounding_now is not None and sounding_now[2] != 7
+
+    # A re-render lands: same tab, a map that says something else entirely.
+    tab.adopt_render(tab.pcm, None, ((0, 9, second, 7),))
+    assert sirens_mode.playhead_mark(ctx, tab) == sounding_now
+
+
+def test_playing_from_the_caret_starts_at_the_order_entry_the_caret_is_in(monkeypatch):
+    """S3. A pattern used at two places in the order list is one uid, and the
+    lookup broke on the first mark whose *pattern* matched -- so a chorus at
+    entries 00 and 02 always played from 00, however far down the song the
+    user was working. Against the unfixed code this starts at entry 00's
+    offset, two thirds of the song early.
+    """
+    _audible(monkeypatch)
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    doc = tab.doc
+    chorus = doc.patterns[0].uid
+    verse = doc.add_pattern().uid
+    doc.set_order([chorus, verse, chorus])
+    _render(ctx, tab)
+
+    sirens_mode.set_caret(ctx, pattern=chorus, row=2, order_index=2)
+    assert sirens_mode.play_from_caret(ctx, tab) is True
+
+    wanted = next(
+        mark for mark in tab.marks if mark[1] == 2 and mark[2] == chorus and mark[3] == 2
+    )
+    first_time = next(
+        mark for mark in tab.marks if mark[1] == 0 and mark[2] == chorus and mark[3] == 2
+    )
+    assert wanted[0] != first_time[0], "the two occurrences are at different offsets"
+    assert tab.sounding.anchor == wanted[0]
+
+
+def test_the_highlight_names_the_order_entry_and_not_merely_the_pattern(monkeypatch):
+    """S3, the half a listener sees. ``playhead_row`` dropped the order index
+    too, so while the song was in entry 00 the grid lit up for a caret sitting
+    in entry 02 of the same pattern. Against the unfixed code this returns row
+    0 rather than ``None``.
+    """
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    doc = tab.doc
+    chorus = doc.patterns[0].uid
+    verse = doc.add_pattern().uid
+    doc.set_order([chorus, verse, chorus])
+    _render(ctx, tab)
+    sirens_mode.set_caret(ctx, pattern=chorus, row=0, order_index=2)
+
+    _sounding(monkeypatch, tab, 0.0)  # the song is at the top: entry 00
+    assert sirens_mode.playhead_mark(ctx, tab)[0] == 0
+    assert sirens_mode.playhead_row(ctx, tab) is None, "the caret is in entry 02"
+
+
+def test_from_the_caret_with_loop_playback_repeats_the_song_not_its_tail(monkeypatch):
+    """S4, which is M10's Muse bug still live in Sirens. ``loops=-1`` on the
+    slice ``pcm[offset:]`` repeats only what is left of the song from that row
+    onward and never comes back to bar 1. Against the unfixed code the buffer
+    handed to the mixer is shorter than the song by exactly the caret's offset.
+    """
+    played = _audible(monkeypatch)
+    ctx = FakeCtx()
+    tab, _first, second = _two_pattern_song(ctx)
+    state = sirens_mode.ensure(ctx)
+    state.loop_playback = True
+    wanted = next(mark for mark in tab.marks if mark[2] == second and mark[3] == 2)
+    sirens_mode.set_caret(ctx, pattern=second, row=2)
+
+    assert sirens_mode.play_from_caret(ctx, tab) is True
+    pcm, kwargs = played[-1]
+    assert kwargs["loops"] == -1
+    assert len(pcm) == len(tab.pcm), "the whole song repeats, rotated"
+    assert tab.sounding.wrap == len(tab.pcm)
+
+    # And the rotation is unwound: at the instant it starts, the playhead is on
+    # the row the caret was on, not on row 0 of the song.
+    from warlock.studio import sirens_audio
+
+    monkeypatch.setattr(sirens_audio, "tag", lambda: tab.uid)
+    monkeypatch.setattr(sirens_audio, "position", lambda: 0.0)
+    assert sirens_mode.playhead_mark(ctx, tab) == (wanted[1], wanted[2], wanted[3])
+
+
+def test_a_mute_in_one_song_leaves_the_other_song_alone():
+    """S5. ``muted``/``solo`` lived on ``SirensState``, shared by every tab,
+    while channels are identified by uid -- and ``document.reserve_uid`` starts
+    each document's count over, so two songs carry the *same* channel uids.
+    Against the unfixed code muting channel 1 of the first song silences
+    channel 1 of the second, which reads as a channel that went quiet on its
+    own.
+    """
+    ctx = FakeCtx()
+    # The same file, opened twice -- which is what a person does when they want
+    # to compare a change against the version on disk. Channel uids come out of
+    # the file, so the two tabs carry identical ones.
+    data = wsng.wsng_bytes(_tab(ctx).doc)
+    first = sirens_mode.adopt(ctx, wsng.read_wsng(data), title="one")
+    second = sirens_mode.adopt(ctx, wsng.read_wsng(data), title="two")
+    assert [one.uid for one in first.doc.channels] == [
+        one.uid for one in second.doc.channels
+    ], "the same file really does give two tabs the same channel uids"
+
+    victim = first.doc.channels[1].uid
+    assert sirens_mode.toggle_mute(ctx, victim, first) is True
+
+    assert sirens_mode.audible_channels(first.doc, first) == (0, 2, 3, 4)
+    assert sirens_mode.audible_channels(second.doc, second) == (0, 1, 2, 3, 4)
+
+
+def test_switching_tabs_stops_the_song_that_was_playing(monkeypatch):
+    """S6. There is one mixer channel, so tab A went on sounding under tab B --
+    and because the transport read the *global* ``playing()``, B showed a Stop
+    button that silenced A. Against the unfixed code nothing stops and A's
+    buffer is still on the channel.
+    """
+    stopped: list[bool] = []
+    from warlock.studio import sirens_audio
+
+    monkeypatch.setattr(sirens_audio, "stop", lambda: stopped.append(True))
+    ctx = FakeCtx()
+    first = _tab(ctx)
+    second = _tab(ctx)
+
+    state = sirens_mode.ensure(ctx)
+    state.activate(first.uid)
+    assert stopped, "the device is silenced on the way out"
+    assert first.sounding is None and second.sounding is None

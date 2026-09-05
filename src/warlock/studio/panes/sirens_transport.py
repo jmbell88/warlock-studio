@@ -38,7 +38,14 @@ def draw(ctx: Any) -> None:
         return
 
     device = sirens_audio.available()
-    playing = sirens_audio.playing()
+    # **This tab's sound, not the machine's (S6, 2026-09-05).** The global
+    # ``playing()`` is true while any tab -- or a sound effect -- is on the one
+    # mixer channel, so switching to a silent tab B while A played showed B a
+    # Stop button, and pressing it stopped A. The tag names whose buffer is
+    # actually on the channel. Belt and braces with ``SirensState.activate``,
+    # which now stops the device on the switch: both, because every door in
+    # this app is held twice.
+    playing = sirens_audio.tag() == tab.uid
     width = widgets.grid_width(2)
     label = f"{icons.SQUARE} Stop" if playing else f"{icons.PLAY} Play"
     if widgets.disabled_button(

@@ -127,29 +127,54 @@ def test_a_loop_covers_a_real_fraction_of_the_take():
 
 # --- crossfade ---------------------------------------------------------------
 #
-# M08: the previous version blended material from *before* ``start`` into the
-# loop's head, which does nothing about the seam a repeated loop actually
-# plays across -- the join between the *tail* of one repetition and the *head*
-# of the next. Every test below is about that seam, on the *repeated* output,
-# not about the buffer's own first samples.
+# M08. The seam a repeated loop plays across is the body's *last* sample
+# meeting its *first*, and that is the only number these tests measure. Two
+# earlier versions each blended material in without measuring the wrap: the
+# second ended the body on ``head[fade - 1]``, so playback wrapped to
+# ``head[0]`` and jumped backwards by a whole fade every repeat.
+#
+# Every wrap test below uses *non-constant* material, deliberately. The old
+# tests used a constant plateau, where ``head[fade - 1] == head[0]`` makes that
+# defect structurally invisible -- which is why it shipped.
+
+
+def _wrap(body: np.ndarray) -> tuple[float, float]:
+    """``(seam step, largest interior step)`` of ``body`` played on repeat.
+
+    The claim every test here asserts is the comparison of the two: a loop
+    whose wrap is no bigger a step than the music's own biggest step has no
+    seam to hear, whatever the absolute numbers are.
+    """
+    repeated = np.concatenate([body, body])
+    n = body.shape[0]
+    steps = np.abs(np.diff(repeated.astype(np.float64), axis=0))
+    steps = steps.reshape(steps.shape[0], -1).sum(axis=1)
+    seam = float(np.abs(repeated[n].astype(np.float64) - repeated[n - 1].astype(np.float64)).sum())
+    return seam, float(steps[: n - 1].max())
+
+
+def _int_tone(seconds: float, hz: float = 440.0, rate: int = RATE) -> np.ndarray:
+    t = np.arange(int(seconds * rate), dtype=np.float64) / rate
+    return (20000.0 * np.sin(2 * np.pi * hz * t)).astype(np.int16)
 
 
 def test_the_crossfade_is_equal_power_rather_than_linear():
-    """The blend at the tail is exactly ``tail * cos + head * sin`` -- weights
-    whose *squares* sum to 1, which is what keeps two decorrelated signals from
+    """The blend is exactly ``lead * cos + own * sin`` -- weights whose
+    *squares* sum to 1, which is what keeps two decorrelated signals from
     dipping ~3 dB at mid-fade the way a linear (weights summing to 1) blend
     would. Asserted as the exact per-sample formula rather than a statistical
     approximation over random material, which is fragile by construction: any
     single sample's instantaneous value depends on both signals' signs, not
     only on their power.
     """
-    pcm = np.arange(4000, dtype=np.float32)
+    pcm = np.arange(5000, dtype=np.float32)
     fade = 400
+    # A ramp's cheapest join by far is to continue past ``end`` into the head,
+    # so this is the post-end fade: the body starts on ``pcm[4000]``.
     body = loops.crossfade(pcm, 0, 4000, fade)
-    tail, head = pcm[4000 - fade : 4000], pcm[:fade]
     angle = np.linspace(0.0, np.pi / 2.0, fade, dtype=np.float32)
-    expected_tail = tail * np.cos(angle) + head * np.sin(angle)
-    np.testing.assert_allclose(body[4000 - fade :], expected_tail, rtol=1e-4)
+    expected_head = pcm[4000 : 4000 + fade] * np.cos(angle) + pcm[:fade] * np.sin(angle)
+    np.testing.assert_allclose(body[:fade], expected_head, rtol=1e-4)
 
 
 def test_the_body_is_the_requested_span():
@@ -157,67 +182,91 @@ def test_the_body_is_the_requested_span():
     assert loops.crossfade(pcm, 1000, 5000, 100).shape[0] == 4000
 
 
-def test_crossfade_does_not_introduce_a_click_into_an_already_seamless_loop():
-    """M08's own repro. A constant loop has a zero-jump seam already: blending
-    whatever comes *before* ``start`` -- a different constant here -- into the
-    head introduced a jump the untreated loop never had. Fails against the
-    unfixed code, which reads exactly that 40000-unit jump at the wrap.
+def test_the_repeat_seam_is_no_worse_than_the_musics_own_biggest_step():
+    """M08, the headline claim, on the audit's own measurement: a 440 Hz tone,
+    region ``[1000, 60000)``, 2048-sample fade. Against the unfixed code the
+    seam steps 14502 with an interior maximum of 1320 -- eleven times the
+    largest step the music itself contains, and worse than the 11695 that
+    applying no fade at all would have left.
+    """
+    body = loops.crossfade(_int_tone(2.0), 1000, 60000, 2048)
+    seam, interior = _wrap(body)
+    assert seam <= interior
+
+
+def test_a_region_starting_at_the_top_of_the_take_still_gets_a_seamless_wrap():
+    """M08 with no material *before* ``start``: the join has to be found on the
+    other side, by beginning the body on ``data[end]``. Fails against the
+    unfixed code, whose seam steps 9238 against an interior maximum of 1401.
+    """
+    body = loops.crossfade(_int_tone(2.0), 0, 60000, 2048)
+    seam, interior = _wrap(body)
+    assert seam <= interior
+
+
+def test_a_stereo_takes_wrap_is_seamless_in_both_channels_at_once():
+    """M08 across channels. The two channels share one seam, so the join is
+    costed on both together rather than chosen for one and inflicted on the
+    other. Fails against the unfixed code, whose summed seam steps 42945
+    against an interior maximum of 2579.
+    """
+    tone = _int_tone(2.0)
+    pcm = np.stack([tone, np.roll(tone, 7)], axis=1)
+    body = loops.crossfade(pcm, 1000, 60000, 2048)
+    assert body.shape == (59000, 2)
+    seam, interior = _wrap(body)
+    assert seam <= interior
+
+
+def test_a_body_shorter_than_twice_the_fade_still_wraps_cleanly():
+    """Duration policy under M08: the fade is capped at half the body, so the
+    faded region can never cover the body twice, and the join is still chosen
+    by measurement. Fails against the unfixed code, whose seam steps 22404 on
+    this fifty-sample body against an interior maximum of 1253.
+    """
+    body = loops.crossfade(_int_tone(2.0), 1000, 1050, 1000)
+    assert body.shape[0] == 50
+    seam, interior = _wrap(body)
+    assert seam <= interior
+
+
+def test_an_already_seamless_loop_is_left_exactly_alone():
+    """M08's own repro, and the reason declining is a real branch. A constant
+    plateau's untreated wrap is already a zero-sample step: no join can improve
+    on that, so no fade is applied and the body is the plain slice. Fails
+    against the unfixed code, which blends anyway and leaves a 157-unit step
+    wobbling through the *interior* of a signal that was flat.
     """
     pcm = np.concatenate(
         [np.full(500, -20000, dtype=np.int16), np.full(2000, 20000, dtype=np.int16)]
     )
-    start, end, fade = 500, 2500, 200
-    original_seam = abs(int(pcm[end - 1]) - int(pcm[start]))
-    assert original_seam == 0
-
-    body = loops.crossfade(pcm, start, end, fade)
-    repeated = np.concatenate([body, body])
-    seam_jump = abs(int(repeated[len(body) - 1]) - int(repeated[len(body)]))
-    assert seam_jump == 0
+    body = loops.crossfade(pcm, 500, 2500, 200)
+    assert np.array_equal(body, pcm[500:2500])
+    assert _wrap(body) == (0.0, 0.0)
 
 
-def test_the_material_faded_into_the_tail_comes_from_the_bodys_own_head():
-    """The join is tail-against-head, both from *inside* the body -- never
-    material from before ``start``, which the old version reached for and
-    which need not resemble the body's own end at all.
-    """
-    pcm = np.zeros(4000, dtype=np.float32)
-    pcm[1000:1200] = 1.0  # only the head of the body (from 1000) is non-zero
-    body = loops.crossfade(pcm, 1000, 3000, 200)
-    # The tail (the last 200 samples of the body) now leans toward the head's
-    # content; the untouched middle stays at zero.
-    assert body[-200:].max() > 0.5
-    assert body[200:-200].max() == pytest.approx(0.0)
-
-
-def test_crossfade_still_fades_when_the_region_starts_at_the_top_of_the_take():
-    """The old algorithm needed lead-in material from before ``start`` and so
-    clamped ``fade`` by ``start`` -- at ``start == 0`` there is none, and it
-    silently fell back to no fade at all. Fails against the unfixed code,
-    which returns the plain, un-blended slice whenever ``start == 0``.
-    """
-    pcm = np.concatenate(
-        [np.full(1000, 1000.0, dtype=np.float32), np.full(1000, -1000.0, dtype=np.float32)]
-    )
-    body = loops.crossfade(pcm, 0, 2000, 200)
-    assert body[-1] != pytest.approx(-1000.0)
-
-
-def test_a_fade_longer_than_half_the_body_is_capped_so_head_and_tail_never_overlap():
-    """Duration policy: the fade cannot exceed half the body, or the fading
-    head and tail regions would read the same samples twice. A short body with
-    a distinct head and tail still gets a seamless repeat -- fails against the
-    unfixed code, whose ``fade = min(fade, start, len(body))`` has no notion
-    of "half the body" and, at ``start == 0``, disables the fade outright
-    (leaving the 2000-unit jump between B and A at the repeat).
+def test_a_region_with_no_material_on_either_side_declines_rather_than_inventing_one():
+    """Both fades need material from outside the region; with none available
+    there is nothing to measure a better join against, so the body is returned
+    untouched rather than blended into itself. Fails against the unfixed code,
+    which blends the head into the tail and returns a body that is not the
+    slice.
     """
     pcm = np.concatenate([np.full(25, 1000, dtype=np.int16), np.full(25, -1000, dtype=np.int16)])
-    body = loops.crossfade(pcm, 0, 50, 1000)  # fade requested far past the body
-    assert body.shape[0] == 50
-    assert np.isfinite(body).all()
-    repeated = np.concatenate([body, body])
-    seam_jump = abs(int(repeated[49]) - int(repeated[50]))
-    assert seam_jump < 2000  # smaller than the untreated jump between B and A
+    body = loops.crossfade(pcm, 0, 50, 1000)
+    assert np.array_equal(body, pcm)
+
+
+def test_a_rotated_body_is_still_seamless_so_seeking_inside_the_region_keeps_the_loop():
+    """M10 rotates the loop body with ``np.roll`` so playback can start at the
+    seek point, which turns every interior join into a potential seam. A body
+    that is wrap-continuous by construction survives that; the unfixed code's
+    does not -- rotating it merely moves its 14502-step defect into the
+    interior, where the seek lands on it.
+    """
+    body = loops.crossfade(_int_tone(2.0), 1000, 60000, 2048)
+    seam, interior = _wrap(np.roll(body, -5000, axis=0))
+    assert seam <= interior
 
 
 def test_no_fade_is_the_plain_slice():
@@ -226,17 +275,8 @@ def test_no_fade_is_the_plain_slice():
 
 
 def test_an_integer_take_comes_back_in_its_own_dtype_and_in_range():
-    pcm = np.full(4000, 30000, dtype="<i2")
-    body = loops.crossfade(pcm, 1000, 3000, 200)
+    pcm = np.concatenate([np.full(1000, 30000, dtype="<i2"), _int_tone(0.1)])
+    body = loops.crossfade(pcm, 100, 1000, 200)
     assert body.dtype == np.dtype("<i2")
     assert body.max() <= np.iinfo("<i2").max
-
-
-def test_a_stereo_takes_seam_is_faded_independently_per_channel():
-    pcm = np.zeros((4000, 2), dtype=np.float32)
-    pcm[1000:1200, 0] = 1.0  # only channel 0's head is non-zero
-    pcm[1000:1200, 1] = -1.0  # channel 1's head is the opposite sign
-    body = loops.crossfade(pcm, 1000, 3000, 200)
-    assert body.shape == (2000, 2)
-    assert body[-200:, 0].max() > 0.5
-    assert body[-200:, 1].min() < -0.5
+    assert body.min() >= np.iinfo("<i2").min

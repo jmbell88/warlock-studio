@@ -167,3 +167,61 @@ def test_a_refused_reference_leaves_nothing_on_disk(svc):
             svc, prompt="dark ambient", duration=30.0, reference_wav=b"junk"
         )
     assert set(svc.config.job_dir("").iterdir()) == before
+
+
+# --- Closeness is a control, not a literal (W1, 2026-09-05) -------------------
+
+
+def test_the_reference_door_takes_the_closeness_the_caller_asked_for(svc):
+    """W1. The door wrote a hard-coded ``0.5`` into the params, while the
+    identical knob is a user-facing slider on the derive path -- and the manual
+    sent the reader to *Make more -> Something like this* to adjust it, which
+    governs a different job entirely. Against the unfixed code this lands 0.5
+    whatever the caller asked for.
+    """
+    made = door.create_music_job(
+        svc,
+        prompt="dark ambient",
+        duration=30.0,
+        reference_wav=_render(),
+        ref_audio_strength=0.8,
+    )
+    params = svc.store.get(made["id"])["params"]
+    assert params["task"] == "audio2audio"
+    assert params["ref_audio_strength"] == pytest.approx(0.8)
+
+
+def test_a_closeness_that_leaves_no_sampling_steps_is_refused_at_the_door(svc):
+    """The refusal ``derive_music_job`` already carried, now shared rather than
+    written twice: the sampler computes ``int((1 - strength) * infer_steps)``,
+    so a strength this near 1.0 decodes the noised reference unchanged -- a
+    long job that hands back its own input. Both controls are named because
+    either one fixes it.
+    """
+    with pytest.raises(Invalid) as caught:
+        door.create_music_job(
+            svc,
+            prompt="dark ambient",
+            duration=30.0,
+            reference_wav=_render(),
+            ref_audio_strength=0.999,
+            infer_step=60,
+        )
+    assert caught.value.field == "ref_audio_strength"
+
+
+def test_the_composers_default_closeness_is_the_derive_paths_own(svc):
+    """One knob, one default. Before this the mode's default and the door's
+    were two independent ``0.5``s that merely happened to agree.
+    """
+    from warlock.studio import muse_state
+
+    state = muse_state.MuseState()
+    assert state.compose_strength == pytest.approx(
+        muse_state.DEFAULT_DERIVE["ref_audio_strength"]
+    )
+    low, high = 0.0, 0.9
+    from warlock.studio.panes.muse_results import DERIVE_FIELDS
+
+    assert DERIVE_FIELDS["ref_audio_strength"][1:3] == (low, high)
+    assert low <= state.compose_strength <= high

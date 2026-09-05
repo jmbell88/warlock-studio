@@ -76,6 +76,11 @@ DEFAULT_DERIVE: dict[str, Any] = {
 #: mismatch the zero-crossing snap could not close.
 DEFAULT_XFADE_MS = 40.0
 
+#: How many takes' loop settings :attr:`MuseState.loop_memory` keeps. Small on
+#: purpose: this is a convenience for going back and forth between a handful of
+#: candidates, not a document, and nothing outside the session reads it.
+LOOP_MEMORY = 32
+
 #: The longest crossfade the player will offer. Half a second is already long
 #: enough to hear as a dip rather than a join; past it the control is asking
 #: for a different effect.
@@ -165,6 +170,36 @@ class MuseState:
     #: the column. One dict rather than two so that a future "reuse this take's
     #: settings" is a copy rather than a merge of two halves.
     form: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_FORM))
+
+    #: How near the model stays to a song composed from Sirens -- the reference
+    #: door's ``ref_audio_strength``, drawn as *Closeness* beside the Compose
+    #: button in ``panes/sirens_bridge.py`` (W1, 2026-09-05). It used to be the
+    #: literal ``0.5`` written into the params by the door, with the manual
+    #: sending the reader to *Make more -> Something like this* to find it --
+    #: a control that governs a different job entirely. Defaulted *from*
+    #: :data:`DEFAULT_DERIVE` rather than to a second ``0.5``, so the two
+    #: spellings of the same knob cannot drift apart.
+    #: ``{job id: (loop_start, loop_end, xfade_ms)}`` for takes audition
+    #: previously, most recent last, capped at :data:`LOOP_MEMORY` entries
+    #: (oldest evicted). Restored when a take is loaded again (W4,
+    #: 2026-09-05): :class:`Player` holds one decoded take and
+    #: ``on_task_done`` builds a fresh one per load, so auditioning a second
+    #: take and coming back discarded the first one's region, crossfade and
+    #: candidates -- M07 only stopped the *same* take being rebuilt.
+    #:
+    #: **This is not the cache the ``Player`` docstring rules out**, and the
+    #: difference is the whole reason it is allowed to exist: that one refuses
+    #: to hold ~42 MB of PCM per job, which is a mode growing without bound
+    #: while somebody auditions candidates. Three floats per job is a different
+    #: question, and the cap is here anyway so the answer does not depend on
+    #: anyone agreeing with that.
+    loop_memory: dict[str, tuple[float | None, float | None, float]] = field(
+        default_factory=dict
+    )
+
+    compose_strength: float = field(
+        default_factory=lambda: float(DEFAULT_DERIVE["ref_audio_strength"])
+    )
 
     #: The job id currently being auditioned, or "". The *audio* is
     #: ``sirens_audio``'s -- it is tag-keyed and mode-agnostic, and Muse passes

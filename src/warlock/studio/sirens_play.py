@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import sirens_audio, sirens_mode
-from .sirens_state import SongTab, active, ensure  # noqa: F401
+from .sirens_state import SongTab, Sounding, active, ensure  # noqa: F401
 
 # --- rendering ----------------------------------------------------------------
 
@@ -67,7 +67,7 @@ def request_render(ctx: Any, tab: SongTab | None = None) -> None:
 
     # The mix's own mask, read on the frame thread with everything else the
     # task needs: a mute is view state, so the snapshot cannot carry it.
-    keep = sirens_mode.audible_channels(tab.doc, ensure(ctx))
+    keep = sirens_mode.audible_channels(tab.doc, tab)
     whole = len(keep) == len(tab.doc.channels)
 
     def run() -> dict[str, Any]:
@@ -159,7 +159,9 @@ def audition(ctx: Any, tab: SongTab | None, uid: int) -> bool:
             raise invalid_from(exc, "That sound effect did not render") from exc
         return {"pcm": wavout.to_int16(samples), "oneshot": effect}
 
-    return bool(ctx.submit(f"{AUDITION_PREFIX}{tab.uid}", run))
+    state = ensure(ctx)
+    state.play_request += 1
+    return bool(ctx.submit(f"{AUDITION_PREFIX}{tab.uid}", run, tag=state.play_request))
 
 
 #: A note preview's key prefix. ``AUDITION_PREFIX``'s reasoning a third time:
@@ -214,7 +216,8 @@ def preview_note(ctx: Any, note: int) -> bool:
         )
         return {"pcm": wavout.to_int16(samples)}
 
-    return bool(ctx.submit(f"{PREVIEW_PREFIX}{tab.uid}", run))
+    state.play_request += 1
+    return bool(ctx.submit(f"{PREVIEW_PREFIX}{tab.uid}", run, tag=state.play_request))
 
 
 def _caret_kind(ctx: Any, tab: SongTab) -> str:
@@ -252,12 +255,17 @@ def play(ctx: Any, tab: SongTab | None = None) -> bool:
         ctx.toast("There is nothing in the order list to play yet.", "error")
         return False
     state = ensure(ctx)
-    tab.play_offset = 0
-    if not sirens_audio.play(
-        tab.pcm, tag=tab.uid, loops=-1 if state.loop_playback else 0
-    ):
+    state.play_request += 1
+    looping = bool(state.loop_playback)
+    if not sirens_audio.play(tab.pcm, tag=tab.uid, loops=-1 if looping else 0):
         ctx.toast("That song could not be played; see the log for details.", "error")
         return False
+    tab.sounding = Sounding(
+        marks=tab.marks,
+        anchor=0,
+        wrap=int(len(tab.pcm)) if looping else None,
+        generation=tab.render_generation,
+    )
     return True
 
 
@@ -278,11 +286,7 @@ def play_from_caret(ctx: Any, tab: SongTab | None = None) -> bool:
     tab = tab or state.active
     if tab is None or not _playable(ctx, tab):
         return False
-    offset = None
-    for at, _order_index, pattern, row in tab.marks:
-        if pattern == state.pattern and row >= state.row:
-            offset = at
-            break
+    offset = _caret_offset(tab, state)
     if offset is None:
         ctx.toast(
             "The song never reaches this row -- add this pattern to the order "
@@ -290,13 +294,61 @@ def play_from_caret(ctx: Any, tab: SongTab | None = None) -> bool:
             "info",
         )
         return False
-    tab.play_offset = int(offset)
-    if not sirens_audio.play(
-        tab.pcm[int(offset) :], tag=tab.uid, loops=-1 if state.loop_playback else 0
-    ):
+    state.play_request += 1
+    offset = int(offset)
+    looping = bool(state.loop_playback)
+    if looping:
+        # **The whole song repeats, not the tail (S4, 2026-09-05).** This used
+        # to hand the mixer ``pcm[offset:]`` with ``loops=-1``, so "from the
+        # caret" with loop playback on repeated whatever was left of the song
+        # from bar 40 onward and never came back to bar 1 -- M10's bug in Muse,
+        # still live here. Rotating the full buffer means the repeat covers the
+        # song exactly once per lap; ``Sounding.wrap`` unwinds the rotation when
+        # the playhead asks where we are.
+        import numpy as np
+
+        buffer = np.concatenate([tab.pcm[offset:], tab.pcm[:offset]]) if offset else tab.pcm
+    else:
+        buffer = tab.pcm[offset:]
+    if len(buffer) == 0:
+        return False
+    if not sirens_audio.play(buffer, tag=tab.uid, loops=-1 if looping else 0):
         ctx.toast("That song could not be played; see the log for details.", "error")
         return False
+    tab.sounding = Sounding(
+        marks=tab.marks,
+        anchor=offset,
+        wrap=int(len(tab.pcm)) if looping else None,
+        generation=tab.render_generation,
+    )
     return True
+
+
+def _caret_offset(tab: SongTab, state: Any) -> int | None:
+    """Where in the render the caret's row starts, in samples, or ``None``.
+
+    **The order entry decides, not the pattern (S3, 2026-09-05).** A pattern
+    used at order entries 00 and 03 is one uid at two places in the song, and
+    walking the map for the first mark whose *pattern* matches always found 00 --
+    so writing the last chorus and pressing "from the caret" played the first
+    one. ``state.order_index`` is preferred when the caret came from the order
+    list; falling back to pattern-only is what keeps a caret placed by clicking
+    the grid working, where there is no entry to name.
+    """
+    wanted = state.order_index
+    for at, order_index, pattern, row in tab.marks:
+        if wanted is not None and order_index != int(wanted):
+            continue
+        if pattern == state.pattern and row >= state.row:
+            return int(at)
+    if wanted is None:
+        return None
+    # The order list moved under the caret (an entry deleted, the list
+    # reordered) -- answer for the pattern rather than refusing to play.
+    for at, _order_index, pattern, row in tab.marks:
+        if pattern == state.pattern and row >= state.row:
+            return int(at)
+    return None
 
 
 def play_pattern(ctx: Any, tab: SongTab | None = None) -> bool:
@@ -334,7 +386,8 @@ def play_pattern(ctx: Any, tab: SongTab | None = None) -> bool:
     # Keyed on the *tab*, like every other ``sirens-`` key: the arm below looks
     # a tab up from the second segment, and there is one channel anyway, so two
     # patterns auditioning at once is not a thing to make room for.
-    return bool(ctx.submit(f"{PATTERN_PREFIX}{tab.uid}", run))
+    state.play_request += 1
+    return bool(ctx.submit(f"{PATTERN_PREFIX}{tab.uid}", run, tag=state.play_request))
 
 
 def _playable(ctx: Any, tab: SongTab) -> bool:
@@ -358,8 +411,25 @@ PATTERN_PREFIX = "sirens-pattern:"
 
 
 def stop(ctx: Any) -> None:
-    """Silence, from any surface. A no-op with no device."""
+    """Silence, from any surface. A no-op with no device.
+
+    **Withdraws the request as well as the sound (S1, 2026-09-05).** A preview,
+    a pattern audition or a sound effect is rendered on a task thread, and
+    ``on_task_done`` used to hand every successful one straight to the mixer
+    with no freshness check at all -- so pressing a note and then Stop played
+    the note, a second or two after the user had asked for silence. Bumping the
+    counter here is what makes those completions stale; see
+    ``SirensState.play_request``.
+    """
     sirens_audio.stop()
+    # ``ctx.state.sirens`` rather than ``ensure``: Stop is on the keymap, so it
+    # can be pressed in a session that never opened a song, and building the
+    # state to withdraw a request nobody made is ``active``'s rule.
+    state = ctx.state.sirens
+    if state is not None:
+        state.play_request += 1
+        for tab in state.docs:
+            tab.sounding = None
 
 
 def toggle_play(ctx: Any, tab: SongTab | None = None) -> bool:
@@ -410,8 +480,14 @@ def playhead_row(ctx: Any, tab: SongTab | None = None) -> int | None:
     mark = playhead_mark(ctx, tab)
     if mark is None:
         return None
-    _order_index, pattern, row = mark
+    order_index, pattern, row = mark
     if state.pattern is not None and pattern != state.pattern:
+        return None
+    if state.order_index is not None and order_index != int(state.order_index):
+        # **This entry, not merely this pattern (S3).** A chorus at order
+        # entries 00 and 03 lit the grid up during 00 while the caret -- and so
+        # the user -- was in 03, which is a highlight that lies about where the
+        # song is.
         return None
     return row
 

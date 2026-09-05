@@ -53,6 +53,7 @@ from . import muse_io, sirens_audio, sirens_io, sirens_mode, sirens_state
 from .muse_state import (  # noqa: F401
     DEFAULT_DERIVE,
     DEFAULT_FORM,
+    LOOP_MEMORY,
     MuseState,
     active,
     ensure,
@@ -275,6 +276,9 @@ def on_task_done(ctx: Any, done: Any) -> None:
         # let a take the user had stopped waiting for start playing anyway the
         # moment its read finally landed.
         return
+    # The take being replaced keeps its markers (W4), so switching back to it
+    # does not mean finding its loop points again.
+    remember_loop(ctx)
     # **One take at a time.** ~42 MB for four minutes, so replaced rather than
     # cached per job -- see ``MuseState.player``.
     state.player = MusePlayer(
@@ -284,6 +288,12 @@ def on_task_done(ctx: Any, done: Any) -> None:
         env=result.get("env"),
         duration=float(result.get("duration", 0.0)),
     )
+    remembered = state.loop_memory.get(job_id)
+    if remembered is not None:
+        start, end, fade = remembered
+        state.player.loop_start = start
+        state.player.loop_end = end
+        state.player.xfade_ms = float(fade)
     # Tagged with the job id, which is what lets a card ask "am *I* the one
     # playing" rather than only "is anything playing".
     if sirens_audio.play(result["pcm"], result["rate"], tag=job_id):
@@ -504,6 +514,26 @@ def play_region(ctx: Any) -> None:
     _play_from(ctx, one, one.loop_start)
 
 
+def remember_loop(ctx: Any) -> None:
+    """File the current take's loop region and crossfade under its job id (W4).
+
+    Called wherever the ``Player`` is about to be replaced. Three floats per
+    job, capped at :data:`muse_state.LOOP_MEMORY` and oldest-first -- see
+    ``MuseState.loop_memory`` for why this is not the PCM cache the ``Player``
+    docstring refuses.
+    """
+    state = active(ctx)
+    one = state.player if state is not None else None
+    if state is None or one is None or not one.job:
+        return
+    state.loop_memory.pop(one.job, None)
+    state.loop_memory[one.job] = (one.loop_start, one.loop_end, float(one.xfade_ms))
+    while len(state.loop_memory) > LOOP_MEMORY:
+        # ``dict`` keeps insertion order, so the first key is the oldest --
+        # which is what makes a bounded LRU here two lines rather than a class.
+        state.loop_memory.pop(next(iter(state.loop_memory)))
+
+
 def set_region(ctx: Any, start: float | None, end: float | None) -> None:
     """Set or clear the loop markers, in seconds. Ordered and clamped here.
 
@@ -699,12 +729,15 @@ def compose_from_sirens(ctx: Any, tab: Any = None) -> bool:
 
     One door *is* opened, on the Muse side: ``create_music_job`` takes scalars
     only, so it gains ``reference_wav``. See that function for why bytes rather
-    than a path.
+    than a path. It also takes ``ref_audio_strength`` -- *Closeness*, drawn
+    beside the button that calls this, because how near to stay to the song is a
+    property of this hand-off and not of the brief (W1).
     """
     from ..service import jobs as svc_jobs
     from .sirens import wsng
 
     state = ensure(ctx)
+    strength = float(state.compose_strength)
     tab = tab or sirens_mode.active(ctx)
     if tab is None or not tab.doc.order:
         ctx.toast("There is nothing in the order list to compose from.", "warn")
@@ -746,6 +779,7 @@ def compose_from_sirens(ctx: Any, tab: Any = None) -> bool:
             cfg_type=str(form["cfg_type"]),
             omega_scale=float(form["omega_scale"]),
             reference_wav=reference,
+            ref_audio_strength=strength,
         )
 
     ctx.state.clear_field_errors()
@@ -787,6 +821,7 @@ __all__ = [
     "play_region",
     "player",
     "position",
+    "remember_loop",
     "reset_form",
     "seek",
     "set_region",

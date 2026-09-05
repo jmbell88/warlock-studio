@@ -110,6 +110,28 @@ MUSIC_ROWS: tuple[str, ...] = (f"music:{models.DEFAULT_MUSIC_MODEL}",)
 SEPARATION_ROWS: tuple[str, ...] = (f"separation:{models.DEFAULT_SEPARATION}",)
 
 
+def _check_ref_strength(strength: float, steps: int) -> float:
+    """The two refusals an ``audio2audio`` strength owes. -> the value, as a float.
+
+    Shared by both doors that mint the task (W1, 2026-09-05). The second is the
+    interesting one and is **a refusal, not a runtime failure**: the sampler
+    computes ``infer_steps = int((1 - strength) * infer_steps)``, so a strength
+    close enough to 1.0 asks for zero sampling steps and decodes the noised
+    reference unchanged -- a two-minute job that hands back its own input. Both
+    controls are named in the sentence because either one fixes it.
+    """
+    value = float(strength)
+    if not 0.0 <= value <= 1.0:
+        raise Invalid("strength must be between 0 and 1", field="ref_audio_strength")
+    if int((1.0 - value) * int(steps)) < 1:
+        raise Invalid(
+            "at that strength the model takes no sampling steps at all --"
+            " lower the strength or raise the step count",
+            field="ref_audio_strength",
+        )
+    return value
+
+
 def create_music_job(
     svc: WarlockService,
     *,
@@ -120,6 +142,7 @@ def create_music_job(
     music_model: str | None = None,
     seed: int | None = None,
     reference_wav: bytes | None = None,
+    ref_audio_strength: float = 0.5,
     infer_step: int = 60,
     guidance_scale: float = 15.0,
     scheduler_type: str = "euler",
@@ -142,6 +165,13 @@ def create_music_job(
     bridge to Sirens opens no new doors" is about Muse -> Sirens and stays true,
     while the other direction genuinely needs this, because this function
     otherwise takes scalars only.
+
+    ``ref_audio_strength`` goes with it, and is a parameter rather than the
+    literal ``0.5`` this used to write into ``params`` unconditionally (W1,
+    2026-09-05): it is the same knob the derive door exposes as *Closeness*, so
+    a caller who can hand over a reference can say how near to stay to it. The
+    same two refusals apply, through :func:`_check_ref_strength` -- one function
+    rather than two hand-written copies that agree today.
 
     Deliberately the narrowest thing that works: **bytes, not a path.** A path
     means a temporary file with an owner, a lifetime and a cleanup story; bytes
@@ -235,7 +265,9 @@ def create_music_job(
         # The same task the derive door mints -- so the imported reference is
         # just another source, with no new worker key and no new queue branch.
         params["task"] = "audio2audio"
-        params["ref_audio_strength"] = 0.5
+        params["ref_audio_strength"] = _check_ref_strength(
+            ref_audio_strength, int(infer_step)
+        )
     # Both refusals before anything is written, which is what "at the door"
     # means: check_weights names the download that fixes it, and check_vram
     # prices the job off the params above rather than a guess.
@@ -533,22 +565,11 @@ def derive_music_job(
         block["edit_n_max"] = float(edit_n_max)
 
     else:  # audio2audio
-        strength = float(ref_audio_strength)
-        if not 0.0 <= strength <= 1.0:
-            raise Invalid("strength must be between 0 and 1", field="ref_audio_strength")
-        # **A refusal, not a runtime failure.** The sampler computes
-        # ``infer_steps = int((1 - strength) * infer_steps)``, so a strength
-        # this close to 1.0 asks for zero sampling steps and decodes the noised
-        # reference unchanged -- a two-minute job that returns its own input.
-        # Both controls are named because either one fixes it.
-        steps = int(parent["params"].get("infer_step", 60))
-        if int((1.0 - strength) * steps) < 1:
-            raise Invalid(
-                "at that strength the model takes no sampling steps at all --"
-                " lower the strength or raise the step count",
-                field="ref_audio_strength",
-            )
-        block["ref_audio_strength"] = strength
+        # The step count is the *parent's*, because a derivation inherits its
+        # recipe; the reference door checks its own.
+        block["ref_audio_strength"] = _check_ref_strength(
+            ref_audio_strength, int(parent["params"].get("infer_step", 60))
+        )
 
     # The parent's recipe, minus what the worker recorded about *its* artifacts
     # and minus the parent's own task block. ``DERIVED_PARAMS`` is the

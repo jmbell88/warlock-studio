@@ -142,12 +142,14 @@ def _order(ctx: Any, state: Any, tab: Any, editable: bool) -> None:
     order = list(doc.order)
     looping = doc.loop_order >= 0
     for index, uid in enumerate(order):
-        selected = state.pattern == uid
+        # The *entry*, not the pattern (S3): a chorus at 00 and 03 used to draw
+        # both rows highlighted at once, because a uid cannot tell them apart.
+        selected = state.pattern == uid and state.order_index in (None, index)
         mark = f"{icons.REFRESH} " if looping and doc.loop_order == index else ""
         if controls.selectable(
             f"{index:02d}  {mark}{_name_of(doc, uid)}###sirens-order-{index}", selected
         )[0]:
-            sirens_mode.set_caret(ctx, pattern=uid)
+            sirens_mode.set_caret(ctx, pattern=uid, order_index=index)
         # The row's own verbs, in the order a person reaches for them: move it,
         # point it somewhere else, take it out. The loop below breaks after any
         # of them, because each rewrites the list being walked.

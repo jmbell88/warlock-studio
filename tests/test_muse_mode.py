@@ -566,3 +566,75 @@ def test_the_palette_offers_a_go_command_for_free():
 
     keys = {cmd.key for cmd in palette._mode_commands()}
     assert "go:muse" in keys
+
+
+# --- the 2026-09-05 workflow wins (W1-W4) ------------------------------------
+
+
+def test_the_take_count_stays_on_screen_when_its_control_is_dropped():
+    """W3. ``_row_widths`` drops the count outright in a narrow pane, leaving
+    the user pressing a button whose cost -- four takes is four waits and four
+    rows -- they cannot see. Against the unfixed code the label is plain
+    "Generate" at every width, which is what made the number vanish.
+    """
+    from warlock.studio import muse_brief
+
+    assert muse_brief.generate_label(None) == "Generate"
+    assert muse_brief.generate_label(1) == "Generate", "one take does not apologise"
+    assert muse_brief.generate_label(4) == "Generate 4 takes"
+
+
+def test_a_take_switch_gives_the_first_takes_loop_points_back(ctx, monkeypatch):
+    """W4. ``Player`` holds one decoded take and ``on_task_done`` builds a
+    fresh one per load, so auditioning a second take and coming back discarded
+    the first's region and crossfade -- M07 only stopped the *same* take being
+    rebuilt. Against the unfixed code the region comes back ``(None, None)``
+    and the crossfade at its default.
+    """
+    import numpy as np
+
+    from warlock.studio import muse_mode, sirens_audio
+
+    monkeypatch.setattr(sirens_audio, "play", lambda *a, **k: True)
+    state = muse_mode.ensure(ctx)
+
+    def load(job: str) -> None:
+        state.audition_job = job
+        done = type("_Done", (), {
+            "key": f"{muse_mode.LOAD_PREFIX}{job}",
+            "result": {
+                "pcm": np.zeros((1000, 2), dtype=np.int16),
+                "rate": 100,
+                "duration": 10.0,
+            },
+        })()
+        muse_mode.on_task_done(ctx, done)
+
+    load("a")
+    muse_mode.set_region(ctx, 2.0, 6.0)
+    state.player.xfade_ms = 120.0
+
+    load("b")
+    assert (state.player.loop_start, state.player.loop_end) == (None, None)
+
+    load("a")
+    assert (state.player.loop_start, state.player.loop_end) == (2.0, 6.0)
+    assert state.player.xfade_ms == 120.0
+
+
+def test_the_loop_memory_is_bounded(ctx):
+    """W4's cap. Three floats per job is not the ~42 MB-per-job cache the
+    ``Player`` docstring refuses, but it is still not allowed to grow without
+    bound while somebody works through a tray.
+    """
+    from warlock.studio import muse_mode, muse_state
+
+    state = muse_mode.ensure(ctx)
+    for index in range(muse_state.LOOP_MEMORY + 10):
+        state.player = muse_state.Player(job=f"job{index}", duration=10.0)
+        muse_mode.set_region(ctx, 1.0, 2.0)
+        muse_mode.remember_loop(ctx)
+
+    assert len(state.loop_memory) == muse_state.LOOP_MEMORY
+    assert "job0" not in state.loop_memory, "the oldest is the one evicted"
+    assert f"job{muse_state.LOOP_MEMORY + 9}" in state.loop_memory

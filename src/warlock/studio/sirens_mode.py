@@ -236,7 +236,7 @@ def confirm_remove_pattern(ctx: Any, tab: SongTab, uid: int, used: int) -> None:
     )
 
 
-def audible_channels(doc: Any, state: Any) -> tuple[int, ...]:
+def audible_channels(doc: Any, view: Any) -> tuple[int, ...]:
     """Which channel *indices* the mix should play. Pure.
 
     Solo wins over mute, which is every tracker's rule and the one that makes
@@ -244,10 +244,14 @@ def audible_channels(doc: Any, state: Any) -> tuple[int, ...]:
     have to undo four mutes. A solo naming a channel the song no longer has
     falls back to "everything", because a removed channel is not a reason for
     silence.
+
+    ``view`` is the **tab**, not the app state: the mask is per document since
+    S5, because channel uids restart per document and a mask on ``SirensState``
+    silenced a channel of the same number in every other song.
     """
     channels = list(getattr(doc, "channels", ()))
-    solo = int(getattr(state, "solo", -1))
-    muted = set(getattr(state, "muted", ()) or ())
+    solo = int(getattr(view, "solo", -1))
+    muted = set(getattr(view, "muted", ()) or ())
     order = [one.uid for one in channels]
     if solo >= 0 and solo in order:
         return (order.index(solo),)
@@ -265,12 +269,14 @@ def toggle_mute(ctx: Any, uid: int, tab: SongTab | None = None) -> bool:
 
     state = ensure(ctx)
     tab = tab or state.active
+    if tab is None:
+        return False
     uid = int(uid)
-    if uid in state.muted:
-        state.muted.discard(uid)
+    if uid in tab.muted:
+        tab.muted.discard(uid)
         muted = False
     else:
-        state.muted.add(uid)
+        tab.muted.add(uid)
         muted = True
     sirens_play.request_rerender(ctx, tab)
     return muted
@@ -283,9 +289,11 @@ def toggle_solo(ctx: Any, uid: int, tab: SongTab | None = None) -> int:
 
     state = ensure(ctx)
     tab = tab or state.active
-    state.solo = -1 if state.solo == int(uid) else int(uid)
+    if tab is None:
+        return -1
+    tab.solo = -1 if tab.solo == int(uid) else int(uid)
     sirens_play.request_rerender(ctx, tab)
-    return state.solo
+    return tab.solo
 
 
 def channel_state(ctx: Any, uid: int) -> tuple[bool, bool, bool]:
@@ -297,18 +305,40 @@ def channel_state(ctx: Any, uid: int) -> tuple[bool, bool, bool]:
     """
     state = ensure(ctx)
     tab = state.active
-    muted = int(uid) in state.muted
-    soloed = state.solo == int(uid)
     if tab is None:
-        return muted, soloed, not muted
+        # No document, so no mask: nothing is muted and nothing is soloed.
+        return False, False, True
+    muted = int(uid) in tab.muted
+    soloed = tab.solo == int(uid)
     order = [one.uid for one in tab.doc.channels]
     if int(uid) not in order:
         return muted, soloed, False
-    audible = order.index(int(uid)) in audible_channels(tab.doc, state)
+    audible = order.index(int(uid)) in audible_channels(tab.doc, tab)
     return muted, soloed, audible
 
 
 # --- task results -------------------------------------------------------------
+
+
+def _still_wanted(state: Any, done: Any) -> bool:
+    """Whether the completion in ``done`` is the sound the user is still asking
+    for (S1, 2026-09-05). -> ``False`` for a stale one, which is dropped.
+
+    The three audition branches below hand their result straight to the mixer,
+    and used to do it with no freshness check whatever: press a note, press
+    Stop, hear the note a second later, because the render was still on a task
+    thread when the device was silenced. ``SirensState.play_request`` counts
+    requests and ``stop`` bumps it; ``TaskRunner`` carries the value the request
+    was made under in ``Done.tag`` -- the slot has been threaded through
+    ``submit`` since it was written and had no reader until now -- so a stale
+    completion is one whose tag is not the current count. No cancellation is
+    involved and none is needed: the render finishes and its samples are simply
+    not played, which is ``MuseState.audition_job``'s answer (M11) with a
+    counter in place of a job id, because not everything that sounds here has
+    one.
+    """
+    tag = getattr(done, "tag", None)
+    return tag is None or int(tag) == int(state.play_request)
 
 
 def on_task_done(ctx: Any, done: Any) -> None:
@@ -344,6 +374,8 @@ def on_task_done(ctx: Any, done: Any) -> None:
         # The caret's pattern, alone, straight to the mixer -- the audition's
         # shape, and tagged so the song's playhead does not bisect the song's
         # row map against a single pattern's clock.
+        if not _still_wanted(state, done):
+            return
         if isinstance(result, dict) and not sirens_audio.play(
             result["pcm"], tag=f"pattern:{result.get('pattern', '')}"
         ):
@@ -353,6 +385,8 @@ def on_task_done(ctx: Any, done: Any) -> None:
     if name == "sirens-preview":
         # Straight to the mixer, under a tag of its own so a preview never
         # displaces the playhead's reading of what the song is doing.
+        if not _still_wanted(state, done):
+            return
         if isinstance(result, dict):
             sirens_audio.play(result["pcm"], tag="preview")
         return
@@ -361,6 +395,8 @@ def on_task_done(ctx: Any, done: Any) -> None:
         # Straight to the mixer. Deliberately not through :func:`play`, which
         # is about ``tab.pcm`` -- see :data:`AUDITION_PREFIX` for why an effect
         # never lands there.
+        if not _still_wanted(state, done):
+            return
         if isinstance(result, dict) and not sirens_audio.play(result["pcm"]):
             ctx.toast("That sound effect could not be played; see the log.", "error")
         return
