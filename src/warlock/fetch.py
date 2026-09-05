@@ -26,6 +26,7 @@ once as prose:
 from __future__ import annotations
 
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -443,6 +444,51 @@ def free_gib(path: Path) -> float | None:
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class Shortfall:
+    """The one destination volume a plan does not fit on."""
+
+    volume: Path
+    need_gib: float
+    """What the plan wants there, headroom included."""
+    free_gib: float
+    volumes: int
+    """How many volumes the plan touched in total. A message naming the drive
+    is help when a plan straddles two and noise when it does not, and the
+    caller cannot tell which without this."""
+
+
+def volume_refusal(items: Sequence[tuple[Path, float]]) -> Shortfall | None:
+    """Which destination volume ``items`` does not fit on, if any.
+
+    The rule behind :func:`disk_refusal`, extracted so the pack installer can
+    obey it rather than reimplement it. Both halves of it were incidents:
+
+    * **Grouped per volume.** A plan's whole size compared against one
+      destination's free space is right only while every write lands on one
+      drive. ``WARLOCK_T2I_DIR`` relocates the turbo entry by itself, so a
+      roomy first volume approved a large write to a nearly full second one,
+      and a tight first volume refused a plan whose bytes were mostly going
+      elsewhere (MDL-09).
+    * **Unreadable free space is not a refusal.** An answer nobody can obtain
+      is not evidence there is no room.
+
+    Keyed on ``anchor`` -- the drive on Windows, ``/`` elsewhere -- because
+    that is the granularity ``free_gib`` reports at, and because two
+    directories under one root are one budget.
+    """
+    groups: dict[Path, list[tuple[Path, float]]] = {}
+    for path, want in items:
+        groups.setdefault(Path(path).anchor or Path(path), []).append((path, want))
+    for volume, group in groups.items():
+        need = sum(want for _, want in group) + DISK_HEADROOM_GIB
+        free = free_gib(group[0][0])
+        if free is None or free >= need:
+            continue
+        return Shortfall(volume, need, free, len(groups))
+    return None
+
+
 def disk_refusal(jobs: list[Job]) -> str | None:
     """Why this plan must not start, or None. Refusing is the point.
 
@@ -451,37 +497,24 @@ def disk_refusal(jobs: list[Job]) -> str | None:
     somewhere unrelated. Unreadable free space is not a refusal: an answer
     nobody can obtain is not evidence there is no room.
 
-    **Grouped per destination volume.** The plan's *whole* size used to be
-    compared against the free space of ``jobs[0].dest`` alone, which is right
-    only while every fetch lands on one drive -- and ``WARLOCK_T2I_DIR``
-    relocates the ``turbo`` entry by itself, so a plan can straddle two. A roomy
-    first volume then approved a large write to a nearly full second one, and a
-    tight first volume falsely refused a plan whose bytes were mostly going
-    elsewhere (MDL-09).
+    Grouped per destination volume, and unreadable free space is not a
+    refusal: both rules live in :func:`volume_refusal`, which the pack
+    installer obeys too, and MDL-09 is recorded there.
 
     The message names the destination that is short, because "not enough disk
     space" on a machine with a half-empty drive is not actionable.
     """
     if not jobs:
         return None
-    groups: dict[Path, list[Job]] = {}
-    for job in jobs:
-        # Keyed on the volume, not the directory: two models under one root are
-        # one budget. ``anchor`` is the drive on Windows and "/" elsewhere,
-        # which is the same granularity ``free_gib`` reports at.
-        groups.setdefault(Path(job.dest).anchor or Path(job.dest), []).append(job)
-    for volume, group in groups.items():
-        need = total_gib(group) + DISK_HEADROOM_GIB
-        free = free_gib(group[0].dest)
-        if free is None or free >= need:
-            continue
-        where = f" on {volume}" if len(groups) > 1 else ""
-        return (
-            f"Not enough disk space{where}: this needs about {need:.1f} GB "
-            f"(including {DISK_HEADROOM_GIB:.0f} GB headroom) and "
-            f"{free:.1f} GB is free."
-        )
-    return None
+    short = volume_refusal([(Path(job.dest), job.size_gib) for job in jobs])
+    if short is None:
+        return None
+    where = f" on {short.volume}" if short.volumes > 1 else ""
+    return (
+        f"Not enough disk space{where}: this needs about {short.need_gib:.1f} GB "
+        f"(including {DISK_HEADROOM_GIB:.0f} GB headroom) and "
+        f"{short.free_gib:.1f} GB is free."
+    )
 
 
 # --- taking one back out ------------------------------------------------------

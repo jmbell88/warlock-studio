@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import ctypes
-import importlib.util
 import os
 import shutil
 import socket
 import subprocess
 import sys
 import threading
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import fetch, guidance, memlog, models, native, rigging, vram, winjob
+from . import fetch, guidance, memlog, models, native, packs, rigging, vram, winjob
 from .config import Config
 
 # Cheap: matting itself imports nothing heavier than models and reference, both
@@ -1092,25 +1090,11 @@ def _run_load_probe(which: str, path: Path) -> tuple[bool, str]:
 _MATTING_IMPORTS = ("einops", "kornia", "timm", "transformers")
 
 
-def _missing_modules(names: Sequence[str]) -> list[str]:
-    """Which of these do not resolve, without importing any of them.
-
-    ``find_spec`` locates a top-level module without executing it, which is
-    what keeps this cheap and keeps a startup check from dragging torch into
-    the process. It raises rather than returns None for a dotted name whose
-    parent is absent (and a package with broken metadata can raise anything at
-    all), so every answer is wrapped: a probe that takes the app down at
-    startup is strictly worse than a red row.
-    """
-    missing: list[str] = []
-    for name in names:
-        try:
-            found = importlib.util.find_spec(name) is not None
-        except Exception:  # noqa: BLE001 -- a probe must never raise out of run_checks
-            found = False
-        if not found:
-            missing.append(name)
-    return missing
+# One implementation, in ``packs``, because the pack registry asks the same
+# question of the same interpreter: is this optional dependency actually here?
+# Two copies of a probe whose whole job is to *never raise* is two places for
+# one of them to start raising.
+_missing_modules = packs.missing_modules
 
 
 def _matting_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
