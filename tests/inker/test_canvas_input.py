@@ -637,15 +637,17 @@ def test_a_drag_cannot_lose_the_drawing(driven):
 # --- the wheel --------------------------------------------------------------
 
 
-def test_the_wheel_scrolls_the_page(driven):
-    """Aseprite's default, and the reverse of what this pane did until
-    2026-08-31: the wheel moves the view and the zoom is left alone."""
+def test_the_wheel_zooms_and_leaves_the_page_where_it_was(driven):
+    """The rule every 2-D canvas shares since 2026-09-05 (``inker_state.wheel``):
+    the wheel zooms. This pane scrolled on it from 2026-08-31, Aseprite's
+    default, while Plotter and Packwright zoomed -- the same gesture with two
+    results, and zoom won because two of three did it."""
     _state, tab, frame = driven
-    tab.view.pan = (0.0, 100.0)
-    frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE)
-    assert tab.view.pan[1] == pytest.approx(100.0 - inker_state.scroll_step(REGION[1]))
-    assert tab.view.pan[0] == pytest.approx(0.0)
-    assert tab.view.zoom == pytest.approx(1.0)
+    tab.view.zoom = 1.0
+    frame((0.0, 0.0), wheel=imgui_backend.WHEEL_SCALE)
+    assert tab.view.zoom == pytest.approx(1.05)
+    # Zooming about the origin moves nothing: the wheel is not a scroll.
+    assert tab.view.pan == pytest.approx((0.0, 0.0))
 
 
 def test_shift_and_the_wheel_scrolls_sideways(driven):
@@ -654,6 +656,7 @@ def test_shift_and_the_wheel_scrolls_sideways(driven):
     frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE, shift=True)
     assert tab.view.pan[0] == pytest.approx(100.0 - inker_state.scroll_step(REGION[0]))
     assert tab.view.pan[1] == pytest.approx(100.0)
+    assert tab.view.zoom == pytest.approx(1.0)
 
 
 def test_a_tilt_wheel_scrolls_sideways_too(driven):
@@ -666,37 +669,46 @@ def test_a_tilt_wheel_scrolls_sideways_too(driven):
     assert tab.view.pan[1] == pytest.approx(100.0)
 
 
-def test_ctrl_and_one_wheel_notch_moves_the_zoom_by_five_percent(driven):
+def test_one_wheel_notch_moves_the_zoom_by_five_percent(driven):
     """The backend halves every wheel event; the pane divides that back out.
 
     Asserted through ``_input`` rather than against ``zoom_step`` directly,
     because the number under test is exactly the one that crosses the boundary
-    between the two modules. Re-keyed to Ctrl rather than deleted when the
-    plain wheel became a scroll -- the number it pins did not change.
+    between the two modules. Keyed to Ctrl from 2026-08-31 to 2026-09-05 and
+    back to the bare wheel since -- the number it pins did not change.
     """
+    _state, tab, frame = driven
+    tab.view.zoom = 1.0
+    frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE)
+    assert tab.view.zoom == pytest.approx(1.05)
+    frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE)
+    assert tab.view.zoom == pytest.approx(1.0)
+
+
+def test_ctrl_and_the_wheel_zooms_too(driven):
+    """Ctrl was the zoom modifier for a week and a hand that learned it keeps
+    working: Ctrl changes nothing about the wheel."""
     _state, tab, frame = driven
     tab.view.zoom = 1.0
     frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE, ctrl=True)
     assert tab.view.zoom == pytest.approx(1.05)
-    frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE, ctrl=True)
-    assert tab.view.zoom == pytest.approx(1.0)
 
 
-def test_ctrl_and_the_wheel_stops_at_the_inker_bounds(driven):
+def test_the_wheel_stops_at_the_inker_bounds(driven):
     _state, tab, frame = driven
     for _ in range(400):
-        frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE, ctrl=True)
+        frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE)
     assert tab.view.zoom == pytest.approx(inker_state.INKER_MAX_ZOOM)
     for _ in range(400):
-        frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE, ctrl=True)
+        frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE)
     assert tab.view.zoom == pytest.approx(inker_state.INKER_MIN_ZOOM)
 
 
-def test_ctrl_and_the_wheel_still_holds_the_pixel_under_the_cursor(driven):
+def test_the_wheel_holds_the_pixel_under_the_cursor(driven):
     _state, tab, frame = driven
     at = (24.0, 18.0)
     before = inker_state.to_image(tab.view, (0.0, 0.0), *at)
-    frame(at, wheel=imgui_backend.WHEEL_SCALE, ctrl=True)
+    frame(at, wheel=imgui_backend.WHEEL_SCALE)
     assert inker_state.to_image(tab.view, (0.0, 0.0), *at) == pytest.approx(before)
 
 

@@ -1037,6 +1037,8 @@ def _done_sheetin(ctx: Any, state: Any, done: Any) -> None:
 
 def _done_recover(ctx: Any, state: Any, done: Any) -> None:
     result = done.result
+    if result is None:
+        journal.adopt_failed(ctx, "drawing")
     if isinstance(result, dict):
         tab = _adopt(
             ctx,
@@ -1354,20 +1356,22 @@ def _nudge_viewer(ctx: Any, tab: InkerDoc) -> None:
 # --- closing and guarding ---------------------------------------------------
 
 
+def tool_label(ctx: Any) -> str:
+    """The active tool's name, for the status bar's shared branch."""
+    state = getattr(ctx.state, "inker", None)
+    return inker_state.tool_label(state.tool) if state is not None else ""
+
+
 def request_close(ctx: Any, tab: InkerDoc) -> None:
+    """``docmodes.close_tab``; what is Inker's is the release."""
     state = ensure(ctx)
 
-    def go() -> None:
+    def release(tab: InkerDoc) -> None:
         from .panes import inker_textures
 
         inker_textures.release_doc(ctx, tab.uid)
-        drop_autosave(ctx, tab)
-        state.close(tab.uid)
 
-    if not tab.dirty:
-        go()
-        return
-    dialogs.ask_close_unsaved(ctx, tab.title, go)
+    docmodes.close_tab(ctx, state, tab.uid, release)
 
 
 def guard(ctx: Any, verb: str, proceed: Any) -> bool:
@@ -2075,11 +2079,17 @@ def drop_autosave(ctx: Any, tab: InkerDoc) -> None:
     journal.drop(ctx, tab)
 
 
-def _load_recovery(path: Path, meta: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Blocking; task thread only."""
+def _load_recovery(path: Path, meta: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Blocking; task thread only. ``None`` when the copy will not reopen --
+    a corrupt ``.ora`` arrived as the generic "That did not work" here, where
+    every other provider warns (``journal.adopt_failed``, 2026-09-05)."""
     from .inker import Document
 
-    doc = Document.load(Path(path))
+    try:
+        doc = Document.load(Path(path))
+    except Exception:
+        log.exception("could not reopen the recovered drawing at %s", path)
+        return None
     doc.path = None
     title = (meta or {}).get("title") or Path(path).stem.rsplit("-", 1)[0]
     return {

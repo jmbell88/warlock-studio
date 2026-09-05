@@ -22,6 +22,7 @@ lazy-Pillow rule the engines follow holds here too.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,123 @@ def start_save(ctx: Any, tab: Any, key: str, run: Any) -> None:
     tab.saving = True
     if not ctx.submit(key, run):
         tab.saving = False
+
+
+def find_path(docs: Any, path: Path) -> Any:
+    """The already-open tab over ``path``, so opening twice focuses rather
+    than forking -- two tabs over one file would race on save.
+
+    **Resolved and case-folded, because on Windows one file has many
+    spellings.** ``Level.WMAP`` and ``level.wmap`` are the same file and
+    ``Path.__eq__`` says they are not, so the same document opened from the
+    recents list and from a drop forked into two tabs that then raced on save
+    -- exactly what the method exists to prevent. ``resolve`` folds the other
+    spellings (a relative path, a symlink, an 8.3 short name); ``normcase`` is
+    what makes the comparison case-insensitive *where the filesystem is*, and
+    a no-op where it is not.
+
+    Plotter fixed this on its own copy and wrote, in its docstring, that Clay
+    and Packwright carried the same bug and fixing them "is deliberately not
+    this change". Inker and Sirens carried it too and were not named. One
+    body now, and every ``*State.find_path`` delegates here (2026-09-05).
+    """
+    probe = os.path.normcase(str(Path(path).resolve()))
+    for doc in docs:
+        if doc.path is None:
+            continue
+        if os.path.normcase(str(Path(doc.path).resolve())) == probe:
+            return doc
+    return None
+
+
+#: The Ctrl chords **every** document mode refuses while its save is writing:
+#: the two that move the history head the save captured, and the export, which
+#: flattens or serialises the live document -- the same read a save makes and
+#: just as wrong to take while one is in flight. Inker alone guarded ``e``;
+#: each mode adds its own restructuring chords on top (2026-09-05).
+WRITE_CHORDS = frozenset({"z", "y", "e"})
+
+
+def blocked_while_writing(tab: Any, name: str, chords: frozenset[str] = WRITE_CHORDS) -> bool:
+    """Whether Ctrl+``name`` waits for the tab's save. ``busy`` where the tab
+    has a second reason (Inker's playback), ``saving`` otherwise."""
+    if name not in chords:
+        return False
+    return bool(getattr(tab, "busy", getattr(tab, "saving", False)))
+
+
+def refuse(
+    ctx: Any, text: str, *, action: str | None = None, action_arg: str | None = None
+) -> None:
+    """A gesture's refusal: one sentence, coalesced, with its remedy if one exists.
+
+    Inker has a tip strip under its canvas (``InkerState.say``) and a remedy
+    button on it; the other workspaces have toasts. What they did not have was
+    one *rule*: Clay wrapped ``ctx.toast(msg, "error")`` in ``_toast``, Sirens
+    called it bare, Plotter and Packwright called it bare and unconditionally
+    -- so a shape tool refused once per vertex stacked a copy per click, which
+    is the stacking ``toast_once`` was written to stop. Every refusal that is
+    not Inker's goes through here (2026-09-05): error level, coalesced, and an
+    ``action`` where the refusal has an undo (``plotter_mode._locked_toast``'s
+    Unlock).
+    """
+    once = getattr(ctx, "toast_once", None)
+    if once is not None:
+        once(text, "error", action, action_arg)
+    elif action is not None:
+        ctx.toast(text, "error", action=action, action_arg=action_arg)
+    else:
+        ctx.toast(text, "error")
+
+
+#: What a tab's x says while its save is still writing. One sentence for
+#: every mode: Clay refused silently and the other four did not refuse at all.
+CLOSE_WHILE_SAVING = "Still saving -- close it once the save lands."
+
+
+def close_tab(ctx: Any, state: Any, uid: str, release: Any) -> None:
+    """Close one document, asking first if it has unsaved work.
+
+    The one shape every mode had copied: forget the crash copy, release what
+    the document owns in the single GL context (``release``, the per-mode
+    part), take it out of the tab list, and ask ``ask_close_unsaved`` first if
+    it is dirty. Its own question rather than :func:`guard`, because ``guard``
+    asks about every dirty document in the workspace and the answer sought
+    here is about *this* one.
+
+    **Refused while the tab is saving, out loud.** The serialise task reads
+    the live document on a task thread, and closing it out from under that
+    read is the one way to lose the file being written rather than merely the
+    edits since. Clay alone had the refusal (silently -- the x did nothing);
+    Inker, Plotter, Packwright and Sirens encode the live document the same
+    way and let the tab go (2026-09-05 consistency pass).
+
+    ``journal.drop`` rather than leaving the copy: the document is on disk
+    under a name the user chose, or is gone from the session -- either way the
+    crash copy describes work that is no longer at risk, and one left behind
+    is exactly the file that gets offered back after a clean session and
+    confuses somebody (UX-05).
+    """
+    tab = state.get(uid)
+    if tab is None:
+        return
+    if getattr(tab, "saving", False):
+        ctx.toast(CLOSE_WHILE_SAVING, "info")
+        return
+
+    def drop() -> None:
+        from . import journal
+
+        journal.drop(ctx, tab)
+        release(tab)
+        state.close(uid)
+
+    if not getattr(tab, "dirty", False):
+        drop()
+        return
+    from . import dialogs
+
+    dialogs.ask_close_unsaved(ctx, tab.title, drop)
 
 
 def title_for(path: Path | None) -> str:

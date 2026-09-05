@@ -444,6 +444,23 @@ def active(ctx: Any) -> Any:
     return viewer if viewer is not None and viewer.pose_mode else None
 
 
+def document_label(ctx: Any) -> tuple[str, bool] | None:
+    """``(name, dirty)`` for the status bar, or None with no pose on screen.
+
+    The name is the library record's, ``save``'s own lookup; a pose not yet
+    saved anywhere is ``Untitled`` like every other mode's new document. The
+    flag is ``AppState.pose_dirty``, the mirror ``Viewer.on_pose_dirty`` keeps
+    for exactly this -- an indicator visible from outside the pose pane.
+    """
+    viewer = viewer_of(ctx)
+    if viewer is None or not viewer.pose_mode:
+        return None
+    state = ensure(ctx)
+    record = state.find(viewer.editor.current)
+    name = str((record or {}).get("name") or "") or "Untitled"
+    return name, bool(getattr(ctx.state, "pose_dirty", False))
+
+
 def save(ctx: Any, tab: Any = None) -> None:
     """Save over the pose being edited, or fall through to Save-as.
 
@@ -586,25 +603,23 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if event.key == pygame.K_ESCAPE and viewer.editor.selected is not None:
         viewer.editor.selected = None
         return True
-    # **The view keys Clay already has**, on the same three numbers and with
-    # the same Shift-is-the-opposite rule, plus F to reframe. Poser had none of
-    # them: the only way to look at a pose from the side was to orbit there by
-    # hand, and there was no way back to a model that had been orbited off
-    # screen at all. Read from ``clay_mode`` rather than restated, so the two
-    # viewports cannot come to disagree about which number is the front.
+    # **The view keys Clay already has**, on the same three numbers, with the
+    # same Shift-is-the-opposite rule and **the same Ctrl** -- plus F to
+    # reframe. Poser had none of them: the only way to look at a pose from
+    # the side was to orbit there by hand, and there was no way back to a
+    # model that had been orbited off screen at all. Dispatched through
+    # ``clay_mode.axis_view_key`` rather than restated, so the two viewports
+    # cannot come to disagree about which number is the front. Until
+    # 2026-09-05 this copy tested the bare digit: 1, 3, 7 and 5 snapped the
+    # camera here and did nothing in Clay without Ctrl.
     from . import clay_mode
 
     name = pygame.key.name(event.key).lower()
-    if name in clay_mode.AXIS_VIEW_KEYS:
-        wanted = clay_mode.AXIS_VIEW_KEYS[name]
-        if event.mod & pygame.KMOD_SHIFT:
-            wanted = {"front": "back", "right": "left", "top": "bottom"}[wanted]
-        viewer.camera.look_along(wanted)
+    ctrl = bool(event.mod & pygame.KMOD_CTRL)
+    shift = bool(event.mod & pygame.KMOD_SHIFT)
+    if ctrl and clay_mode.axis_view_key(viewer.camera, name, shift):
         return True
-    if name == "5":
-        viewer.camera.orthographic = not viewer.camera.orthographic
-        return True
-    if name == "f":
+    if name == "f" and not ctrl:
         # ``frame`` on the armature's own bounds, not the model's: a Poser
         # armature has no mesh, which is exactly why ``frame_bounds`` exists.
         reframe(ctx)
@@ -612,8 +627,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
     # Ctrl+S / Ctrl+Shift+S, the one chord a user carries between every editor
     # in this app. Both functions existed and neither had a key: saving a pose
     # was a button in one pane and nothing else.
-    ctrl = bool(event.mod & pygame.KMOD_CTRL)
-    if ctrl and pygame.key.name(event.key) == "s":
+    if ctrl and name == "s":
         save_as(ctx) if event.mod & pygame.KMOD_SHIFT else save(ctx)
         return True
     return False

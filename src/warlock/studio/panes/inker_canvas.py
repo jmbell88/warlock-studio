@@ -902,11 +902,9 @@ def _input(
         # count the user's hand made, not a fraction of it.
         notches = io.mouse_wheel / imgui_backend.WHEEL_SCALE
         sideways = io.mouse_wheel_h / imgui_backend.WHEEL_SCALE
-        # **The wheel scrolls and Ctrl+wheel zooms**, which is Aseprite's
-        # default and the opposite of what this pane did until 2026-08-31.
-        # Precedence is C, then Ctrl, then Shift, then plain: ``C`` is a *tool*
-        # modifier rather than a navigation one -- the hand holding it is
-        # dragging a rectangle out, not moving around -- and keeping
+        # ``C`` is tested before the shared rule: it is a *tool* modifier
+        # rather than a navigation one -- the hand holding it is dragging a
+        # rectangle out, not moving around -- and keeping
         # ``state.tool == "rect"`` as the left operand also keeps
         # ``is_key_down`` off the path for every other tool.
         if state.tool == "rect" and imgui.is_key_down(imgui.Key.c):
@@ -915,23 +913,18 @@ def _input(
             # own because the hand is already holding the shape out, and the
             # only spare axis is the one the wheel turns.
             state.corner_radius = max(0, int(state.corner_radius) + int(notches))
-        elif io.key_ctrl:
-            inker_state.zoom_step(tab.view, origin, (mouse.x, mouse.y), notches, **_BOUNDS)
         else:
-            # A tilt wheel scrolls sideways on its own, and its sign is the
-            # opposite of Shift+wheel's: imgui reports a positive
-            # ``mouse_wheel_h`` as "towards the right", where a positive
-            # ``mouse_wheel`` is "away from the user", which moves the page the
-            # other way. Written out rather than folded into one term.
-            along = (notches if io.key_shift else 0.0) - sideways
-            down = 0.0 if io.key_shift else notches
-            inker_state.pan_by(
-                tab.view,
-                tab.doc.size,
-                region,
-                inker_state.scroll_step(region[0]) * along,
-                inker_state.scroll_step(region[1]) * down,
+            # The wheel zooms and Shift+wheel scrolls sideways -- the rule
+            # every 2-D canvas shares; ``inker_state.wheel`` says why.
+            along = inker_state.wheel(
+                tab.view, origin, (mouse.x, mouse.y), notches, sideways,
+                shift=bool(io.key_shift), **_BOUNDS,
             )
+            if along:
+                inker_state.pan_by(
+                    tab.view, tab.doc.size, region,
+                    inker_state.scroll_step(region[0]) * along, 0.0,
+                )
 
     _os_cursor(state, tab, hovered=hovered)
 

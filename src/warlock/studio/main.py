@@ -147,6 +147,34 @@ _SINGLE_PANE_MODES = ("home", "settings", "library")
 # rather than a copy of it.
 DROPPABLE_IMAGES = filetypes.IMAGE_SUFFIXES
 
+#: What a drop is told in a mode that opens no files. **A table, not a chain
+#: of branches**, because the chain had a hole: Poser and Troupe were given a
+#: refusal on 2026-09-04 (a drop there "fell through to Create's branches
+#: below, which would either refuse it by describing a generation form that
+#: is not on screen or accept it by switching modes out from under the
+#: user"), and Muse, Review and Settings were still falling through on
+#: 2026-09-05 -- a PNG dropped on a results tray switched the window to
+#: Create. Each sentence names what the mode works on instead (H71's rule).
+#: A test holds this table and the document branches of ``_on_drop`` against
+#: ``modes.KEYS``, so a new mode cannot be forgotten. Home, Library and Create
+#: are the modes a drop *starts* something in and are deliberately absent.
+DROP_REFUSALS: dict[str, str] = {
+    "poser": (
+        "The Poser opens no files: it edits poses on a rig you already have, "
+        "chosen from its own library."
+    ),
+    "troupe": (
+        "Troupe opens no files: it plays the character sheets a render has "
+        "already produced."
+    ),
+    "muse": (
+        "Muse opens no files: it makes music from a brief, and a take goes to "
+        "Sirens from its own card."
+    ),
+    "review": "Review opens no files: it grades the assets already in the library.",
+    "settings": "Settings opens no files. Drop it on the workspace that reads it.",
+}
+
 
 # The two image-labelling passes, named as the questions they are. Wording is the
 # feature here: the same PNG is a *product* in 2D mode and a *blank* on the way to
@@ -3027,20 +3055,11 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             else:
                 ctx.toast("Sirens opens .wsng songs and .wav samples.", "error")
             return
-        if ctx.state.mode in ("poser", "troupe"):
-            # Neither mode opens a file, and neither said so: a drop here fell
-            # through to Create's branches below, which would either refuse it
-            # by describing a generation form that is not on screen or accept
-            # it by switching modes out from under the user. The refusal names
-            # what this mode works on instead, H71's rule.
-            ctx.toast(
-                "The Poser opens no files: it edits poses on a rig you already "
-                "have, chosen from its own library."
-                if ctx.state.mode == "poser"
-                else "Troupe opens no files: it plays the character sheets a "
-                "render has already produced.",
-                "error",
-            )
+        if ctx.state.mode in DROP_REFUSALS:
+            # A mode that opens no files says so, before Create's branches
+            # below can switch the window out from under the user. See the
+            # table for the hole this closes.
+            ctx.toast(DROP_REFUSALS[ctx.state.mode], "error")
             return
         if ctx.state.mode in ("home", "library") and path.suffix.lower() == ".glb":
             # Home and Library take a mesh straight into the library, which is

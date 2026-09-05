@@ -82,7 +82,7 @@ def test_it_imports_no_window_and_no_service_at_module_scope():
             roots.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             roots.add("." * node.level + (node.module or "").split(".")[0])
-    assert roots <= {"__future__", "pathlib", "typing", "numpy"}, roots
+    assert roots <= {"__future__", "os", "pathlib", "typing", "numpy"}, roots
 
 
 # --- start_save ---------------------------------------------------------------

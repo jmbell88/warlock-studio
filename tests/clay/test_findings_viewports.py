@@ -162,15 +162,18 @@ def test_a_bevel_copies_the_faces_it_does_not_touch():
 # --- the shared viewer's input ------------------------------------------------
 
 
-def test_the_viewer_pans_without_a_middle_button():
-    """A trackpad and most pen tablets have none, so panning was unreachable on
-    the hardware this app is most likely to be drawn with."""
+def test_the_viewer_orbits_on_alt_drag_like_clay():
+    """Alt+drag panned here for two days (a trackpad has no middle button)
+    while ``_view_drag`` said the same gesture "must never be reinterpreted"
+    and orbited. One rule since 2026-09-05: Alt+drag orbits in both viewports,
+    and the pan is the middle button's."""
     import inspect
 
     from warlock.studio import viewer_embed
 
     body = inspect.getsource(viewer_embed.Viewer._press)
-    assert "button == 2 or (button == 1 and alt)" in body
+    assert 'self._grab = "pan" if button == 2 else "orbit"' in body
+    assert "KMOD_ALT" not in body
 
 
 def test_a_bare_hover_does_not_redraw_the_scene():

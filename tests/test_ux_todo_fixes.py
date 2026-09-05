@@ -438,7 +438,10 @@ def test_clay_state_close_has_a_caller():
 
     assert hasattr(clay_mode, "close_tab")
     text = (STUDIO / "clay_mode.py").read_text(encoding="utf-8")
-    assert "state.close(uid)" in text
+    # The body moved to ``docmodes.close_tab`` on 2026-09-05 (every mode had
+    # copied it); what Clay keeps is the call and its own release.
+    assert "docmodes.close_tab(ctx, state, uid, release)" in text
+    assert "state.close(uid)" in (STUDIO / "docmodes.py").read_text(encoding="utf-8")
     # And both routes to it: the tab bar's x and Ctrl+W. The bar is drawn by
     # the *shell* rather than by a pane, because the shell owns Clay's centre
     # pane -- in ``clay_viewport.py`` since 2026-09-04, when it moved out of
@@ -470,7 +473,7 @@ def test_poser_saves_from_the_keyboard_and_the_palette():
     assert "poser" in palette._DOC_MODES
     assert callable(poser_mode.active)
     source = inspect.getsource(poser_mode.handle_key)
-    assert 'pygame.key.name(event.key) == "s"' in source
+    assert 'ctrl and name == "s"' in source
 
 
 def test_clays_frame_key_lives_with_clays_other_keys():
@@ -494,11 +497,12 @@ def test_the_right_button_means_one_thing_in_both_viewports():
 
     source = inspect.getsource(viewer_embed.Viewer._press)
     assert "button in (2, 3)" not in source
-    # Alt+left pans as well since 2026-09-03 -- a trackpad and most pen tablets
-    # have no middle button, so panning was unreachable on the hardware this
-    # app is most likely to be drawn with. The *right* button still means one
-    # thing, which is what this test is about.
-    assert 'button == 2 or (button == 1 and alt)' in source
+    # Alt+left *panned* here from 2026-09-03 to 2026-09-05 and orbited in
+    # Clay; the consistency pass made it orbit in both (one gesture, one
+    # result), so the pan is the middle button's alone. The *right* button
+    # still means one thing, which is what this test is about.
+    assert 'self._grab = "pan" if button == 2 else "orbit"' in source
+    assert "KMOD_ALT" not in source
     # And the menu is gated on pose mode, or it would appear over Create's
     # inspector, where nobody is posing anything.
     assert "button == 3 and self.pose_mode" in source

@@ -70,13 +70,17 @@ def test_every_close_without_saving_goes_through_the_one_helper():
 
     from warlock.studio import (
         clay_mode,
+        docmodes,
         inker_mode,
         packwright_mode,
         plotter_mode,
         sirens_mode,
     )
 
+    # The question moved into ``docmodes.close_tab`` on 2026-09-05, so the
+    # five modes ask it by calling that and none spells it out any more.
+    assert "ask_close_unsaved" in Path(docmodes.__file__).read_text(encoding="utf-8")
     for module in (clay_mode, inker_mode, packwright_mode, plotter_mode, sirens_mode):
         source = Path(module.__file__).read_text(encoding="utf-8")
-        assert "ask_close_unsaved" in source, module.__name__
+        assert "docmodes.close_tab(" in source, module.__name__
         assert "Close without saving?" not in source, module.__name__

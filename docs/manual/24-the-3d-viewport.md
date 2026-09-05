@@ -14,6 +14,7 @@ The camera orbits a point, and every control is relative to that point rather th
 | Input | What it does |
 | --- | --- |
 | Left-drag | Orbit around the framed point |
+| Alt+left-drag | Orbit too — the one gesture that means the same in every 3D view, Clay's included |
 | Middle-drag | Pan — the framed point moves with the pointer |
 | Wheel | Dolly in and out |
 | `F` | Frame the model again, undoing a pan and a dolly at once |

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import inker_mode, inker_ops, inker_state
+from . import docmodes, inker_mode, inker_ops, inker_state
 from .inker_state import InkerDoc, InkerState
 
 
@@ -241,7 +241,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
 # is just as wrong to take while one is in flight.
 # ``j`` joins them for the ordinary reason: layer-from-selection adds a layer
 # (a track, on an animated document) and may cut pixels out of another.
-_MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t", "e", "j"})
+_MUTATING_CTRL = docmodes.WRITE_CHORDS | frozenset({"a", "d", "x", "v", "i", "t", "j"})
 
 
 #: The keys whose chord label is not simply the character on them.
@@ -346,7 +346,7 @@ def _ctrl_key(
 
     # ``busy``, not ``saving``: playback is the second reason the document may
     # not be restructured, and it is the same list of keys for the same reason.
-    if tab.busy and name in _MUTATING_CTRL:
+    if docmodes.blocked_while_writing(tab, name, _MUTATING_CTRL):
         return True
 
     if name == "z" and shift:

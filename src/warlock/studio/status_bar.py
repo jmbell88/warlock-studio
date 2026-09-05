@@ -41,17 +41,23 @@ def items(ctx: Any) -> list[StatusItem]:
     label = next((name for key, name, _icon in modes.MODES if key == mode), mode.title())
     out = [StatusItem("workspace", label)]
 
-    if mode == "inker":
-        from . import inker_mode, inker_state
+    if mode == "poser":
+        # Poser's "tab" is the viewer (``poser_mode.active``), which has no
+        # label and no ``dirty``: the row read a constant ``Untitled`` however
+        # dirty the pose was, until 2026-09-05. The name and the flag come
+        # from the mode, which knows which library record is being edited.
+        from . import poser_mode
 
-        state = inker_mode.ensure(ctx)
-        tab = state.active
-        if tab is not None:
-            dirty = " *" if bool(getattr(tab, "dirty", False)) else ""
-            out.append(StatusItem("document", f"{_document_name(tab)}{dirty}"))
-            out.append(StatusItem("tool", inker_state.tool_label(state.tool)))
-            out.append(StatusItem("zoom", f"{tab.view.zoom * 100:.0f}%"))
-    elif mode in ("clay", "plotter", "packwright", "poser", "sirens"):
+        named = poser_mode.document_label(ctx)
+        if named is not None:
+            name, dirty = named
+            out.append(StatusItem("document", f"{name}{' *' if dirty else ''}"))
+    elif mode in ("inker", "clay", "plotter", "packwright", "sirens"):
+        # **One branch for every document mode.** Inker alone reported its
+        # tool and zoom, from a branch of its own; Plotter and Packwright
+        # carry the identical ``PaintView.zoom`` and Plotter has tools, and
+        # the bar is "shared by every workspace" (line 1). What a mode has is
+        # asked for by name and drawn if it answers (2026-09-05).
         try:
             from importlib import import_module
 
@@ -60,6 +66,14 @@ def items(ctx: Any) -> list[StatusItem]:
             if tab is not None:
                 dirty = " *" if bool(getattr(tab, "dirty", False)) else ""
                 out.append(StatusItem("document", f"{_document_name(tab)}{dirty}"))
+                tool = getattr(module, "tool_label", None)
+                label = tool(ctx) if tool is not None else ""
+                if label:
+                    out.append(StatusItem("tool", label))
+                view = getattr(tab, "view", None)
+                zoom = getattr(view, "zoom", None)
+                if zoom is not None:
+                    out.append(StatusItem("zoom", f"{float(zoom) * 100:.0f}%"))
         except (AttributeError, ImportError):
             pass
 

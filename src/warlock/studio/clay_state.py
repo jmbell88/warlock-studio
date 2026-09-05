@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import docmodes
+
 # Name, label, and the key that selects it. The primitive tools mirror the
 # generator registry; the transform tools mirror the three gizmos.
 TOOLS = (
@@ -180,6 +182,11 @@ class ClayTab:
 
 
 def title_for(path: Path | None) -> str:
+    """The stem, not the name -- the one mode that differs from
+    ``docmodes.title_for`` on purpose. A Clay tab is named for the *document*
+    (``barrel``) rather than the file (``barrel.wblk``): the export beside it
+    is ``barrel.glb`` and the library row is ``barrel``, and the suffix would
+    be the only one of the three saying ``.wblk``."""
     return path.stem if path is not None else "Untitled"
 
 
@@ -355,12 +362,8 @@ class ClayState:
         self.activate(self.docs[(index + step) % len(self.docs)].uid)
 
     def find_path(self, path: Path) -> ClayTab | None:
-        """An already-open tab for this file, so opening twice focuses rather
-        than forking -- two tabs over one path would race on save."""
-        for doc in self.docs:
-            if doc.path is not None and doc.path == path:
-                return doc
-        return None
+        """``docmodes.find_path``: the one case-folding body every mode shares."""
+        return docmodes.find_path(self.docs, path)
 
     # -- drag ---------------------------------------------------------------
 

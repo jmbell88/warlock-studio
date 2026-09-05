@@ -75,10 +75,12 @@ strange one.
 
 ## Moving around
 
-**The wheel scrolls**, `Shift` and the wheel scrolls sideways, and a tilt wheel does the same
-without the key. One notch moves an eighth of the pane — so three notches move about a third of
-what you can see — and it is an eighth of the *pane* rather than a number of image pixels, which is
-what makes a scroll cover the same distance on screen at 800% as at 5%.
+**The wheel zooms** — the same rule as Plotter's and Packwright's canvases, so a hand that moves
+between the three does one thing everywhere. `Shift` and the wheel scrolls sideways, and a tilt
+wheel does the same without the key. One notch of scroll moves an eighth of the pane — so three
+notches move about a third of what you can see — and it is an eighth of the *pane* rather than a
+number of image pixels, which is what makes a scroll cover the same distance on screen at 800% as
+at 5%.
 
 Space-drag and middle-drag still pan, and there are **scrollbars** along the canvas's right and
 bottom edges. They can be dragged, and a click on the bare track jumps the page to it. Their length
@@ -93,10 +95,10 @@ A drawing much smaller than the pane stays inside it altogether.
 
 ## Zooming
 
-`Ctrl` and the wheel zooms, in steps of 5%, and it rounds to that step first: come out of a **Fit
-view** at some
-awkward 83% and the first notch takes you to 85, not to 88. That is what makes 100% a place you can
-reach from either direction rather than a number you have to type. The zoom stops at 5% and at
+The wheel zooms in steps of 5% (`Ctrl` and the wheel does the same), and it rounds to that step
+first: come out of a **Fit view** at some awkward 83% and the first notch takes you to 85, not to 88.
+That is what makes 100% a place you can reach from either direction rather than a number you have
+to type. The zoom stops at 5% and at
 1000% — far enough out to see any page whole, far enough in to place single pixels, and no
 further in either direction, because past those the canvas is either unreadable or unusable.
 
@@ -105,11 +107,11 @@ scales — 5%, 10%, 12.5%, 25%, 50%, 100%, 200%, 300%, 400%, 500%, 600%, 800%, 1
 at a time. Those
 are the zooms at which pixel art is being shown rather than resampled. At 135% a pixel of the drawing
 is 1.35 pixels of the screen, so some are drawn one wide and some two: a checkerboard dither comes
-out as bands, and a one-pixel line thickens and thins along its length. `Ctrl` and the wheel is the
+out as bands, and a one-pixel line thickens and thins along its length. The wheel is the
 fine control and the keys are the honest one. A step always goes past where you are, so 135% zooms out to
 100% and in to 200%, and both keys hold at the ends of the ladder rather than wrapping.
 
-Zooming with the keys holds whatever is under the cursor still, the way `Ctrl` and the wheel does, unless the
+Zooming with the keys holds whatever is under the cursor still, the way the wheel does, unless the
 cursor is off the canvas — then it holds the middle of the pane, so a keypress cannot throw the page
 off screen because the mouse happened to be resting in another panel.
 
@@ -132,7 +134,7 @@ the tool and its brush size, the layer you are drawing into, the frame if the do
 the document's size, and the zoom.
 
 The zoom at the end is a picker rather than a readout: open it and choose 5%, 12.5%, 25%, 50%, 75%,
-100%, 200%, 400% or 800% and the canvas goes there, centred, in one move. A zoom `Ctrl`+wheel has left
+100%, 200%, 400% or 800% and the canvas goes there, centred, in one move. A zoom the wheel has left
 you on — 85%, say — is added to the top of the list so the control always says where you actually
 are. 75% is on this list and not on the `+`/`-` ladder above, and that is deliberate: asking for a
 number exactly is a different question from asking for the next honest scale.

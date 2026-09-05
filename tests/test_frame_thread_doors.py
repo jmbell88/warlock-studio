@@ -245,13 +245,12 @@ def test_a_recovered_clay_model_is_read_on_a_task_and_adopted_dirty(tmp_path, mo
 
 
 def test_a_recovered_clay_model_that_will_not_parse_says_so(tmp_path):
-    from warlock.service.errors import ServiceError
-
-    ctx = _ClayCtx()
+    """Through ``journal.adopt_failed`` since 2026-09-05 -- a warning with the
+    log behind it, the sentence every provider says -- where a raise here
+    arrived as an *error* toast no other mode's copy raised."""
     path = tmp_path / "bad.wblk"
     path.write_bytes(b"not a zip")
-    with pytest.raises(ServiceError, match="could not be reopened"):
-        clay_mode._journal_adopt(ctx, path, {})
+    assert clay_mode._load_recovery(path, {}) is None
 
 
 def test_the_clay_uid_counter_survives_a_reserve_from_a_task_thread():

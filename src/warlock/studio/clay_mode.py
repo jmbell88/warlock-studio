@@ -500,6 +500,8 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
 
     if name == "clay-recover":
+        if result is None:
+            journal.adopt_failed(ctx, "model")
         if isinstance(result, dict):
             tab = adopt(ctx, result["doc"], path=None, title=result.get("title"))
             # Dirty from the moment it opens, and it owns the file it came
@@ -581,9 +583,8 @@ def close_tab(ctx: Any, uid: str) -> None:
     user had no way to reach -- Ctrl+Tab cycled them with nothing on screen
     saying so.
 
-    Its own question rather than ``guard``, for ``plotter_mode.close_tab``'s
-    reason: ``guard`` asks about every dirty document in the workspace, and the
-    answer being sought here is about *this* one.
+    ``docmodes.close_tab`` asks the question and refuses a tab mid-save; what
+    is Clay's is the release below.
 
     What a Clay document owns in the single GL context is the part worth
     stating. The per-document camera is plain data on the tab
@@ -595,21 +596,8 @@ def close_tab(ctx: Any, uid: str) -> None:
     frame of rebuild and is what ``sync`` does on every tab switch anyway.
     """
     state = ensure(ctx)
-    tab = state.get(uid)
-    if tab is None or tab.saving:
-        # Refused mid-save for ``_MUTATING_CTRL``'s reason and then some: the
-        # serialise task reads the live document on a task thread, and closing
-        # it out from under that read is the one way to lose the file being
-        # written rather than merely the edits since.
-        return
 
-    def drop() -> None:
-        # The document is on disk under a name the user chose, or is gone
-        # from the session: either way the crash copy describes work that
-        # is no longer at risk, and one left behind is exactly the file
-        # that gets offered back after a clean session and confuses
-        # somebody (UX-05).
-        journal.drop(ctx, tab)
+    def release(tab: ClayTab) -> None:
         view = getattr(ctx, "clay_view", None)
         if view is not None and tab.uid == state.active_uid:
             if getattr(view, "dragging", False):
@@ -623,12 +611,8 @@ def close_tab(ctx: Any, uid: str) -> None:
         # open tab redo its (adjacency-building) checks on the next draw.
         for obj in tab.doc.objects:
             state.manifold.pop(obj.uid, None)
-        state.close(uid)
 
-    if not tab.dirty:
-        drop()
-        return
-    dialogs.ask_close_unsaved(ctx, tab.title, drop)
+    docmodes.close_tab(ctx, state, uid, release)
 
 
 # --- keys -------------------------------------------------------------------
@@ -656,10 +640,32 @@ ELEMENT_KEYS = {"1": "vertex", "2": "edge", "3": "face", "4": "object"}
 # keys belong to Clay and only Clay.
 AXIS_VIEW_KEYS = {"1": "front", "3": "right", "7": "top"}
 
+def axis_view_key(camera: Any, name: str, shift: bool) -> bool:
+    """One Ctrl+digit view key, on any camera. -> whether ``name`` was one.
+
+    Shift is the opposite view, as Blender's numpad does it -- Ctrl+1 is the
+    front and Ctrl+Shift+1 the back, so six views cost three keys; Ctrl+5
+    toggles orthographic. **Shared with Poser rather than restated there**, so
+    the two 3-D viewports cannot come to disagree about which number is the
+    front -- and so that both require Ctrl. Poser's copy tested the bare
+    digit, so a 1 typed into nothing snapped its camera while Clay's did not.
+    """
+    if name in AXIS_VIEW_KEYS:
+        wanted = AXIS_VIEW_KEYS[name]
+        if shift:
+            wanted = {"front": "back", "right": "left", "top": "bottom"}[wanted]
+        camera.look_along(wanted)
+        return True
+    if name == "5":
+        camera.orthographic = not camera.orthographic
+        return True
+    return False
+
+
 # Ctrl-shortcuts that change the document. Serialising reads the live document
 # on a task thread, so anything that restructures it or moves the history head
 # the save captured waits for the save, exactly as a gizmo drag does.
-_MUTATING_CTRL = frozenset({"z", "y", "a", "i", "j", "m"})
+_MUTATING_CTRL = docmodes.WRITE_CHORDS | frozenset({"a", "i", "j", "m"})
 #: The chords a live drag swallows -- history and the tab; see ``_ctrl_key``.
 #: Deliberately *not* the whole of ``_MUTATING_CTRL``: Ctrl+J under a drag is a
 #: pinned behaviour (``test_ctrl_chords_still_reach_their_ops_during_a_drag``).
@@ -897,14 +903,14 @@ def _escape(state: ClayState, tab: ClayTab, doc: Any) -> None:
 
 
 def _toast(ctx: Any, message: str) -> None:
-    """See ``clay_ops.toast``: the attribute this reached for never existed."""
-    ctx.toast(message, "error")
+    """``docmodes.refuse``: the one refusal door the non-Inker modes share."""
+    docmodes.refuse(ctx, message)
 
 
 def _ctrl_key(
     ctx: Any, state: ClayState, tab: ClayTab, doc: Any, name: str, *, shift: bool
 ) -> bool:
-    if tab.saving and name in _MUTATING_CTRL:
+    if docmodes.blocked_while_writing(tab, name, _MUTATING_CTRL):
         return True
     view = getattr(ctx, "clay_view", None)
     if getattr(view, "dragging", False) and name in _DRAG_BLOCKED_CTRL:
@@ -915,19 +921,10 @@ def _ctrl_key(
         # change history or the tab wait for the release; the view chords and
         # the object ops go on working.
         return True
-    if name in AXIS_VIEW_KEYS:
-        # Shift is the opposite view, as Blender's numpad does it -- Ctrl+1 is
-        # the front and Ctrl+Shift+1 the back, so six views cost three keys.
-        wanted = AXIS_VIEW_KEYS[name]
-        if shift:
-            wanted = {"front": "back", "right": "left", "top": "bottom"}[wanted]
+    if name in AXIS_VIEW_KEYS or name == "5":
         view = getattr(ctx, "clay_view", None)
         if view is not None:
-            view.camera.look_along(wanted)
-    elif name == "5":
-        view = getattr(ctx, "clay_view", None)
-        if view is not None:
-            view.camera.orthographic = not view.camera.orthographic
+            axis_view_key(view.camera, name, shift)
     elif name == "s":
         save_as(ctx, tab) if shift else save(ctx, tab)
     elif name == "o":
@@ -938,7 +935,12 @@ def _ctrl_key(
         # Beside its siblings, and the same key Inker, Plotter and Packwright
         # already close a document with.
         close_tab(ctx, tab.uid)
-    elif name == "e":
+    elif name == "e" and not shift:
+        # Not the shifted half: Ctrl+Shift+E was a silent alias of Ctrl+E here,
+        # which is the one thing a printed binding exists to prevent
+        # (``inker_keys``'s rule). Clay's file export *is* its library export,
+        # so the chord every other mode gives the file export has nothing
+        # distinct to do here and does nothing.
         export_asset(ctx, tab)
     elif name == "z":
         redo(ctx, tab) if shift else undo(ctx, tab)
@@ -1087,14 +1089,16 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
 
 def _load_recovery(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
     """The task-thread half of a crash recovery: bytes to document."""
-    from ..service.errors import invalid_from
     from .clay import serialize
 
     try:
         doc = serialize.read_wblk(_within_ceiling(path).read_bytes())
-    except Exception as exc:
+    except Exception:
+        # ``None`` rather than a raise: the landing turns it into the one
+        # sentence every provider says (``journal.adopt_failed``), where a
+        # raise arrived as an *error* toast that no other mode's copy raised.
         log.exception("could not reopen the recovered model at %s", path)
-        raise invalid_from(exc, "A recovered model could not be reopened") from exc
+        return None
     return {
         "doc": doc,
         "title": f"{meta.get('title') or path.stem} (recovered)",

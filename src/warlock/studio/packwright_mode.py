@@ -125,7 +125,7 @@ def ask_add_sources(ctx: Any) -> None:
     """The picker and the decode on one task thread."""
     tab = active(ctx)
     if tab is None:
-        ctx.toast("Start or open an atlas first.", "error")
+        docmodes.refuse(ctx, "Start or open an atlas first.")
         return
     uid = tab.uid
 
@@ -149,7 +149,7 @@ def ask_add_tileset(ctx: Any) -> None:
     """
     tab = active(ctx)
     if tab is None:
-        ctx.toast("Start or open an atlas first.", "error")
+        docmodes.refuse(ctx, "Start or open an atlas first.")
         return
     uid = tab.uid
 
@@ -224,7 +224,7 @@ def import_tileset(ctx: Any) -> bool:
             pixels, tile=tile, prefix=f"{path}@{tile[0]}x{tile[1]}", name=stem
         )
     except ValueError as exc:
-        ctx.toast(f"That tile set was not imported: {exc}", "error")
+        docmodes.refuse(ctx, f"That tile set was not imported: {exc}")
         return False
     if state.tileset_dedup:
         sprites, _dropped = dedup_tiles(
@@ -330,7 +330,7 @@ def add_inker_document(ctx: Any, inker_tab: Any) -> None:
     try:
         sprites = sprites_from_document(inker_tab.doc, prefix=prefix)
     except ValueError as exc:
-        ctx.toast(f"Those frames were not added: {exc}", "error")
+        docmodes.refuse(ctx, f"Those frames were not added: {exc}")
         return
     ctx.toast(_added_sentence(*_add_sprites(ctx, tab, sprites)))
 
@@ -434,7 +434,7 @@ def rename_source(ctx: Any, tab: PackTab | None, uid: int, name: str) -> None:
     try:
         tab.doc.rename_source(uid, name)
     except ValueError as exc:
-        ctx.toast(f"That name was not applied: {exc}", "error")
+        docmodes.refuse(ctx, f"That name was not applied: {exc}")
         return
     tab.pack_dirty = True
 
@@ -453,7 +453,7 @@ def set_settings(ctx: Any, tab: PackTab | None = None, **values: Any) -> None:
         # be -- and an uncaught one here is a crash rather than a refusal.
         # Framed rather than forwarded, the house rule: a bare ``str(exc)``
         # toast is library text with no subject in front of it.
-        ctx.toast(f"That setting was not applied: {exc}", "error")
+        docmodes.refuse(ctx, f"That setting was not applied: {exc}")
         return
     tab.pack_dirty = True
 
@@ -655,27 +655,15 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
 
 
 def close_tab(ctx: Any, uid: str) -> None:
+    """``docmodes.close_tab``; what is Packwright's is the release."""
     state = ensure(ctx)
-    tab = state.get(uid)
-    if tab is None:
-        return
 
-    def drop() -> None:
-        # The document is on disk under a name the user chose, or is gone
-        # from the session: either way the crash copy describes work that
-        # is no longer at risk, and one left behind is exactly the file
-        # that gets offered back after a clean session and confuses
-        # somebody (UX-05).
-        journal.drop(ctx, tab)
+    def release(_tab: PackTab) -> None:
         from .panes import packwright_textures
 
         packwright_textures.release_doc(ctx, uid)
-        state.close(uid)
 
-    if not tab.dirty:
-        drop()
-        return
-    dialogs.ask_close_unsaved(ctx, tab.title, drop)
+    docmodes.close_tab(ctx, state, uid, release)
 
 
 def release_all(ctx: Any) -> None:
@@ -684,7 +672,7 @@ def release_all(ctx: Any) -> None:
     packwright_textures.release_all(ctx)
 
 
-_MUTATING_CTRL = frozenset({"z", "y"})
+_MUTATING_CTRL = docmodes.WRITE_CHORDS
 
 
 # --- history ------------------------------------------------------------------
@@ -731,7 +719,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
     name = pygame.key.name(event.key).lower()
 
     if ctrl:
-        if tab is not None and tab.busy and name in _MUTATING_CTRL:
+        if tab is not None and docmodes.blocked_while_writing(tab, name, _MUTATING_CTRL):
             return True
         return _ctrl_key(ctx, state, tab, name, shift=shift)
 
@@ -836,7 +824,7 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
         doc = wpack.read_wpack(packwright_io._within_ceiling(Path(path)).read_bytes())
     except Exception:
         log.exception("could not reopen the recovered atlas at %s", path)
-        ctx.toast("A recovered atlas could not be reopened.", "warn", action="log")
+        journal.adopt_failed(ctx, "atlas")
         return False
     title = f"{meta.get('title') or Path(path).stem} (recovered)"
     tab = adopt(ctx, doc, path=None, title=title)

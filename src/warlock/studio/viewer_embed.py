@@ -581,14 +581,19 @@ class Viewer(PoseOps):
             # exists.
             self.menu_request = local
             return True
-        # **Alt+drag pans**, as well as the middle button. A trackpad and most
-        # pen tablets have no middle button at all, so panning was unreachable
-        # on the hardware this app is most likely to be drawn with -- and Alt
-        # is what Maya, Blender and every DCC before them use for exactly this.
-        import pygame
-
-        alt = bool(pygame.key.get_mods() & pygame.KMOD_ALT)
-        self._grab = "pan" if button == 2 or (button == 1 and alt) else "orbit"
+        # **Alt+drag orbits, as it does in Clay, and the middle button pans.**
+        # Until 2026-09-05 Alt+drag *panned* here, with a comment citing Maya
+        # and Blender, while ``_view_drag`` two viewports over said Alt+drag
+        # "must never be reinterpreted" and orbited -- the same hand gesture
+        # with opposite results depending on which 3-D view the pointer was
+        # over, and the shortcut sheet advertising only Clay's. One rule, the
+        # one already written down: Alt+drag orbits in every mode, in every
+        # viewport. The right button, outside pose mode, does nothing rather
+        # than being a second orbit, for the same reason Clay's does nothing
+        # on a drag: grabbing the wrong button mid-gesture costs nothing.
+        if button == 3:
+            return True
+        self._grab = "pan" if button == 2 else "orbit"
         return True
 
     def _release(self, button: int) -> bool:

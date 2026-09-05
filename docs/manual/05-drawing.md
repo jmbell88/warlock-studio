@@ -19,7 +19,7 @@ the pipeline bridges on the right, and the timeline — layers down, frames acro
 bottom. Above the canvas is one row, the context bar: what the tool in your hand is set to, and the
 symmetry toggles.
 
-Move around the canvas with the wheel, which scrolls; hold `Ctrl` and roll to zoom, and space-drag
+Roll the wheel to zoom, hold `Shift` and roll to scroll sideways, and space-drag
 or middle-drag to pan. There are scrollbars along the right and bottom edges too. `Ctrl+0` fits
 the canvas to the window and `Ctrl+1` snaps back to 100%. Zoom and pan are *not* tools here — they
 do not take a slot in the toolbox, because a toolbox slot spent on navigation is a slot not spent on

@@ -124,7 +124,7 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Ctrl+Shift+I", "Invert the selection"),
             ("Right-click", "Context menu"),
             ("Alt+drag", "Orbit, in any mode"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo (Ctrl+Shift+Z also redoes)"),
             ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
             # "Ctrl+N / O / W", matching Inker's row below rather than
             # stopping at O: Clay closes a document with Ctrl+W like every
@@ -134,7 +134,7 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             # undiscoverable.
             ("Ctrl+N / O / W", "New / open / close"),
             ("Ctrl+E", "Export to the library"),
-            ("Ctrl+Tab", "Next document"),
+            ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous document"),
             ("Ctrl+1 / 3 / 7", "Look along front / right / top"),
             ("Ctrl+Shift+1 / 3 / 7", "The opposite view: back / left / bottom"),
             ("Ctrl+5", "Orthographic / perspective"),
@@ -181,13 +181,13 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("+ / -", "Zoom in / out, by whole scales"),
             ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
             ("Space / middle drag", "Pan"),
-            ("Shift+wheel", "Scroll sideways (the wheel alone scrolls up and down)"),
-            ("Ctrl+wheel", "Zoom in 5% steps"),
+            ("Wheel", "Zoom in 5% steps -- the rule every canvas shares"),
+            ("Shift+wheel", "Scroll sideways"),
             ("Ctrl+4 / Ctrl+5", "Rotate the view a quarter turn / flip it"),
             ("Arrows", "Nudge a pixel (Shift: eight)"),
             ("Delete", "Delete what is selected"),
             ("Esc", "Cancel -- a move, playback, a float, then the selection"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo (Ctrl+Shift+Z also redoes)"),
             ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
             ("Ctrl+E", "Save as a reference in the library"),
             ("Ctrl+Shift+E", "Export PNG"),
@@ -202,7 +202,7 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Ctrl+Shift+I", "Invert the selection"),
             ("Ctrl+T", "Free transform"),
             ("Ctrl+B", "Capture the selection as an image brush"),
-            ("Ctrl+Tab", "Next tab"),
+            ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous tab"),
             (", / .", "Previous / next frame (animated)"),
             ("Enter", "Play or pause (animated)"),
         ],
@@ -233,13 +233,13 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Ctrl+J", "Duplicate the selected object"),
             ("Ctrl+click / Alt+click", "Insert / remove a polygon vertex"),
             ("Delete", "Clear the selection, or remove the object"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo (Ctrl+Shift+Z also redoes)"),
             ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
             ("Ctrl+E", "Export to the library"),
             ("Ctrl+Shift+E", "Export a Tiled .tmx"),
             ("Ctrl+N / O / W", "New / open / close"),
             ("Ctrl+G", "Toggle the grid"),
-            ("Ctrl+Tab", "Next map"),
+            ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous map"),
             ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
             ("Space / middle drag", "Pan (wheel zooms)"),
             ("Esc", "Cancel a drag, then the object, then the selection"),
@@ -249,9 +249,15 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
         "Poser",
         [
             # The mode is otherwise mouse-shaped -- joints are clicked and
-            # gizmos are dragged -- which is why two rows are the whole group
-            # and not a sign that the rest were forgotten.
+            # gizmos are dragged. The view keys and the mouse rows are Clay's,
+            # on the same chords: the 2026-09-05 pass found this table saying
+            # "two rows are the whole group" a week after six more were bound.
             ("Ctrl+Z / Ctrl+Y", "Undo / redo (Ctrl+Shift+Z also redoes)"),
+            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+            ("Ctrl+1 / Ctrl+3 / Ctrl+7", "Look along front / right / top (Shift: the opposite)"),
+            ("Ctrl+5", "Toggle orthographic and perspective"),
+            ("F", "Frame the armature"),
+            ("Alt+drag", "Orbit (middle drag pans)"),
             ("Esc", "Deselect the joint"),
         ],
     )
@@ -260,12 +266,12 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
         [
             ("R", "Repack now"),
             ("Delete", "Remove the selected source"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo (Ctrl+Shift+Z also redoes)"),
             ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
             ("Ctrl+E", "Export to the library"),
             ("Ctrl+Shift+E", "Export the atlas and its JSON"),
             ("Ctrl+N / O / W", "New / open / close"),
-            ("Ctrl+Tab", "Next atlas"),
+            ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous atlas"),
             ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
             # Middle drag alone, not "Space / middle drag" as Plotter's row
             # says: there is no space-pan in this mode to advertise.
@@ -319,10 +325,11 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Delete", "Clear the column under the caret, or the whole selection"),
             ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste a block at the caret"),
             ("Esc", "Drop the selection"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo (Ctrl+Shift+Z also redoes)"),
             ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
             ("Ctrl+N / O / W", "New song / open a file / close the tab"),
             ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous song"),
+            ("Ctrl+Shift+E", "Export WAV + stems"),
         ],
     )
     return sections

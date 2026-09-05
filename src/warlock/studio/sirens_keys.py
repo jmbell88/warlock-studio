@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import sirens_audio, sirens_mode, sirens_state
+from . import docmodes, sirens_audio, sirens_mode, sirens_state
 from .sirens_state import SirensState, SongTab, ensure  # noqa: F401
 
 
@@ -42,7 +42,7 @@ PIANO_KEYS: dict[str, int] = {
 
 # The Ctrl chords a busy tab refuses. Copy is not among them: it reads the
 # document and pushes nothing, so a tab mid-save can still be copied from.
-_MUTATING_CTRL = frozenset({"z", "y", "x", "v", "g"})
+_MUTATING_CTRL = docmodes.WRITE_CHORDS | frozenset({"x", "v", "g"})
 
 
 def handle_key(ctx: Any, event: Any) -> bool:
@@ -65,7 +65,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
     name = pygame.key.name(event.key).lower()
 
     if ctrl:
-        if tab is not None and tab.busy and name in _MUTATING_CTRL:
+        if tab is not None and docmodes.blocked_while_writing(tab, name, _MUTATING_CTRL):
             return True
         return _ctrl_key(ctx, state, tab, name, shift=shift)
 
@@ -113,11 +113,11 @@ def handle_key(ctx: Any, event: Any) -> bool:
         sirens_mode.jump_row(ctx, 0 if event.key == pygame.K_HOME else rows - 1, select=shift)
         return True
     if event.key == pygame.K_ESCAPE:
-        # Staged, and consumed only when it had something to drop -- Inker's and
-        # Plotter's rule. This cleared the anchor and returned True either way,
-        # so Esc with nothing selected was swallowed here rather than reaching
-        # whatever the app would otherwise do with it (closing an overlay, say),
-        # and a user pressing it twice got no answer to the second press.
+        # Staged, and answering False when there was nothing to drop --
+        # Inker's and Plotter's rule. **The False reaches nothing**: every
+        # workspace arm in ``main`` returns after its mode's ``handle_key``
+        # whatever it answers (the Delete-trashes-a-library-asset rule, stated
+        # once there), so this is the honest report and not a hand-off.
         if state.anchor is None:
             return False
         state.anchor = None
@@ -229,6 +229,12 @@ def _ctrl_key(
         return True
     if name == "s":
         sirens_mode.save_as(ctx, tab) if shift else sirens_mode.save(ctx, tab)
+        return True
+    if name == "e" and shift:
+        # Ctrl+Shift+E is the file export in every document mode; Sirens was
+        # the one where Export was menu-only (2026-09-05). Ctrl+E stays
+        # unbound: Sirens has no library export for it to mean.
+        sirens_mode.export_files(ctx, tab)
         return True
     if name == "z":
         # Ctrl+Shift+Z redoes as well, which is what Inker, Clay, Plotter and

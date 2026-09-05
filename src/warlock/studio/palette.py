@@ -240,9 +240,13 @@ def _doc_export(ctx: Any) -> None:
     module, tab = _doc_mode(ctx)
     if tab is None:
         return
-    # Each mode's *primary* export, which is the one its bridge puts first and
-    # the one Ctrl+E is bound to. The others stay panel-only: a palette listing
-    # four exports per mode is a list nobody reads.
+    # Each mode's *file* export -- the one its bridge puts first. The others
+    # stay panel-only: a palette listing four exports per mode is a list
+    # nobody reads. **Its chord is Ctrl+Shift+E, not Ctrl+E**, in every mode
+    # but Clay: Ctrl+E is the library export everywhere it exists (Inker's is
+    # "Save as reference"), and Clay's file export *is* its library export.
+    # This comment said Ctrl+E for all of them until 2026-09-05, and
+    # ``_doc_export_hint`` is what keeps the row's printed chord honest.
     if not _doc_export_label(ctx):
         return
     if ctx.state.mode == "inker":
@@ -258,6 +262,11 @@ def _doc_export(ctx: Any) -> None:
 def _doc_export_label(ctx: Any) -> str:
     entry = _DOC_MODES.get(ctx.state.mode)
     return entry[1] if entry else "Export"
+
+
+def _doc_export_hint(ctx: Any) -> str:
+    """The chord the mode actually binds the file export to; see ``_doc_export``."""
+    return "Ctrl+E" if ctx.state.mode == "clay" else "Ctrl+Shift+E"
 
 
 def _can_export(ctx: Any) -> bool:
@@ -589,7 +598,7 @@ def commands(ctx: Any) -> list[Command]:
             label=_doc_export_label(ctx),
             group="Document",
             run=_doc_export,
-            hint="Ctrl+E",
+            hint=_doc_export_hint(ctx),
             enabled=_can_export,
             why=_DOC_WHY
             if _doc_export_label(ctx)

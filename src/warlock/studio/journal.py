@@ -542,6 +542,15 @@ def _write_pair(payload: Path, data: bytes, meta: dict[str, Any]) -> None:
                 staging.unlink(missing_ok=True)
 
 
+def adopt_failed(ctx: Any, noun: str) -> None:
+    """What every provider says when its copy will not reopen: a warning
+    with the log behind it. Inker let the exception through to the generic
+    "That did not work", Clay raised it as an error, and the other three
+    warned -- three levels for one event (2026-09-05). The caller has already
+    logged the traceback; this is the user's half."""
+    ctx.toast(f"A recovered {noun} could not be reopened.", "warn", action="log")
+
+
 def drop(ctx: Any, slot: Any) -> None:
     """Forget one slot's copy. Never raises -- it is cleanup, not an edit.
 

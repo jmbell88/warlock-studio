@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import dialogs, docmodes, journal, plotter_state, recents
+from . import docmodes, journal, plotter_state, recents
 from .plotter._map_model import ObjectLayer
 
 # ``ensure`` and ``active`` live in :mod:`.plotter_state` -- they touch nothing
@@ -233,7 +233,7 @@ def export_library(ctx: Any, tab: PlotterDoc | None = None) -> None:
         return
     doc, title = tab.doc, tab.title
     if not doc.tilesets:
-        ctx.toast("There is nothing to render -- add a tileset first.", "error")
+        docmodes.refuse(ctx, "There is nothing to render -- add a tileset first.")
         return
 
     try:
@@ -248,7 +248,7 @@ def export_library(ctx: Any, tab: PlotterDoc | None = None) -> None:
         # encode.
         # By name, not by ``ValueError``: anything else out of this encoder is a
         # defect and belongs in a traceback rather than in a toast.
-        ctx.toast(f"Nothing was exported. {exc}", "error")
+        docmodes.refuse(ctx, f"Nothing was exported. {exc}")
         return
 
     def run() -> dict[str, Any]:
@@ -422,30 +422,27 @@ def _forget_preview(ctx: Any, tab: Any) -> None:
             preview.pop(key, None)
 
 
-def close_tab(ctx: Any, uid: str) -> None:
-    state = ensure(ctx)
-    tab = state.get(uid)
-    if tab is None:
-        return
+def tool_label(ctx: Any) -> str:
+    """The active tool's name, for the status bar's shared branch -- which
+    reported a tool for Inker alone until 2026-09-05."""
+    state = getattr(ctx.state, "plotter", None)
+    if state is None:
+        return ""
+    return next((label for key, label, _k in plotter_state.TOOLS if key == state.tool), "")
 
-    def drop() -> None:
-        # The document is on disk under a name the user chose, or is gone
-        # from the session: either way the crash copy describes work that
-        # is no longer at risk, and one left behind is exactly the file
-        # that gets offered back after a clean session and confuses
-        # somebody (UX-05).
-        journal.drop(ctx, tab)
+
+def close_tab(ctx: Any, uid: str) -> None:
+    """``docmodes.close_tab``; what is Plotter's is the release."""
+    state = ensure(ctx)
+
+    def release(tab: PlotterDoc) -> None:
         from .panes import plotter_canvas, plotter_textures
 
         plotter_textures.release_doc(ctx, uid)
         plotter_canvas.forget_doc(uid)
         _forget_preview(ctx, tab)
-        state.close(uid)
 
-    if not tab.dirty:
-        drop()
-        return
-    dialogs.ask_close_unsaved(ctx, tab.title, drop)
+    docmodes.close_tab(ctx, state, uid, release)
 
 
 def release_all(ctx: Any) -> None:
@@ -466,7 +463,7 @@ TOOL_KEYS = plotter_state.TOOL_KEYS
 # duplicate, and paste is here since ``ObjectClip`` -- pasting an *object*
 # writes the document, where a tile paste only sets the brush and the tool.
 # Gating the tile case alongside costs a busy tab nothing it could have used.
-_MUTATING_CTRL = frozenset({"z", "y", "x", "v", "j"})
+_MUTATING_CTRL = docmodes.WRITE_CHORDS | frozenset({"x", "v", "j"})
 
 
 def _flipped_h(brush: Any, _shift: bool) -> Any:
@@ -665,7 +662,7 @@ def remove_tileset(ctx: Any, index: int) -> None:
         # Framed, the house rule: the model's sentence names the tileset, the
         # count and the layer, and in front of it the user needs to know what
         # was being attempted.
-        ctx.toast(f"{name} was not removed: {exc}", "error")
+        docmodes.refuse(ctx, f"{name} was not removed: {exc}")
         return
     # The palette index names a slot that may no longer exist.
     state.tileset_index = max(0, min(state.tileset_index, len(tab.doc.tilesets) - 1))
@@ -809,7 +806,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
     name = pygame.key.name(event.key).lower()
 
     if ctrl:
-        if tab is not None and tab.busy and name in _MUTATING_CTRL:
+        if tab is not None and docmodes.blocked_while_writing(tab, name, _MUTATING_CTRL):
             return True
         return _ctrl_key(ctx, state, tab, name, shift=shift)
 
@@ -885,9 +882,7 @@ def _locked_toast(ctx: Any, layer: Any) -> None:
     in two workspaces of one app cost one click in one and a hunt through the
     layer list in the other. ``ctx.toast`` has taken an action all along.
     """
-    ctx.toast(
-        f"{layer.name} is locked.", "error", action="unlock", action_arg=str(layer.uid)
-    )
+    docmodes.refuse(ctx, f"{layer.name} is locked.", action="unlock", action_arg=str(layer.uid))
 
 
 def unlock_layer(ctx: Any, uid: str) -> None:
@@ -923,11 +918,11 @@ def _selected_tiles(ctx: Any, state: PlotterState, tab: PlotterDoc, *, writing: 
 
     rect = state.selection_in(tab.doc)
     if rect is None:
-        ctx.toast("Select some cells first.", "error")
+        docmodes.refuse(ctx, "Select some cells first.")
         return None, None
     layer = tab.doc.active()
     if not isinstance(layer, TileLayer):
-        ctx.toast("Pick a tile layer first.", "error")
+        docmodes.refuse(ctx, "Pick a tile layer first.")
         return None, None
     if writing and layer.locked:
         _locked_toast(ctx, layer)
@@ -996,7 +991,7 @@ def _paste(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
     cells erase what they land on rather than letting it show through.
     """
     if state.clipboard is None:
-        ctx.toast("Nothing has been copied.", "error")
+        docmodes.refuse(ctx, "Nothing has been copied.")
         return
     if isinstance(state.clipboard, ObjectClip):
         _paste_object(ctx, state, tab)
@@ -1007,7 +1002,7 @@ def _paste(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
         # would land silently wrong rather than fail.
         source = state.get(state.clipboard_doc)
         where = f" from {source.title}" if source is not None else ""
-        ctx.toast(f"That copy{where} belongs to another map.", "error")
+        docmodes.refuse(ctx, f"That copy{where} belongs to another map.")
         return
     state.brush = state.clipboard.copy()
     state.tool = "stamp"
@@ -1077,11 +1072,11 @@ def _paste_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
     if state.clipboard_doc != tab.uid:
         source = state.get(state.clipboard_doc)
         where = f" from {source.title}" if source is not None else ""
-        ctx.toast(f"That object{where} belongs to another map.", "error")
+        docmodes.refuse(ctx, f"That object{where} belongs to another map.")
         return
     layer = tab.doc.active()
     if not isinstance(layer, ObjectLayer):
-        ctx.toast("Pick an object layer to paste onto.", "error")
+        docmodes.refuse(ctx, "Pick an object layer to paste onto.")
         return
     # A paste adds an object, which is a content edit -- the same door
     # ``_delete`` holds, because the lock is enforced at the studio layer.
@@ -1117,7 +1112,7 @@ def _duplicate_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
     from .plotter.tilemap import new_uid
 
     if state.tool != "object" or state.selected_object is None:
-        ctx.toast("Select an object first.", "error")
+        docmodes.refuse(ctx, "Select an object first.")
         return
     layer = tab.doc.active()
     if not isinstance(layer, ObjectLayer):
@@ -1430,7 +1425,7 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
         doc = wmaplib.read_wmap(_within_ceiling(Path(path)).read_bytes())
     except Exception:
         log.exception("could not reopen the recovered map at %s", path)
-        ctx.toast("A recovered map could not be reopened.", "warn", action="log")
+        journal.adopt_failed(ctx, "map")
         return False
     title = f"{meta.get('title') or Path(path).stem} (recovered)"
     tab = adopt(ctx, doc, path=None, title=title, file_format="wmap")

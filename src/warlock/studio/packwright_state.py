@@ -218,10 +218,8 @@ class PackwrightState:
         self.activate(self.docs[(index + step) % len(self.docs)].uid)
 
     def find_path(self, path: Path) -> PackTab | None:
-        for doc in self.docs:
-            if doc.path is not None and doc.path == path:
-                return doc
-        return None
+        """``docmodes.find_path``: the one case-folding body every mode shares."""
+        return docmodes.find_path(self.docs, path)
 
 
 

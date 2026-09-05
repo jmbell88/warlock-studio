@@ -25,7 +25,6 @@ case that have to agree about flags, clipping and the no-op rule.
 from __future__ import annotations
 
 import itertools
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -780,28 +779,10 @@ class PlotterState:
         self.activate(self.docs[(index + step) % len(self.docs)].uid)
 
     def find_path(self, path: Path) -> PlotterDoc | None:
-        """An already-open tab for this file, so opening twice focuses rather
-        than forking -- two tabs over one path would race on save.
-
-        **Resolved and case-folded, because on Windows one file has many
-        spellings.** ``Level.WMAP`` and ``level.wmap`` are the same file and
-        ``Path.__eq__`` says they are not, so the same document opened from the
-        recents list and from a drop used to fork into two tabs that then raced
-        on save -- exactly what this method exists to prevent. ``resolve`` folds
-        the other spellings (a relative path, a symlink, an 8.3 short name);
-        ``normcase`` is what makes the comparison case-insensitive *where the
-        filesystem is*, and a no-op where it is not.
-
-        Clay and Packwright carry the same shape and the same bug; fixing them
-        is deliberately not this change, because each has its own tab list.
-        """
-        probe = os.path.normcase(str(Path(path).resolve()))
-        for doc in self.docs:
-            if doc.path is None:
-                continue
-            if os.path.normcase(str(Path(doc.path).resolve())) == probe:
-                return doc
-        return None
+        """``docmodes.find_path``: the case-folding body written here first
+        (``Level.WMAP`` and ``level.wmap`` forked into two tabs) and shared
+        with every mode since 2026-09-05."""
+        return docmodes.find_path(self.docs, path)
 
     # -- drag ---------------------------------------------------------------
 

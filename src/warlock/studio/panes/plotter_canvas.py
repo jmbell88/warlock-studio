@@ -1877,9 +1877,22 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool, region) -> No
     io = imgui.get_io()
     view = tab.view
 
-    if hovered and io.mouse_wheel:
+    if hovered and (io.mouse_wheel or io.mouse_wheel_h):
+        from .. import imgui_backend
+
         mouse = imgui.get_mouse_pos()
-        inker_state.zoom_about(view, origin, (mouse.x, mouse.y), io.mouse_wheel)
+        # The rule every 2-D canvas shares (``inker_state.wheel``): the wheel
+        # zooms on the 5% lattice, Shift+wheel and a tilt wheel scroll
+        # sideways. Until 2026-09-05 this pane zoomed multiplicatively on the
+        # backend-halved count and never landed on a round percentage.
+        along = inker_state.wheel(
+            view, origin, (mouse.x, mouse.y),
+            io.mouse_wheel / imgui_backend.WHEEL_SCALE,
+            io.mouse_wheel_h / imgui_backend.WHEEL_SCALE,
+            shift=bool(io.key_shift),
+        )
+        if along:
+            view.pan = (view.pan[0] + inker_state.scroll_step(region[0]) * along, view.pan[1])
 
     # Claimed before any tool sees the mouse, and before panning: the minimap
     # sits *over* the map, so a press inside it that fell through would paint a

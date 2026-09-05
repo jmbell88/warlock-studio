@@ -1354,7 +1354,8 @@ def zoom_about(
 
     Multiplicative: a fixed *ratio* per step, which is the right shape for a
     keyboard zoom spanning three orders of magnitude. The wheel uses
-    :func:`zoom_step` instead.
+    :func:`zoom_step` instead, through :func:`wheel` -- in every canvas, not
+    only Inker's, since 2026-09-05.
     """
     _anchor(view, origin, mouse, clamp_zoom(view.zoom * (ZOOM_STEP**steps), lo, hi))
 
@@ -1403,6 +1404,44 @@ def zoom_step(
         percent += ZOOM_PERCENT_STEP * notches
         target = percent / 100.0
     _anchor(view, origin, mouse, clamp_zoom(target, lo, hi))
+
+
+def wheel(
+    view: PaintView,
+    origin: tuple[float, float],
+    mouse: tuple[float, float],
+    notches: float,
+    sideways: float = 0.0,
+    *,
+    shift: bool = False,
+    lo: float = MIN_ZOOM,
+    hi: float = MAX_ZOOM,
+) -> float:
+    """The one wheel rule for every 2-D canvas. -> sideways notches to pan by.
+
+    **The wheel zooms; Shift+wheel and a tilt wheel scroll sideways.** Decided
+    on 2026-09-05 when the three canvases were found disagreeing: Inker
+    scrolled on the wheel and zoomed on Ctrl+wheel (Aseprite's default, since
+    2026-08-31), while Plotter and Packwright zoomed on the bare wheel through
+    :func:`zoom_about` -- multiplicatively, on the backend-halved count, so
+    they never landed on a round percentage. Same hand gesture, two results,
+    and no comment on either side saying why. Zoom won because two of three
+    did it and both neighbours' manuals promised it; the *lattice* rule won
+    because it is the one that makes 100% reachable.
+
+    ``notches`` and ``sideways`` are **physical** notches -- the caller has
+    already divided the backend's ``WHEEL_SCALE`` back out. A tilt wheel's
+    sign is the opposite of Shift+wheel's: imgui reports a positive
+    ``mouse_wheel_h`` as "towards the right", where a positive ``mouse_wheel``
+    is "away from the user", which moves the page the other way. Written out
+    rather than folded into one term. What is returned is how many pane-widths'
+    worth of :func:`scroll_step` the caller pans by, so a pane with bounds
+    (Inker) and one without (Packwright) can each apply it their own way.
+    """
+    along = (notches if shift else 0.0) - sideways
+    if not shift and notches:
+        zoom_step(view, origin, mouse, notches, lo=lo, hi=hi)
+    return along
 
 
 def zoom_ladder_step(
@@ -2716,12 +2755,8 @@ class InkerState:
         self.activate(self.docs[(index + step) % len(self.docs)].uid)
 
     def find_path(self, path: Path) -> InkerDoc | None:
-        """An already-open tab for this file, so opening twice focuses rather
-        than forking -- two tabs over one path would race on save."""
-        for doc in self.docs:
-            if doc.path is not None and doc.path == path:
-                return doc
-        return None
+        """``docmodes.find_path``: the one case-folding body every mode shares."""
+        return docmodes.find_path(self.docs, path)
 
     def find_job(self, job_id: str) -> InkerDoc | None:
         for doc in self.docs:

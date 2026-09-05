@@ -527,9 +527,11 @@ def test_escape_deselects_the_joint(svc):
     assert poser_mode.handle_key(ctx, other) is False
 
 
-def test_poser_has_clays_view_keys(svc):
+def test_poser_has_clays_view_keys_under_the_same_ctrl(svc):
     """It had none: the only way to look at a pose from the side was to orbit
-    there by hand, and no way back once the model was off screen."""
+    there by hand, and no way back once the model was off screen. And once it
+    had them it fired them on the *bare* digit, where Clay wants Ctrl -- the
+    2026-09-05 consistency pass: one chord, both viewports."""
     import pygame
 
     from warlock.studio import clay_mode
@@ -542,13 +544,18 @@ def test_poser_has_clays_view_keys(svc):
             ctx, SimpleNamespace(type=pygame.KEYDOWN, key=key, mod=mod)
         )
 
-    assert press(pygame.K_1) is True
+    at_rest = (viewer.camera.theta, viewer.camera.phi, viewer.camera.orthographic)
+    assert press(pygame.K_1) is False
+    assert press(pygame.K_5) is False
+    assert (viewer.camera.theta, viewer.camera.phi, viewer.camera.orthographic) == at_rest
+
+    assert press(pygame.K_1, pygame.KMOD_CTRL) is True
     front = (viewer.camera.theta, viewer.camera.phi)
-    assert press(pygame.K_1, pygame.KMOD_SHIFT) is True
+    assert press(pygame.K_1, pygame.KMOD_CTRL | pygame.KMOD_SHIFT) is True
     assert (viewer.camera.theta, viewer.camera.phi) != front
 
     ortho = viewer.camera.orthographic
-    assert press(pygame.K_5) is True
+    assert press(pygame.K_5, pygame.KMOD_CTRL) is True
     assert viewer.camera.orthographic is not ortho
 
     assert press(pygame.K_f) is True

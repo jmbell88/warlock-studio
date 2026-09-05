@@ -379,7 +379,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
         if isinstance(result, dict) and not sirens_audio.play(
             result["pcm"], tag=f"pattern:{result.get('pattern', '')}"
         ):
-            ctx.toast("That pattern could not be played; see the log.", "error")
+            docmodes.refuse(ctx, "That pattern could not be played; see the log.")
         return
 
     if name == "sirens-preview":
@@ -398,7 +398,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
         if not _still_wanted(state, done):
             return
         if isinstance(result, dict) and not sirens_audio.play(result["pcm"]):
-            ctx.toast("That sound effect could not be played; see the log.", "error")
+            docmodes.refuse(ctx, "That sound effect could not be played; see the log.")
         return
 
     if name == "sirens-sample":
@@ -493,30 +493,19 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
 
 
 def close_tab(ctx: Any, uid: str) -> None:
+    """``docmodes.close_tab``; what is Sirens' is the release."""
     from . import sirens_play
 
     state = ensure(ctx)
-    tab = state.get(uid)
-    if tab is None:
-        return
 
-    def drop() -> None:
-        # The document is on disk under a name the user chose, or is gone from
-        # the session: either way the crash copy describes work that is no
-        # longer at risk, and one left behind is exactly the file that gets
-        # offered back after a clean session and confuses somebody (UX-05).
-        journal.drop(ctx, tab)
+    def release(_tab: SongTab) -> None:
         if state.active_uid == uid:
             # The buffer on this tab is what the mixer is playing; a tab closed
             # mid-bar would otherwise keep sounding with nothing on screen to
             # stop it.
             sirens_play.stop(ctx)
-        state.close(uid)
 
-    if not tab.dirty:
-        drop()
-        return
-    dialogs.ask_close_unsaved(ctx, tab.title, drop)
+    docmodes.close_tab(ctx, state, uid, release)
 
 
 # --- crash recovery (UX-05) ---------------------------------------------------
@@ -550,7 +539,7 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
         doc = wsng.read_wsng(sirens_io._within_ceiling(Path(path)).read_bytes())
     except Exception:
         log.exception("could not reopen the recovered song at %s", path)
-        ctx.toast("A recovered song could not be reopened.", "warn", action="log")
+        journal.adopt_failed(ctx, "song")
         return False
     title = f"{meta.get('title') or Path(path).stem} (recovered)"
     tab = adopt(ctx, doc, path=None, title=title)

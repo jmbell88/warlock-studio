@@ -270,8 +270,8 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Ctrl+4 / Ctrl+Shift+4 | Turn the view a quarter clockwise / anticlockwise |
 | Ctrl+5 | Mirror the view left to right |
 | Space drag, middle drag | Pan |
-| Shift+wheel | Scroll the canvas sideways (the wheel alone scrolls it up and down) |
-| Ctrl+wheel | Zoom in 5% steps, and by whole scales past 800% |
+| Wheel | Zoom in 5% steps, and by whole scales past 800% — the rule every canvas shares |
+| Shift+wheel | Scroll the canvas sideways |
 | Delete | Clear the selected pixels |
 | Esc | Cancel a floating selection, then deselect |
 
@@ -294,12 +294,12 @@ key restores the tool you were using.
 
 `+` and `-` step through whole zoom scales — 25%, 50%, 100%, 200%, 300% and up — rather than the
 wheel's 5% notches. Pixel art wants the whole ones: at 135% a source pixel is 1.35 screen pixels, so
-some are drawn one wide and some two, and a dither comes out as bands. Ctrl+wheel is still the fine
-control, and Ctrl+0 and Ctrl+1 still fit and reset. The wheel on its own scrolls rather than zooming,
-which is Aseprite's default.
+some are drawn one wide and some two, and a dither comes out as bands. The wheel is still the fine
+control, and Ctrl+0 and Ctrl+1 still fit and reset. The wheel zooms in Inker because it zooms in
+Plotter and Packwright: one gesture, one result, in every canvas.
 
 **The ceiling is 6400%**, the same as Aseprite's: a 16 px sprite at the old 1000% was 160 screen
-pixels, which on a large display is a stamp in the middle of an empty canvas. Past 800% a Ctrl+wheel
+pixels, which on a large display is a stamp in the middle of an empty canvas. Past 800% a wheel
 notch is a whole scale rather than 5%, because 5% of 6400% is a twentieth of a pixel and the top
 would otherwise be a thousand notches away.
 
@@ -323,9 +323,14 @@ applies the transform and does not also start the clip. See
 | --- | --- |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
 | Ctrl+S / Ctrl+Shift+S | Save the pose / save it under a new name |
+| Ctrl+1 / Ctrl+3 / Ctrl+7 | Look along front / right / top; add `Shift` for the opposite view |
+| Ctrl+5 | Toggle orthographic and perspective |
+| F | Frame the armature |
+| Alt+drag | Orbit — the same gesture as Clay's; middle-drag pans |
 | Esc | Deselect the joint |
 
-The mode is otherwise mouse-shaped: joints are clicked and gizmos are dragged. The undo binding is
+The mode is otherwise mouse-shaped: joints are clicked and gizmos are dragged. The view keys and
+the mouse are Clay's, on the same chords, so a hand that learned one viewport has learned both. The undo binding is
 the same one the asset pose editor answers to, because they are
 [one editor with two doors](26-poser.md#undo-and-redo).
 
@@ -387,7 +392,7 @@ throw away the selection you spent a gesture placing.
 | --- | --- |
 | `R` | Repack now |
 | Delete | Remove the selected source |
-| Ctrl+Z / Ctrl+Y | Undo / redo |
+| Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
 | Ctrl+E | Export to the library |
 | Ctrl+Shift+E | Export the atlas and its JSON |
@@ -463,13 +468,14 @@ bracket keys place a marker exactly where you are listening — the thing a mous
 | Ctrl+C / Ctrl+X | Copy / cut the selection (or the caret's cell) as a block |
 | Ctrl+V | Paste the block at the caret |
 | Esc | Drop the selection |
-| Ctrl+Z / Ctrl+Y | Undo / redo |
+| Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
 | Ctrl+Shift+Z | Redo as well |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
 | Ctrl+N | New song |
 | Ctrl+O | Open a file |
 | Ctrl+W | Close the current tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous song |
+| Ctrl+Shift+E | Export `song.wav`, the stems and the effects into a folder |
 
 **Which column the caret is in decides what a key means**, which is why the same letters appear
 twice above. The piano rows fire in the **note** column only: `e` in the effect column is the letter

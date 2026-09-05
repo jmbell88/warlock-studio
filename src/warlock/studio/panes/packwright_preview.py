@@ -77,7 +77,7 @@ def draw(ctx: Any) -> None:
     _outlines(state, tab, draw_list, (origin.x, origin.y))
     draw_list.pop_clip_rect()
 
-    _events(state, tab, (origin.x, origin.y), hovered)
+    _events(state, tab, (origin.x, origin.y), hovered, region)
     widgets.muted(
         f"{size_px[0]} x {size_px[1]} px  --  {int(view.zoom * 100)}%  --  "
         f"{len(tab.layout.frames) if tab.layout else 0} sprite(s)"
@@ -222,14 +222,27 @@ def _pivot_mark(draw_list: Any, view: Any, origin, frame: Any, colour: int) -> N
     draw_list.add_circle(at, arm * 0.6, colour, 12)
 
 
-def _events(state: Any, tab: Any, origin, hovered: bool) -> None:
+def _events(state: Any, tab: Any, origin, hovered: bool, region) -> None:
     from imgui_bundle import imgui
+
+    from .. import imgui_backend
 
     io = imgui.get_io()
     view = tab.view
-    if hovered and io.mouse_wheel:
+    if hovered and (io.mouse_wheel or io.mouse_wheel_h):
         mouse = imgui.get_mouse_pos()
-        inker_state.zoom_about(view, origin, (mouse.x, mouse.y), io.mouse_wheel)
+        # The rule every 2-D canvas shares (``inker_state.wheel``): the wheel
+        # zooms on the 5% lattice, Shift+wheel and a tilt wheel scroll
+        # sideways. Until 2026-09-05 this pane zoomed multiplicatively on the
+        # backend-halved count and never landed on a round percentage.
+        along = inker_state.wheel(
+            view, origin, (mouse.x, mouse.y),
+            io.mouse_wheel / imgui_backend.WHEEL_SCALE,
+            io.mouse_wheel_h / imgui_backend.WHEEL_SCALE,
+            shift=bool(io.key_shift),
+        )
+        if along:
+            view.pan = (view.pan[0] + inker_state.scroll_step(region[0]) * along, view.pan[1])
     if hovered and imgui.is_mouse_dragging(2):
         delta = imgui.get_mouse_drag_delta(2)
         imgui.reset_mouse_drag_delta(2)
