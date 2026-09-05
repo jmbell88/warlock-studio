@@ -28,27 +28,24 @@ SWATCH = 20.0
 # that set it claimed ``display_hex`` "puts the hex box on the inline row
 # too" -- it does not, and cannot: ``no_inputs`` is what decides whether there
 # is an inline row at all, and ``display_hex`` only chooses what the box says
-# once there is one. So for as long as both were set, the two colours this app
-# is mostly about were a bare square, the hex the comment promised was behind a
-# click, and the only way to type a value was a popup nothing advertised. The
-# rows are the wider control now and that is the point of them; the small
-# swatches elsewhere (``inker_tools._CHIP_FLAGS``, the sheet and Flourish
-# pickers) keep ``no_inputs``, because a chip the width of a glyph has no room
-# for a field and ``inker_picker`` is the surface that gives every channel a
-# number.
+# once there is one. So for as long as both were set, every colour in Inker was
+# a bare square, the hex that comment promised was behind a click, and the only
+# way to type one was a popup nothing advertised.
+#
+# **This is every colour control in the mode, not just this pane's.** The
+# toolbox chips, the sheet's replace pair and Flourish's colour params all read
+# it, which is what makes "a colour can be typed" one fact with one spelling
+# rather than four call sites that agree until one of them is edited. It is
+# ``display_hex`` and not the default RGBA quartet for exactly that reason: one
+# box fits where four fields do not, so the same set can serve a full-width row
+# and a chip beside a button. What a caller adds on top is presentation --
+# ``no_label`` for a chip that is captioned by a tooltip, ``alpha_preview_half``
+# for one that shows its own transparency.
 FLAGS = (
     imgui.ColorEditFlags_.alpha_bar.value
     | imgui.ColorEditFlags_.display_hex.value
     | imgui.ColorEditFlags_.picker_hue_bar.value
 )
-
-#: :data:`FLAGS` for a swatch that does *not* have its line to itself. The
-#: inline fields are the whole point of ``FLAGS``, and they are also most of
-#: its width -- so a colour drawn with a ``same_line`` button after it (the
-#: filter popup's "use FG") needs the square back, or the button is pushed off
-#: the row. One constant derived from the other rather than two lists, so the
-#: alpha bar and the hex display cannot come to differ between them.
-COMPACT_FLAGS = FLAGS | imgui.ColorEditFlags_.no_inputs.value
 
 
 def _to_rgba(value: Any) -> tuple[int, int, int, int]:

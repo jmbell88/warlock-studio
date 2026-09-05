@@ -21,6 +21,7 @@ from ..inker_state import (
 )
 from ..manual import render as manual_render
 from ..tokens import sp
+from . import inker_colors
 
 # Icon-only: what every paint program's toolbox looks like. The name and
 # shortcut live in the tooltip -- three columns of bare labels truncated
@@ -157,13 +158,20 @@ STAMP_ALIGN_LABELS = (
 #: ``tests/inker/test_inker_ux.py`` reconstructs it.
 TOOLS_FLOOR = 190.0 - 2 * BUTTON_H - GRID_GAP
 
-#: The colour chips' flags: no inputs, no label, alpha as a split square. The
-#: full editor is the colour panel's; these two are a *picture* of what the
-#: tool writes with, and a click opens the picker anyway. Zero would draw the
-#: picker's own R/G/B strips beside a 34 px swatch, which is what the rail's
-#: first screenshot showed.
+#: The colour chips' flags: the mode's shared colour set, plus the two pieces
+#: of presentation a chip wants. ``no_label`` because a chip is captioned by
+#: its tooltip and a visible name would double the row's width;
+#: ``alpha_preview_half`` because a chip is the one place transparency has to
+#: be readable at a glance.
+#:
+#: **``no_inputs`` was here and is not any more.** It made the two colours the
+#: tool writes with a pair of squares that could only be edited through a
+#: popup -- and it was set against the *default* RGBA quartet, which really
+#: would have drawn four fields beside a 34 px swatch. ``inker_colors.FLAGS``
+#: is ``display_hex``, so what lands beside the swatch is one box; the chips
+#: are sized for it below rather than kept at a glyph's width.
 _CHIP_FLAGS = (
-    imgui.ColorEditFlags_.no_inputs.value
+    inker_colors.FLAGS
     | imgui.ColorEditFlags_.no_label.value
     | imgui.ColorEditFlags_.alpha_preview_half.value
 )
@@ -212,13 +220,26 @@ def _colour_chips(ctx: Any, state: Any) -> None:
     *palette* -- swatches, ramps, the indexed table -- is a panel, which is why
     it is a pane of its own in the other column (``inker_colors``).
     """
-    # **Sized, and drawn as swatches rather than editors.** ``color_edit4``
-    # defaults to a full-width item and to showing its inputs, so the two chips
-    # drew as coloured slivers with the picker's own strips either side --
-    # which is what the screenshot pass at 1.5 caught in the 90 px rail. A chip
-    # is a picture of the colour; the editor is the click, and the sliders are
-    # the pane at the foot of the other column (``inker_picker``).
-    chip = sp(BUTTON_W)
+    # **Sized from the room there is, not from a constant.** ``color_edit4``
+    # defaults to a full-width item, so left alone the two chips overflow the
+    # pane between them -- the failure the screenshot pass at 1.5 caught in the
+    # 90 px rail. A flat ``BUTTON_W`` fixed that and over-corrected: it is a
+    # swatch's width, which was right while these were swatches and is far too
+    # narrow to read a hex in. So the two share the row instead, with the old
+    # width as the floor -- a pane squeezed past this still draws two legible
+    # chips, it just stops having room for the hex.
+    #
+    # **The item width is not the widget's width.** ``set_next_item_width``
+    # sizes a ``color_edit4``'s *input*, and the swatch is drawn after it at a
+    # frame height plus a gap -- so each chip costs ``chip + gap + square``,
+    # and sizing the two as if they were the whole row overflows it by two
+    # squares. Only those two are counted here: the swap button below takes no
+    # ``same_line`` and has always had a row of its own, so reserving for it
+    # would be width given up for nothing.
+    spacing = imgui.get_style().item_spacing.x
+    square = imgui.get_frame_height()
+    avail = imgui.get_content_region_avail().x
+    chip = max(sp(BUTTON_W), (avail - 2 * (spacing + square) - spacing) / 2)
     imgui.set_next_item_width(chip)
     changed, value = controls.color_edit4("##inkfg", _vec(state.fg), _CHIP_FLAGS)
     if changed:
@@ -727,10 +748,16 @@ def _gradient_stops(state: Any) -> None:
         if changed:
             state.gradient_stops[index] = (float(value), colour)
         imgui.same_line()
+        # The mode's shared set here too, so a stop's colour can be typed like
+        # every other colour in Inker. A *fixed* width, unlike the chips above:
+        # these rows are drawn inside ``inker_context``'s tool-panels popover,
+        # which ``begin_popup`` auto-sizes to its content, so there is no column
+        # for the row to overflow and the popup simply grows to fit the slider,
+        # the box, the swatch and the delete. Measuring the available region
+        # here would be measuring the popup against itself.
+        imgui.set_next_item_width(sp(112))
         edited, rgba = controls.color_edit4(
-            "##col",
-            [c / 255.0 for c in colour],
-            imgui.ColorEditFlags_.no_inputs.value | imgui.ColorEditFlags_.alpha_bar.value,
+            "##col", [c / 255.0 for c in colour], inker_colors.FLAGS
         )
         if edited:
             state.gradient_stops[index] = (

@@ -22,6 +22,7 @@ from .. import controls, inker_ops, inker_sheet, widgets
 from ..inker import sheetscope
 from ..manual import render as manual_render
 from ..tokens import sp
+from . import inker_colors
 
 #: Every op the strip presses, so a test can assert each is registered.
 STRIP_OPS: tuple[str, ...] = (
@@ -86,11 +87,17 @@ def draw_strip(ctx: Any, tab: Any) -> None:
     imgui.same_line()
     _press(ctx, "sheet_remark", "Re-mark")
 
-    imgui.set_next_item_width(sp(120))
+    # ``sp(120)`` while these were bare squares, where the width did nothing at
+    # all -- a no-inputs ``color_edit4`` is a swatch whatever it is told. Now
+    # that the hex box is there the number is load-bearing, and it is the
+    # narrowest that still shows ``#RRGGBBAA`` whole: this row also carries the
+    # scope combo, three verbs, the tolerance slider and Replace, and it is a
+    # ``same_line`` run, so what does not fit is not wrapped but clipped.
+    imgui.set_next_item_width(sp(104))
     changed, old = controls.color_edit4(
         "##sheet-old",
         [c / 255.0 for c in state.sheet_old],
-        imgui.ColorEditFlags_.no_inputs.value,
+        inker_colors.FLAGS,
         tooltip="The colour to replace.",
     )
     if changed:
@@ -98,11 +105,11 @@ def draw_strip(ctx: Any, tab: Any) -> None:
     imgui.same_line()
     widgets.muted("to")
     imgui.same_line()
-    imgui.set_next_item_width(sp(120))
+    imgui.set_next_item_width(sp(104))
     changed, new = controls.color_edit4(
         "##sheet-new",
         [c / 255.0 for c in state.sheet_new],
-        imgui.ColorEditFlags_.no_inputs.value,
+        inker_colors.FLAGS,
         tooltip="What it becomes.",
     )
     if changed:

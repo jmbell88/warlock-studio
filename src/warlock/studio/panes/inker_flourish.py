@@ -33,6 +33,7 @@ from ..inker.flourish import engines, presets, prims
 from ..inker.flourish import recipe as flourish_recipe
 from ..manual import render as manual_render
 from ..tokens import sp
+from . import inker_colors
 
 MODE_OPTIONS = (("painterly", "Painterly"), ("pixel", "Pixel art"))
 ENGINE_OPTIONS = tuple((e, e) for e in engines.ENGINES)
@@ -461,7 +462,7 @@ def _param_control(name: str, spec: Any, value: Any) -> tuple[Any, bool]:
     if spec.kind == "color":
         rgba = prims.parse_color(str(value))
         changed, got = controls.color_edit4(
-            label, [float(c) for c in rgba], imgui.ColorEditFlags_.no_inputs.value, tooltip=tip
+            label, [float(c) for c in rgba], inker_colors.FLAGS, tooltip=tip
         )
         if changed:
             return "#" + "".join(f"{int(round(c * 255)):02X}" for c in got), True

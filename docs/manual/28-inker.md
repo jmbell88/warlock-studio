@@ -185,7 +185,9 @@ not a property of the picture.
 ## Tools
 
 The toolbox is an icon grid; hovering a tool shows its name and its letter. Every tool is listed in
-[Keyboard shortcuts](38-shortcuts.md).
+[Keyboard shortcuts](38-shortcuts.md). Under the grid are the foreground and background colours,
+each with its hex value in a box you can type into and a swatch that opens the full picker; the
+shuffle button beneath them swaps the two, as `X` does.
 
 The primary letters are Aseprite's: `L` is line and `U` rectangle, while shifted letters select the
 paired tools (`Shift+B/G/L/U/D/M/C`). Earlier Inker letters remain as compatibility aliases and can
@@ -536,6 +538,11 @@ semi-transparent brush is a colour rather than a separate mode.
 
 Both swatches show their hex value inline and open a full picker — hue bar, HSV, hex, alpha — when
 clicked, so a colour somebody sent you as `#3b4252` can be typed straight in.
+
+**Every colour in Inker works that way**, not only these two: the pair under the toolbox, the
+**From** and **To** of a colour replacement, and a gradient's stops all carry the same hex box, and
+all of them open the same picker. There is one exception by design — the small squares in the
+palette row below are swatches you click to *choose*, not fields you edit.
 
 Below them is a row of **swatches**. Clicking one makes it the foreground; the row is saved with
 your settings rather than reset each session, because a project has a palette and retyping it every

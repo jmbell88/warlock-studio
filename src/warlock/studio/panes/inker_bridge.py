@@ -868,7 +868,7 @@ def _filter_control(
         # rounding between imgui's floats and the 8-bit tuple the engine writes
         # with is a rule, and two copies of a rule are one disagreement waiting.
         changed, value = controls.color_edit4(
-            f"{label}##{key}", inker_colors._vec(tuple(values[key])), inker_colors.COMPACT_FLAGS
+            f"{label}##{key}", inker_colors._vec(tuple(values[key])), inker_colors.FLAGS
         )
         if changed:
             values[key] = inker_colors._to_rgba(value)
