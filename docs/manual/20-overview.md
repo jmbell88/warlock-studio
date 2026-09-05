@@ -152,6 +152,37 @@ Once you are in the workspace, the window is three columns:
 
 Above the columns is the menu bar and below them is the status bar, and both are described next.
 
+## What is the same in every workspace
+
+Eight workspaces are eight editors, and they are deliberately one program eight times. Whichever
+one is open:
+
+- **The file panel** in the right column carries the same four verbs — **New**, **Open**, **Save**,
+  **Save As** — over one sentence saying where the document stands, then **Undo** and **Redo** with
+  the step count, which is a button onto the history when the mode has one. Under **Take it
+  somewhere** are the ways out of the mode: the library, and whichever workspaces read what this one
+  makes. Each panel has exactly one accented button, and it is the mode's own commit — export to the
+  library, send to Troupe, export the audio.
+- **The same gestures.** The wheel zooms, in 5% steps, in every canvas; `Shift` and the wheel scrolls
+  sideways; the middle button pans. In a 3D view, `Alt`+drag orbits and the middle button pans.
+  `Ctrl+1`, `Ctrl+3` and `Ctrl+7` look along an axis and `Ctrl+5` toggles perspective, in Clay and
+  in Poser alike.
+- **The same chords.** `Ctrl+S` and `Ctrl+Shift+S` save; `Ctrl+Z`, `Ctrl+Y` and `Ctrl+Shift+Z` walk
+  the history; `Ctrl+Tab` and `Ctrl+Shift+Tab` cycle the tabs; `Ctrl+W` closes one; `Ctrl+Shift+E`
+  is the file export and `Ctrl+E` the library export wherever each exists. A chord is printed in a
+  control's tooltip and in the menu's right-hand column, never in a button's label.
+- **The same words.** **Delete** destroys a thing and wears the trash glyph; **Remove** takes it out
+  of this document and leaves it on disk; **Clear** empties a field. **Play** and **Stop** are the
+  transport everywhere, over the play and stop glyphs, with `Space` in the tooltip where a mode
+  binds it. A label ending in an ellipsis opens a dialog; one without does not.
+- **The same refusals.** A gesture the document cannot take right now says so once, as a toast with
+  its remedy where one exists, and a tab whose save is still writing says so when you try to close
+  it rather than closing anyway. A crash copy that will not reopen warns, with the log behind it, in
+  the same sentence in every mode.
+- **The same file rules.** A file dropped on a mode that opens no files is refused with a sentence
+  naming what that mode works on, rather than switched away from. Opening a file already open
+  focuses its tab rather than opening it twice, whatever the spelling of its path.
+
 ## The menu bar
 
 One menu bar across the top of the window, drawn in every mode. Its roots are **File**, **Edit**,
@@ -175,8 +206,9 @@ the rail and the palette — to change what the window is showing.
 ## The status bar
 
 One line along the foot of the window, also in every mode. Left to right: the workspace you are in,
-then the open document and whether it has unsaved changes — plus the current tool and zoom in Inker
-— then the queue when anything is running or waiting, then an amber **N issue(s)** when a startup
+then the open document and whether it has unsaved changes — plus the current tool and zoom in any
+workspace that has them (Inker, Plotter and Packwright zoom; Inker and Plotter have tools) — then
+the queue when anything is running or waiting, then an amber **N issue(s)** when a startup
 check has failed. Clicking that last one opens the Issues list; it is **Issues** in the command
 palette too, which is how you reach it when nothing is failing and there is no count to click.
 There is no green "all well" state, because a healthy install has nothing to report.
