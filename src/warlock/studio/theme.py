@@ -237,6 +237,13 @@ def apply(imgui: Any) -> None:
     # than a second opaque colour, so a table reads as banded rather than as
     # two stacked surfaces, and so it stays correct on any palette where the
     # step direction is defined. Two readers: the Settings models table and
-    # ``manual.render``, which had the same latent problem.
+    # ``manual.render``, which had the same latent problem. The alpha is
+    # ``tokens.ROW_STRIPE_ALPHA`` rather than a literal because there is a
+    # third reader outside this file -- Inker's timeline paints its own row
+    # bands with its own draw list, and a zebra with two spellings is a zebra
+    # that drifts.
     set_color(c.table_row_bg.value, (0.0, 0.0, 0.0, 0.0))
-    set_color(c.table_row_bg_alt.value, rgba(tokens.colour("ELEV_1"), 0.4))
+    set_color(
+        c.table_row_bg_alt.value,
+        rgba(tokens.colour("ELEV_1"), tokens.ROW_STRIPE_ALPHA),
+    )

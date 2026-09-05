@@ -2881,6 +2881,18 @@ def list_row(
     as two different selection states and the wash stops being a signal. Tiled
     gets away with stripes because its selection is a solid system highlight.
     It is a parameter rather than an absence so the decision is one flag away.
+
+    **Inker's layer list is banded, and that is this rule passing rather than
+    bending.** The test the rule states is "is there a wash for a stripe to be
+    confused with", and in the timeline there is not: a selected layer is a 2 px
+    accent *outline* across the whole strip (``inker_timeline._track_overlay``)
+    and the active one has its name drawn in ``theme.ACCENT``, so the selection
+    is geometry and hue where the band is a few levels of grey. It does not go
+    through this function at all -- its rows are bare items with a cel grid
+    running off them, so they paint their own band in
+    ``inker_timeline._row_stripe`` -- and the strength is shared through
+    ``tokens.ROW_STRIPE_ALPHA``, with imgui's own ``table_row_bg_alt``, so the
+    app cannot come to have two zebras of different weights.
     """
     row_h = height or imgui.get_frame_height()
     origin = imgui.get_cursor_screen_pos()

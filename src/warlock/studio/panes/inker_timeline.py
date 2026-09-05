@@ -59,7 +59,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import anchors, controls, icons, inker_mode, theme, toolbar, widgets
+from .. import anchors, controls, icons, inker_mode, theme, tokens, toolbar, widgets
 from ..inker import animation, sheetout
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -165,6 +165,54 @@ def note_u32(colour: Sequence[int]) -> int:
     red, green, blue, alpha = colour
     return imgui.color_convert_float4_to_u32(
         (red / 255.0, green / 255.0, blue / 255.0, alpha / 255.0)
+    )
+
+
+def _row_stripe(origin: Any, cell: float, geom: dict[str, Any] | None) -> None:
+    """The zebra band for one layer row, painted before the row is submitted.
+
+    ``widgets.list_row`` states the mechanism this relies on: an item submits
+    its own draw commands, so a rect added to the window's draw list *before*
+    the row's first item lands underneath every one of them, with no channel
+    split. That matters here -- ``widgets._BlockScope`` owns the app's only
+    split and a second one on the same list corrupts both -- and it also means
+    the band is not an item: it takes no id, never becomes ``LastItemData``,
+    and so cannot steal the click ``_track_row`` reads off the layer's name,
+    the drag ``_reorder`` begins, or ``_row_menu``'s context popup. This is
+    the whole reason ``list_row`` needs ``set_next_item_allow_overlap`` and
+    this does not: its surface is a real ``invisible_button`` and this is
+    geometry.
+
+    The right edge is ``_track_overlay``'s ``x1`` spelled the same way, so the
+    accent outline of a selected row sits flush on the band rather than inset.
+    The left edge is the row's own cursor, which is *left of* ``x0`` in the
+    label column -- so on a selected row the band shows outside the outline.
+    That is intended (the band is the row, the outline is the selection) and
+    it is one more reason the alpha is kept low.
+
+    Square corners, not ``RADIUS_S``: consecutive bands butt together and the
+    outline over them is square, so rounding would break the column into
+    beads.
+    """
+    if geom is None:
+        return
+    frames = geom["frames"]
+    if frames < 1:
+        # ``_range_overlay``/``_track_overlay``'s guard, for their reason.
+        return
+    pitch = geom["cell"] + geom["gutter"]
+    # The item spacing is part of the row: without it the bands float as bars
+    # with gaps between them and read as stripes *on* rows rather than as
+    # banded rows.
+    height = max(imgui.get_frame_height(), cell) + imgui.get_style().item_spacing.y
+    imgui.get_window_draw_list().add_rect_filled(
+        (origin.x, origin.y),
+        (geom["x0"] + pitch * (frames - 1) + geom["cell"], origin.y + height),
+        # ``_u32`` and not ``get_color_u32``, for that function's documented
+        # reason: row rhythm is structure rather than state, and it must not
+        # fade out with the row while a save has the panel disabled.
+        _u32(theme.ELEV_1, tokens.ROW_STRIPE_ALPHA),
+        0.0,
     )
 
 
@@ -319,6 +367,45 @@ def row_plan(
         if not any(guid in collapsed for guid in chain):
             plan.append(RowEntry("track", len(chain), index=index))
     return plan
+
+
+def striped_rows(plan: Sequence[RowEntry]) -> frozenset[int]:
+    """Which positions in a row plan take the alternating tint.
+
+    Pure, for :func:`row_plan`'s own reason: banding that goes wrong is a
+    mistake about a *list*, and a list is the only thing a headless test can
+    assert it against. Kept separate from ``row_plan`` rather than folded in as
+    a field on ``RowEntry`` because the plan answers *which rows there are* and
+    this answers *which of them are tinted* -- the first is the document, the
+    second is presentation, and splitting them is what lets a test call this on
+    a hand-built plan with no ``Document`` at all.
+
+    **A header neither takes the tint nor advances the count.** ``_group_row``
+    draws no cels, so its band would be a different width and the rhythm would
+    visibly stutter; and it already carries a chevron, a folder glyph and its
+    own eye, so a wash under it reads as "this header is selected". The
+    load-bearing half is the counting: a header that consumed a parity slot
+    puts two tinted layers either side of one untinted header, which is
+    precisely the doubled band the alternation exists to prevent.
+
+    The rank is a position in the *drawn* plan and never ``entry.index``. A
+    name filter or a collapsed group makes the drawn rows a sparse subset of
+    the stack -- ``[0, 3, 7]`` -- and striping on the stack index bands those
+    three rows in a pattern with no relation to what is on screen.
+
+    Odd ranks are the tinted ones, so the topmost row stays clean: it abuts
+    ``_frame_headers`` and a band there merges into the header row.
+    """
+
+    striped: set[int] = set()
+    rank = 0
+    for position, entry in enumerate(plan):
+        if entry.kind != "track":
+            continue
+        if rank % 2:
+            striped.add(position)
+        rank += 1
+    return frozenset(striped)
 
 
 def toggle_fold(tab: Any, group_uid: int) -> None:
@@ -1019,7 +1106,7 @@ def _grid(ctx: Any, tab: Any) -> None:
     # The layers panel's filter, moved rather than dropped: it is one of six
     # call sites in the app and the list it filtered is this one now.
     needle = widgets.list_filter(ctx, "inker-layers", len(doc.stack))
-    _frame_headers(ctx, tab, cell, gutter)
+    header_x0 = _frame_headers(ctx, tab, cell, gutter)
     # Where every cell ended up, filled in as the rows draw. The marquee is
     # measured against this rather than against hover, and the numbers have to
     # be *screen* coordinates so the scrolling child maps for free.
@@ -1031,7 +1118,8 @@ def _grid(ctx: Any, tab: Any) -> None:
     # is drawing.
     columns = frame_uids(doc)
     geom: dict[str, Any] = {
-        "x0": 0.0,
+        # The header's measurement, not a placeholder: see ``_frame_headers``.
+        "x0": header_x0,
         "tops": {},
         "cell": cell,
         "gutter": gutter,
@@ -1051,11 +1139,18 @@ def _grid(ctx: Any, tab: Any) -> None:
         for index in range(len(doc.stack))
         if not needle or needle in (doc.stack[index].name or "").lower()
     ]
-    for entry in row_plan(doc, matched, tab.collapsed_groups):
+    # Computed once over the whole plan rather than counted inside the loop,
+    # which is what keeps the parity rule (and its header case) assertable
+    # against a list -- see ``striped_rows``.
+    plan = row_plan(doc, matched, tab.collapsed_groups)
+    stripes = striped_rows(plan)
+    for position, entry in enumerate(plan):
         if entry.kind == "group":
             _group_row(ctx, tab, doc, entry)
             continue
-        _track_row(ctx, tab, entry.index, cell, gutter, geom)
+        _track_row(
+            ctx, tab, entry.index, cell, gutter, geom, stripe=position in stripes
+        )
     # The *filter's* count, not the drawn one: a collapsed folder hides rows
     # that matched perfectly well, and "no layers match" would be a lie about
     # the filter rather than a statement about the fold.
@@ -1169,22 +1264,43 @@ def _track_overlay(tab: Any, geom: dict[str, Any]) -> None:
         )
 
 
-def _frame_headers(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
+def _frame_headers(ctx: Any, tab: Any, cell: float, gutter: float) -> float:
     """The frame numbers, and the three toggle-alls in front of them.
 
     The eye, the padlock and the continuous flag in the header cell set *every*
     row at once, which is Aseprite's header and the answer to the same round
     trips ``_drag_toggle`` addresses from the other direction.
+
+    **Returns the x every row's first cell will land at**, which is this
+    function's second job and the reason it has a return value at all.
+    ``geom["x0"]`` used to be seeded ``0.0`` and filled in by ``_cell``, so it
+    was the window origin for the whole of the first track row of *every*
+    draw -- not merely the first frame -- and ``_range_overlay`` and
+    ``_track_overlay`` both read it. An overlay resolving before a cell had
+    recorded the real value drew its accent box hard against the left edge of
+    the window. The header lays its own cells out with the same
+    ``same_line(sp(TRACK_LABEL_W))`` the rows use, so it already knows the
+    answer a row is about to arrive at; measuring it here is what makes the
+    number available *before* the first row draws. ``_cell`` goes on
+    overwriting it with the measured cell rect -- the same value, and
+    measurement stays the authority.
     """
     doc = tab.doc
     anim = doc.anim
     _toggle_all(ctx, tab)
     imgui.same_line(sp(TRACK_LABEL_W))
+    # Read after the ``same_line`` and before anything is submitted: this is
+    # the cursor the first cell of every row starts from. Deliberately not
+    # ``origin.x + sp(TRACK_LABEL_W)`` -- ``same_line`` offsets from the
+    # window position less the scroll, where the cursor at row entry carries
+    # ``WindowPadding.x`` on top of it, so the arithmetic version overshoots
+    # by one padding and every overlay drawn against it sits inset.
+    x0 = imgui.get_cursor_screen_pos().x
     if anim is None:
         # One column, no number: the header of a still document says which
         # frame you are on, and there is only one.
         imgui.dummy((cell, cell))
-        return
+        return x0
     playing = tab.play_index if tab.playing else anim.current
     for index, frame in enumerate(anim.frames):
         if index:
@@ -1203,6 +1319,7 @@ def _frame_headers(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
             imgui.pop_style_color()
         _frame_menu(tab, index)
         imgui.pop_id()
+    return x0
 
 
 def _toggle_all(ctx: Any, tab: Any) -> None:
@@ -1370,6 +1487,8 @@ def _track_row(
     cell: float,
     gutter: float,
     geom: dict[str, Any] | None = None,
+    *,
+    stripe: bool = False,
 ) -> None:
     """One layer: its eye, its name, its lock, and its cels across.
 
@@ -1382,6 +1501,11 @@ def _track_row(
     doc = tab.doc
     layer = doc.stack[track_index]
     active_track = track_index == doc.stack.active_index
+
+    # Before the ``push_id`` and well before the ``indent`` below, which moves
+    # the cursor: the band is measured from where the row *starts*.
+    if stripe:
+        _row_stripe(imgui.get_cursor_screen_pos(), cell, geom)
 
     imgui.push_id(f"tr{layer.uid}")
     # Indent only (L3 v1): no header row and no fold, so a grouped track's row

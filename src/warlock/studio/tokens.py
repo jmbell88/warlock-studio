@@ -138,6 +138,15 @@ SELECTION_WASH_ALPHA = 0.14
 HOVER_WASH_ALPHA = 0.10
 PRESSED_WASH_ALPHA = 0.24
 ERROR_WASH_ALPHA = 0.12
+# The zebra, and one number for both of its readers: the tables'
+# ``table_row_bg_alt`` and Inker's own timeline row banding. The colour it is
+# applied to is ELEV_1 rather than a second opaque grey, so the tint is a step
+# *along* the palette's elevation ramp and stays correct wherever that ramp
+# points -- which is why light and pixel do not each need their own number.
+# It is the larger figure and the *weaker* signal: SELECTION_WASH_ALPHA is
+# ACCENT, a hue nothing else in a list uses, while this is a 3-5 level
+# achromatic shift away from PANEL.
+ROW_STRIPE_ALPHA = 0.4
 # There is deliberately still no SP_8. UX.md Phase 0's list named it and Phase
 # 0's own note deferred it to "whatever gap turns out to want 32"; the section
 # rhythm this phase settled on is SP_6 above a heading and SP_4 inside a form,
