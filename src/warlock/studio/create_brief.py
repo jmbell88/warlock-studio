@@ -186,6 +186,7 @@ def _count(ctx: Any, form: dict[str, Any]) -> None:
             tuple((str(n), str(n)) for n in _COUNTS),
             str(form["count"]),
             compact=True,
+            tooltips=_COUNT_HINTS,
         )
         if changed:
             form["count"] = int(picked)
@@ -194,10 +195,18 @@ def _count(ctx: Any, form: dict[str, Any]) -> None:
         # control to the keyboard even though it is four items to imgui.
         if focused:
             here = _COUNTS.index(form["count"]) if form["count"] in _COUNTS else 0
+            before_arrow = form["count"]
             if imgui.is_key_pressed(imgui.Key.left_arrow):
                 form["count"] = _COUNTS[(here - 1) % len(_COUNTS)]
             if imgui.is_key_pressed(imgui.Key.right_arrow):
                 form["count"] = _COUNTS[(here + 1) % len(_COUNTS)]
+            # The click branch above clears the ring on a change; this
+            # hand-rolled branch edits ``form["count"]`` the same way and must
+            # clear the same error, or a user who fixes an invalid count with
+            # the keyboard instead of a click keeps a ring pointing at a value
+            # that is no longer wrong. The 2026-09-05 audit, finding create-07.
+            if form["count"] != before_arrow:
+                ctx.state.clear_field_error("count")
     imgui.pop_item_width()
     _ring(ctx, "count")
     imgui.end_group()
@@ -261,6 +270,18 @@ def _enter_pressed() -> bool:
 
 #: The count control's four values. 8 is ``validation.MAX_REFERENCE_COUNT``.
 _COUNTS: tuple[int, ...] = (1, 2, 4, 8)
+
+#: Per-pill hover text for the count control, the same shape as
+#: ``_TYPE_HINTS`` beside it. Four bare pills ("1 2 4 8") carried no label and
+#: no tooltip -- unlike the Type combo, which names each value on hover -- so
+#: a first-time user had nothing on screen or on hover saying they choose how
+#: many candidates one press draws. The 2026-09-05 audit, finding create-11.
+_COUNT_HINTS: dict[str, str] = {
+    "1": "Draw one candidate.",
+    "2": "Draw two candidates to compare.",
+    "4": "Draw four candidates to compare.",
+    "8": "Draw eight, the most one press can generate.",
+}
 
 #: One line per type, on the combo's tooltip. The five-row descriptive block
 #: that used to sit under the selector is gone with the column it sat in; this

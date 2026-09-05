@@ -70,16 +70,27 @@ class _Probe:
 
     A real ``Path`` would need ``pathlib`` monkeypatched to be counted, and that
     counts every other ``exists`` in the process with it.
+
+    ``is_file`` defaults to mirroring ``answer`` so the tests written before
+    the 2026-09-05 audit's finding create-06 (which only ever called
+    ``exists()``) keep passing unchanged; a directory-shaped probe passes the
+    two separately, the way a real directory left where the binary should be
+    does.
     """
 
-    def __init__(self, name: str, answer: bool) -> None:
+    def __init__(self, name: str, answer: bool, *, is_file: bool | None = None) -> None:
         self.name = name
         self.answer = answer
+        self._is_file = answer if is_file is None else is_file
         self.calls = 0
 
     def exists(self) -> bool:
         self.calls += 1
         return self.answer
+
+    def is_file(self) -> bool:
+        self.calls += 1
+        return self._is_file
 
     def __str__(self) -> str:
         return self.name
@@ -131,4 +142,20 @@ def test_a_config_that_raises_is_no_binary_rather_than_a_frame_that_dies(monkeyp
             raise RuntimeError("no config")
 
     ctx = SimpleNamespace(svc=SimpleNamespace(config=_Exploding()))
+    assert retarget_panel._gltfpack_available(ctx) is False
+
+
+def test_gltfpack_available_is_false_when_the_path_is_a_directory(monkeypatch):
+    """The 2026-09-05 audit, finding create-06: ``doctor._gltfpack_check`` was
+    fixed (citing L01) to use ``is_file()`` because a directory left where the
+    binary should be reads as present under ``exists()`` -- a broken
+    extraction, or a stray folder. This panel used ``exists()`` too, so the
+    doctor row could say "exists but is not a file" while this panel still
+    offered every named tier, and "Rebuild mesh" failed at the gltfpack
+    subprocess instead of being refused up front.
+    """
+    monkeypatch.setattr(retarget_panel, "_gltfpack_seen", {})
+    probe = _Probe("vendor/gltfpack/gltfpack.exe", True, is_file=False)
+    ctx = _ctx(probe)
+
     assert retarget_panel._gltfpack_available(ctx) is False

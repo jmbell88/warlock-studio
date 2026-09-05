@@ -253,3 +253,47 @@ def test_the_error_map_is_a_snapshot():
     form = forms.Form("probe", errors=live)
     live.clear()
     assert form._error("seed") == "too big"
+
+
+# --- the Rig stage's bare combo, outside forms.Form ----------------------------
+#
+# ``stage_rig.py`` and the identical combo in ``settings_3d.py`` draw
+# ``widgets.field_error(ctx.state, "rig_template")`` with a bare
+# ``widgets.labeled_combo`` -- no ``forms.Form``, so neither is reachable from
+# ``FIELD_FORMS`` above. That made the gap invisible to this file's own sweep:
+# ``create_rig`` and ``service/poses.py`` both refuse with
+# ``field="rig_template"``, and once they did, the ring stayed lit on the Rig
+# stage forever -- arguing about a value the user had long since changed --
+# until some unrelated pane's submit happened to call the global
+# ``clear_field_errors()``.
+
+
+def test_changing_the_rig_stage_skeleton_clears_its_field_error_ring():
+    """The 2026-09-05 audit, finding create-05.
+
+    ``remesh_panel``/``retarget_panel`` clear a field's ring the moment its
+    control is edited (via ``forms.Form(on_edit=...)``) and again before a
+    fresh submit is judged on its own. ``stage_rig._skeleton_picker`` bypasses
+    ``forms.Form`` entirely and did neither -- and ``settings_3d._rig`` draws
+    the same combo the same way.
+    """
+    import inspect
+
+    from warlock.studio.panes import settings_3d, stage_rig
+
+    picker_src = inspect.getsource(stage_rig._skeleton_picker)
+    assert 'clear_field_error("rig_template")' in picker_src, (
+        "stage_rig._skeleton_picker never clears rig_template's ring when the "
+        "skeleton combo is changed"
+    )
+
+    draw_src = inspect.getsource(stage_rig.draw)
+    assert "clear_field_errors()" in draw_src, (
+        "stage_rig.draw submits a fresh rig without clearing last time's rings first"
+    )
+
+    rig_src = inspect.getsource(settings_3d._rig)
+    assert 'clear_field_error("rig_template")' in rig_src, (
+        "settings_3d._rig has the identical gap: its rig_template combo never "
+        "clears the ring either"
+    )

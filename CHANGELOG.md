@@ -84,6 +84,42 @@ them is a bet, not a measurement: the fixes above should turn "never finishes"
 into "finishes across a few attempts", and nothing has re-run on that PC to
 show it.
 
+An audit of Create — the one staged mode, and the widest slice in the tree —
+ran the same day and closed eleven findings. Two of them a user would have hit.
+
+- **A finished remesh or re-texture left the old mesh on screen.** Both rewrite
+  the selected job's `model.glb` under the same name, and `_sync_viewer`
+  short-circuits when the path it wants is the path already loaded — which is
+  right for a selection change and wrong after the file underneath it has been
+  replaced. `_reload_viewer` exists for exactly that and had one caller, the
+  retarget branch. The reason the obvious fix is not the right one is worth
+  keeping: a retarget finishes under its own task key, but a remesh is a
+  *queued* job, and the `remesh:`/`retexture:` keys fire when the panel enqueues
+  the row, not when the worker finishes minutes later — so hanging the reload
+  off those keys would have reloaded nothing. It hangs off the job reaching
+  done instead. You pressed Remesh and rebake, it said done, and the viewport
+  showed you the mesh from before.
+- **A malformed GLB leaked GPU memory every time it failed to open.** The glTF
+  loader bounds-checks a node's children and its material and did not check its
+  `mesh` or `skin`, so a file naming skin 7 of 2 raised `IndexError` out of the
+  GPU-model constructor *after* buffers existed for the earlier, valid nodes in
+  the same file. The constructor never returns, nothing holds those buffers,
+  and this app sets no moderngl `gc_mode`, so nothing frees them either: the
+  leak lasted until you quit. The check now happens in the loader, on the task
+  thread, before a single GPU object is allocated.
+- **Smaller ones, all in Create.** The matte preview could sit on "Cutting the
+  subject out..." forever when the reference file had gone missing, because
+  "never tried" and "tried and failed" were both spelled `None`. img2img on a
+  non-SDXL base was refused only at the queue door, so the request round-tripped
+  and failed there instead of the checkbox saying so. The Rig stage's skeleton
+  combo and the command bar's candidate count both drew an error ring they
+  never cleared — the bar's cleared on a click and not on the arrow keys. The
+  retarget panel called gltfpack present when a *directory* sat where the
+  binary belongs, disagreeing with the doctor page, which had been fixed for
+  that months earlier. Make 3D's greyed button offered a keyboard shortcut that
+  did nothing, and the library-pose Apply button greyed with no reason at all.
+  The candidate count is four unlabelled numbers no longer.
+
 ## 0.0.35 — 2026-09-05
 
 Every download this application makes now says who it is, which sounds like

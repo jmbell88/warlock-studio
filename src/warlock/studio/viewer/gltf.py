@@ -757,11 +757,39 @@ class _Reader:
         return Skin(joints=joints, inverse_bind=ibm)
 
     def node(self, node: dict) -> Node:
+        # Bounds-checked against the file's own declared counts, not decoded
+        # length -- both are read from ``self.gltf`` before any node is built,
+        # so this holds regardless of load()'s decode order. The 2026-09-05
+        # audit, finding create-01: an out-of-range mesh/skin index used to
+        # reach ``GpuModel.__init__`` (scene.py) as a bare ``IndexError`` --
+        # *after* real ``ctx.buffer``/``ctx.texture`` objects had already been
+        # allocated for earlier, valid nodes in the same document, which
+        # leaked them forever (this app sets no moderngl ``gc_mode``: a
+        # dropped reference frees nothing). Refusing here, on the task thread
+        # inside ``load()``, means no GPU resource is ever created for a file
+        # that will not finish loading -- the same ceiling ``prim["material"]``
+        # already gets a few lines below.
+        mesh = node.get("mesh")
+        if mesh is not None:
+            n_meshes = len(self.gltf.get("meshes", []))
+            if not 0 <= mesh < n_meshes:
+                raise ValueError(
+                    f"node {node.get('name', '') or '<unnamed>'!r} references mesh "
+                    f"{mesh}, but this GLB declares {n_meshes} mesh(es)"
+                )
+        skin = node.get("skin")
+        if skin is not None:
+            n_skins = len(self.gltf.get("skins", []))
+            if not 0 <= skin < n_skins:
+                raise ValueError(
+                    f"node {node.get('name', '') or '<unnamed>'!r} references skin "
+                    f"{skin}, but this GLB declares {n_skins} skin(s)"
+                )
         out = Node(
             name=node.get("name", ""),
             children=list(node.get("children", [])),
-            mesh=node.get("mesh"),
-            skin=node.get("skin"),
+            mesh=mesh,
+            skin=skin,
         )
         if "matrix" in node:
             # A node gives either a matrix or TRS, never both.

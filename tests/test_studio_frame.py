@@ -66,6 +66,14 @@ def _fake_app(svc, cache, *, accept_submits: bool = True):
         def _check_worker(self) -> None:
             pass
 
+        def _reload_viewer_after_rework(self, job: dict[str, Any]) -> None:
+            # 2026-09-05 audit, finding create-02: ``announce`` now calls this
+            # unconditionally on every done-transition, alongside
+            # ``_request_storage``. Nothing here is about the viewer -- the
+            # wiring itself is pinned in ``test_studio_plumbing.py`` -- so a
+            # no-op stand-in is right, the same call ``_sync_viewer`` gets.
+            pass
+
     return FakeApp()
 
 

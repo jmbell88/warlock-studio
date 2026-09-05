@@ -77,6 +77,10 @@ def draw(ctx: Any) -> None:
     if widgets.disabled_button(
         label, not ctx.busy(key), reason="This mesh is already being rigged."
     ):
+        # The 2026-09-05 audit, finding create-05: a new submit is judged on
+        # its own -- remesh_panel/retarget_panel's rule, and the half this
+        # pane's bare widgets.field_error() could not supply by itself.
+        ctx.state.clear_field_errors()
         ctx.submit(key, svc_rig.create_rig, ctx.svc, job["id"], template=skeleton(ctx))
 
 
@@ -88,6 +92,7 @@ def _skeleton_picker(ctx: Any) -> None:
     if not options:
         return
     form = ctx.state.form_3d
+    before = form.get("rig_template")
     form["rig_template"] = widgets.labeled_combo(
         "Skeleton",
         form.get("rig_template") or ctx.rig_default,
@@ -97,6 +102,12 @@ def _skeleton_picker(ctx: Any) -> None:
             "proportion unless the mesh's own landmarks are found."
         ),
     )
+    # The 2026-09-05 audit, finding create-05: this combo bypasses forms.Form
+    # entirely (bare labeled_combo + field_error), so it never had the
+    # on_edit wiring remesh_panel/retarget_panel get from Form(on_edit=...) --
+    # a rig_template refusal's ring outlived the very edit meant to answer it.
+    if form["rig_template"] != before:
+        ctx.state.clear_field_error("rig_template")
     # ``settings_3d``'s reason: ``service/rig.py`` and ``service/poses.py``
     # both refuse on ``rig_template``, and a generic toast that leaves the
     # dropdown at fault unmarked is the one failure the form cannot point at.

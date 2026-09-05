@@ -1350,6 +1350,15 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
             form["ip_scale"] = value
 
     widgets.field_label("start image")
+    # The 2026-09-05 audit, finding create-04: this checkbox used to be drawn
+    # unconditionally, so a non-SDXL base under Advanced showed it live, took
+    # the tick, and only refused at the queue door (guidance.normalize). It is
+    # disabled with a reason rather than hidden, matching ``_negative``'s
+    # pattern for the same shape of problem: a value restored from a prior
+    # SDXL run must stay visible, not vanish silently, until the user acts.
+    inert = img2img_note(ctx, form)
+    if inert is not None:
+        imgui.begin_disabled()
     changed, on = controls.checkbox(
         "Start from this image (img2img)", bool(form.get("init_image"))
     )
@@ -1368,6 +1377,9 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
         )
         if changed:
             form["init_strength"] = value
+    if inert is not None:
+        imgui.end_disabled()
+        widgets.muted_wrapped(inert)
 
     widgets.field_label("structure")
     note = recipe_structure_note(ctx, form) or structure_note(ctx, form)
@@ -1542,6 +1554,32 @@ def structure_note(ctx: Any, form: dict[str, Any]) -> str | None:
     )
 
 
+def img2img_note(ctx: Any, form: dict[str, Any]) -> str | None:
+    """Why "Start from this image" is inert here, or None when it is live.
+
+    The 2026-09-05 audit, finding create-04: only the SDXL family's img2img
+    path accepts a start image -- the same fact ``guidance.normalize``
+    refuses on, late, at the queue door. Read through the resolved recipe
+    rather than ``form["base_model"]`` directly, the reason
+    ``recipe_structure_note`` exists beside ``structure_note``: under
+    automatic routing a tier can resolve to FLUX.2 Klein (``image_flux2``)
+    with the checkbox still ticked from an earlier SDXL run, and
+    ``form["base_model"]`` is not what actually ran. One function rather than
+    that pair's split, because the message here does not change with the
+    routing mode -- there is no ControlNet-style "under automatic, name the
+    tier instead" branch, only "pick an SDXL model" either way.
+    """
+    resolved = _resolved_recipe(ctx, form)
+    if resolved is None:
+        # The pane already says "no compatible installed recipe" elsewhere;
+        # naming that here too would be the wrong subject.
+        return None
+    request = generation.request_from_legacy(form)
+    if generation.capability_controls(request, resolved)["img2img"]:
+        return None
+    return "This model cannot start from an image; pick an SDXL model to use img2img."
+
+
 #: Where the sentences explaining a base-model change's clears are kept between
 #: frames. ``state.preview`` is this app's frame-scratch namespace and is not
 #: persisted, which is right: the notice belongs to the change the user just
@@ -1595,6 +1633,25 @@ def clear_unusable(ctx: Any, form: dict[str, Any]) -> list[str]:
         form["control"] = ""
         cleared.append(
             "The structure control was cleared: this model cannot run a ControlNet."
+        )
+    # The 2026-09-05 audit, finding create-04: the third gate ``validate``
+    # refuses, added beside the two above. Checked directly against the
+    # spec's family rather than a models.py bases list -- see
+    # ``generation._takes_img2img`` for why ``tile_bases()`` is the wrong
+    # reuse here even though it answers the same question today. Left
+    # disabled instead of cleared before this fix, "Start from this image"
+    # stayed ticked with no explanation across a base change that
+    # ``guidance.normalize`` would refuse outright.
+    base_spec = modelslib.BASE_MODELS.get(base)
+    if (
+        form.get("init_image")
+        and base_spec is not None
+        and base_spec.family != modelslib.FAMILY_SDXL
+    ):
+        form["init_image"] = False
+        form["init_strength"] = None
+        cleared.append(
+            "The start image was cleared: this model cannot start from an image."
         )
     return cleared
 
@@ -2056,6 +2113,25 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     ):
         problems.append(
             widgets.Problem("Structure control needs a full-CFG model.", "base_model")
+        )
+    # The 2026-09-05 audit, finding create-04: this pane's docstring promises
+    # "what would be refused, said before the button is pressed", but nothing
+    # here checked img2img against the base's family, so the refusal only
+    # arrived from the queue door (``guidance.normalize``) after a round
+    # trip. Checked against the spec's family directly rather than a
+    # models.py bases list -- see ``generation._takes_img2img``.
+    base_spec = modelslib.BASE_MODELS.get(base)
+    if (
+        not tileset
+        and form.get("init_image")
+        and base_spec is not None
+        and base_spec.family != modelslib.FAMILY_SDXL
+    ):
+        problems.append(
+            widgets.Problem(
+                "This model cannot start from an image; pick an SDXL model.",
+                "init_image",
+            )
         )
     # Reachable the same way: a style picked under one base survives a change
     # of base under Advanced, and the service refuses the submit outright

@@ -209,6 +209,14 @@ REASON_SWEPT = (
     "panes/sprite_panel.py",
     "panes/settings_2d.py",
     "panes/settings_3d.py",
+    # Added by the 2026-09-05 audit, finding create-09: the library pose
+    # "Apply" button was the one disabled_button in the seven Create stage
+    # panes with no reason=, greying out with no explanation while its own
+    # file's near-identical "Save GLB..." button, a few lines below, passed
+    # one. stage_rig.py, remesh_panel.py and texture_panel.py have the same
+    # gap and are left out of this list deliberately: other work is in
+    # flight on those files.
+    "panes/pose_panel.py",
 )
 
 
@@ -245,6 +253,18 @@ def test_a_greyed_button_on_a_swept_surface_says_why():
         for rel in REASON_SWEPT
         for n in _unexplained_disabled_buttons(STUDIO / rel)
     ]
+    assert offenders == []
+
+
+def test_the_library_pose_apply_button_says_why_it_is_greyed():
+    """The 2026-09-05 audit, finding create-09. ``pose_panel._library_list``'s
+    "Apply" button greyed out while a pose applied with no ``reason=`` at all
+    -- the only ``disabled_button`` in any of the seven Create stage panes
+    missing one, and inconsistent with the near-identical "Save GLB..."
+    button a few lines below in the same file, which does pass one. Scoped to
+    this one file rather than relying only on the ``REASON_SWEPT`` sweep
+    above, so this claim keeps its own name and stays provable on its own."""
+    offenders = list(_unexplained_disabled_buttons(STUDIO / "panes/pose_panel.py"))
     assert offenders == []
 
 

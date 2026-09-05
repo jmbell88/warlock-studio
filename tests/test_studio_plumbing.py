@@ -159,6 +159,99 @@ def test_a_retarget_with_nothing_stale_does_not_warn_about_rig_artifacts():
     assert [m for m, _ in app.toasts] == ["Mesh rebuilt."]
 
 
+def test_a_finished_remesh_or_retexture_reloads_the_viewer_not_just_retarget():
+    """2026-09-05 audit, finding create-02. Unlike a retarget, a remesh and a
+    re-texture are queued jobs: the "remesh:"/"retexture:" task key fires when
+    the panel enqueues the row, not when the worker finishes rewriting
+    model.glb, so the reload has to hang off the job reaching "done" -- and
+    both publish over the *source* job's directory, so it is
+    params["source_job"], not the job's own id, that has to match the
+    selection."""
+    for kind in ("remesh", "retexture"):
+        app = FakeApp(selected="aaaaaaaaaaaa")
+        job = {
+            "id": "bbbbbbbbbbbb",
+            "kind": kind,
+            "status": "done",
+            "params": {"source_job": "aaaaaaaaaaaa"},
+        }
+        main.App._reload_viewer_after_rework(app, job)
+        assert "_reload_viewer" in app.calls, kind
+
+
+def test_announce_still_calls_the_viewer_reload_for_a_finished_remesh(svc):
+    """2026-09-05 audit, finding create-02. The test above calls
+    ``_reload_viewer_after_rework`` directly, which proves only its own
+    logic: delete the line that calls it from ``_refresh``'s ``announce``
+    closure and that test still passes, because nothing pins the wiring
+    between the done-transition and the helper. This drives the real path
+    instead -- ``ctx.cache.tick`` firing ``announce`` -- the way the existing
+    retarget test drives ``_on_task_done``, mirroring
+    ``test_studio_frame.py``'s own ``_tick_with`` for the findings recompute."""
+    from warlock.studio.jobs_cache import JobsCache
+
+    class WiredApp(FakeApp):
+        # The real method, not a stand-in: what is under test is whether
+        # ``_refresh`` still reaches it, not what it then does with a job.
+        _reload_viewer_after_rework = main.App._reload_viewer_after_rework
+
+        def _check_worker(self) -> None:
+            pass
+
+        def _request_storage(self, job_id: str | None = None) -> None:
+            # C33's incremental remeasure takes the finished job's id; the
+            # shared FakeApp's stub predates it and takes none.
+            self.calls.append("_request_storage")
+
+    app = WiredApp(selected="aaaaaaaaaaaa")
+    cache = JobsCache(svc)
+    job = {
+        "id": "bbbbbbbbbbbb",
+        "kind": "remesh",
+        "status": "done",
+        "params": {"source_job": "aaaaaaaaaaaa"},
+    }
+    cache.tick = lambda announce: bool(announce(job, "running"))  # type: ignore[method-assign]
+    app.app_ctx.cache = cache
+    app.app_ctx.svc = svc
+    # The done-transition toast takes "action"/"action_arg" kwargs the
+    # shared FakeApp's toast stub (built for _on_task_done's plain calls)
+    # does not accept; only the reload wiring is under test here.
+    app.app_ctx.toast = lambda *a, **k: None
+
+    main.App._refresh(app)
+
+    assert "_reload_viewer" in app.calls
+
+
+def test_a_finished_remesh_for_a_job_no_longer_selected_does_not_reload():
+    """The user clicked elsewhere while it ran; reloading now would overwrite
+    whatever is on screen with a mesh nobody asked to see."""
+    app = FakeApp(selected="zzzzzzzzzzzz")
+    job = {
+        "id": "bbbbbbbbbbbb",
+        "kind": "remesh",
+        "status": "done",
+        "params": {"source_job": "aaaaaaaaaaaa"},
+    }
+    main.App._reload_viewer_after_rework(app, job)
+
+    assert "_reload_viewer" not in app.calls
+
+
+def test_a_running_remesh_does_not_reload_the_viewer_early():
+    app = FakeApp(selected="aaaaaaaaaaaa")
+    job = {
+        "id": "bbbbbbbbbbbb",
+        "kind": "remesh",
+        "status": "running",
+        "params": {"source_job": "aaaaaaaaaaaa"},
+    }
+    main.App._reload_viewer_after_rework(app, job)
+
+    assert "_reload_viewer" not in app.calls
+
+
 def test_a_delete_remeasures_storage_but_a_rename_does_not():
     """The walk is expensive; only the keys that change bytes on disk pay."""
     deleted, renamed = FakeApp(), FakeApp()

@@ -11,7 +11,7 @@ import os
 import types
 
 from warlock.studio import widgets
-from warlock.studio.panes import inspector
+from warlock.studio.panes import inspector, sprite_panel
 
 
 def _job(stage="reference", files=()):
@@ -449,6 +449,26 @@ def test_pixel_scale_is_a_whole_multiple_and_at_least_one():
     assert inspector.pixel_scale((32, 32), 192) == 6
     assert inspector.pixel_scale((96, 64), 192) == 2
     assert inspector.pixel_scale((256, 256), 192) == 1
+
+
+def test_sprite_panels_pixel_scale_agrees_with_inspectors():
+    """The 2026-09-05 audit, finding create-10.
+
+    ``sprite_panel._pixel_scale`` is a deliberate duplicate of
+    ``inspector.pixel_scale`` -- its own docstring says "repeated rather than
+    imported" (a real import cycle: :mod:`.inspector` imports this module) --
+    but only the original had a test, so the two could silently drift apart.
+    This is the agreement test that closes that gap: representative sizes and
+    available widths, including degenerate ones, must scale identically
+    through both copies.
+    """
+    sizes = [(32, 32), (96, 64), (256, 256), (1, 1), (17, 9), (400, 1), (3, 500)]
+    avails = [1, 2, 96, 192, 500, 1000]
+    for size in sizes:
+        for avail in avails:
+            assert sprite_panel._pixel_scale(size, avail) == inspector.pixel_scale(
+                size, avail
+            )
 
 
 class _Prefs:

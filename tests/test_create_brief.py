@@ -99,6 +99,34 @@ def test_every_generation_type_has_a_hint():
     assert set(create_brief._TYPE_HINTS) == offered
 
 
+def test_the_count_control_carries_a_tooltip_naming_what_it_counts():
+    """Four bare pills sat between the prompt and Generate with no label and no
+    tooltip -- unlike the Type combo beside them, which names each of its
+    values on hover through ``_TYPE_HINTS``. ``segmented_choice`` already
+    supports per-option hover text through its ``tooltips=`` mapping (Inker's
+    tile-behaviour row and Clay's tool row both use it); Create's own count
+    control is the one holdout. The 2026-09-05 audit, finding create-11."""
+    body = _body(create_brief._count)
+    assert "tooltips=" in body, "segmented_choice must be given per-option hover text"
+    assert set(create_brief._COUNT_HINTS) == {str(n) for n in create_brief._COUNTS}
+    for hint in create_brief._COUNT_HINTS.values():
+        assert hint.strip(), "a blank tooltip names nothing"
+
+
+# --- the count clears its own stale field-error ring -------------------------
+
+
+def test_arrow_key_edit_of_count_clears_its_stale_field_error_ring():
+    """The click path (``segmented_choice``) calls ``clear_field_error`` on a
+    change; the hand-rolled left/right-arrow path edits ``form["count"]``
+    directly and must clear the same error, or a user who fixes an invalid
+    count with the keyboard instead of a click keeps a red ring around a value
+    that is no longer wrong. The 2026-09-05 audit, finding create-07."""
+    body = _body(create_brief._count)
+    arrow_branch = body[body.index("is_key_pressed(imgui.Key.left_arrow)") :]
+    assert 'clear_field_error("count")' in arrow_branch
+
+
 # --- the count is hidden where the door refuses a batch ---------------------
 
 

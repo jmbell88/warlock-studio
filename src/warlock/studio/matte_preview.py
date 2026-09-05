@@ -65,6 +65,17 @@ class MatteState:
     # rewrites ``input.png``, the mtime moves, and the next frame asks again on
     # its own.
     failed_stamp: int | None = None
+    # Whether ``on_task_failed`` has actually latched a failure for the
+    # currently open preview. ``failed_stamp`` alone cannot gate ``pump``'s
+    # "don't ask again" check: its unset default is ``None``, and
+    # ``svc_matte.stamp_for`` also returns ``None`` for a job whose
+    # ``input.png`` is missing, so the very first pump for such a job found
+    # ``failed_stamp == stamp`` true before a submit had ever been tried --
+    # the preview task was never submitted and no toast ever explained why
+    # (2026-09-05 audit, finding create-03). This flag distinguishes "never
+    # tried" from "tried and failed" without changing what ``failed_stamp``
+    # itself reads as.
+    _tried_and_failed: bool = False
     # Previews by job id, cached under the racily-clean rule. Kept on the state
     # rather than module-global so a second Ctx (a test, a compare view) does
     # not inherit another's answers.
@@ -92,6 +103,7 @@ def open_for(ctx: Any, job_id: str, kwargs: dict[str, Any], *, force: bool = Fal
     state.stamp = None
     state.preview = None
     state.failed_stamp = None
+    state._tried_and_failed = False
     state._open = False
     return state
 
@@ -103,6 +115,7 @@ def close(ctx: Any) -> None:
         state.preview = None
         state.stamp = None
         state.failed_stamp = None
+        state._tried_and_failed = False
         state._open = False
 
 
@@ -139,7 +152,7 @@ def pump(ctx: Any) -> MatteState | None:
         state.preview = hit
         return state
     state.preview = None
-    if state.failed_stamp == stamp:
+    if state._tried_and_failed and state.failed_stamp == stamp:
         # Already tried these exact bytes and it failed. The toast has been
         # shown once; asking again would only show it again.
         return state
@@ -176,6 +189,7 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         # never been tried.
         return
     state.failed_stamp = state.stamp
+    state._tried_and_failed = True
 
 
 def on_task_done(ctx: Any, done: Any) -> None:

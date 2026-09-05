@@ -394,9 +394,17 @@ def _rig(ctx: Any, form: dict[str, Any]) -> None:
     if form["rig"]:
         options = [(t["key"], t["label"]) for t in ctx.rig_templates]
         if options:
+            before = form["rig_template"]
             form["rig_template"] = widgets.labeled_combo(
                 "Skeleton", form["rig_template"] or ctx.rig_default, options
             )
+            # The 2026-09-05 audit, finding create-05: this combo is drawn the
+            # same bare way stage_rig.py's identical control was, with no
+            # forms.Form(on_edit=...) to clear a stale ring -- so a
+            # rig_template refusal argued about a value the user had already
+            # changed until an unrelated submit happened to clear it.
+            if form["rig_template"] != before:
+                ctx.state.clear_field_error("rig_template")
             # Three doors refuse on this exact field -- ``validation.py``,
             # ``service/rig.py`` and ``service/poses.py`` -- and without this
             # the one dropdown at fault was the only control in the form never
@@ -424,7 +432,16 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
     busy = ctx.busy("submit")
     enabled = not problems and not busy
     with focus.item(ctx.state, FOCUS_PANE, "make3d") as focused:
-        pressed = widgets.primary_button("Make 3D", (-1, sp(34)), enabled=enabled)
+        pressed = widgets.primary_button(
+            "Make 3D",
+            (-1, sp(34)),
+            enabled=enabled,
+            # The 2026-09-05 audit, finding create-08: create_brief._generate
+            # states its top refusal as the button's own reason; this button
+            # stated nothing (the refusals above it were the only word on it),
+            # which is the one thing a hover of a greyed Make 3D could answer.
+            reason=str(problems[0]) if problems else "",
+        )
         # Enter on the ring's last stop; see ``settings_2d._submit``.
         if focused and enabled and (
             imgui.is_key_pressed(imgui.Key.enter)
@@ -433,7 +450,10 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
             pressed = True
     if pressed:
         promote(ctx, source, form)
-    if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
+    # Gated on ``enabled``, the other half of create-08: unguarded, this fired
+    # on hover whether or not Make 3D could be pressed, advertising a shortcut
+    # that does nothing while the button is dead.
+    if enabled and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
         imgui.set_tooltip("Ctrl+Enter")
 
 

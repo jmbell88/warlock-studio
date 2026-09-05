@@ -23,6 +23,19 @@ def _ctx():
     )
 
 
+def _ctx_resolving():
+    """``_ctx()`` plus what ``_resolved_recipe`` needs.
+
+    ``img2img_note`` reads the resolved recipe rather than only the catalog
+    (the same reason ``recipe_structure_note`` does), so it needs
+    ``ctx.svc.config`` -- ``None`` means "no config, no opinion about what is
+    downloaded", matching ``test_generation_tiers.py``'s ``_ctx()``.
+    """
+    ctx = _ctx()
+    ctx.svc = SimpleNamespace(config=None)
+    return ctx
+
+
 def _hint_ctx(tmp_path, prompt, doc):
     import json
 
@@ -108,6 +121,42 @@ def test_the_structure_note_names_the_bases_that_can_run_one():
         assert models.BASE_MODELS[key].label in note
 
 
+# --- img2img needs the SDXL family --------------------------------------------
+
+
+def _non_sdxl_base() -> str:
+    return next(
+        key for key, spec in models.BASE_MODELS.items()
+        if spec.family != models.FAMILY_SDXL
+    )
+
+
+def _model_form(base: str) -> dict:
+    return {
+        "asset_type": "image",
+        "generation_type": "image",
+        "prompt": "a wooden crate",
+        "count": 1,
+        "model_mode": "advanced",
+        "base_model": base,
+        "model_override": base,
+    }
+
+
+def test_an_sdxl_base_gets_no_img2img_note():
+    assert settings_2d.img2img_note(_ctx_resolving(), _model_form("sdxl_cfg")) is None
+
+
+def test_a_non_sdxl_base_is_told_img2img_is_unavailable():
+    """The 2026-09-05 audit, finding create-04: the pane's own docstring for
+    ``validate`` promises "what would be refused, said before the button is
+    pressed"; this is that sentence for img2img, drawn beside the checkbox
+    rather than only discovered at the queue door.
+    """
+    note = settings_2d.img2img_note(_ctx_resolving(), _model_form(_non_sdxl_base()))
+    assert note is not None and "image" in note
+
+
 # --- what a change of base model clears --------------------------------------
 
 
@@ -188,6 +237,22 @@ def test_a_base_that_cannot_run_a_controlnet_clears_the_structure_control():
     )
     settings_2d.clear_unusable(_ctx(), form)
     assert form["control"] == ""
+    assert settings_2d.validate(form) == []
+
+
+def test_switching_to_a_non_sdxl_base_clears_the_start_image():
+    """The 2026-09-05 audit, finding create-04: ``clear_unusable`` reset
+    ``style_lora`` and ``control`` on an unusable base but left ``init_image``
+    ticked, so the pane kept showing "Start from this image" checked with no
+    explanation after a switch ``guidance.normalize`` would refuse outright.
+    """
+    form = _form(ref_path="ref.png", init_image=True, init_strength=0.5)
+    form["base_model"] = _non_sdxl_base()
+    cleared = settings_2d.clear_unusable(_ctx(), form)
+    assert form["init_image"] is False
+    assert form["init_strength"] is None
+    assert any("start image" in note.lower() and "cleared" in note.lower() for note in cleared)
+    # And Generate is live again: that is the whole point.
     assert settings_2d.validate(form) == []
 
 

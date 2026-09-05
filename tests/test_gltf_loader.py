@@ -690,6 +690,81 @@ def test_a_child_index_that_names_no_node_is_skipped_not_raised():
     assert np.allclose(model.nodes[0].world[:3, 3], [1.0, 0.0, 0.0])
 
 
+def test_a_glb_with_an_out_of_range_mesh_index_is_refused_with_a_value_error_not_an_index_error():
+    """The 2026-09-05 audit, finding create-01. This node graph used to load
+    clean -- ``load()`` never looked at ``node["mesh"]`` against how many
+    meshes the file actually declares -- and only blew up later, as a bare
+    ``IndexError``, the first time something read ``model.meshes[node.mesh]``
+    (``Model.mesh_instances``, or ``GpuModel.__init__`` in scene.py)."""
+    with pytest.raises(ValueError, match="mesh 5"):
+        gltf.load(_graph([{"name": "bad", "mesh": 5}], [0]))
+
+
+def test_a_glb_with_an_out_of_range_skin_index_does_not_leak_gpu_buffers_from_earlier_valid_nodes(
+    gl, tmp_path
+):
+    """The 2026-09-05 audit, finding create-01. Before the fix, ``load()``
+    happily returned a ``Model`` for this file, so ``GpuModel.__init__``
+    (scene.py) would run: it allocates real ``ctx.buffer``/``ctx.texture``
+    objects for the good node first, *then* raises a bare ``IndexError`` off
+    ``model.skins[node.skin]`` for the bad one. Because the constructor never
+    returns, nothing is ever left holding those objects to release them --
+    and ``glctx.py`` documents that this app sets no moderngl ``gc_mode``, so
+    a dropped reference frees nothing either. Refusing inside ``load()``
+    means ``GpuModel.__init__`` is never entered for this file at all: there
+    is nothing left to leak.
+    """
+    from warlock.studio.viewer import scene as scenelib
+
+    positions = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype="<f4")
+    indices = np.array([0, 1, 2], dtype="<u4")
+    binary = positions.tobytes() + indices.tobytes()
+    doc = {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        # Node 0 is a perfectly good, unskinned mesh node -- its GpuPrimitive
+        # would be built (and a real GL buffer allocated) before node 1 is
+        # even looked at. Node 1 claims skin index 7, but no skins exist.
+        "scenes": [{"nodes": [0, 1]}],
+        "nodes": [
+            {"name": "good", "mesh": 0},
+            {"name": "bad", "mesh": 0, "skin": 7},
+        ],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+        "buffers": [{"byteLength": len(binary)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": positions.nbytes},
+            {"buffer": 0, "byteOffset": positions.nbytes, "byteLength": indices.nbytes},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5125, "count": 3, "type": "SCALAR"},
+        ],
+    }
+    path = tmp_path / "bad_skin.glb"
+    path.write_bytes(_glb(doc, binary))
+
+    created: list[object] = []
+    real_buffer = gl.buffer
+
+    def tracking_buffer(*a, **kw):
+        b = real_buffer(*a, **kw)
+        created.append(b)
+        return b
+
+    gl.buffer = tracking_buffer
+    try:
+        with pytest.raises(ValueError, match="skin 7"):
+            scenelib.GpuModel(gl, gltf.load(path))
+        assert created == [], (
+            "a GL buffer was allocated for the good node before the bad "
+            "node's skin index was ever checked -- the refusal belongs in "
+            "gltf.load(), before scene.py sees a Model at all"
+        )
+    finally:
+        gl.buffer = real_buffer
+
+
 def test_a_node_count_over_the_ceiling_is_refused_at_load(monkeypatch):
     monkeypatch.setattr(gltf, "MAX_NODES", 2)
     with pytest.raises(ValueError, match="more than this viewer will load"):

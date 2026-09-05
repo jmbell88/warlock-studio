@@ -2028,6 +2028,14 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
                 # findings.json only when somebody next filed a verdict.
                 if job.get("stage") == "model" and job.get("kind") in ("text", "image"):
                     review_mode.refresh_findings(ctx)
+                # 2026-09-05 audit, finding create-02: a remesh or a re-texture
+                # is a *queued* job, unlike a retarget's foreground task, so the
+                # "remesh:"/"retexture:" keys the panels submit fire when the
+                # panel enqueues the row, not when the worker finishes it -- by
+                # the time this job reaches "done" nothing is waiting on that
+                # key any more. This transition, noticed the same way a
+                # finished generation is noticed above, is the only place left.
+                self._reload_viewer_after_rework(job)
 
         if ctx.cache.tick(announce):
             self._sync_viewer()
@@ -2222,6 +2230,27 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         self.viewer.path = None
         self.viewer.pending = None
         self._sync_viewer()
+
+    def _reload_viewer_after_rework(self, job: Any) -> None:
+        """Reload the viewport once a queued remesh or re-texture finishes.
+
+        2026-09-05 audit, finding create-02. A retarget runs as a foreground
+        task under its own ``"retarget:{job_id}"`` key and reaches
+        ``_on_task_done`` -> ``_reload_viewer`` the moment the rebuild lands.
+        A remesh or a re-texture is a *queued* job instead: the
+        ``"remesh:"``/``"retexture:"`` task key (``texture_panel.py``'s
+        ``_submit``) fires when the panel enqueues the row, not when the
+        worker finishes rewriting ``model.glb`` minutes later, so that key
+        was never going to reload anything. Both also publish over the
+        *source* job's directory by rename rather than their own -- like a
+        rig -- so the id to compare against the selection is
+        ``params["source_job"]``, never ``job["id"]``.
+        """
+        if job.get("status") != "done" or job.get("kind") not in ("remesh", "retexture"):
+            return
+        source_job = str((job.get("params") or {}).get("source_job") or "")
+        if source_job and source_job == self.app_ctx.state.selected:
+            self._reload_viewer()
 
     def _clear_viewport(self) -> None:
         """Empty the canvas of whichever Create stage is on screen.

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -28,6 +29,7 @@ from warlock.service import jobs as svc_jobs
 from warlock.service import matte as svc_matte
 from warlock.service.errors import Invalid
 from warlock.service.validation import DERIVED_PARAMS
+from warlock.studio import matte_preview
 
 
 def _png(pixels: np.ndarray) -> bytes:
@@ -125,6 +127,38 @@ def test_the_stamp_is_the_input_pngs_own_mtime(svc):
 
     assert svc_matte.stamp_for(src) == src.stat().st_mtime_ns
     assert svc_matte.stamp_for(src.with_name("nothing.png")) is None
+
+
+def test_pump_submits_and_reports_when_input_png_is_missing_on_first_check(svc):
+    """2026-09-05 audit, finding create-03.
+
+    ``MatteState.failed_stamp`` defaults to ``None``, and ``stamp_for`` also
+    returns ``None`` for a missing ``input.png`` -- so a reference whose file
+    is absent the first time ``pump`` looks made the guard
+    ``failed_stamp == stamp`` true before any submit was ever tried. The
+    preview task was never submitted, ``on_task_failed`` never ran, and the
+    modal sat on "Cutting the subject out..." with no toast, forever.
+    """
+    job_id = _reference(svc, _subject_rgb())
+    (svc.job_dir(job_id) / "input.png").unlink()
+
+    class Ctx:
+        def __init__(self) -> None:
+            self.state = SimpleNamespace(matte=None)
+            self.svc = svc
+            self.submitted: list = []
+
+        def submit(self, key, fn, *args, **kwargs):
+            self.submitted.append(key)
+            return True
+
+    ctx = Ctx()
+    matte_preview.open_for(ctx, job_id, {})
+
+    state = matte_preview.pump(ctx)
+
+    assert ctx.submitted == [matte_preview.key(job_id)]
+    assert state.preview is None
 
 
 # --- approved alpha ---------------------------------------------------------

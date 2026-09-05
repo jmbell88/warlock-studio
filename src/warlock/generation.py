@@ -590,6 +590,28 @@ def _takes_controlnet(resolved: ResolvedRecipe | None) -> bool:
     return bool(spec is not None and spec.controlnet)
 
 
+def _takes_img2img(resolved: ResolvedRecipe | None) -> bool:
+    """Whether the checkpoint this recipe resolves to can start from an image.
+
+    The 2026-09-05 audit, finding create-04: nothing before the queue door
+    checked ``init_image`` against the base model's family, so a request
+    built under Advanced with a non-SDXL base and img2img ticked passed every
+    pane and ``validate_request`` check and only failed at
+    ``guidance.normalize``, late, with the checkpoint already resident. This
+    is the family test that check makes (``base_model.family !=
+    models.FAMILY_SDXL``), read directly rather than through a models.py
+    bases-list: ``tile_bases()`` answers this same question today only by
+    coincidence -- its own docstring is the record of that list and
+    ``lora_bases()`` once being one list until the registry gave them
+    different answers -- and reusing it here would grow a second question
+    hiding behind that same coincidence.
+    """
+    if resolved is None:
+        return False
+    spec = models.BASE_MODELS.get(resolved.base_model)
+    return bool(spec is not None and spec.family == models.FAMILY_SDXL)
+
+
 def capability_controls(
     request: GenerationRequest, resolved: ResolvedRecipe | None
 ) -> dict[str, bool]:
@@ -601,6 +623,10 @@ def capability_controls(
         "multi_reference": bool(recipe and "multi" in recipe.reference_modes),
         "controlnet": _takes_controlnet(resolved),
         "style_lora": bool(recipe and recipe.base_model in models.lora_bases()),
+        # The 2026-09-05 audit, finding create-04: published so the pane can
+        # tell "Start from this image" is inert before the button is pressed,
+        # the same way it already does for controlnet and style_lora.
+        "img2img": _takes_img2img(resolved),
         "tile": request.generation_type == "seamless_material",
         "tiles": request.generation_type == "tileset",
         "sprites": request.generation_type == "sprite_sheet",
@@ -775,6 +801,21 @@ def validate_request(
                         if field_name == "base_model"
                         else "Switch the recipe to Quality, or clear the structure control."
                     ),
+                )
+            )
+        if request.init_image and not _takes_img2img(resolved):
+            # The 2026-09-05 audit, finding create-04: the sibling of the
+            # ``structure_control`` refusal above, for img2img. Named
+            # ``init_image`` rather than resolved through a
+            # model_mode-dependent field the way that one names ``base_model``
+            # or ``quality`` -- unlike a ControlNet, the checkbox this refuses
+            # is drawn under both routing modes, so it is always the control
+            # the user can see and act on.
+            issues.append(
+                CompatibilityIssue(
+                    "init_image",
+                    f"{resolved.recipe.label} cannot start from an image; "
+                    "pick an SDXL model to use img2img.",
                 )
             )
         # A saved brief can carry Avoid text from a full-CFG model into a

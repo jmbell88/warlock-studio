@@ -399,7 +399,14 @@ def _library_list(ctx: Any, job: Any) -> None:
         imgui.text(name)
         imgui.same_line()
         key = f"pose-lib-apply:{job_id}:{pose_id}"
-        if widgets.disabled_button("Apply", not ctx.busy(key)):
+        # The 2026-09-05 audit, finding create-09: this was the only
+        # disabled_button in the seven Create stage panes with no reason= --
+        # it greyed out while the pose applied and said nothing, unlike the
+        # near-identical "Save GLB..." button below ("This pose is already
+        # baking.").
+        if widgets.disabled_button(
+            "Apply", not ctx.busy(key), reason="This pose is already applying."
+        ):
             ctx.submit(key, svc_poses.apply_library_pose, ctx.svc, job_id, pose_id)
         imgui.pop_id()
     widgets.no_matches(needle, shown)

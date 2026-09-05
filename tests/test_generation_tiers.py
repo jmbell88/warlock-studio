@@ -218,7 +218,67 @@ def test_a_form_carries_its_control_into_the_request_only_with_a_reference():
     assert generation.request_from_legacy(form).structure_control == "canny"
 
 
-# --- what the tier needs downloaded -------------------------------------------
+# --- img2img needs the SDXL family ---------------------------------------------
+
+
+def _non_sdxl_base() -> str:
+    return next(
+        key for key, spec in models.BASE_MODELS.items()
+        if spec.family != models.FAMILY_SDXL
+    )
+
+
+def test_validate_request_refuses_init_image_on_a_non_sdxl_base():
+    """The 2026-09-05 audit, finding create-04: nothing before the queue door
+    checked ``init_image`` against the base model's family. A request built
+    under Advanced with a non-SDXL base and img2img ticked used to pass every
+    pre-submit check here and fail only at ``guidance.normalize``, late, with
+    the checkpoint already resident.
+    """
+    request = _request(
+        model_mode="advanced",
+        model_override=_non_sdxl_base(),
+        references=("some/ref.png",),
+        reference_mode="single",
+        init_image=True,
+        init_strength=0.5,
+    )
+    resolved = generation.resolve_recipe(request, None)
+    assert resolved is not None
+    issues = generation.validate_request(request, resolved)
+    assert [i.field for i in issues] == ["init_image"]
+    # The same two words the probe checks for in guidance.normalize's own
+    # refusal, so the early and late refusals agree about what happened.
+    assert "image" in issues[0].message and "start" in issues[0].message
+
+
+def test_an_sdxl_base_with_init_image_is_accepted():
+    request = _request(
+        model_mode="advanced",
+        model_override="sdxl_cfg",
+        references=("some/ref.png",),
+        reference_mode="single",
+        init_image=True,
+        init_strength=0.5,
+    )
+    resolved = generation.resolve_recipe(request, None)
+    assert resolved is not None
+    assert generation.validate_request(request, resolved) == []
+
+
+def test_capability_controls_reports_img2img_only_for_the_sdxl_family():
+    non_sdxl = generation.resolve_recipe(
+        _request(model_mode="advanced", model_override=_non_sdxl_base()), None
+    )
+    sdxl = generation.resolve_recipe(
+        _request(model_mode="advanced", model_override="sdxl_cfg"), None
+    )
+    assert non_sdxl is not None and sdxl is not None
+    assert generation.capability_controls(_request(), non_sdxl)["img2img"] is False
+    assert generation.capability_controls(_request(), sdxl)["img2img"] is True
+
+
+# --- what the tier needs downloaded ---------------------------------------------
 
 
 def test_fast_is_satisfied_by_the_base_row_alone():

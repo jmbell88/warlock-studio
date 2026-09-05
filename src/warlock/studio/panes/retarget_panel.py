@@ -155,7 +155,13 @@ def _gltfpack_available(ctx: Any) -> bool:
     found = _gltfpack_seen.get(key)
     if found is None:
         try:
-            found = bool(path.exists())
+            # The 2026-09-05 audit, finding create-06: this used to call
+            # ``path.exists()``, so a directory left where the binary should
+            # be (a broken extraction, a stray folder) read as present --
+            # doctor.py's ``_gltfpack_check`` was already fixed for the same
+            # reason (L01). ``is_file()`` is the readiness check; a directory
+            # is not a usable binary no matter what its name is.
+            found = bool(path.is_file())
         except Exception:  # noqa: BLE001 - an unreachable path is an absent one
             found = False
         _gltfpack_seen[key] = found
