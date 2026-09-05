@@ -16,6 +16,31 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
+## 0.0.35 — 2026-09-05
+
+Every download this application makes now says who it is, which sounds like
+housekeeping and was a broken feature. Python's `urllib` sends
+`Python-urllib/3.13` unless told otherwise, and Cloudflare began answering that
+agent with 403 and `error code: 1010` — "banned based on your browser's
+signature" — on the host `uv.lock` records for torch, torchaudio and
+torchvision. Every other host still served it, so nothing looked like a network
+failure.
+
+- **Installing the Create, Poser or Muse dependency packs failed outright.**
+  Those three packs are mostly torch, and `pack_worker` fetched it under the
+  banned agent, so Settings → Packs offered three rows that could only end in a
+  traceback. The same one line broke the build that *produces* the packs, which
+  is how it was found: `installeruild.ps1` staged a full 6 GB runtime and then
+  died in `scripts/make_packs.py`. `pipelines/download.py` owns the agent for
+  the pack worker, the fetch worker and the build script alike, and
+  `tests/test_download_agent.py` reads their source rather than the network,
+  because a test that only fails while a ban is live is a test that passes until
+  the morning it matters.
+
+There is also a new release command, `pwsh scriptsebuild.ps1`, which runs
+every step of Windows CI locally and then builds the installer — the two halves
+of a release build existed already and nothing ran them together.
+
 ## 0.0.34 — 2026-09-05
 
 The two audio modes, gone over properly. Muse's loop crossfade was making the
