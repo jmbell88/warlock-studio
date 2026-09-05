@@ -16,6 +16,7 @@ the empty state and the two overlays drawn on top.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 
@@ -215,8 +216,12 @@ class ClayViewport:
                 ("New model", lambda: clay_mode.new_document(ctx)),
                 ("Open a file...", lambda: clay_mode.ask_open(ctx)),
             ],
-            # No recent list here: it is the bridge panel's, on both of its
-            # branches, which is where Plotter and Packwright keep theirs (B5).
+            # On the empty canvas *as well as* on the bridge (B5 put it there
+            # alone): Inker and Sirens offered recents under the two buttons
+            # and this mode did not, so the same screen answered "how do I get
+            # back to yesterday's work" in two document modes and not the other three.
+            recent_paths=clay_mode.recent_paths(ctx),
+            on_open=lambda path: clay_mode.open_path(ctx, Path(path)),
         )
 
     def _clay_marquee(self, imgui: Any, view: Any, rect: Any) -> None:

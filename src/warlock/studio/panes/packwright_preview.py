@@ -13,6 +13,7 @@ answers it wrongly at exactly one colour.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from .. import icons, inker_state, packwright_mode, theme, widgets
@@ -144,6 +145,10 @@ def _empty(ctx: Any) -> None:
             ("New atlas", lambda: packwright_mode.new_document(ctx)),
             ("Open a file...", lambda: packwright_mode.ask_open(ctx)),
         ],
+        # The same recents the bridge lists, here too -- every workspace's
+        # empty screen offers the way back (2026-09-05).
+        recent_paths=packwright_mode.recent_paths(ctx),
+        on_open=lambda path: packwright_mode.open_path(ctx, Path(path)),
     )
 
 

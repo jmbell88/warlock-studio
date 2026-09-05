@@ -30,6 +30,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import time
+from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -42,6 +43,7 @@ from .. import (
     plotter_setup,
     plotter_state,
     theme,
+    tokens,
     widgets,
 )
 from ..plotter import project
@@ -334,7 +336,7 @@ def goto_popup(ctx: Any, state: Any, tab: Any) -> None:
     imgui.separator()
     _, form["x"] = controls.input_int("Column##goto-x", int(form["x"]), 1)
     _, form["y"] = controls.input_int("Row##goto-y", int(form["y"]), 1)
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     if widgets.primary_button("Go##goto-apply", (-1, 0)):
         # Through the mode's door, not by writing ``state.goto_cell`` here: the
         # clamp is what keeps a typo from asking the canvas to centre on a cell
@@ -352,6 +354,10 @@ def _empty(ctx: Any) -> None:
             ("New map...", lambda: plotter_mode.ask_new_document(ctx)),
             ("Open a file...", lambda: plotter_mode.ask_open(ctx)),
         ],
+        # The same recents the bridge lists, here too -- every workspace's
+        # empty screen offers the way back (2026-09-05).
+        recent_paths=plotter_mode.recent_paths(ctx),
+        on_open=lambda path: plotter_mode.open_path(ctx, Path(path)),
     )
 
 
