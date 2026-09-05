@@ -188,7 +188,11 @@ def claims(base: dict[str, str], per_pack: dict[str, dict[str, str]]) -> dict[st
     rather than two (``warlock.packs.plan``).
     """
     out: dict[str, list[str]] = {}
-    for key in packs.KEYS:
+    # Registry order rather than call order, and only the packs actually asked
+    # for: ``--pack`` exists so one pack can be collected on its own, and a
+    # partial run must produce a manifest that says so rather than one with
+    # empty rows for the packs nobody collected.
+    for key in (k for k in packs.KEYS if k in per_pack):
         closure = per_pack[key]
         for name in closure:
             if name in base:
@@ -481,17 +485,26 @@ def build_manifest(
     return {"version": packs.MANIFEST_VERSION, "wheels": wheels}
 
 
-def report(manifest: dict[str, Any]) -> str:
-    """What was collected, per pack, in the figures a user will be shown."""
+def report(manifest: dict[str, Any], collected: Sequence[str]) -> str:
+    """What was collected, per pack, in the figures a user will be shown.
+
+    Only the packs actually collected are listed. A row of zeroes for a pack
+    this run never looked at reads exactly like a pack that came out empty.
+    """
     lines = []
     parsed = packs.parse_manifest(manifest)
-    for pack in packs.PACKS:
-        plan = packs.plan(parsed, [pack.key])
-        lines.append(
-            f"{pack.key:<12} {len(plan):>4} wheels  "
-            f"{packs.gib(packs.total_bytes(plan)):>6.2f} GiB download  "
-            f"{packs.gib(packs.installed_bytes(plan)):>6.2f} GiB installed"
+    for key in (k for k in packs.KEYS if k in collected):
+        plan = packs.plan(parsed, [key])
+        unpacked = packs.installed_bytes(plan)
+        measured = (
+            f"{packs.gib(unpacked):>6.2f} GiB installed" if unpacked else "  (unmeasured)"
         )
+        lines.append(
+            f"{key:<12} {len(plan):>4} wheels  "
+            f"{packs.gib(packs.total_bytes(plan)):>6.2f} GiB download  {measured}"
+        )
+    if not {"text2image", "music"} <= set(collected):
+        return "\n".join(lines)
     both = packs.plan(parsed, ["text2image", "music"])
     lines.append(
         f"{'t2i+music':<12} {len(both):>4} wheels  "
@@ -513,15 +526,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--lock", type=Path, default=ROOT / "uv.lock")
     parser.add_argument(
+        "--pack", action="append", choices=list(packs.KEYS), dest="chosen",
+        help="collect only this pack; repeatable, and every pack by default",
+    )
+    parser.add_argument(
         "--offline", action="store_true",
         help="refuse to fetch anything not already collected",
     )
     args = parser.parse_args(argv)
 
+    chosen = packs.chosen_packs(args.chosen or packs.KEYS)
     base = export(["studio"])
-    per_pack = {
-        pack.key: export(["studio", *pack.extras]) for pack in packs.PACKS
-    }
+    per_pack = {pack.key: export(["studio", *pack.extras]) for pack in chosen}
     claimed = claims(base, per_pack)
     lock = load_lock(args.lock)
     unpacked = installed_sizes(args.python)
@@ -537,7 +553,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     (args.out / packs.MANIFEST_NAME).write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
-    print(report(manifest))
+    print(report(manifest, [pack.key for pack in chosen]))
     return 0
 
 

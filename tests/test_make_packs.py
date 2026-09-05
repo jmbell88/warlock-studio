@@ -173,6 +173,50 @@ def test_what_the_base_installer_already_ships_is_claimed_by_nobody(maker):
     assert claimed["librosa"] == ["music"]
 
 
+def test_one_pack_can_be_collected_on_its_own(maker):
+    """``--pack rig`` exports only that pack, so the claim mapping has to work
+    from a partial set rather than indexing every key in the registry."""
+    claimed = maker.claims({"httpx": "0.27"}, {"rig": {"httpx": "0.27", "bpy": "5.2.0"}})
+    assert claimed == {"bpy": ["rig"]}
+
+
+def test_a_partial_run_reports_only_what_it_collected(maker):
+    """A row of zeroes for a pack this run never looked at reads exactly like a
+    pack that came out empty."""
+    manifest = {
+        "version": packs.MANIFEST_VERSION,
+        "wheels": [
+            {
+                "filename": "bpy-5.2.0-cp313-cp313-win_amd64.whl",
+                "size_bytes": 338_722_862,
+                "sha256": "d" * 64,
+                "installed_bytes": 670_346_229,
+                "packs": ["rig"],
+            }
+        ],
+    }
+    said = maker.report(manifest, ["rig"])
+    assert said.splitlines() == [said]  # one line, for the one pack collected
+    assert said.startswith("rig")
+    assert "0.32 GiB download" in said and "0.62 GiB installed" in said
+    assert "text2image" not in said and "t2i+music" not in said
+
+
+def test_an_unmeasured_pack_says_so_rather_than_printing_a_zero(maker):
+    manifest = {
+        "version": packs.MANIFEST_VERSION,
+        "wheels": [
+            {
+                "filename": "bpy-5.2.0-cp313-cp313-win_amd64.whl",
+                "size_bytes": 338_722_862,
+                "sha256": "d" * 64,
+                "packs": ["rig"],
+            }
+        ],
+    }
+    assert "(unmeasured)" in maker.report(manifest, ["rig"])
+
+
 def test_one_distribution_at_two_versions_is_refused(maker):
     """One pack directory cannot hold two builds of one distribution, and the
     installer would apply whichever it saw last."""
