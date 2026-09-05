@@ -204,7 +204,8 @@ def _fetch_url(staging: Path, spec: dict[str, Any]) -> None:
     growing file to measure exactly as it does for a Hub fetch.
     """
     import hashlib
-    import urllib.request
+
+    from . import download
 
     digest = str(spec.get("sha256") or "").lower()
     if not digest:
@@ -217,7 +218,9 @@ def _fetch_url(staging: Path, spec: dict[str, Any]) -> None:
 
     out = staging / name
     running = hashlib.sha256()
-    with urllib.request.urlopen(str(spec["url"]), timeout=60) as response, out.open("wb") as handle:
+    # Not a bare urlopen: the default agent is banned outright on at least one
+    # host this project downloads from. See pipelines/download.py.
+    with download.open_url(str(spec["url"]), timeout=60) as response, out.open("wb") as handle:
         while chunk := response.read(1 << 20):
             running.update(chunk)
             handle.write(chunk)

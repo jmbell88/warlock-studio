@@ -46,11 +46,11 @@ import re
 import shutil
 import sys
 import time
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 from .. import winjob
+from . import download
 
 CHUNK = 1 << 20
 
@@ -196,7 +196,9 @@ def collect(spec: dict[str, Any]) -> list[str]:
         running = hashlib.sha256()
         got = 0
         with (
-            urllib.request.urlopen(str(wheel["url"]), timeout=60) as response,
+            # Not a bare urlopen: the default agent is banned on the host
+            # uv.lock records for torch. See pipelines/download.py.
+            download.open_url(str(wheel["url"]), timeout=60) as response,
             staging.open("wb") as handle,
         ):
             while chunk := response.read(CHUNK):

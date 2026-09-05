@@ -68,6 +68,11 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from warlock import packs  # noqa: E402 -- after the path insert, deliberately
 
+# The agent this project downloads under, and the incident that made it a
+# named constant, both live in one module rather than being restated here:
+# the ban that motivated it hit this script and `pack_worker` alike.
+from warlock.pipelines import download as _download  # noqa: E402 -- same
+
 # The environment the *shipped* runtime is, which is not necessarily the one
 # this script runs in. ``installer/build.ps1`` stages a uv-managed CPython 3.13
 # x86_64 for Windows and ``runtime-manifest.json`` pins that; these values are
@@ -360,7 +365,10 @@ def download(source: Source, into: Path, *, offline: bool) -> Path:
         raise PackError(f"{source.filename} is not collected and --offline was given")
     into.mkdir(parents=True, exist_ok=True)
     staging = target.with_suffix(target.suffix + ".part")
-    with urllib.request.urlopen(source.url) as response, staging.open("wb") as handle:
+    with (
+        urllib.request.urlopen(_download.request(source.url)) as response,
+        staging.open("wb") as handle,
+    ):
         shutil.copyfileobj(response, handle)
     got = _sha256(staging)
     if got != source.sha256:
