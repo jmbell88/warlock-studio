@@ -1,4 +1,10 @@
-"""The imgui context the Inker pane tests press controls inside.
+"""The imgui context the pane tests press controls inside.
+
+It lived at ``tests/inker/`` until 2026-09-05, when a Troupe pane test wanted
+it too. It sits at the root of ``tests/`` now -- which ``tests/conftest.py``
+already puts on ``sys.path``, so the bare-name import below works from any
+subdirectory -- rather than being copied a second time, for the reason the
+paragraph after next gives about it being copied a first four.
 
 The twenty-odd lines below were written four times before they were written
 once: ``test_pattern_fill``, ``test_timeline_cel_opacity_input``,

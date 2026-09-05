@@ -158,7 +158,13 @@ def _scorecard(ctx: Any, state: Any) -> None:
                 draw.add_line((a.x + inset, a.y + inset), (b[0] - inset, b[1] - inset), ink, 1.5)
                 draw.add_line((b[0] - inset, a.y + inset), (a.x + inset, b[1] - inset), ink, 1.5)
             if current:
-                draw.add_rect((a.x - 1, a.y - 1), (b[0] + 1, b[1] + 1), ring, sp(2), 0, 2.0)
+                # ``add_rect(p_min, p_max, col, rounding, thickness, flags)``:
+                # imgui_bundle's order, not pyimgui's ``rounding, flags,
+                # thickness``. Written the old way, ``2.0`` landed on the
+                # integer ``flags`` and the binding raised before drawing --
+                # which took the whole centre pane down every frame a cell
+                # was selected (2026-09-05, warlock.log 16:52).
+                draw.add_rect((a.x - 1, a.y - 1), (b[0] + 1, b[1] + 1), ring, sp(2), 2.0)
             if imgui.is_item_hovered() and tip:
                 imgui.set_tooltip(tip)
             if clicked:
