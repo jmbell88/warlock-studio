@@ -16,6 +16,74 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
+## 0.0.36 — 2026-09-05
+
+The first install of this application on a machine that did not build it
+happened today, and everything here comes out of it. A USB drive, a clean
+Windows PC with no Python, no `uv` and no CUDA toolkit, and an 8 GB card: the
+installer ran fully offline, the app launched, and a drawing was made in Inker
+and saved and reopened. Then every model download failed, and the log she
+copied back said why — and the reason was ours, not her network's.
+
+- **A failed download threw away everything it had downloaded.** `fetch_one`
+  unwound with `except BaseException: rmtree(staging)`, and `huggingface_hub`
+  keeps its resume bookkeeping in `.cache/` *inside* that staging tree, so a
+  failure discarded the ability to resume along with the bytes. One
+  reconstruction-engine attempt ran eight minutes and several gigabytes and was
+  deleted whole; the next began at zero. On a connection that resets every few
+  minutes a 16.1 GB model could therefore never be downloaded, however many
+  times Install was pressed, and her log is nine attempts of exactly that. The
+  staging tree is now kept and the next attempt resumes into it, keyed by a
+  marker holding the whole spec so a tree staged for another revision is wiped
+  rather than mixed in — `_verify_staged` only catches files the hub wrote a
+  digest sidecar for, so a mixture would publish as a finished model. A digest
+  mismatch still drops the tree, or every retry would re-verify the same bad
+  bytes. Both transports now retry with backoff over the same tree. What never
+  changed is the destination: nothing moves until the tree is whole and
+  verified, which is the promise every presence probe rests on.
+- **A socket error was shown to a non-developer verbatim.**
+  `ConnectError: [WinError 10054] An existing connection was forcibly closed by
+  the remote host`, in a transient toast, with no log button and no remedy —
+  the one class of exception that is never human-readable, on a code path whose
+  own comment said "the message is the product here". It is translated now, by
+  `winerror` and `errno`, walking the `__cause__` chain because the transports
+  bury the number two levels down and `hf_xet` raises from Rust with no number
+  at all. Offline, reset, timeout, refused and DNS failure are five remedies
+  where there was one stringified exception, and a reset names the things that
+  actually cause it — antivirus, a firewall, a VPN, a workplace proxy. A
+  sentence this project wrote itself, such as a digest mismatch, is still
+  passed through untouched; anything unrecognised says what it was and points
+  at `warlock.log`, where the raw exception is now written beside the friendly
+  one.
+- **Installing a dependency pack made the health check throw, once per poll.**
+  `vram.probe` and doctor's CUDA row caught `ImportError` only, and a torch
+  that pip is midway through writing into the running `site-packages` does not
+  raise `ImportError` — it raises from the DLL loader, `OSError [WinError 126]`
+  on `caffe2_nvrtc.dll` and then `PermissionError [WinError 32]` on `shm.dll`.
+  Five tracebacks in twenty-one seconds, until the install finished. Torch was
+  never broken on that machine; the guard was. Any failed import now falls back
+  to NVML, which answers on a base install with no torch at all, and the CUDA
+  row says the install is in progress rather than that the card is missing.
+- **Create and Muse sent you to download 23 GB that could not run.** A
+  workspace needs two separate things — the dependency pack, which is the code,
+  and the model weights, which are what the code reads — and only the weights
+  were being checked at the door. `Pack.modes` had named which mode each pack
+  gates since the packs shipped, and was read in exactly one place: a label
+  inside Settings. So on a base install both halves were missing, the rail
+  offered the weights, and installing them would have changed nothing because
+  `torch` was not there. The door now asks for the pack first and the weights
+  second, which is also the cheaper order, and the greyed tooltip names the
+  pack and its own size.
+
+Two things from that machine are still unanswered and are recorded rather than
+guessed at. The resets were never diagnosed — they hit `download.pytorch.org`
+as well as Hugging Face while dependency packs from PyPI installed without
+trouble, so "Hugging Face is blocked" is not the explanation however much a
+failed Xet token refresh looked like one. And whether a download now outlasts
+them is a bet, not a measurement: the fixes above should turn "never finishes"
+into "finishes across a few attempts", and nothing has re-run on that PC to
+show it.
+
 ## 0.0.35 — 2026-09-05
 
 Every download this application makes now says who it is, which sounds like
@@ -37,7 +105,8 @@ failure.
   because a test that only fails while a ban is live is a test that passes until
   the morning it matters.
 
-There is also a new release command, `pwsh scriptsebuild.ps1`, which runs
+There is also a new release command, `pwsh scripts
+ebuild.ps1`, which runs
 every step of Windows CI locally and then builds the installer — the two halves
 of a release build existed already and nothing ran them together.
 
