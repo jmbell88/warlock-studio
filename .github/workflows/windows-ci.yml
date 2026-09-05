@@ -43,37 +43,15 @@ jobs:
       # ``packages``) shipped green. Installed into a *clean* venv rather than
       # the development one, which is the only arrangement where the source
       # tree cannot stand in for a file the wheel forgot.
+      #
+      # **The assertions moved into a script on 2026-09-05** and this step
+      # calls it, because ``scripts/rebuild.ps1`` runs this whole workflow
+      # locally before a push: a second copy of them in that driver would be a
+      # local pass that stopped meaning anything the month this one changed.
+      # (This step is also where a wrong assertion once sat unnoticed -- the
+      # suite above fails first on a runner, so it was rarely reached.)
       - name: Wheel install smoke test
-        shell: pwsh
-        run: |
-          $wheel = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
-          uv venv .smoke
-          uv pip install --python .smoke\Scripts\python.exe $wheel
-          # From a directory that is not the checkout, so `import warlock`
-          # cannot resolve to `src/` by accident.
-          Push-Location $env:TEMP
-          & "$env:GITHUB_WORKSPACE\.smoke\Scripts\python.exe" -c @"
-          import warlock, warlock.models, warlock.doctor, warlock.changelog
-          from warlock.studio import modes
-          assert warlock.models.BASE_MODELS, 'the registry is empty'
-          # ``modes`` is imported to prove it *loads* from a wheel, not to
-          # count it. A literal here is a number no test can keep in sync: it
-          # said 11 against a twelve-mode tree, so this step could only ever
-          # fail once anything reached it. (It rarely did -- the suite step
-          # above fails first on a runner, which is how a wrong assertion sat
-          # here unnoticed. A latent blocker is still a blocker.) The count is
-          # asserted where it can be derived from ``modes.MODES``:
-          # ``tests/manual/test_docs.py`` and ``tests/test_studio_state.py``,
-          # both of which run above.
-          assert modes.KEYS, 'the rail is empty'
-          # The two force-includes, which are exactly what a wheel drops
-          # silently: the manual tree and the changelog.
-          from importlib.resources import files
-          assert files('warlock').joinpath('CHANGELOG.md').is_file()
-          assert files('warlock').joinpath('manual/00-index.md').is_file()
-          print('wheel import smoke test passed')
-          "@
-          Pop-Location
+        run: uv run python scripts/wheel_smoke.py
 
   # **The 3.12 floor leg was retired on 2026-09-03, not deleted for quiet.**
   # It was added 2026-08-24 to run the suite under the declared floor without

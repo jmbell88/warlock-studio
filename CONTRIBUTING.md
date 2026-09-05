@@ -63,7 +63,9 @@ a regression test; check that it fails first.
 
 ## Commits and pull requests
 
-- Run `uv run python scripts/preflight.py` before opening a PR.
+- Run `uv run python scripts/preflight.py` before opening a PR. To run the whole
+  of Windows CI locally first -- and the installer after it -- use
+  `pwsh scripts\rebuild.ps1`.
 - One logical change per commit.
 - If you change something a stored measurement depends on (`trellis_band`,
   `SEAM_MAX`, the grade scale), a `docs/measurements/` document comes first.

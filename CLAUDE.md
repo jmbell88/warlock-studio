@@ -20,6 +20,7 @@ uv run pytest -m gpu -n 0   # real card + weights; xdist is refused for this lan
 uv run pytest -m perf -n 0  # wall-clock budgets; meaningless under contention
 uv run ruff check .
 uv run python scripts/preflight.py   # release gate; run before a PR (`--fast` is what CI runs)
+pwsh scripts\rebuild.ps1  # all of Windows CI locally, then the native DLL, then the installer, then prunes dist\
 pwsh native\build.ps1     # optional C kernels → vendor/warlockc/warlockc.dll (gitignored); WARLOCK_NATIVE=0 forces numpy
 ```
 

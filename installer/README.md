@@ -5,6 +5,12 @@ Studio installer. The build requires Windows, `uv`, an already installed
 uv-managed CPython 3.13, and Inno Setup 6 (`iscc.exe` on `PATH`, or supplied as
 `-Iscc`). It does not download Python, native tools, or model weights.
 
+`pwsh scripts\rebuild.ps1` is the release driver over this script: it runs
+every step of Windows CI first, then this build, and prunes `dist\` down to the
+version that was built. It leaves `warlockc.dll` alone unless asked with
+`-Native`, because a rebuilt DLL is a new SHA-256 and therefore a manifest
+change -- see the pin note below.
+
 The staged application contains the locked Python runtime and dependencies,
 `src\warlock`, the manual, and the three native runtime directories under
 `vendor`. Model weights remain first-run downloads under the user's Warlock
