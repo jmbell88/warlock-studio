@@ -471,11 +471,21 @@ def build_manifest(
         source = select_wheel(entry)
         if source is not None:
             path = download(source, out_dir, offline=offline)
+            url = source.url
         else:
             path = build_from_sdist(entry, out_dir, offline=offline)
+            # A wheel built here exists nowhere else, so there is no URL the
+            # app could fetch it from. It is marked bundled instead, which
+            # means the installer has to carry this file: three of them, and
+            # `unidic-lite` is most of the weight. Writing a plausible-looking
+            # URL would move the failure to install time, on a user's machine,
+            # three wheels from the end of a music pack.
+            url = ""
         wheels.append(
             {
                 "filename": path.name,
+                "url": url,
+                "bundled": not url,
                 "size_bytes": path.stat().st_size,
                 "sha256": _sha256(path),
                 "installed_bytes": unpacked.get(name, 0),

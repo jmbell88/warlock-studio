@@ -18,11 +18,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
+URL = "https://example.invalid/torch.whl"
 
 
-def wheel(filename: str, size: int, *, packs_: tuple[str, ...], installed: int = 0) -> dict:
+def wheel(
+    filename: str,
+    size: int,
+    *,
+    packs_: tuple[str, ...],
+    installed: int = 0,
+    url: str | None = None,
+) -> dict:
     return {
         "filename": filename,
+        "url": "https://example.invalid/" + filename if url is None else url,
         "size_bytes": size,
         "sha256": SHA_A,
         "installed_bytes": installed,
@@ -294,7 +303,7 @@ def test_the_wheels_and_the_unpacked_bytes_are_charged_to_one_volume_together(fr
     """Not double-counting: the wheels are still on disk while the packages are
     written out of them, so the peak really is the sum."""
     free["C:\\"] = 12.0
-    plan = [packs.Wheel("torch.whl", 5 * GIB, SHA_B, installed_bytes=6 * GIB, packs=("rig",))]
+    plan = [packs.Wheel("torch.whl", URL, 5 * GIB, SHA_B, installed_bytes=6 * GIB, packs=("rig",))]
     said = packs.disk_refusal(
         plan, cache_dir=Path("C:/home/packs"), install_dir=Path("C:/app/lib")
     )
@@ -310,7 +319,7 @@ def test_a_roomy_cache_drive_does_not_approve_a_write_to_a_full_runtime_one(free
     home and the application runtime on two drives."""
     free["D:\\"] = 500.0
     free["C:\\"] = 1.0
-    plan = [packs.Wheel("torch.whl", 3 * GIB, SHA_B, installed_bytes=8 * GIB, packs=("rig",))]
+    plan = [packs.Wheel("torch.whl", URL, 3 * GIB, SHA_B, installed_bytes=8 * GIB, packs=("rig",))]
     said = packs.disk_refusal(
         plan, cache_dir=Path("D:/home/packs"), install_dir=Path("C:/app/lib")
     )
@@ -323,7 +332,7 @@ def test_an_unmeasured_plan_still_budgets_the_download_it_does_know(free):
     known and a cache drive can be full on its own."""
     free["D:\\"] = 1.0
     free["C:\\"] = 0.5
-    plan = [packs.Wheel("torch.whl", 3 * GIB, SHA_B, packs=("rig",))]
+    plan = [packs.Wheel("torch.whl", URL, 3 * GIB, SHA_B, packs=("rig",))]
     said = packs.disk_refusal(
         plan, cache_dir=Path("D:/home/packs"), install_dir=Path("C:/app/lib")
     )

@@ -533,6 +533,70 @@ non-commercial entry beside SDXL-Turbo, and unlike Turbo it is optional.
 keys, the tray button, and chapter 35's Stems section. The `url`/`sha256`
 transport in `models.Fetch` **stays** either way.
 
+## P26. Decide whether the dependency packs ship, and wire them up if so
+
+**Why it is yours:** a product decision with a cost attached, and it gates
+buildable work that is otherwise ready. The pure and performing halves are
+built and proven (`0975721f`, `2556cb6d`, `26b40d8a`, and this session's
+commit); what is left is a *choice* about the shipped installer, plus one
+packaging question with a real weight in megabytes.
+
+**Where it stands.** `warlock/packs.py` is the registry and planner,
+`scripts/make_packs.py` the generator, `pipelines/pack_worker.py` the child
+that downloads and installs, `service/packs.py` the parent. Measured against
+the real lock: base+studio is 30 distributions; `rig` adds 7, `text2image` 34,
+`music` 74, with 27 shared between the two torch packs — 85 wheels, 82 fetched
+and 3 built. The rig pack has been collected and installed end to end into a
+base-only runtime (0.32 GiB download, 0.63 GiB installed, `import bpy` → 5.2.0
+LTS). The second offline exception is recorded in `docs/INVARIANTS.md`.
+
+**The decision.** Today's installer stages every extra: a 2.91 GB payload,
+6.61 GB installed (P1). Packs would take the base to roughly a third of that
+and let a user who only draws pixel art never download torch. Against: it is a
+second install path to support, and the audience is a closed beta of invited
+users for whom one big download is not obviously worse than two small ones.
+**If the answer is no, delete the four modules and this entry** — a half-built
+distribution mechanism is worse than none, and the measurements are in the
+commits either way.
+
+**Do, if yes** — each step is specified, none is started:
+
+1. **Decide where the three built wheels live.** `docopt`, `mojimoji` and
+   `unidic-lite` publish no Windows wheel, so the build compiles them and they
+   are marked `bundled` in the manifest: there is no URL to fetch them from, so
+   the installer must carry them. `unidic-lite` is ~47 MB of that, all of it in
+   the base download, for a pack the user may never install. The alternatives
+   are hosting the three built wheels as release assets (a publishing step, and
+   the first URL in this project that is ours) or dropping `cutlet`/`fugashi`
+   and losing Japanese lyric romanisation. **This is the one open design
+   question in the programme.**
+2. **Wire `installer/build.ps1`.** Export `--extra studio` alone for the staged
+   runtime, run `scripts/make_packs.py` after `uv pip sync`, stage `packs.json`
+   beside `pyproject.toml` and the bundled wheels into the pack directory.
+   `installer/runtime-manifest.json` pins native binaries by digest and should
+   gain the same treatment for the bundled wheels, or state why not.
+3. **The Settings pane.** `service.packs.rows` already returns everything a row
+   needs — label, summary, the modes it unlocks, `present`, wheel count,
+   download and installed sizes, and whether a manifest exists at all. The
+   model-download rows are the pattern to copy, progress bar included; the
+   child already emits `fetch_worker`'s progress protocol, verbatim.
+4. **Say what a finished install means.** `pack_worker.verify` proves the
+   modules import *in the child*; the running app has already cached their
+   absence. Either re-run `doctor.run_checks(force=True)` the way a finished
+   fetch does and let `modes.NEEDS_ROWS` re-gate, or tell the user to restart —
+   but decide, because a mode that stays grey after a successful install is the
+   failure the whole exercise exists to avoid.
+5. **Collect the other two packs once, on a real line**, and record the
+   figures. Only `rig` has ever been collected; `text2image` and `music` are
+   multi-gigabyte and `music` is the only one that exercises the sdist build
+   path (three compiles, one of them a C extension). It is also the only one
+   that will ever exercise the bundled-wheel branch of `pack_worker.collect`,
+   which is today covered by tests alone.
+
+**Expected outcome:** either four deleted modules and a line in *Closed
+records*, or an installer whose base download is around a gigabyte and three
+packs a user chooses.
+
 ## Also owed, smaller
 
 - **Tutorial sample assets** (art): a 32×32 `.ora` sprite with a few layers

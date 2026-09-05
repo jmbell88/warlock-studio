@@ -272,10 +272,28 @@ class Wheel:
     filename: str
     """The wheel's own name, as PEP 427 spells it. The identity a plan dedupes
     on: two packs naming this file mean one download."""
+    url: str
+    """Where the file comes from -- the URL the lock recorded, which is PyPI or
+    ``download.pytorch.org``. Empty when ``bundled``.
+
+    Carrying it means a pack needs no hosting of its own: the installer ships
+    ``packs.json`` and the wheels arrive from the same places ``uv`` would have
+    got them, pinned by ``sha256`` rather than by trust in the host. https
+    only, and enforced rather than assumed -- a manifest is a list of files
+    about to be installed into the application runtime, and the digest is what
+    makes the transport safe, not the other way round."""
     size_bytes: int
     """Stat of the collected file. Never the lock's declared size -- see
     ``SIZELESS_DISTS`` for the three that have none."""
     sha256: str
+    bundled: bool = False
+    """Whether this wheel ships with the installer instead of being fetched.
+
+    True for exactly the distributions that publish no Windows wheel, which
+    the build compiles itself. There is no URL such a file could be downloaded
+    from, so the installer has to carry it -- which is a real cost worth seeing
+    in the manifest rather than a detail: ``unidic-lite`` alone is most of it.
+    """
     installed_bytes: int = 0
     """What the distribution occupies unpacked, summed from its ``RECORD`` by
     the generator, which has the installed tree in front of it. ``0`` means
@@ -338,6 +356,21 @@ def parse_manifest(payload: Any) -> Manifest:
         if filename in seen:
             raise ManifestError(f"pack manifest lists {filename} twice")
         seen.add(filename)
+        url = raw.get("url")
+        bundled = raw.get("bundled") is True
+        if not isinstance(url, str):
+            raise ManifestError(f"{filename}: url must be a string")
+        # Exactly one of the two ways a wheel can arrive, never both and never
+        # neither. ``docopt``, ``mojimoji`` and ``unidic-lite`` publish no
+        # Windows wheel, so the build compiles them and they have to travel
+        # with the installer; everything else is fetched. A bundled wheel with
+        # a URL would invite a download of something that is not what was
+        # built, and a fetched wheel without one fails on the user's machine
+        # rather than here.
+        if bundled and url:
+            raise ManifestError(f"{filename}: a bundled wheel cannot also have a url")
+        if not bundled and not url.startswith("https://"):
+            raise ManifestError(f"{filename}: url must be https, not {url!r}")
         sha256 = raw.get("sha256")
         if not isinstance(sha256, str) or len(sha256) != 64:
             raise ManifestError(f"{filename}: sha256 must be 64 hex characters")
@@ -357,6 +390,8 @@ def parse_manifest(payload: Any) -> Manifest:
         wheels.append(
             Wheel(
                 filename=filename,
+                url=url,
+                bundled=bundled,
                 size_bytes=_int_field(raw, "size_bytes", filename, required=True),
                 sha256=sha256.lower(),
                 installed_bytes=_int_field(raw, "installed_bytes", filename, required=False),
@@ -417,6 +452,83 @@ def installed_bytes(wheels: Sequence[Wheel]) -> int:
 
 def gib(byte_count: int) -> float:
     return byte_count / _GIB
+
+
+def canonical_name(name: str) -> str:
+    """PEP 503 normalisation: lowercase, runs of ``-_.`` collapsed to one ``-``.
+
+    By hand rather than through ``packaging``, to keep this module's import
+    list what its docstring says it is. It is four lines and it is the thing
+    that makes ``huggingface-hub``, ``huggingface_hub`` and ``Huggingface.Hub``
+    one key rather than three.
+    """
+    out = name.strip().lower()
+    for ch in "_.":
+        out = out.replace(ch, "-")
+    while "--" in out:
+        out = out.replace("--", "-")
+    return out
+
+
+def wheel_dist(filename: str) -> tuple[str, str]:
+    """The (canonical name, version) a wheel filename declares.
+
+    PEP 503 normalisation by hand rather than through ``packaging``, to keep
+    this module's import list what its docstring says it is. A wheel name is
+    ``name-version-python-abi-platform.whl`` with the name's own hyphens
+    escaped as underscores, so the first two fields are unambiguous.
+    """
+    stem = filename[:-4] if filename.endswith(".whl") else filename
+    parts = stem.split("-")
+    if len(parts) < 2:
+        raise ValueError(f"{filename!r} is not a wheel filename")
+    return canonical_name(parts[0]), parts[1]
+
+
+def conflicts(wheels: Sequence[Wheel], installed: Mapping[str, str]) -> list[str]:
+    """Distributions this plan would *change* rather than add, worst first.
+
+    **A pack is a delta over the base runtime, not a self-contained set**, and
+    this is that sentence made checkable. It was learned by running one: the
+    first attempt to resolve the rig pack into an empty interpreter failed
+    because ``bpy`` needs ``numpy``, which is one of the thirty distributions
+    base+studio already ships. The pack deliberately does not carry it.
+
+    The consequence for installing is the mirror image. Every wheel in a pack
+    is either absent from the runtime or present at exactly the version the
+    pack was built from, because pack and base come out of one lock. Anything
+    else means the two were built from *different* locks, and installing it
+    would quietly re-version a package the running application has already
+    imported -- numpy under the app's feet, in the worst case. That is not a
+    thing to do halfway through, so it is refused whole, before the first
+    byte, in ``fetch.disk_refusal``'s style.
+
+    A wheel already installed at the pack's own version is not a conflict; it
+    is simply nothing to do, which is what makes an interrupted install safe
+    to run again.
+    """
+    bad: list[str] = []
+    for wheel in wheels:
+        name, version = wheel_dist(wheel.filename)
+        have = installed.get(name)
+        if have is not None and have != version:
+            bad.append(f"{name} {have} would be replaced by {version}")
+    return sorted(bad)
+
+
+def to_install(wheels: Sequence[Wheel], installed: Mapping[str, str]) -> list[Wheel]:
+    """The subset that is not already present at the version the pack carries.
+
+    What makes a re-run after a failure cheap, and what stops a second install
+    of an overlapping pack rewriting torch: ``music`` after ``text2image`` is
+    47 wheels, not 74.
+    """
+    out: list[Wheel] = []
+    for wheel in wheels:
+        name, version = wheel_dist(wheel.filename)
+        if installed.get(name) != version:
+            out.append(wheel)
+    return out
 
 
 def disk_refusal(

@@ -188,6 +188,7 @@ def test_a_partial_run_reports_only_what_it_collected(maker):
         "wheels": [
             {
                 "filename": "bpy-5.2.0-cp313-cp313-win_amd64.whl",
+                "url": "https://example.invalid/bpy.whl",
                 "size_bytes": 338_722_862,
                 "sha256": "d" * 64,
                 "installed_bytes": 670_346_229,
@@ -208,6 +209,7 @@ def test_an_unmeasured_pack_says_so_rather_than_printing_a_zero(maker):
         "wheels": [
             {
                 "filename": "bpy-5.2.0-cp313-cp313-win_amd64.whl",
+                "url": "https://example.invalid/bpy.whl",
                 "size_bytes": 338_722_862,
                 "sha256": "d" * 64,
                 "packs": ["rig"],
@@ -299,12 +301,20 @@ def test_the_manifest_the_generator_writes_is_one_the_app_accepts(maker, tmp_pat
     finding out from the user."""
     collected = tmp_path / "torch-2.8.0-cp313-cp313-win_amd64.whl"
     collected.write_bytes(b"not really a wheel, but a real file with a real size")
+    # The file is already collected and its digest matches, so ``download``
+    # short-circuits and never opens the URL -- which is how this exercises the
+    # whole manifest path without a network call.
     manifest = maker.build_manifest(
         lock={
             "torch": maker.LockEntry(
                 "torch",
                 "2.8.0",
-                (maker.Source(f"file:///{collected.name}", maker._sha256(collected)),),
+                (
+                    maker.Source(
+                        f"https://example.invalid/{collected.name}",
+                        maker._sha256(collected),
+                    ),
+                ),
                 None,
             )
         },
