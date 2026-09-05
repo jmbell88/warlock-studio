@@ -21,7 +21,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, layout_edit, plotter_mode, plotter_tilesets, toolbar
+from .. import controls, layout_edit, plotter_mode, plotter_tilesets, toolbar, verbs
 from . import plotter_tools
 
 BAR = "plotter-menu"
@@ -136,7 +136,7 @@ def _map_rows(ctx: Any, state: Any, tab: Any) -> None:
     ):
         plotter_mode.export_map(ctx, "tmj", tab)
     if _row(
-        "Export to the library",
+        verbs.EXPORT_TO_LIBRARY,
         "Ctrl+E",
         enabled=ready and tilesets,
         reason=BUSY if not ready else NO_TILESET,

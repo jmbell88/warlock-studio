@@ -30,7 +30,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import modes, state
+from . import modes, state, verbs
 from .tour import scripts as tour_scripts
 
 # How many assets the quick-open section offers at once. A palette is a
@@ -190,7 +190,7 @@ def _selected(ctx: Any) -> Any:
 _DOC_MODES: dict[str, tuple[str, str]] = {
     # mode -> (module name, export command label)
     "inker": ("inker_mode", "Export PNG"),
-    "clay": ("clay_mode", "Export to the library"),
+    "clay": ("clay_mode", verbs.EXPORT_TO_LIBRARY),
     "plotter": ("plotter_mode", "Export .tmx"),
     "packwright": ("packwright_mode", "Export atlas + JSON"),
     # Named for the folder rather than for a file: this is the one export in

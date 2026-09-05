@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import troupe_mode, widgets
+from .. import troupe_mode, verbs, widgets
 from ..manual import render as manual_render
 
 
@@ -24,7 +24,7 @@ def draw(ctx: Any) -> None:
 
     ready = bool(state.job_id and state.sheet_id)
     if widgets.disabled_button(
-        "Open in Inker",
+        verbs.open_in("inker"),
         ready,
         (-1, 0),
         reason="Pick a character sheet first.",
@@ -36,7 +36,7 @@ def draw(ctx: Any) -> None:
         troupe_mode.open_in_inker(ctx)
     imgui.dummy((0, 4))
     if widgets.disabled_button(
-        "Add to Packwright",
+        verbs.add_to("packwright"),
         ready,
         (-1, 0),
         reason="Pick a character sheet first.",

@@ -15,7 +15,7 @@ from typing import Any
 
 from ... import rigging
 from ...service import troupe as svc_troupe
-from .. import forms, troupe_mode, widgets
+from .. import forms, troupe_mode, verbs, widgets
 from ..manual import render as manual_render
 
 
@@ -114,7 +114,7 @@ def _existing_mesh(ctx: Any, form: dict[str, Any]) -> None:
     busy = ctx.busy(f"troupe-send:{current}")
     if busy:
         widgets.busy("Sending")
-    if widgets.disabled_button("Send to Troupe", not busy, (-1, 0)):
+    if widgets.disabled_button(verbs.send_to("troupe"), not busy, (-1, 0)):
         troupe_mode.send_to_troupe(ctx, chosen, form)
     widgets.cost_note(
         "A mesh that is not rigged is rigged first, as a humanoid. Then the "

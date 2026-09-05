@@ -20,7 +20,7 @@ from ... import followups
 from ...service import export as svc_export
 from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
-from .. import controls, dialogs, icons, jobs_cache, motion, theme, tokens, toolbar, widgets
+from .. import controls, dialogs, icons, jobs_cache, motion, theme, tokens, toolbar, verbs, widgets
 from ..manual import render as manual_render
 from ..state import ACTIONS, QUERY_FIELDS, SORTS, card_kind, primary_action
 from ..tokens import sp
@@ -900,7 +900,8 @@ def _overflow(ctx: Any, job: Any) -> None:
     # the same file.
     from .. import inker_mode
 
-    if inker_mode.can_edit_job(ctx, job) and controls.menu_item("Open in Inker", "", False)[0]:
+    editable = inker_mode.can_edit_job(ctx, job)
+    if editable and controls.menu_item(verbs.open_in("inker"), "", False)[0]:
         inker_mode.open_job_reference(ctx, job)
     _map_and_atlas_items(ctx, job, files)
     _troupe_item(ctx, job)
@@ -909,7 +910,7 @@ def _overflow(ctx: Any, job: Any) -> None:
         # here, and imports ``model.glb`` -- the optimized, grounded, served
         # mesh -- when it was not. Never ``source.glb``: that is the raw
         # reconstruction, and nothing downstream of the pipeline uses it.
-        if controls.menu_item("Open in Clay", "", False)[0]:
+        if controls.menu_item(verbs.open_in("clay"), "", False)[0]:
             from .. import clay_mode
 
             clay_mode.edit_asset_in_clay(ctx, job)
@@ -928,7 +929,7 @@ def _overflow(ctx: Any, job: Any) -> None:
         # inside the inspector's Rig & Pose tab -- so a user with six rigged
         # props and a walk cycle to author had to already know the mode
         # existed. Same gate the pose pane uses, answered from the cached row.
-        if "rig.glb" in files and controls.menu_item("Open in Poser", "", False)[0]:
+        if "rig.glb" in files and controls.menu_item(verbs.open_in("poser"), "", False)[0]:
             from . import pose_panel
 
             pose_panel.open_in_poser(ctx, job)
@@ -970,7 +971,7 @@ def _send_to_troupe_item(ctx: Any, job: dict[str, Any]) -> None:
         if rigged
         else "Rig this mesh as a humanoid, then render a character sheet from it."
     )
-    if controls.menu_item("Send to Troupe", "", False, tooltip=hint)[0]:
+    if controls.menu_item(verbs.send_to("troupe"), "", False, tooltip=hint)[0]:
         troupe_mode.send_to_troupe(ctx, job)
 
 
@@ -993,7 +994,7 @@ def _troupe_item(ctx: Any, job: dict[str, Any]) -> None:
     sheet_id = str(params.get("sheet_id") or "")
     if not source:
         return
-    if controls.menu_item("Open in Troupe", "", False)[0]:
+    if controls.menu_item(verbs.open_in("troupe"), "", False)[0]:
         from .. import troupe_mode
 
         # The same call a finished charsheet's "Show" toast makes, so the
@@ -1017,15 +1018,15 @@ def _map_and_atlas_items(ctx: Any, job: dict[str, Any], files: Any) -> None:
     from .. import packwright_mode, plotter_mode
 
     authored = (job.get("params") or {}).get("authored")
-    if authored == "plotter" and controls.menu_item("Open in Plotter", "", False)[0]:
+    if authored == "plotter" and controls.menu_item(verbs.open_in("plotter"), "", False)[0]:
         plotter_mode.edit_asset_in_plotter(ctx, job)
-    if authored == "packwright" and controls.menu_item("Open in Packwright", "", False)[0]:
+    if authored == "packwright" and controls.menu_item(verbs.open_in("packwright"), "", False)[0]:
         packwright_mode.edit_asset_in_packwright(ctx, job)
     if "input.png" not in files:
         return
-    if controls.menu_item("Add to Plotter as a tileset", "", False)[0]:
+    if controls.menu_item(verbs.add_to("plotter", "as a tileset"), "", False)[0]:
         plotter_mode.use_as_tileset(ctx, job)
-    if controls.menu_item("Add to a Packwright atlas", "", False)[0]:
+    if controls.menu_item(verbs.add_to("packwright", "as an atlas source"), "", False)[0]:
         packwright_mode.add_job_source(ctx, job)
 
 

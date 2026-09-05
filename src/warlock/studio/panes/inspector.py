@@ -19,7 +19,7 @@ from ...service import derive as svc_derive
 from ...service import files as svc_files
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
-from .. import controls, create_stages, fonts, forms, quality, theme, widgets
+from .. import controls, create_stages, fonts, forms, quality, theme, verbs, widgets
 from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -231,28 +231,28 @@ def _edit_actions(ctx: Any, job: Any) -> None:
     if params.get("asset_intent") == "tileset" and "input.png" in (job.get("files") or []):
         from .. import packwright_mode, plotter_mode
 
-        if controls.button("Add to Plotter"):
+        if controls.button(verbs.add_to("plotter")):
             plotter_mode.use_as_tileset(ctx, job)
-        if controls.button("Add to Packwright"):
+        if controls.button(verbs.add_to("packwright")):
             packwright_mode.add_job_source(ctx, job)
         widgets.hint_text("Use the generated grid as a map tileset or atlas source.")
 
     if offers_inker(ctx, job):
-        if controls.button(f"{icons.BRUSH} Open in Inker"):
+        if controls.button(f"{icons.BRUSH} {verbs.open_in('inker')}"):
             inker_mode.open_job_reference(ctx, job)
         widgets.hint_text("Paint over the reference; saving updates this asset.")
     # Independent, not an else: the two gates are disjoint today (a reference
     # has no mesh and a mesh has no editable reference), and an else would hide
     # one of them without saying so if that ever stopped being true.
     if can_edit_in_clay(job):
-        if controls.button(f"{icons.BOX} Open in Clay"):
+        if controls.button(f"{icons.BOX} {verbs.open_in('clay')}"):
             clay_mode.edit_asset_in_clay(ctx, job)
         widgets.hint_text("Opens the authored document when there is one, else the mesh.")
 
     from .. import troupe_mode
 
     if troupe_mode.can_send_to_troupe(ctx, job):
-        if controls.button(f"{icons.PERSON_STANDING} Send to Troupe"):
+        if controls.button(f"{icons.PERSON_STANDING} {verbs.send_to('troupe')}"):
             troupe_mode.send_to_troupe(ctx, job)
         # The library's menu item has carried this since it existed and the
         # button beside the mesh had nothing at all -- so the one surface where
@@ -1009,7 +1009,7 @@ def _pixel_handoffs(
     """
     from .. import inker_mode
 
-    if controls.button("Open in Inker"):
+    if controls.button(verbs.open_in("inker")):
         inker_mode.open_pixel_artifact(
             ctx,
             job_id,

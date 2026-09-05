@@ -23,7 +23,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, icons, muse_mode, widgets
+from .. import controls, icons, muse_mode, verbs, widgets
 from ..tokens import sp
 
 #: A card's size in design pixels. Wide enough for two lines of tags at a
@@ -132,7 +132,7 @@ def _actions(ctx: Any, job: dict[str, Any], job_id: str) -> None:
             muse_mode.play(ctx, job_id)
     imgui.same_line()
     if widgets.ghost_button(
-        "Open in Sirens",
+        verbs.open_in("sirens"),
         enabled=ready,
         reason="" if ready else "this take has not finished yet",
         tooltip="Import this track into the tracker as a sample instrument.",

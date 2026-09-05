@@ -1350,4 +1350,4 @@ def handle_key(ctx: Any, event: Any) -> bool:
 
 #: The glyph the rail, Home and the palette all use for this mode. One name, so
 #: a screen the user has seen does not change its picture per surface.
-ICON = icons.PERSON_STANDING
+ICON = icons.FILM

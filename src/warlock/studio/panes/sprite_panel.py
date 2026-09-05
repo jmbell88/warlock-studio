@@ -29,7 +29,7 @@ from imgui_bundle import imgui
 from ... import rigging
 from ...service import sprites as svc_sprites
 from ...service import validation
-from .. import asset_open, controls, forms, theme, widgets
+from .. import asset_open, controls, forms, theme, verbs, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import model_gate, stamps
@@ -360,7 +360,7 @@ def _candidate(
             widgets.muted_wrapped(
                 f"{warning.get('cell')}: {warning.get('detail')}"
             )
-        if controls.small_button("Open in Inker"):
+        if controls.small_button(verbs.open_in("inker")):
             from .. import inker_mode
 
             inker_mode.open_sprite_draft(ctx, job_id, draft_id, letter)

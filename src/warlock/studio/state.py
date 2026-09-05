@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from . import verbs
+
 # The prompt history the 2D pane offers. Twenty is what the browser kept: long
 # enough to find yesterday's phrasing, short enough to scan.
 MAX_HISTORY = 20
@@ -1304,9 +1306,9 @@ ACTIONS = {
     "promote": "Make 3D",
     "rig": "Rig",
     "open": "Open",
-    "inker": "Open in Inker",
-    "clay": "Open in Clay",
-    "plotter": "Add to Plotter",
+    "inker": verbs.open_in("inker"),
+    "clay": verbs.open_in("clay"),
+    "plotter": verbs.add_to("plotter"),
     "variation": "Variation",
     "revise": "Revise with prompt",
     "settings": "Use settings",

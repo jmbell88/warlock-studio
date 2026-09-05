@@ -796,9 +796,13 @@ def _layer_table(ctx: Any, doc: Any, layer: Any, editable: bool) -> None:
             doc.set_layer_props(layer.uid, class_name=class_name)
 
         _row_named("Opacity", "How strongly this layer draws over the ones below it.")
-        changed, opacity = controls.slider_float(
-            "##layer-opacity", float(layer.opacity), 0.0, 1.0
+        # As a percentage, the way the Layers pane beside it and every other
+        # 0..1 slider in the app draw one; this row said "1.000" while the
+        # pane across the map said "100%" for the same value.
+        changed, shown = controls.slider_float(
+            "##layer-opacity", float(layer.opacity) * 100.0, 0.0, 100.0, "%.0f%%"
         )
+        opacity = shown / 100.0
         # One gesture, one step: a drag reports on every frame the pointer
         # moves, and ``set_layer_props`` pushes a step per report without this.
         controls.fold_undo(doc.history)
@@ -1130,9 +1134,10 @@ def _object_fields(ctx: Any, doc: Any, state: Any, layer: Any, obj: MapObject) -
         _row_named(
             "Opacity", "This one object's opacity, multiplied into its layer's."
         )
-        changed, opacity = controls.slider_float(
-            "##obj-opacity", float(obj.opacity), 0.0, 1.0
+        changed, shown = controls.slider_float(
+            "##obj-opacity", float(obj.opacity) * 100.0, 0.0, 100.0, "%.0f%%"
         )
+        opacity = shown / 100.0
         # One gesture, one step: a drag reports on every frame the pointer
         # moves, and ``set_object`` pushes a step per report without this.
         controls.fold_undo(doc.history)

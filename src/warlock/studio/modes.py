@@ -64,9 +64,12 @@ MODES: list[tuple[str, str, str]] = [
     # than a panel in Create for the reason Poser is one: what happens here is
     # *watching* -- a walk cycle plays continuously and you judge it -- and
     # that is a use of the whole window, not of a 300px column beside a form.
-    # The glyph is Poser's, deliberately: both are about a human figure, and
-    # the rail distinguishes them by label.
-    ("troupe", "Troupe", icons.PERSON_STANDING),
+    # Not Poser's glyph any more. It was, "deliberately: both are about a
+    # human figure, and the rail distinguishes them by label" -- and then the
+    # rail's default became icons (``layout.py``), so two adjacent rows drew
+    # the same standing figure and were told apart only by hovering. FILM is
+    # what this mode makes: frames of a character, played.
+    ("troupe", "Troupe", icons.FILM),
     ("plotter", "Plotter", icons.GRID),
     ("packwright", "Packwright", icons.LAYERS),
     # Muse: the thirteenth mode, and the one whose output is a **job row**.

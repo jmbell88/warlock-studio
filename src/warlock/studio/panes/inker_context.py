@@ -683,6 +683,30 @@ def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:
 
         return toolbar.Field(key, label, draw, width=NARROW, compact=COMPACT)
 
+    def percent_slider(low: float, high: float) -> Any:
+        """A 0..1 option drawn as ``Opacity 85%``, stored as the fraction.
+
+        The same rule ``widgets.labeled_slider_float`` applies everywhere else
+        in the app: the model keeps its natural units and the reader gets the
+        ones they think in. The word on the face is the option's *full* label
+        from ``inker_state.context_label`` -- this bar said ``opa 1.00`` and
+        ``hard 0.85`` while the timeline, the menu and Plotter's layer pane
+        all said "Opacity", which the 2026-09-05 consistency review caught.
+        """
+
+        def draw(compact: bool) -> None:
+            changed, shown = controls.slider_float(
+                f"##ctx/{key}",
+                float(options[key]) * 100.0,
+                low * 100.0,
+                high * 100.0,
+                f"{label} %.0f%%",
+            )
+            if changed:
+                options[key] = float(shown) / 100.0
+
+        return toolbar.Field(key, label, draw, width=NARROW, compact=COMPACT)
+
     def combo(choices: list[tuple[str, str]], width: float = NARROW) -> Any:
         def draw(compact: bool) -> None:
             changed, value = controls.combo(f"##ctx/{key}", str(options[key]), choices)
@@ -706,8 +730,11 @@ def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:
     # **Every slider carries its own name in its format string.** A row of
     # bare numbers -- 12, 0.85, 1.00 -- is three settings the user has to
     # count along the bar to identify, which is what the screenshot pass
-    # found. The names are short because the field is 92 px: this is the
-    # place a four-letter word is worth more than a correct one.
+    # found. The name is the option's full label: the 92 px field once
+    # justified "opa" and "hard", and the consistency review of 2026-09-05
+    # found the same setting called "Opacity" everywhere else, including
+    # Inker's own timeline. A percentage is shorter than a two-place float,
+    # which is what buys the whole word back.
     if key == "brush_size":
         return slider_int(inker.MIN_BRUSH, inker.MAX_BRUSH, "%d px")
     if key == "nib":
@@ -716,9 +743,9 @@ def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:
         # word or it is lying about what is selected.
         return combo(NIB_LABELS)
     if key == "hardness":
-        return slider_float(0.0, 1.0, "hard %.2f")
+        return percent_slider(0.0, 1.0)
     if key == "opacity":
-        return slider_float(0.05, 1.0, "opa %.2f")
+        return percent_slider(0.05, 1.0)
     if key == "paint_ink":
         def draw(compact: bool) -> None:
             changed, value = controls.combo(
@@ -736,7 +763,7 @@ def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:
     if key == "spray_rate":
         return slider_int(5, 400, "%d/s")
     if key in ("spacing", "stabilise", "speed_taper", "strength"):
-        return slider_float(0.0, 1.0, f"{label[:5].lower()} %.2f")
+        return percent_slider(0.0, 1.0)
     if key == "wand_tolerance":
         return slider_int(0, 255, "tol %d")
     if key == "brush_angle":

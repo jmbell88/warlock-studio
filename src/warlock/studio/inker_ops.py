@@ -35,6 +35,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import verbs
+
 __all__ = [
     "MENUS",
     "OPS",
@@ -915,7 +917,7 @@ register(
 register(
     Op(
         "add_to_packwright",
-        "Add to Packwright",
+        verbs.add_to("packwright"),
         lambda ctx, tab, **_: _packwright(ctx, tab),
         menu="File",
         enabled=ready,

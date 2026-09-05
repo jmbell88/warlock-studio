@@ -113,7 +113,7 @@ rule doing what it was told.
 
 This distinction matters as much as Merge versus Union.
 
-**Export to library** mints an ordinary finished asset from your exact geometry. Nothing is
+**Export to the library** mints an ordinary finished asset from your exact geometry. Nothing is
 reinterpreted. It unlocks everything downstream — rigging, posing, sheets, every export format —
 none of which needs to know Clay exists.
 
@@ -130,7 +130,7 @@ applied downstream, on the finished asset, in the retarget panel.
 
 ## Round trips
 
-Export to library, then use **Open in Clay** on the resulting card, and you get your objects back —
+Export to the library, then use **Open in Clay** on the resulting card, and you get your objects back —
 names, generator parameters and all. That works because the export keeps a `.wblk` beside the mesh.
 Opening a mesh that was *not* authored in Clay instead gives you one frozen object per material,
 which is the honest answer to "what were the objects in this file" for a file that never had any.
@@ -145,7 +145,7 @@ which is the honest answer to "what were the objects in this file" for a file th
    retry successfully.
 5. In Face mode, select the top of a box, **Inset**, then **Extrude** upward to make a chimney —
    and watch the properties panel drop the box's parameters the moment the inset lands.
-6. **Export to library**, then **Open in Clay** from the new card, and confirm your objects came
+6. **Export to the library**, then **Open in Clay** from the new card, and confirm your objects came
    back.
 
 ## What to read next

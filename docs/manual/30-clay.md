@@ -497,7 +497,7 @@ that key existed still opens, and simply gets framed.
 Clay has two output paths and they do genuinely different things. Choosing between them is the
 whole reason both exist.
 
-**Export to library** puts the *exact* geometry in the library as an ordinary asset. It is a
+**Export to the library** puts the *exact* geometry in the library as an ordinary asset. It is a
 finished model row from the moment it lands, so it inherits everything the rest of the app does to a
 mesh: rigging, posing, sprite sheets, the triangle retarget, and the STL, OBJ, FBX, collision and
 texture exports. Use it when the shape you modelled is the shape you meant.

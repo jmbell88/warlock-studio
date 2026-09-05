@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import icons, packwright_mode, widgets
+from .. import icons, packwright_mode, verbs, widgets
 from ..manual import render as manual_render
 
 
@@ -92,7 +92,7 @@ def draw(ctx: Any) -> None:
     # produces files for another application, not a move inside the app.
     widgets.section("Take it somewhere")
     if widgets.disabled_button(
-        f"{icons.UPLOAD} Export to the library (Ctrl+E)",
+        f"{icons.UPLOAD} {verbs.EXPORT_TO_LIBRARY} (Ctrl+E)",
         ready and packed,
         (-1, 0),
         reason=busy_why if not ready else packed_why,

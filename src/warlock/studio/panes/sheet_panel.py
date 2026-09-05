@@ -17,7 +17,7 @@ from imgui_bundle import imgui
 from ... import models, rigging
 from ...service import sheets as svc_sheets
 from ...service import validation
-from .. import asset_open, atomic, controls, dialogs, forms, icons, widgets
+from .. import asset_open, atomic, controls, dialogs, forms, icons, verbs, widgets
 from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
 from . import model_gate, stamps
@@ -660,10 +660,10 @@ def _handoffs(ctx: Any, job_id: str, sheet_id: str, *, pixel: bool = False) -> N
     from .. import inker_mode, packwright_mode
 
     suffix = "pixel" if pixel else "render"
-    if controls.small_button(f"Open in Inker##ink-{suffix}"):
+    if controls.small_button(f"{verbs.open_in('inker')}##ink-{suffix}"):
         inker_mode.open_rendered_sheet(ctx, job_id, sheet_id, pixel=pixel)
-    widgets.same_line_or_wrap(widgets.button_width("Add to Packwright"))
-    if controls.small_button(f"Add to Packwright##pw-{suffix}"):
+    widgets.same_line_or_wrap(widgets.button_width(verbs.add_to("packwright")))
+    if controls.small_button(f"{verbs.add_to('packwright')}##pw-{suffix}"):
         packwright_mode.add_rendered_sheet(ctx, job_id, sheet_id, pixel=pixel)
 
 

@@ -24,7 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, icons, widgets
+from .. import clay_mode, icons, verbs, widgets
 from ..manual import render as manual_render
 
 #: What this pane refuses to shrink past, in design pixels: the path line, the
@@ -140,7 +140,7 @@ def _outputs(ctx: Any, tab: Any) -> None:
         else "Nothing visible to send -- every object is hidden."
     )
 
-    if widgets.primary_button(f"{icons.DOWNLOAD} Export to library", enabled=ready):
+    if widgets.primary_button(f"{icons.DOWNLOAD} {verbs.EXPORT_TO_LIBRARY}", enabled=ready):
         clay_mode.export_asset(ctx, tab)
     if imgui.is_item_hovered():
         imgui.set_tooltip(
