@@ -15,9 +15,10 @@ version and every deleted plan (`git log --all --diff-filter=D`).
 2. **Work that is fully specified and deliberately unstarted** — today that is
    Troupe's phases 7 and 8 alone (P13), each here with the argument that
    makes it actionable, not as a title.
-3. **Open audit findings** (the section at the end): code work the 2026-09-04
-   static audit found and did not fix. Each is buildable and is struck out the
-   day it is built; the section is deleted when it is empty.
+3. **Open findings** (the section at the end): code work a review or a real
+   run turned up and did not fix, numbered `F<N>` so it cannot be confused
+   with the `P<N>` entries above. Each is buildable and is struck out the day
+   it is built; the section is deleted when it is empty.
 
 **The moment an item could be built, it is built and struck out rather than
 tracked.** A plan whose boxes disagree with the tree is worse than no plan, and
@@ -37,65 +38,89 @@ so that "done" is recognisable without re-deriving it.
 
 ---
 
-## P1. Run the installer on a clean machine
+## P1. Generate an asset from a clean-machine install
 
 **Why it is yours:** hardware. The installer was built for the first time on
-2026-08-26 and rebuilt at 0.0.31 on 2026-09-03 (2.91 GB payload, ~800 s
-compile, 6.61 GB installed; single exe, `DiskSpanning=no`). Two things it
-reproduced both times and which are the path, not an edge case: `iscc` is not
-on PATH (`-Iscc` is needed) and the default index does not serve cu128, so the
-pinned-index retry in `build.ps1` is load-bearing. A default per-user `/SILENT`
-install was proved the same day. Everything below has never been seen on a
-machine that is not this one.
+2026-08-26 and has been rebuilt since; two things it reproduced every time, and
+which are the path rather than an edge case: `iscc` is not on PATH (`-Iscc` is
+needed) and the default index does not serve cu128, so the pinned-index retry in
+`build.ps1` is load-bearing.
+
+**The install half of this entry closed on 2026-09-05**
+(`docs/measurements/2026-09-05-clean-machine-install.md`).
+`WarlockSetup-v0.0.35.exe` was carried on a USB drive to a second Windows PC
+with no Python, no `uv` and no CUDA toolkit, and installed there with no network
+involved at any point. The app launched, every mode was browsable, and a drawing
+was made in Inker, saved and reopened. So the sentence this entry used to end
+with — that the project has no shippable artifact — is retired: it installs on a
+machine that is not this one, and it draws. What it has still never done is
+*make* anything, because that machine's card is 8 GiB and `vram.TRELLIS_GIB` is
+16.0, so a reconstruction is out of reach there by design.
+
+Note also that the figures this entry used to carry (2.91 GB payload, 6.61 GB
+installed) were the all-extras shape and are superseded. P26 took the installer
+to `--extra studio` alone with the three heavy extras arriving as packs, and
+`INSTALL.md` now measures that build: **810 MB download (846,950,916 bytes),
+about 1.4 GB installed base**, SHA-256 `254b3af9…`, at v0.0.35.
 
 **Do:**
-- Install once with `/DIR=C:\Temp\WarlockApp /SILENT`. With `$env:WARLOCK_HOME`
-  at a scratch directory: the Start Menu shortcut launches under `pythonw`, the
-  checkout-shape gate passes, the fatal banners name the two missing-weights
-  rows, the first-run overlay shows correct GPU verdicts, ~23 GB and the disk
-  check, and the wizard's first page renders `LICENSE`.
-- Prove the fetch pipeline under the bundled interpreter: one small row end to
-  end (dinov2, 0.4 GB), then SDXL and one reference generation. For TRELLIS,
-  copy an existing `~/.warlock/models/trellis2-gguf` into the scratch home to
-  prove the engine launches from `{app}\vendor`; start the engine download and
-  cancel it mid-flight to prove staging cleanup.
-- Upgrade over a scratch version (clean slate, data intact); uninstall
-  (`{app}` gone, `~/.warlock` intact). Then a clean Windows VM with no Python
-  and no CUDA toolkit: install, generate one asset, uninstall, reinstall.
-- Then the laptop — the one machine whose GPU is unknown.
 
-Two things the code review could not check: `pythonw.exe` has no console, so a
-crash *before* `_setup_logging` attaches closes silently — if that happens, run
-`python -m warlock` from a terminal to see it. And an unsigned exe means
-SmartScreen's "More info → Run anyway" (code signing was answered no for the
-closed beta; see Closed records).
+1. ~~**Install on a machine that is not this one, and reach the window.**~~
+   Proved 2026-09-05. Offline from USB onto a clean Windows PC: the shortcut
+   launched, the checkout-shape gate passed, the welcome dialog offered its
+   three doors, the hardware scan named the real GPU, and the fatal banners
+   named the missing-weights rows. The base install reached the window with no
+   torch and no `bpy` — P26's added step — and Inker round-tripped a document.
+2. ~~**Prove the installer stages the packs.**~~ Proved 2026-09-05. Settings →
+   Packs drew a real row with a size and a live Install button rather than
+   `app_settings.pack_blocked`'s "this build carries no packs" fallback, which
+   is what a source checkout gets. `packs.json` and the bundled wheels are
+   reaching `{app}\packs` on a machine that has never had `uv`.
+3. ~~**Install a pack from Settings on a machine that has never had `uv`.**~~
+   Proved 2026-09-05, on the reinstall. All three went on — Image Generation,
+   Rigging and Music — which is P26's programme validated outside the test
+   suite for the first time, `music`'s sdist build path and the bundled-wheel
+   branch of `pack_worker.collect` included. Still unchecked: whether Poser
+   opens without a restart afterwards.
+4. **Fix the model downloads, then prove the fetch pipeline under the bundled
+   interpreter.** The one thing that stopped both runs, and the second run
+   narrowed it sharply: packs install fine from PyPI while *every* Hugging Face
+   row is reset with `ConnectError: [WinError 10054]`. Two experiments separate
+   the causes, neither has been run, and the fetch path should not be touched
+   before one of them has — see F1. When it works: one small row end to end
+   (dinov2, 0.4 GB), then SDXL and one reference generation. For TRELLIS, copy
+   an existing `~/.warlock/models/trellis2-gguf` into the scratch home to prove
+   the engine launches from `{app}\vendor`; start the engine download and cancel
+   it mid-flight to prove staging cleanup.
+5. **The three recovery paths, which have only ever run against fakes** (the
+   beta audit's H02/M01/M02). Quit the app *during* a pack install and watch
+   which half you are in — a download must cancel on the worker's own
+   acknowledgement, and a commit must hold the quit until pip is done rather
+   than confirm one it cannot honour. Then press **Repair** on a pack that
+   installed cleanly (it should reinstall the pinned wheels and come back green)
+   and on one you have damaged by hand, by emptying a `.dist-info` or a
+   top-level module. Finally upgrade over a version with packs installed and
+   take the **Restore packs** button the banner offers: the selection is
+   recorded beside the wheel cache under `WARLOCK_HOME`, so it is supposed to
+   survive the installer wiping `site-packages`. **These are reachable now**:
+   they need a pack, not a weight or a card, and that machine has three. The
+   cheapest step left, and the only one that does not wait on F1.
+6. **Upgrade over a scratch version** (clean slate, data intact). Uninstall and
+   reinstall are done — that is how the second 2026-09-05 run began, and
+   `~/.warlock` survived it — but an upgrade *over* an existing install is
+   not, and that is the one carrying the Restore packs banner.
+7. **Then the laptop** — the one machine whose GPU is unknown.
 
-**The installer changed under this entry on 2026-09-04** (P26): it stages
-`--extra studio` alone and the three heavy extras arrive as packs from
-Settings, so the 2.91 GB payload and 6.61 GB installed above are the *old*
-shape and one of the things this run measures is the new one. Two steps join
-the list: the base install must reach the window with no torch and no `bpy`
-(Create, Poser, Troupe and Muse present and saying what they need), and one
-pack must be installed from Settings on that machine — `rig` is the cheap one
-at 0.32 GiB — after which Poser opens without a restart.
+Two things the code review could not check, one of which is now half-answered:
+`pythonw.exe` has no console, so a crash *before* `_setup_logging` attaches
+closes silently — if that happens, run `python -m warlock` from a terminal to
+see it. And an unsigned exe means SmartScreen's "More info → Run anyway" (code
+signing was answered no for the closed beta; see Closed records) — though on
+2026-09-05 SmartScreen did not appear at all, so that page is still unwitnessed.
 
-**And again on 2026-09-05** (the beta audit's H02/M01/M02): three recovery
-paths were built that have only ever run against fakes, and this is the machine
-that decides whether they are real. Quit the app *during* a pack install and
-watch which half you are in — a download must cancel on the worker's own
-acknowledgement, and a commit must hold the quit until pip is done rather than
-confirm one it cannot honour. Then press **Repair** on a pack that installed
-cleanly (it should reinstall the pinned wheels and come back green) and on one
-you have damaged by hand, by emptying a `.dist-info` or a top-level module of
-an installed pack. Finally upgrade over a version with packs installed and take
-the **Restore packs** button the banner offers: the selection is recorded beside
-the wheel cache under `WARLOCK_HOME`, so it is supposed to survive the
-installer wiping `site-packages` — which nothing but this run can prove.
-
-**Expected outcome:** a first **non-developer** install that generated an
-asset. Until a machine without `uv`, Python or a CUDA toolkit has installed
-this and made something, the project has no shippable artifact, whatever the
-tree says.
+**Expected outcome:** a **non-developer install that generated an asset**. The
+install itself is no longer the question; a working download path and a card
+big enough to reconstruct on are.
 
 ## P3. Re-examine the `trellis_tex_res = 512` pin
 
@@ -462,7 +487,11 @@ surfaces have evidence gaps and no chip: Sirens has never been heard (P14),
 Muse has never been heard (P23), Plotter's Tiled interop has only round-tripped
 against itself (P7), Troupe's sheet job has never run against real Blender
 (P5), and Warlock-written `.aseprite` files have never been opened in Aseprite
-(P6).
+(P6). One more belongs here that is not a mode: on a base install, Create and
+Muse send you to Settings → **Models**, and the weights are only half of what
+they need — the matching **pack** is the other half, and nothing at the door
+says so (F2). An invitee who downloads 23 GB and still cannot generate has hit a
+known gap, not a broken build.
 
 **Do:** name them, by mode, in whatever the invite is — a note beside the
 download. One sentence each: what runs, what has never been checked against the
@@ -625,29 +654,6 @@ left needs a person:
 three packs a user chooses, and a figure for each of the two that have never
 been collected.
 
-## P27. Build the release candidate and measure it into INSTALL.md
-
-**Why it is yours:** hardware and a real build, same as P1 — this is the
-narrower half of it. `INSTALL.md` was rewritten 2026-09-05 around the base
-installer + Settings → Packs → Models flow (L04–L07/M16 of the 2026-09-04
-audit), but every size and hash in it is a placeholder
-(`[TBD — measure from release-candidate build]`) because no one has built the
-slim-base release candidate yet.
-
-**Do:**
-- Build the release candidate with `installer/build.ps1` (the P26 shape:
-  `--extra studio` staged, the three heavy extras pruned to packs).
-- Record the installer's SHA-256, its download size, and the installed base
-  runtime's on-disk size, the same way P1's now-stale 2.91 GB / 6.61 GB
-  figures were originally measured.
-- Replace every `[TBD — measure from release-candidate build]` placeholder in
-  `INSTALL.md` (the What you'll need list, and Step 1) with the measured
-  numbers.
-
-**Expected outcome:** `INSTALL.md` states real numbers instead of
-placeholders, and a beta tester reading it knows what they are actually about
-to download.
-
 ## Also owed, smaller
 
 - **Tutorial sample assets** (art): a 32×32 `.ora` sprite with a few layers
@@ -660,6 +666,114 @@ to download.
 - **Delete the pre-purge mirror** at `D:/Projects/_archive/warlock-pre-purge.git`
   once you have worked in the rewritten repository long enough to be
   satisfied. Keeping it indefinitely means keeping the problem indefinitely.
+
+## Open findings
+
+Code work found by a run against the tree rather than by the suite. Each is
+buildable and is struck out the day it is built; this section is deleted when
+it is empty. Both entries below came out of the 2026-09-05 clean-machine
+install (`docs/measurements/2026-09-05-clean-machine-install.md`), which ran
+twice: once as delivered, once after an uninstall and reinstall.
+
+### F1. Hugging Face downloads are reset on a machine where PyPI is fine
+
+On the 2026-09-05 machine every model download failed with
+`ConnectError: [WinError 10054] An existing connection was forcibly closed by
+the remote host` — the reconstruction engine, the base models, the LoRAs and
+the conditioners alike, with rows tickable, the button live, and 50 GB free.
+**On the second run all three dependency packs installed successfully on the
+same machine, same network, same session.** That asymmetry is the whole value
+of the run: it eliminates the network, the disk, the `winjob` child machinery,
+the staging design, and the `Python-urllib/3.13` agent ban v0.0.35 had just
+fixed. Packs go to PyPI over plain `httpx`; every model row goes through
+`huggingface_hub.snapshot_download`, including the engine (`ilintar/trellis2-gguf`
+is a repository, not a URL). One transport works and the other does not.
+
+**Do not change the fetch path until one of these two has been run**; they have
+different fixes.
+
+1. **Are Hugging Face hosts reset on that machine** (antivirus, TLS
+   interception, a DNS filter, an ISP block)? Open `huggingface.co` in a
+   browser there, and fetch the one registry row that goes to a non-HF host by
+   direct URL — `hdemucs_high`, 0.32 GB from `download.pytorch.org`. If that
+   succeeds while HF rows fail, it is HF reachability, and the fix is
+   messaging plus an `HF_ENDPOINT` mirror the user can set.
+2. **Is it the Xet transport?** `hf-xet` is a dependency of `huggingface_hub`
+   on Windows AMD64, so it is in the base runtime, and a Xet-backed repository
+   is fetched through `*.xethub.hf.co` over many parallel connections — which
+   antivirus and firewall products reset far more readily than one HTTPS
+   stream. Nothing here sets `HF_HUB_DISABLE_XET`. Set it to `1` in the
+   environment on that machine, relaunch, retry. If it works, the fix is a
+   one-line default in `fetch_worker` (with a fallback rather than a hard
+   disable, so a healthy machine keeps Xet's speed).
+
+**Independent of both, the message is a defect and can be fixed today.**
+`pipelines/fetch_worker.py` catches `Exception` at the top of its per-spec loop
+and stringifies it as `f"{type(exc).__name__}: {exc}"`, under a comment reading
+"the message is the product here". That is true of the two exceptions the file
+raises itself — a digest mismatch and a missing rename source both carry real
+sentences — and false of everything the transport raises.
+`service/downloads.py` passes the string through untouched into `Invalid`, and
+`Invalid` is on `studio/tasks.py`'s `CARRIES_ITS_OWN_MESSAGE` list, so the UI
+treats a socket error as human-written prose: a transient toast, no log-file
+button (offered only for `Failed`), and a Models row that reverts to `Install`
+as though nothing had happened.
+
+- **Translate in `fetch_worker.main()`**, which still holds the exception
+  object and can read `getattr(exc, "winerror", None)` and `errno` before
+  anything is stringified. The parent only ever sees a string, so translating
+  there would mean substring-matching, which is worse. Offline,
+  reset-by-peer, DNS failure, 403-or-gated and rate-limited are five different
+  remedies and are currently one undifferentiated line.
+- **Give a failed row a persistent error state.** A toast is the wrong
+  lifetime for something the user has to act on.
+- **Consider a retry with backoff.** There is none on this path, though
+  `pipelines/trellis.py` already has the pattern, and a reset is exactly the
+  class of failure a retry exists for. A stalled socket currently costs the
+  four-hour `FETCH_TIMEOUT` before it says anything, which is its own bug.
+- **Two tests pin the current pass-through** — one in `tests/test_fetch.py`
+  asserting a raw `OSError` string survives into the payload, one in
+  `tests/test_fetch_drain.py` asserting a traceback fragment reaches the
+  refusal. Both are about staging cleanup and stderr drainage rather than
+  messaging, but a fix changes them, so change them deliberately.
+- `service/packs.py` has the identical blanket-catch shape. It is not the
+  failing path here, but it will read the same way the day PyPI resets.
+
+### F2. The pack gate was never written, so the weights gate masks it
+
+On a base install, clicking Create or Muse sends the user to Settings → Models.
+That is the *weights* gate working as designed and as `tests/test_mode_gate.py`
+pins it. The problem is that nothing else is standing at that door:
+`studio/modes.py`'s `NEEDS_ROWS` maps `create` and `muse` to model rows only,
+`model_gate.mode_block` reads `ctx.model_rows` and never consults
+`service.packs`, and `model_gate.request_install` hard-codes the `models`
+category — there is no `packs` equivalent, though the category exists.
+`packs.Pack.modes`, the table that names exactly which mode each pack gates, is
+read in one place: a label inside the Packs pane.
+
+The consequence on a fresh base install is that both conditions are true at
+once and the user is pointed at roughly 23 GB of weights that still will not let
+Create generate anything, because `torch` is not installed. Observed on
+2026-09-05: the click landed on Models, and Packs had to be found by hand on the
+category rail. And a user who *does* have weights, or any job at all in the
+library, gets past the gate entirely — `mode_block` un-gates on a non-empty
+library by design — and meets the missing pack as a worker
+`ModuleNotFoundError`.
+
+- **The shape to copy already exists.** The `rig` pack has a ctx-level
+  capability flag, `ctx.rigging_available`, consulted across the Poser panes,
+  the library and the inspector. `text2image` and `music` have no equivalent.
+- **`doctor.music_deps_check` already knows** Muse's pack is missing, but it is
+  `fatal=False` so the banner filters it out and nothing joins it to Muse's
+  door.
+- Whatever the fix, a mode that needs both a pack and its weights should say so
+  once, in the order they have to be installed.
+
+Unrelated but on the same screen, so worth writing down to stop it being
+re-diagnosed: the VRAM banner above every pane is `doctor._vram_check` firing
+fatal below `vram.TRELLIS_GIB`. It is correct, and it has no causal link to the
+Create click — it simply shares the screen, which is why the symptom first read
+as one thing.
 
 ---
 
@@ -682,6 +796,11 @@ to download.
 - **P9, code signing.** Answered no for the closed beta on 2026-09-03. The
   revisit triggers and the priced option (Azure Trusted Signing) are in
   `docs/INVARIANTS.md`.
+- **P27, the release candidate and its figures.** Built and measured
+  2026-09-05 into `INSTALL.md`: 810 MB download (846,950,916 bytes), about
+  1.4 GB installed base, SHA-256 `254b3af9...`, at v0.0.35. The placeholders it
+  existed to replace are gone. Installing that build on a machine that is not
+  this one is the surviving half of P1.
 - **P10's tile-sheet half.** Shipped 2026-08-29 as Materials and Terrain set,
   with the old path labelled *Grid (legacy)*; the verdict is P15.
 - **P11's phase-6 design.** Decided 2026-09-02 and built 2026-09-03: the merge

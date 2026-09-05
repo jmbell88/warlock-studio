@@ -120,4 +120,5 @@ Installing a newer version over an existing one keeps `%USERPROFILE%\.warlock` �
 
 - **Warlock Doctor**, in the Start Menu, re-runs the same first-run diagnostic checks any time you want to check your setup again, including which packs and which model weights are present.
 - If the SmartScreen prompt during installation is what's worrying you, that's expected — see Step 2 above.
+- **If a pack or model download fails**, the message you get is whatever the network gave us, which for a connection problem is not always readable — `ConnectError: [WinError 10054]` and similar mean the connection was cut, not that anything is wrong with your install. Antivirus software, a firewall, a workplace or school proxy, or a VPN are the usual causes; try pausing them, or try a different network. Nothing is left half-installed by a failed download, so it is always safe to press Install again.
 - For anything else — crashes, out-of-memory errors, missing weights, a stuck GPU worker — see the full guide at `docs/manual/42-troubleshooting.md`.
