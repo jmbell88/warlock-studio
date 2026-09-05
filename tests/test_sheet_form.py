@@ -656,7 +656,11 @@ def test_every_layout_the_form_offers_is_queued_by_the_real_door(svc, mode):
     if mode == MATERIALS:
         assert [cell["prompt"] for cell in block["materials"]] == ["mossy stone"]
     elif mode == TERRAIN:
-        assert [t["name"] for t in block["terrains"]] == ["wet grass", "dark water"]
+        # One entry: the inner terrain, the row's blob cases are pictures of
+        # it. ``dark water`` (outer) stays in ``materials``, not here --
+        # see ``_terrain_record``.
+        assert [t["name"] for t in block["terrains"]] == ["wet grass"]
+        assert [m["prompt"] for m in block["materials"]] == ["wet grass", "dark water"]
         assert block["layout"] == "blob47"
 
 

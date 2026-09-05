@@ -149,20 +149,17 @@ MAX_CELLS = MAX_COLLECTION_CELLS
 #: description's first words rather than the description.
 MAX_TERRAIN_NAME = 40
 
-#: The two placeholder swatches a generated terrain set is landed with, in
-#: ``(inner, outer)`` order. ``studio.plotter.terrain``'s own first two defaults
-#: -- Grass and Dirt -- restated because ``service/`` may not import ``studio/``.
+#: The placeholder swatch a generated terrain set's one declared (inner)
+#: terrain is landed with. ``studio.plotter.terrain``'s own first default --
+#: Grass -- restated because ``service/`` may not import ``studio/``.
 #:
-#: **Placeholders on purpose.** A generated terrain's colour is not knowable
+#: **A placeholder on purpose.** A generated terrain's colour is not knowable
 #: from its description at the door, the pixels do not exist yet, and the swatch
-#: is a palette affordance rather than a fact about the set -- so these are what
-#: the palette shows until somebody recolours them, and never what anything
+#: is a palette affordance rather than a fact about the set -- so this is what
+#: the palette shows until somebody recolours it, and never what anything
 #: draws. The outline is the fill at three fifths, which is
 #: ``plotter_tools``' own derivation.
-_TERRAIN_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
-    (106, 153, 78, 255),
-    (156, 122, 84, 255),
-)
+_TERRAIN_SWATCH: tuple[int, int, int, int] = (106, 153, 78, 255)
 
 #: ``tilesheet.TILE_SIZES`` and ``tilesheet.VIEWS``, restated.
 TILE_SIZES: tuple[int, ...] = (16, 32, 48, 64)
@@ -440,24 +437,23 @@ def _seamless_refusal(exc: ValueError, *, view: str, size: int) -> Invalid:
     return Invalid(str(exc), field="projection" if view not in tileatlas.VIEWS else "tile_size")
 
 
-def _terrain_records(inner: str, outer: str) -> list[dict[str, Any]]:
-    """The two terrains a set declares, in precedence order.
+def _terrain_record(inner: str) -> dict[str, Any]:
+    """The one terrain a set declares.
 
-    Ordered, and the order is meaning: a terrain's position is its precedence,
-    which is ``TerrainSpec``'s rule and the whole of how a cell with two
-    terrains around it picks one picture. ``inner`` first, because ``inner`` is
-    the one the forty-seven blob cases are pictures *of*.
+    ``inner`` only: the forty-seven blob cases are pictures of it, and
+    ``terrain_geometry``'s atlas is one row -- a blob-47 set records one
+    terrain per row (``Tileset.__post_init__``'s rule, and what
+    ``atlas_sidecar`` enforces at the door). ``outer`` is composited into
+    every cell too, but it is the background the row's boundaries are cut
+    against, not a row of its own -- it stays recorded as context, in
+    ``materials`` and ``recipe.terrain.outer``, not here.
     """
-    out = []
-    for text, fill in zip((inner, outer), _TERRAIN_SWATCHES, strict=True):
-        out.append(
-            {
-                "name": str(text).strip()[:MAX_TERRAIN_NAME].strip(),
-                "fill": list(fill),
-                "outline": [*(part * 3 // 5 for part in fill[:3]), fill[3]],
-            }
-        )
-    return out
+    fill = _TERRAIN_SWATCH
+    return {
+        "name": str(inner).strip()[:MAX_TERRAIN_NAME].strip(),
+        "fill": list(fill),
+        "outline": [*(part * 3 // 5 for part in fill[:3]), fill[3]],
+    }
 
 
 def create_tile_sheet(
@@ -722,7 +718,7 @@ def create_tile_sheet(
             {"index": index, "prompt": subject, "variant": 1, "seed": int(cell_seed)}
             for index, (subject, cell_seed) in enumerate(zip((inner, outer), seeds, strict=True))
         ]
-        terrains = _terrain_records(inner, outer)
+        terrains = [_terrain_record(inner)]
         # The field that will draw the boundaries, on the request's own seed.
         # ``inset``/``amplitude``/``feather`` are ``None`` rather than numbers:
         # ``tilemask`` reads absent as "the ratio", which is what keeps the
@@ -858,7 +854,8 @@ def create_tile_sheet(
             # order, which is what ``Tileset.local_for`` indexes.
             "layout": layout,
             "materials": materials,
-            # Ordered, and the order is precedence -- see ``_terrain_records``.
+            # One entry: the inner terrain the row's blob cases are pictures
+            # of. See ``_terrain_record``.
             "terrains": terrains,
             "mask": mask,
             # The words both terrain materials share. Not part of either

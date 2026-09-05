@@ -204,20 +204,40 @@ def test_the_terrain_block_is_a_blob47_row_of_two_materials(svc):
     )
 
 
-def test_the_terrain_block_declares_its_two_terrains_in_precedence_order(svc):
-    """A terrain's position in the list is its precedence, which is the whole
-    of how a cell with two terrains around it picks one picture."""
+def test_the_terrain_block_declares_its_one_terrain(svc):
+    """One entry, naming ``inner`` -- the forty-seven blob cases are pictures
+    of it. ``outer`` is the background composited against it, not a terrain
+    of its own; it stays in ``materials`` and ``recipe.terrain.outer``.
+    ``atlas_sidecar`` refuses a terrain count that does not match the atlas's
+    one row, so a second entry here would fail every terrain job at the end
+    of generation."""
     block = _sheet(svc, _terrain(svc))
-    assert [entry["name"] for entry in block["terrains"]] == [
-        "short green grass",
-        "shallow blue water",
-    ]
-    for entry in block["terrains"]:
-        assert len(entry["fill"]) == 4
-        assert len(entry["outline"]) == 4
-        assert all(0 <= part <= 255 for part in entry["fill"] + entry["outline"])
-    # Distinct swatches, or the palette shows one colour for two terrains.
-    assert block["terrains"][0]["fill"] != block["terrains"][1]["fill"]
+    assert [entry["name"] for entry in block["terrains"]] == ["short green grass"]
+    entry = block["terrains"][0]
+    assert len(entry["fill"]) == 4
+    assert len(entry["outline"]) == 4
+    assert all(0 <= part <= 255 for part in entry["fill"] + entry["outline"])
+
+
+def test_the_terrain_block_is_what_atlas_sidecar_will_actually_accept(svc):
+    """The gap this closes: this file only ever checked the params dict, and
+    ``test_tileset_worker.py`` only ever hand-writes params already shaped to
+    fit ``atlas_sidecar`` -- so a door that declared the wrong terrain count
+    could pass both suites and still fail every real job at the sidecar
+    write, which is what a ``terrains=(inner, outer)`` door once did. This
+    calls the door and then the sidecar it feeds, on the same block."""
+    from warlock import _q_tileset
+
+    block = _sheet(svc, _terrain(svc))
+    geom = tileatlas.terrain_geometry(block["tile_w"], block["projection"])
+    seeds = [int(entry["seed"]) for entry in block["materials"]]
+    tileatlas.atlas_sidecar(
+        geom,
+        created=0.0,
+        materials=_q_tileset._bind(geom, block["materials"], seeds, tileatlas.MODE_TERRAIN),
+        terrains=block["terrains"],
+        mask=block["mask"],
+    )
 
 
 def test_a_terrain_name_is_the_descriptions_first_words_not_the_description(svc):
