@@ -41,8 +41,11 @@ import shutil
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any
+
+from . import download
 
 # Before anything imports huggingface_hub, and this line is the whole point of
 # the module existing: warlock/__init__ has already set HF_HUB_OFFLINE=1 in
@@ -205,8 +208,6 @@ def _fetch_url(staging: Path, spec: dict[str, Any]) -> None:
     """
     import hashlib
 
-    from . import download
-
     digest = str(spec.get("sha256") or "").lower()
     if not digest:
         raise ValueError(f"{spec.get('url')} has no sha256 to verify against")
@@ -231,8 +232,134 @@ def _fetch_url(staging: Path, spec: dict[str, Any]) -> None:
         )
 
 
+#: The resume marker, written inside the staging tree. Named for what it is and
+#: deliberately *not* ``.warlock-fetch.json`` -- that name is the published
+#: manifest in the destination, and one name meaning two things across two
+#: directories is how a later reader comes to trust the wrong file.
+RESUME_NAME = ".warlock-resume.json"
+
+#: How many times one fetch re-enters the transport before giving up, and how
+#: long it waits between attempts. Small and bounded: this is for the reset
+#: that happens mid-transfer, not for a host that is down -- a gated repo or a
+#: bad revision fails the same way every time and is refused terminally below.
+#:
+#: Measured need (2026-09-05): on the clean-machine install, one 16.1 GB engine
+#: download ran eight minutes and died on a single Xet token refresh. With
+#: resume beneath it, one retry would have carried it.
+RETRY_ATTEMPTS = 4
+RETRY_BACKOFF_SECONDS = (2.0, 8.0, 20.0)
+
+#: Failures that must *not* be retried and must *not* leave a tree to resume
+#: into. A digest mismatch means the bytes on disk are wrong, so resuming would
+#: keep re-verifying the same bad file for ever; a missing rename source and a
+#: registry entry with no digest are both faults in the request, identical on
+#: every attempt.
+#: ``download.AUTHORED`` is the same tuple seen from the other side -- the
+#: exceptions this module raises itself, every one already carrying a sentence
+#: written for a person, which is why they are both terminal here and passed
+#: through untranslated there. One definition, because a divergence would mean
+#: an exception that is retried *and* shown raw.
+_TERMINAL = download.AUTHORED
+
+
+def _resume_key(spec: dict[str, Any]) -> dict[str, Any]:
+    """What a staging tree has to match before a later fetch may resume into it.
+
+    Everything that decides *which bytes* belong in the tree. A tree staged for
+    another revision, another file selection or another URL holds files this
+    fetch did not ask for, and publishing it would install a mixture -- so the
+    key is compared whole and a mismatch wipes rather than merges.
+    """
+    return {
+        "repo_id": str(spec.get("repo_id") or ""),
+        "revision": str(spec.get("revision") or ""),
+        "filenames": sorted(str(x) for x in (spec.get("filenames") or ())),
+        "allow_patterns": sorted(str(x) for x in (spec.get("allow_patterns") or ())),
+        "ignore_patterns": sorted(str(x) for x in (spec.get("ignore_patterns") or ())),
+        "url": str(spec.get("url") or ""),
+        "sha256": str(spec.get("sha256") or ""),
+    }
+
+
+def _open_staging(dest: Path, spec: dict[str, Any]) -> Path:
+    """The staging tree for this fetch, resumed if a matching one is already there.
+
+    **Resuming is the whole of finding F1** (2026-09-05). Until this existed,
+    every failure removed the tree, and ``huggingface_hub`` keeps its resume
+    bookkeeping in ``.cache/`` *inside* ``local_dir`` -- so a failure discarded
+    the ability to resume along with the bytes. On a connection that resets
+    every few minutes a 16 GB model could never be downloaded, however many
+    times Install was pressed, because every attempt restarted at zero.
+
+    The tree is kept only when its marker matches :func:`_resume_key` exactly.
+    An unreadable, absent or differing marker is treated as "not mine" and the
+    tree is wiped: a partial download of the *wrong* revision is worse than no
+    partial download, and ``_verify_staged`` only catches files the hub wrote a
+    digest sidecar for.
+    """
+    staging = dest.parent / f".{dest.name}.fetch.part"
+    want = _resume_key(spec)
+    if staging.exists():
+        marker = staging / RESUME_NAME
+        try:
+            found = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            found = None
+        if found != want:
+            shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        (staging / RESUME_NAME).write_text(json.dumps(want, indent=2), encoding="utf-8")
+    return staging
+
+
+def _with_retries(run: Any, spec: dict[str, Any]) -> None:
+    """Call ``run`` until it works, up to :data:`RETRY_ATTEMPTS` times.
+
+    Each attempt re-enters the transport over the *same* staging tree, so a
+    retry resumes rather than restarts -- which is what makes a small number of
+    attempts worth anything on a 16 GB download.
+
+    ``_TERMINAL`` failures re-raise immediately: retrying them costs the user
+    time to arrive at the same refusal. Everything else is retried, deliberately
+    including exception types this module cannot name -- the transports raise
+    ``httpx`` and ``hf_xet`` errors that are not ``OSError`` subclasses, and the
+    reset this exists for (``ConnectError: [WinError 10054]``) is one of them.
+    """
+    # From the spec rather than an environment variable, so a caller that
+    # wants one attempt (every test in this project, which must not sleep
+    # through a real backoff) asks for it in the same JSON that carries
+    # everything else the child is told.
+    attempts = max(1, int(spec.get("retries") or RETRY_ATTEMPTS))
+    last: BaseException | None = None
+    for attempt in range(attempts):
+        try:
+            run()
+            return
+        except _TERMINAL:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- see the docstring
+            last = exc
+            if attempt == attempts - 1:
+                break
+            pause = RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)]
+            _emit(
+                percent=-1.0,
+                label=f"connection lost; retrying in {pause:.0f}s",
+            )
+            time.sleep(pause)
+    assert last is not None
+    raise last
+
 def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
-    """Run one fetch. Raises on failure, having removed the staging tree."""
+    """Run one fetch. Raises on failure, keeping a resumable staging tree.
+
+    The staging tree survives a failed attempt on purpose (F1, 2026-09-05) and
+    the next fetch for the same spec resumes into it. What never survives is a
+    half-populated *destination*: nothing moves until the whole tree is
+    downloaded and verified, which is the promise the presence probes rest on
+    and is untouched by this.
+    """
     from huggingface_hub import snapshot_download
 
     dest = Path(spec["dest"])
@@ -241,10 +368,7 @@ def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
     # of up to 16 GB -- and so the free-space check the host already made
     # against this volume is the one that matters.
     dest.parent.mkdir(parents=True, exist_ok=True)
-    staging = dest.parent / f".{dest.name}.fetch.part"
-    if staging.exists():
-        shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True)
+    staging = _open_staging(dest, spec)
 
     patterns = list(spec.get("filenames") or []) + list(spec.get("allow_patterns") or [])
     ignore = list(spec.get("ignore_patterns") or [])
@@ -269,15 +393,22 @@ def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
             # It verifies itself, so it does not reach ``_verify_staged``
             # below -- that function reads ``snapshot_download``'s own
             # ``.metadata`` sidecars, which a plain HTTP GET never writes.
-            _fetch_url(staging, spec)
+            _with_retries(lambda: _fetch_url(staging, spec), spec)
         else:
             revision = str(spec.get("revision") or "") or None
-            snapshot_download(
-                repo_id=str(spec["repo_id"]),
-                revision=revision,
-                local_dir=str(staging),
-                allow_patterns=patterns or None,
-                ignore_patterns=ignore or None,
+            # Retried over the same ``local_dir``, which is what makes the
+            # retry worth having: ``snapshot_download`` reads its own
+            # ``.cache/`` bookkeeping there and continues from where the last
+            # attempt stopped rather than re-fetching what already landed.
+            _with_retries(
+                lambda: snapshot_download(
+                    repo_id=str(spec["repo_id"]),
+                    revision=revision,
+                    local_dir=str(staging),
+                    allow_patterns=patterns or None,
+                    ignore_patterns=ignore or None,
+                ),
+                spec,
             )
             # Verified here: after the download, before the rename, before the
             # .cache subtree that carries the expected digests is deleted, and
@@ -302,9 +433,12 @@ def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
                 )
             os.replace(staged, staging / dst)
         # huggingface_hub keeps its resume bookkeeping in a .cache/ subtree of
-        # local_dir. Moving it into a model directory would leave a stray
-        # directory every presence probe has to learn to ignore.
+        # local_dir, and this module keeps its resume marker beside it. Neither
+        # belongs in a model directory: the first would be a stray tree every
+        # presence probe has to learn to ignore, and the second would sit next
+        # to the published manifest meaning something different.
         shutil.rmtree(staging / ".cache", ignore_errors=True)
+        (staging / RESUME_NAME).unlink(missing_ok=True)
         if not spec.get("publish", True):
             # No-publish mode (MDL-10). The parent is staging a whole selection
             # and will publish all of them together under one journal, so this
@@ -313,17 +447,27 @@ def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
             # interrupted", which the directory's existence cannot say.
             #
             # Deliberately outside the ``except`` unwind below: the staging
-            # tree is the *product* here, not a temporary, so the usual
-            # "remove it on any failure" rule would delete the answer.
+            # tree is the *product* here, not a temporary.
             sampler.stop()
             return _stage_only(staging, dest, spec)
         moved = _move_into(staging, dest)
-    except BaseException:
-        # Every failure, including a KeyboardInterrupt or a kill that unwinds:
-        # the promise is that a failed download leaves no half-populated model
-        # directory, and the staging tree is the whole of that promise.
+    except _TERMINAL:
+        # The bytes on disk are wrong or the request is, and both are identical
+        # on every attempt -- so this tree must not be resumed into. Dropping
+        # it is what stops a corrupt file being re-verified for ever.
         sampler.stop()
         shutil.rmtree(staging, ignore_errors=True)
+        raise
+    except BaseException:
+        # Everything else, including a KeyboardInterrupt or a kill that
+        # unwinds: **the tree is kept, and the next attempt resumes into it**
+        # (F1, 2026-09-05). What the old unconditional ``rmtree`` protected was
+        # the destination, and the destination is protected by nothing having
+        # moved -- ``_move_into`` is the last statement in the try, and every
+        # presence probe answers from ``dest``. A ``.fetch.part`` sibling is
+        # invisible to all of them. The disk it holds is reclaimed by
+        # ``downloads.sweep_staging`` and by the next mismatching fetch.
+        sampler.stop()
         raise
     sampler.stop()
     shutil.rmtree(staging, ignore_errors=True)
@@ -413,7 +557,20 @@ def main() -> int:
     try:
         result = fetch_one(spec)
     except Exception as exc:  # noqa: BLE001 -- the message is the product here
-        result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        # ...and ``describe_failure`` is what finally makes that comment true
+        # for a transport error rather than only for the exceptions this module
+        # writes itself. See finding F2.
+        # The friendly sentence is what the user sees; the raw exception is
+        # carried beside it so the parent can put it in ``warlock.log``. Both,
+        # because the whole of F2's diagnosis came out of a log file, and a
+        # translation that threw the original away would have made this
+        # incident harder to read rather than easier.
+        traceback.print_exc(file=sys.stderr)
+        result = {
+            "ok": False,
+            "error": download.describe_failure(exc),
+            "detail": f"{type(exc).__name__}: {exc}",
+        }
     result["seconds"] = round(time.perf_counter() - started, 2)
     result_path.write_text(json.dumps(result), encoding="utf-8")
     _emit(percent=100.0 if result.get("ok") else 0.0, label="")

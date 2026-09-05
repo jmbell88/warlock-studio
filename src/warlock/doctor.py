@@ -554,6 +554,19 @@ def _cuda_check(*, probe: bool = True) -> Check:
         return Check(
             "CUDA", False, "torch not installed (uv sync --extra text2image)", fatal=False
         )
+    except Exception as exc:  # noqa: BLE001 -- F3, and ``vram.probe`` has the reasoning
+        # Torch is present but will not load. The case this was written for is
+        # a pack install in flight (the DLL loader raises ``OSError`` and
+        # ``PermissionError``, neither of them an ``ImportError``), which is
+        # transient and resolves on the next launch -- so this reports rather
+        # than raising, and is not fatal.
+        return Check(
+            "CUDA", False,
+            f"torch is installed but will not load ({type(exc).__name__}); "
+            "if a dependency pack is installing, this clears when it finishes "
+            "and you restart Warlock",
+            fatal=False,
+        )
     ok = torch.cuda.is_available()
     detail = "available" if ok else "torch.cuda.is_available() is False"
     return Check("CUDA", ok, detail, fatal=False)

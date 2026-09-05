@@ -77,8 +77,20 @@ does, and that fetch runs in its own process.
 **Fix.** Open **Settings → Models**. Every registered model is listed with its size, where it comes
 from and whether it is on this card; tick what you need and press *Download selected*, which fetches
 the whole selection as one transaction and shows a rate and an ETA. A download can be cancelled from
-its own row, and cancelling installs nothing — the staging is swept the next time the pane opens.
-See [Models](41-app-settings.md#models).
+its own row, and cancelling installs nothing. See [Models](41-app-settings.md#models).
+
+**A download that fails is safe to retry, and it does not start again from zero.** Whatever had
+already arrived is kept beside the destination, and pressing *Install* again continues from there —
+so a 16 GB model on a connection that drops every few minutes finishes across several attempts
+instead of never finishing at all. A lost connection is also retried a few times on its own before
+you are told about it. Nothing partial is ever installed: the files move into place only once the
+whole download is present and its digests check out.
+
+**If the download itself keeps failing**, the message names what happened rather than showing a
+socket error. A connection that is closed part-way through (`WinError 10054` and its relatives) is
+most often antivirus, a firewall, a VPN or a workplace proxy inspecting a large transfer rather than
+a problem with your internet — pausing them, or trying another network, is the usual fix. The full
+technical detail is written to `warlock.log` every time.
 
 **Or from a terminal**, which is the only route on a headless box: `uv run warlock doctor` lists each
 missing item individually with the exact command that fetches it, and the same commands are

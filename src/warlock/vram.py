@@ -669,13 +669,25 @@ def probe() -> DeviceMemory | None:
     """
     try:
         import torch
-    except ImportError:
+    except Exception:  # noqa: BLE001 -- see below; the class is not the point
         # Not "no answer" any more. NVML ships with the driver, so a host with
         # a card and no torch -- which is what the base install becomes once
         # ``text2image`` is a capability pack -- still has a definitive total.
         # Returning None here made ``doctor._vram_check`` take its "no CUDA
         # device at all" branch and mark a working RTX machine **fatal**, on
         # the one path (``probe=True``) that never consults ``device_memory``.
+        #
+        # **Any** exception, not only ``ImportError`` (finding F3, 2026-09-05).
+        # While ``pack_worker``'s pip writes torch into the running
+        # site-packages, importing it raises from the DLL loader instead --
+        # ``OSError: [WinError 126] ... caffe2_nvrtc.dll``, then
+        # ``PermissionError: [WinError 32] ... shm.dll ... used by another
+        # process``. Those are not ``ImportError``, so they escaped this
+        # handler and took the whole health task down with them: five
+        # tracebacks in twenty-one seconds on her machine, one per poll, until
+        # the install finished. A torch that cannot be imported is a torch this
+        # function cannot use, whatever the reason, and NVML still answers.
+        log.debug("torch is not importable; falling back to NVML", exc_info=True)
         return device_memory()
     return _read(torch)
 

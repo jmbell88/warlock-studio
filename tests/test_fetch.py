@@ -644,15 +644,38 @@ def test_the_package_still_sets_hf_hub_offline_to_one():
 
 
 def test_a_fetch_leaves_no_half_populated_directory(tmp_path):
-    """With the network unavailable, the worker must fail and clean up.
+    """With the network unavailable, the worker must fail and publish nothing.
 
     Run for real, as a subprocess, with snapshot_download replaced by one that
     writes a file and then raises -- which is the shape of every real failure
     (a partial download, then an error) and the only one that can leave a
     directory the presence probes would call finished.
+
+    The *destination* is the promise. The staging tree is deliberately kept
+    (F1, 2026-09-05) so the next attempt can resume into it, and the assertions
+    below say so rather than leaving it to be inferred from an absence.
     """
     dest = tmp_path / "models" / "thing"
     result = tmp_path / "result.json"
+    spec = _resume_spec(dest, result)
+    proc = _run_worker_stub(
+        spec,
+        "def snapshot_download(**kw):\n"
+        "    root = pathlib.Path(kw['local_dir'])\n"
+        "    (root / 'config.json').write_text('{}')\n"
+        "    raise OSError('no network')\n",
+    )
+    assert proc.returncode == 1, proc.stderr
+    payload = json.loads(result.read_text(encoding="utf-8"))
+    assert payload["ok"] is False and "no network" in payload["error"]
+    assert not dest.exists(), "a failed fetch left a model directory behind"
+    kept = list((tmp_path / "models").glob("*.fetch.part"))
+    assert len(kept) == 1, "the staging tree a retry would resume into was deleted"
+    assert (kept[0] / "config.json").is_file(), "the bytes that landed were discarded"
+
+
+def _resume_spec(dest, result, **extra):
+    """A worker spec with retries pinned to one, so no test sleeps on a backoff."""
     spec = {
         "repo_id": "acme/thing",
         "dest": str(dest),
@@ -661,31 +684,141 @@ def test_a_fetch_leaves_no_half_populated_directory(tmp_path):
         "ignore_patterns": [],
         "rename": None,
         "size_gib": 0.1,
+        "retries": 1,
         "result_path": str(result),
     }
+    spec.update(extra)
+    return spec
+
+
+def _run_worker_stub(spec, body):
+    """Run the real worker as a subprocess with ``snapshot_download`` stubbed.
+
+    A subprocess and not an import, for the module's own reason: the thing
+    under test is a whole child process, and its unwind is the half that
+    matters here.
+    """
     stub = (
         "import sys, types, pathlib\n"
         "mod = types.ModuleType('huggingface_hub')\n"
-        "def snapshot_download(**kw):\n"
-        "    root = pathlib.Path(kw['local_dir'])\n"
-        "    (root / 'config.json').write_text('{}')\n"
-        "    raise OSError('no network')\n"
-        "mod.snapshot_download = snapshot_download\n"
+        + body
+        + "mod.snapshot_download = snapshot_download\n"
         "sys.modules['huggingface_hub'] = mod\n"
         "from warlock.pipelines import fetch_worker\n"
         "raise SystemExit(fetch_worker.main())\n"
     )
-    proc = subprocess.run(
+    return subprocess.run(
         [sys.executable, "-c", stub],
         input=json.dumps(spec),
         capture_output=True,
         text=True,
     )
-    assert proc.returncode == 1, proc.stderr
+
+
+def test_a_second_attempt_resumes_into_what_the_first_one_downloaded(tmp_path):
+    """The finding this exists for: a 16 GB download must not restart at zero.
+
+    On the 2026-09-05 clean-machine install one engine fetch ran eight minutes
+    and died on a token refresh, and the unwind deleted every byte of it along
+    with huggingface_hub's own ``.cache`` resume bookkeeping -- so the next
+    attempt began again from nothing and no number of attempts could ever
+    finish. The second worker below *refuses to work* unless the first one's
+    partial file is still there, which is the claim stated as a test.
+    """
+    dest = tmp_path / "models" / "thing"
+    first = _run_worker_stub(
+        _resume_spec(dest, tmp_path / "one.json"),
+        "def snapshot_download(**kw):\n"
+        "    root = pathlib.Path(kw['local_dir'])\n"
+        "    (root / 'big.bin').write_bytes(b'x' * 1024)\n"
+        "    raise OSError('connection reset')\n",
+    )
+    assert first.returncode == 1, first.stderr
+
+    second = _run_worker_stub(
+        _resume_spec(dest, tmp_path / "two.json"),
+        "def snapshot_download(**kw):\n"
+        "    root = pathlib.Path(kw['local_dir'])\n"
+        "    part = root / 'big.bin'\n"
+        "    if not part.is_file():\n"
+        "        raise OSError('restarted from zero: nothing was resumed')\n"
+        "    (root / 'config.json').write_text('{}')\n",
+    )
+    assert second.returncode == 0, second.stderr
+    assert (dest / "big.bin").is_file() and (dest / "config.json").is_file()
+    assert not list((tmp_path / "models").glob("*.fetch.part")), (
+        "a published fetch left its staging tree behind"
+    )
+
+
+def test_a_staging_tree_for_another_revision_is_not_resumed_into(tmp_path):
+    """Resume is keyed on the whole spec, because a mixture installs silently.
+
+    ``_verify_staged`` only catches files the hub wrote a digest sidecar for,
+    so a tree half-filled from another revision would publish as a finished
+    model. The marker is compared whole and a mismatch wipes.
+    """
+    dest = tmp_path / "models" / "thing"
+    first = _run_worker_stub(
+        _resume_spec(dest, tmp_path / "one.json", revision="aaa"),
+        "def snapshot_download(**kw):\n"
+        "    root = pathlib.Path(kw['local_dir'])\n"
+        "    (root / 'stale.bin').write_bytes(b'old')\n"
+        "    raise OSError('connection reset')\n",
+    )
+    assert first.returncode == 1, first.stderr
+
+    second = _run_worker_stub(
+        _resume_spec(dest, tmp_path / "two.json", revision="bbb"),
+        "def snapshot_download(**kw):\n"
+        "    root = pathlib.Path(kw['local_dir'])\n"
+        "    if (root / 'stale.bin').exists():\n"
+        "        raise OSError('resumed into another revision')\n"
+        "    (root / 'config.json').write_text('{}')\n",
+    )
+    assert second.returncode == 0, second.stderr
+    assert not (dest / "stale.bin").exists()
+
+
+def test_a_digest_mismatch_drops_the_tree_instead_of_keeping_it(tmp_path):
+    """Corrupt bytes must not be kept, or every retry re-verifies the same file."""
+    dest = tmp_path / "models" / "thing"
+    result = tmp_path / "one.json"
+    proc = _run_worker_stub(
+        _resume_spec(dest, result),
+        "def snapshot_download(**kw):\n"
+        "    root = pathlib.Path(kw['local_dir'])\n"
+        "    (root / 'weights.bin').write_bytes(b'corrupt')\n"
+        "    meta = root / '.cache' / 'huggingface' / 'download'\n"
+        "    meta.mkdir(parents=True, exist_ok=True)\n"
+        "    (meta / 'weights.bin.metadata').write_text(\n"
+        "        'etag\\n' + '0' * 64 + '\\n0\\n'\n"
+        "    )\n",
+    )
+    assert proc.returncode == 1, proc.stdout
     payload = json.loads(result.read_text(encoding="utf-8"))
-    assert payload["ok"] is False and "no network" in payload["error"]
-    assert not dest.exists(), "a failed fetch left a model directory behind"
-    assert not list((tmp_path / "models").glob("*.part")), "staging tree survived"
+    assert "do not match the digests" in payload["error"]
+    assert not list((tmp_path / "models").glob("*.fetch.part")), (
+        "a tree that failed verification was kept for a retry to trip over"
+    )
+
+
+def test_a_reset_partway_through_is_retried_rather_than_surfaced(tmp_path):
+    """One lost connection must not end a download that would otherwise finish."""
+    dest = tmp_path / "models" / "thing"
+    proc = _run_worker_stub(
+        _resume_spec(dest, tmp_path / "one.json", retries=3),
+        "def snapshot_download(**kw):\n"
+        "    root = pathlib.Path(kw['local_dir'])\n"
+        "    tally = root / 'attempts'\n"
+        "    n = int(tally.read_text()) if tally.is_file() else 0\n"
+        "    tally.write_text(str(n + 1))\n"
+        "    if n == 0:\n"
+        "        raise OSError('connection reset')\n"
+        "    (root / 'config.json').write_text('{}')\n",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (dest / "config.json").is_file()
 
 
 def test_a_successful_fetch_moves_the_files_in_and_renames(tmp_path):

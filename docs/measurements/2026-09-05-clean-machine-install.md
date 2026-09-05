@@ -1,6 +1,7 @@
 # The first install on a machine that is not the development box — 2026-09-05
 
-**Status: concluded 2026-09-05, over two runs.** `WarlockSetup-v0.0.35.exe` was
+**Status: concluded 2026-09-05, over two installs and four app sessions, with
+her `warlock.log` copied back for the diagnosis.** `WarlockSetup-v0.0.35.exe` was
 carried on a USB drive to a second Windows PC and installed there with no
 network involved. The app launched, the modes were browsable, and a drawing was
 made in Inker, saved, and reopened. This is the first time any part of this
@@ -8,11 +9,11 @@ project has run on a machine that is not the one that built it, and it closes
 the install half of `TODO.md` P1 — but not P1 itself: the card is 8 GB, so
 nothing was generated.
 
-The machine was then uninstalled and reinstalled, and the second run is the
-more informative one. **All three dependency packs installed successfully, and
-every model download still failed.** That asymmetry is the finding: it rules
-out the network, the machine and the download machinery in general, and points
-at one transport.
+The machine was then uninstalled and reinstalled. **All three dependency packs
+installed successfully, and every model download still failed** — and her log
+turns that from a symptom into a diagnosis. The headline is not the network:
+it is that a failed fetch deletes everything it has downloaded, so a 16 GB
+model cannot be retried into existence on an imperfect line.
 
 ## Why this document exists
 
@@ -53,73 +54,107 @@ empties and this is not.
 | An uninstall and reinstall cycle | **Proven.** The machine was uninstalled and reinstalled between the two runs. |
 | SmartScreen's "More info → Run anyway" | **Not observed.** It did not appear. `INSTALL.md` says "very likely", so the guide is not wrong, but this path remains unwitnessed. |
 
-## What failed: Hugging Face, and only Hugging Face
+## What failed: the download path, diagnosed from her log
 
-Every model download failed, on both runs, with
+Her `warlock.log` was copied back on 2026-09-05 and is the first real evidence
+this project has had from a machine it does not own. It covers 14:07 to 15:21
+and four app sessions. What it shows:
+
+### 1. Every model fetch fails, against more than one host
 
 ```
-ConnectError: [WinError 10054] An existing connection was forcibly closed by the remote host
+14:09:21  fetch of ilintar/trellis2-gguf failed: ConnectError: [WinError 10054] ...
+14:13:32  fetch of stabilityai/stable-diffusion-xl-base-1.0 failed: ConnectError: [WinError 10054] ...
+14:49:03  fetch of ACE-Step/ACE-Step-v1-3.5B failed: ConnectError: [WinError 10054] ...
+14:49:04  fetch of  failed: URLError: <urlopen error [WinError 10054] ...>
 ```
 
-on a machine with a working internet connection and well over 50 GB free. The
-rows were tickable and the Download button was live — this is not the
-`Unavailable` state, and not the disk door refusing the plan. It was tried
-against the reconstruction engine, the base models, the LoRAs and the
-conditioners: everything on the page.
+The fourth line is the one that matters. An empty `repo_id` is the *other*
+transport — `_fetch_url`, used by exactly one registry row, `hdemucs_high`,
+which fetches from `download.pytorch.org` and never touches Hugging Face. It is
+reset too. **So this is not a Hugging Face problem**, and the theory that the
+first two runs suggested is wrong. Multiple unrelated hosts reset the
+connection, while the dependency packs downloaded from PyPI without trouble in
+the same session.
 
-**The second run is what makes this diagnosable.** All three dependency packs —
-Image Generation, Rigging and Music, several gigabytes each — installed
-successfully on the same machine, on the same network, in the same session.
-So the following are all eliminated: the network, DNS in general, the disk, the
-`winjob` child-process machinery, the digest-verified staging design, and the
-`Python-urllib/3.13` user-agent ban that v0.0.35 had just fixed.
+### 2. The Xet transport is confirmed in play, and it is where the long attempt died
 
-What is left is the one thing that differs between them:
+The best attempt of the day ran for about eight minutes — the idle-tick lines
+show the fetch child holding 5.0, 4.6, 3.7 then 1.4 GiB between 15:11 and
+15:18 — and then:
 
-| | transport | host | result |
-|---|---|---|---|
-| Dependency packs | `pack_worker`, plain `httpx` | PyPI and the pinned cu128 index | **worked** |
-| Every model row tried | `fetch_worker` → `huggingface_hub.snapshot_download` | `huggingface.co` and its storage backend | **reset, 10054** |
+```
+15:18:59  fetch of ilintar/trellis2-gguf failed: ConnectionError: Network error:
+          Request middleware error: error sending request for url
+          (https://huggingface.co/api/models/ilintar/trellis2-gguf/xet-read-token/a573...)
+```
 
-Note that the reconstruction engine is not the exception it looks like: it is
-the repository `ilintar/trellis2-gguf` and goes through `snapshot_download`
-like everything else. The *only* registry row that fetches from a non-Hugging
-Face host by direct URL is `hdemucs_high` (0.32 GB, `download.pytorch.org`),
-and it was not tried.
+That is `hf_xet` re-requesting a read token part-way through a 16.1 GB
+download, and failing. `hf-xet` is a dependency of `huggingface_hub` on Windows
+AMD64, so it is in the base runtime, and nothing in this project sets
+`HF_HUB_DISABLE_XET`. This is what "it got most of the way and then faulted at
+the end" was.
 
-### The two hypotheses, and the experiments that separate them
+Note that this run still went through Xet, so **the `HF_HUB_DISABLE_XET=1`
+experiment has still not actually been observed taking effect** — the log ends
+before any session that demonstrably had it set. It remains worth running, but
+it can no longer be the whole story, because hdemucs does not use Xet and fails
+anyway.
 
-1. **Hugging Face hosts are being reset on that machine** — antivirus, TLS
-   interception, a DNS filter or an ISP-level block. Test: open
-   `huggingface.co` in a browser on that machine, and fetch the `hdemucs_high`
-   row, which is small and goes to `download.pytorch.org`. If hdemucs succeeds
-   and HF rows fail, this is it.
-2. **The Xet transport specifically.** `hf-xet` is a dependency of
-   `huggingface_hub` on Windows AMD64, so it is installed in the base runtime,
-   and modern `huggingface_hub` downloads Xet-backed repositories through
-   `*.xethub.hf.co` using many parallel connections — a pattern that antivirus
-   and firewall products reset far more often than a single HTTPS stream.
-   Nothing in this project sets `HF_HUB_DISABLE_XET`. Test: set
-   `HF_HUB_DISABLE_XET=1` as a user environment variable on that machine,
-   relaunch, and retry a model download. If it succeeds, that is both the
-   diagnosis and the shape of the fix.
+### 3. The real blocker: a failed fetch discards everything it downloaded
 
-Neither has been run yet. **Nothing should be changed in the fetch path on a
-guess between these two** — they have different fixes, and the second is a
-one-line default while the first is a documentation-and-messaging problem.
+`fetch_one` stages into `.{name}.fetch.part` beside the destination and its
+unwind is `except BaseException: shutil.rmtree(staging)`. The promise that
+motivates it — that a failed download never leaves a half-populated *model*
+directory — is about `dest`, and keeping the staging tree does not weaken it,
+since every presence probe looks at `dest`. But `huggingface_hub` keeps its
+resume bookkeeping in `.cache/` *inside* `local_dir`, which is the staging
+tree, so deleting it throws away the resume state along with the bytes.
 
-### What the failure did not cost
+The consequence on this machine is decisive: eight minutes and several
+gigabytes of a 16.1 GB download were discarded by one failed token request, and
+the next attempt started from zero. **On a connection that resets every few
+minutes, the engine can never be downloaded, however many times the user
+presses Install.** That is why every retry in this log fails, and it is a
+design property rather than a network condition — it would do the same to any
+beta user on a hotel, mobile or otherwise imperfect line.
 
-Nothing was left half-installed, and the app stayed usable throughout. The
-download path stages and replaces rather than writing in place, and this is the
-first time that design has been exercised against a real failure rather than a
-stubbed one.
+There is already precedent for keeping the tree: `_stage_only` deliberately
+exempts the no-publish path from the same unwind, on the grounds that there the
+staging tree is the product rather than a temporary.
 
-### And the message is a defect either way
+### 4. The health check races a pack install
 
-The raw socket error reached a non-developer verbatim, in a transient toast,
-with no log-file button and no remedy. That is `TODO.md`'s finding F1, it is
-independent of which hypothesis above is right, and it is fixable today.
+Five tracebacks in twenty-one seconds, 14:44:50 to 14:45:11, all from
+`service.system.current_checks` → `doctor._vram_check` → `vram.probe()` →
+`import torch`:
+
+```
+OSError: [WinError 126] ... Error loading "...\torch\lib\caffe2_nvrtc.dll"
+        or one of its dependencies.            (x4, 14:44:50 - 14:45:05)
+PermissionError: [WinError 32] The process cannot access the file because it is
+        being used by another process. Error loading "...\torch\lib\shm.dll"
+        (14:45:11)
+```
+
+This is the health poll importing `torch` while `pack_worker`'s pip is still
+writing it into the running `site-packages`. It cleared after the app was
+restarted at 14:46:42 and never recurred, so **torch is not broken on that
+machine** — but the poll should not import a package that is actively being
+installed, and it should not emit a traceback per tick while it happens.
+
+### What the failures did not cost
+
+Nothing was left half-installed and the app stayed usable throughout — the
+staging-and-replace design held against real failures rather than stubbed ones.
+The cost is the opposite one: it holds *too* firmly, and item 3 above is that
+bill.
+
+### And the message is a defect independent of all of it
+
+The raw socket error reached a non-developer verbatim in a transient toast with
+no log-file button. Everything diagnosed above came out of a log file she had
+to be told how to find.
 
 ## What this machine can now close, and what it never will
 
@@ -143,6 +178,13 @@ machine is now in exactly the state they need.
   install, launch and base-runtime steps are struck against this document.
 - `TODO.md` P27 closed: the release candidate exists, and its figures are in
   `INSTALL.md`.
-- Two findings opened against the tree, both buildable. F1 was rewritten after
-  the second run: it is not "downloads fail" but "Hugging Face fails while PyPI
-  works", which is a far narrower thing.
+- Four findings opened against the tree and **all four closed the same day**:
+  the fetch path's discard-on-failure (the blocker — the tree is kept and
+  resumed into, with retries over it), the unreadable socket message (five
+  remedies where there was one stringified exception), the health poll racing a
+  pack install (any failed torch import falls back to NVML), and the pack gate
+  that was never written (a mode's door asks for the pack first, then the
+  weights). `TODO.md`'s *Open findings* has what each one changed.
+- What is still owed from this machine is not code: a rerun that says whether a
+  download now outlasts the resets, and the `HF_HUB_DISABLE_XET=1` experiment
+  that no session in the log demonstrably had set.

@@ -167,6 +167,13 @@ A pack cannot be removed from here. Uninstalling torch out from under a running 
 the same act as deleting a folder of weights, and the way to get the disk back is to reinstall the
 base app.
 
+**A greyed workspace sends you here first when a pack is what it is waiting for.** Create, Poser,
+Troupe and Muse each need two separate things — the pack, which is the code, and the model weights,
+which are what the code reads — and the pack has to come first, because weights with nothing to load
+them do nothing at all. So on a fresh install, clicking one of those modes opens this page and the
+tooltip names the pack by its own size; once it is installed, clicking the mode again opens
+**Models** instead, with the rows that mode needs already ticked.
+
 On a source checkout there is nothing to install: no build ever generated a pack manifest, and each
 row prints the `uv sync --extra ...` line that does the same job. See
 [Installation](39-installation.md#if-you-installed-rather-than-cloned).

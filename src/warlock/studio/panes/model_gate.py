@@ -112,6 +112,42 @@ def install_offer(ctx: Any, field: str) -> bool:
     return True
 
 
+def missing_packs(ctx: Any, key: str) -> list[dict[str, Any]]:
+    """The dependency packs this mode needs and does not have, in pane order.
+
+    **The other half of a mode's door, and until F1's run it did not exist**
+    (2026-09-05). ``packs.Pack.modes`` has always named which mode each pack
+    gates, and it was read in exactly one place: a label inside Settings. So on
+    a base install -- where the heavy extras are packs and the weights are
+    downloads -- both halves were missing at once, only the weights half was
+    checked, and the user was sent to download about 23 GB that still would not
+    let Create generate anything, because ``torch`` was not installed.
+
+    Read from ``ctx.pack_rows``, the snapshot the app already refreshes, for
+    ``missing``'s reason: this runs on the frame thread sixty times a second
+    and must not touch the disk. A ctx with no snapshot says "nothing to
+    report" rather than "everything is missing", which is the same rule and the
+    same failure it prevents.
+    """
+    return [
+        row
+        for row in (getattr(ctx, "pack_rows", None) or [])
+        if key in (row.get("modes") or ()) and not row.get("present")
+    ]
+
+
+def _library_has_work(ctx: Any) -> bool:
+    """Whether this machine has any finished job on it.
+
+    The escape both gates share. Create's later stages act on jobs that already
+    exist and Muse plays takes it did not have to generate, so a gate that
+    fired on an empty toolchain alone would lock a user out of their own
+    finished work the moment they reclaimed some disk.
+    """
+    cache = getattr(ctx, "cache", None)
+    return cache is not None and (getattr(cache, "total", 0) or 0) > 0
+
+
 def mode_block(ctx: Any, key: str) -> tuple[str, ...]:
     """Which of a mode's required rows are missing. Empty means it can open.
 
@@ -130,17 +166,44 @@ def mode_block(ctx: Any, key: str) -> tuple[str, ...]:
     rows = modes.NEEDS_ROWS.get(key) or ()
     if not rows or not missing(ctx, rows):
         return ()
-    cache = getattr(ctx, "cache", None)
-    if cache is not None and (getattr(cache, "total", 0) or 0) > 0:
+    if _library_has_work(ctx):
         return ()
     return tuple(row["row_key"] for row in missing(ctx, rows))
 
 
+def mode_gate(ctx: Any, key: str) -> tuple[str, tuple[str, ...]]:
+    """What stands at this mode's door: ``("packs" | "models" | "", keys)``.
+
+    **Packs come first when both are missing**, which is the whole point of the
+    ordering rather than a preference: a pack is the code and the weights are
+    what the code reads, so weights installed without their pack buy the user
+    nothing at all, and 23 GB is an expensive way to find that out. Sending
+    them to Packs first means the smaller download is also the one that has to
+    happen first.
+    """
+    packs = missing_packs(ctx, key)
+    if packs and not _library_has_work(ctx):
+        return ("packs", tuple(str(row["key"]) for row in packs))
+    rows = mode_block(ctx, key)
+    return ("models", rows) if rows else ("", ())
+
+
 def mode_reason(ctx: Any, key: str) -> str:
     """The sentence the greyed rail item shows, or "" when it is not gated."""
-    blocked = mode_block(ctx, key)
-    if not blocked:
+    where, blocked = mode_gate(ctx, key)
+    if not where:
         return ""
+    if where == "packs":
+        rows = missing_packs(ctx, key)
+        total = sum(float(row.get("download_gib") or 0.0) for row in rows)
+        named = ", ".join(str(row.get("label") or row.get("key")) for row in rows)
+        size = f" (about {total:.1f} GB)" if total > 0 else ""
+        # Named rather than counted, because a pack's name is what the Settings
+        # row is labelled with and "1 pack" is not something to look for.
+        return (
+            f"Needs the {named} pack{'s' if len(rows) > 1 else ''} "
+            f"installed{size}. Click to install it in Settings."
+        )
     by_key = {
         str(row.get("row_key")): row for row in (getattr(ctx, "model_rows", None) or [])
     }
@@ -150,3 +213,30 @@ def mode_reason(ctx: Any, key: str) -> str:
         f"Needs {len(blocked)} {noun} you haven't made yet "
         f"(about {total:.0f} GB). Click to choose them in Settings."
     )
+
+
+def request_pack(ctx: Any, _keys: tuple[str, ...] = ()) -> None:
+    """Open Settings at Packs. The pack half of :func:`request_install`.
+
+    No pre-ticking to do: the Packs pane installs one row at a time by its own
+    button, deliberately, because two children unpacking torch into one
+    site-packages at once is the worst concurrency this app could have. So the
+    navigation is the whole of it.
+    """
+    from . import app_settings
+
+    ctx.state.preview[app_settings.CATEGORY_SLOT] = "packs"
+    set_mode(ctx.state, "settings")
+
+
+def request_for_mode(ctx: Any, key: str) -> None:
+    """Send the user wherever this mode's door actually points.
+
+    One function so the rail cannot route to Models while the tooltip names a
+    pack -- the disagreement F4 was.
+    """
+    where, keys = mode_gate(ctx, key)
+    if where == "packs":
+        request_pack(ctx, keys)
+    elif where == "models":
+        request_install(ctx, keys)

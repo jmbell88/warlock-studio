@@ -832,7 +832,10 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         # must not learn what a Ctx is.
         from .state import set_mode_gate
 
-        set_mode_gate(lambda key: not model_gate.mode_block(self.app_ctx, key))
+        # ``mode_gate`` rather than ``mode_block``: the refusal and the rail's
+        # grey-out have to answer the same question, and since F4 that question
+        # includes the dependency pack as well as the weights.
+        set_mode_gate(lambda key: not model_gate.mode_gate(self.app_ctx, key)[0])
         self.app_ctx.load_presets = self.load_presets
         self.app_ctx.refresh_rig_data = self._refresh_rig_side_data
         self.eta = Eta()

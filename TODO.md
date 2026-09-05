@@ -83,11 +83,11 @@ about 1.4 GB installed base**, SHA-256 `254b3af9…`, at v0.0.35.
    branch of `pack_worker.collect` included. Still unchecked: whether Poser
    opens without a restart afterwards.
 4. **Fix the model downloads, then prove the fetch pipeline under the bundled
-   interpreter.** The one thing that stopped both runs, and the second run
-   narrowed it sharply: packs install fine from PyPI while *every* Hugging Face
-   row is reset with `ConnectError: [WinError 10054]`. Two experiments separate
-   the causes, neither has been run, and the fetch path should not be touched
-   before one of them has — see F1. When it works: one small row end to end
+   interpreter.** The one thing that stopped both runs. Her log named the cause
+   and it is ours: a failed fetch deletes its staging tree, resume state and
+   all, so a 16.1 GB model cannot be retried in over a line that resets — F1.
+   The resets themselves hit several hosts and are still undiagnosed (F2), but
+   F1 is what makes them fatal rather than annoying. When it works: one small row end to end
    (dinov2, 0.4 GB), then SDXL and one reference generation. For TRELLIS, copy
    an existing `~/.warlock/models/trellis2-gguf` into the scratch home to prove
    the engine launches from `{app}\vendor`; start the engine download and cancel
@@ -104,7 +104,7 @@ about 1.4 GB installed base**, SHA-256 `254b3af9…`, at v0.0.35.
    recorded beside the wheel cache under `WARLOCK_HOME`, so it is supposed to
    survive the installer wiping `site-packages`. **These are reachable now**:
    they need a pack, not a weight or a card, and that machine has three. The
-   cheapest step left, and the only one that does not wait on F1.
+   cheapest step left, and the only one that does not wait on the fetch path.
 6. **Upgrade over a scratch version** (clean slate, data intact). Uninstall and
    reinstall are done — that is how the second 2026-09-05 run began, and
    `~/.warlock` survived it — but an upgrade *over* an existing install is
@@ -490,7 +490,7 @@ against itself (P7), Troupe's sheet job has never run against real Blender
 (P6). One more belongs here that is not a mode: on a base install, Create and
 Muse send you to Settings → **Models**, and the weights are only half of what
 they need — the matching **pack** is the other half, and nothing at the door
-says so (F2). An invitee who downloads 23 GB and still cannot generate has hit a
+says so (F4). An invitee who downloads 23 GB and still cannot generate has hit a
 known gap, not a broken build.
 
 **Do:** name them, by mode, in whatever the invite is — a note beside the
@@ -669,111 +669,58 @@ been collected.
 
 ## Open findings
 
-Code work found by a run against the tree rather than by the suite. Each is
-buildable and is struck out the day it is built; this section is deleted when
-it is empty. Both entries below came out of the 2026-09-05 clean-machine
-install (`docs/measurements/2026-09-05-clean-machine-install.md`), which ran
-twice: once as delivered, once after an uninstall and reinstall.
+Code work a review or a real run turned up. Each is buildable and is struck out
+the day it is built; this section is deleted when it is empty. All four below
+came out of the 2026-09-05 clean-machine install
+(`docs/measurements/2026-09-05-clean-machine-install.md`) — two installs, four
+app sessions, and her `warlock.log` read — and all four were built the same day.
 
-### F1. Hugging Face downloads are reset on a machine where PyPI is fine
+1. ~~**F1. A failed fetch discarded everything it downloaded.**~~ Built
+   2026-09-05. `fetch_one`'s unwind was `except BaseException:
+   rmtree(staging)`, and `huggingface_hub` keeps its resume bookkeeping in
+   `.cache/` *inside* `local_dir`, so a failure threw away the ability to
+   resume along with the bytes — one engine attempt ran eight minutes and
+   several GB and was discarded whole. The tree is now kept and keyed by a
+   `.warlock-resume.json` marker holding the entire spec; a later fetch resumes
+   only on an exact match, a terminal failure (digest mismatch, missing rename
+   source, no digest) still drops it, both sweeps spare a marked tree, and both
+   transports retry with backoff over the same tree. The destination is
+   untouched by any of it — nothing moves until the tree is whole and verified.
+   `docs/INVARIANTS.md` carries the reasoning; five tests in
+   `tests/test_fetch.py` carry the claims.
+2. ~~**F2. A socket error reached a non-developer verbatim.**~~ Built
+   2026-09-05. `download.describe_failure` translates by `winerror`/`errno`,
+   walking the `__cause__` chain because the transports bury the number, and
+   falls back on class name for `hf_xet`'s Rust errors which carry none.
+   Offline, reset, timeout, refused and DNS are five remedies where there was
+   one stringified exception; a sentence this project wrote itself is passed
+   through untouched; anything unrecognised names itself and points at the log.
+   The raw exception now goes to `warlock.log` beside the friendly one, because
+   this incident was diagnosed from a log and the translation must not have
+   made that harder. It lives in `download.py` rather than `fetch_worker.py` so
+   it can be imported without setting `HF_HUB_OFFLINE=0`.
+   `tests/test_fetch_messages.py`.
+3. ~~**F3. The health poll imported torch while pip was writing it.**~~ Built
+   2026-09-05. `vram.probe` and `doctor._cuda_check` caught `ImportError`
+   only, and a half-written torch raises from the DLL loader — `OSError
+   [WinError 126]`, then `PermissionError [WinError 32]` — so the whole health
+   task died, five tracebacks in twenty-one seconds. `probe` now falls back to
+   NVML on any import failure and the CUDA row reports "installed but will not
+   load" with the likely cause, non-fatal, since it clears on the next launch.
+   `tests/test_torch_import_failures.py`.
+4. ~~**F4. The pack gate at a mode's door was never written.**~~ Built
+   2026-09-05. `Pack.modes` was read in one place, a Settings label, so a base
+   install sent the user to Models to fetch ~23 GB that could not run without
+   `torch`. `model_gate.mode_gate` now answers packs-or-models for a mode and
+   **packs come first**, since weights with nothing to read them buy nothing;
+   the rail, its tooltip and `set_mode`'s refusal all read that one answer, and
+   the library escape applies to both halves so nobody is locked out of
+   finished work. `tests/test_pack_gate.py`.
 
-On the 2026-09-05 machine every model download failed with
-`ConnectError: [WinError 10054] An existing connection was forcibly closed by
-the remote host` — the reconstruction engine, the base models, the LoRAs and
-the conditioners alike, with rows tickable, the button live, and 50 GB free.
-**On the second run all three dependency packs installed successfully on the
-same machine, same network, same session.** That asymmetry is the whole value
-of the run: it eliminates the network, the disk, the `winjob` child machinery,
-the staging design, and the `Python-urllib/3.13` agent ban v0.0.35 had just
-fixed. Packs go to PyPI over plain `httpx`; every model row goes through
-`huggingface_hub.snapshot_download`, including the engine (`ilintar/trellis2-gguf`
-is a repository, not a URL). One transport works and the other does not.
-
-**Do not change the fetch path until one of these two has been run**; they have
-different fixes.
-
-1. **Are Hugging Face hosts reset on that machine** (antivirus, TLS
-   interception, a DNS filter, an ISP block)? Open `huggingface.co` in a
-   browser there, and fetch the one registry row that goes to a non-HF host by
-   direct URL — `hdemucs_high`, 0.32 GB from `download.pytorch.org`. If that
-   succeeds while HF rows fail, it is HF reachability, and the fix is
-   messaging plus an `HF_ENDPOINT` mirror the user can set.
-2. **Is it the Xet transport?** `hf-xet` is a dependency of `huggingface_hub`
-   on Windows AMD64, so it is in the base runtime, and a Xet-backed repository
-   is fetched through `*.xethub.hf.co` over many parallel connections — which
-   antivirus and firewall products reset far more readily than one HTTPS
-   stream. Nothing here sets `HF_HUB_DISABLE_XET`. Set it to `1` in the
-   environment on that machine, relaunch, retry. If it works, the fix is a
-   one-line default in `fetch_worker` (with a fallback rather than a hard
-   disable, so a healthy machine keeps Xet's speed).
-
-**Independent of both, the message is a defect and can be fixed today.**
-`pipelines/fetch_worker.py` catches `Exception` at the top of its per-spec loop
-and stringifies it as `f"{type(exc).__name__}: {exc}"`, under a comment reading
-"the message is the product here". That is true of the two exceptions the file
-raises itself — a digest mismatch and a missing rename source both carry real
-sentences — and false of everything the transport raises.
-`service/downloads.py` passes the string through untouched into `Invalid`, and
-`Invalid` is on `studio/tasks.py`'s `CARRIES_ITS_OWN_MESSAGE` list, so the UI
-treats a socket error as human-written prose: a transient toast, no log-file
-button (offered only for `Failed`), and a Models row that reverts to `Install`
-as though nothing had happened.
-
-- **Translate in `fetch_worker.main()`**, which still holds the exception
-  object and can read `getattr(exc, "winerror", None)` and `errno` before
-  anything is stringified. The parent only ever sees a string, so translating
-  there would mean substring-matching, which is worse. Offline,
-  reset-by-peer, DNS failure, 403-or-gated and rate-limited are five different
-  remedies and are currently one undifferentiated line.
-- **Give a failed row a persistent error state.** A toast is the wrong
-  lifetime for something the user has to act on.
-- **Consider a retry with backoff.** There is none on this path, though
-  `pipelines/trellis.py` already has the pattern, and a reset is exactly the
-  class of failure a retry exists for. A stalled socket currently costs the
-  four-hour `FETCH_TIMEOUT` before it says anything, which is its own bug.
-- **Two tests pin the current pass-through** — one in `tests/test_fetch.py`
-  asserting a raw `OSError` string survives into the payload, one in
-  `tests/test_fetch_drain.py` asserting a traceback fragment reaches the
-  refusal. Both are about staging cleanup and stderr drainage rather than
-  messaging, but a fix changes them, so change them deliberately.
-- `service/packs.py` has the identical blanket-catch shape. It is not the
-  failing path here, but it will read the same way the day PyPI resets.
-
-### F2. The pack gate was never written, so the weights gate masks it
-
-On a base install, clicking Create or Muse sends the user to Settings → Models.
-That is the *weights* gate working as designed and as `tests/test_mode_gate.py`
-pins it. The problem is that nothing else is standing at that door:
-`studio/modes.py`'s `NEEDS_ROWS` maps `create` and `muse` to model rows only,
-`model_gate.mode_block` reads `ctx.model_rows` and never consults
-`service.packs`, and `model_gate.request_install` hard-codes the `models`
-category — there is no `packs` equivalent, though the category exists.
-`packs.Pack.modes`, the table that names exactly which mode each pack gates, is
-read in one place: a label inside the Packs pane.
-
-The consequence on a fresh base install is that both conditions are true at
-once and the user is pointed at roughly 23 GB of weights that still will not let
-Create generate anything, because `torch` is not installed. Observed on
-2026-09-05: the click landed on Models, and Packs had to be found by hand on the
-category rail. And a user who *does* have weights, or any job at all in the
-library, gets past the gate entirely — `mode_block` un-gates on a non-empty
-library by design — and meets the missing pack as a worker
-`ModuleNotFoundError`.
-
-- **The shape to copy already exists.** The `rig` pack has a ctx-level
-  capability flag, `ctx.rigging_available`, consulted across the Poser panes,
-  the library and the inspector. `text2image` and `music` have no equivalent.
-- **`doctor.music_deps_check` already knows** Muse's pack is missing, but it is
-  `fatal=False` so the banner filters it out and nothing joins it to Muse's
-  door.
-- Whatever the fix, a mode that needs both a pack and its weights should say so
-  once, in the order they have to be installed.
-
-Unrelated but on the same screen, so worth writing down to stop it being
-re-diagnosed: the VRAM banner above every pane is `doctor._vram_check` firing
-fatal below `vram.TRELLIS_GIB`. It is correct, and it has no causal link to the
-Create click — it simply shares the screen, which is why the symptom first read
-as one thing.
+**What is left on that machine is not code**: whether the resets stop once a
+retry can outlast them (F1 and F2 together should turn "never finishes" into
+"finishes eventually"), and the still-unrun `HF_HUB_DISABLE_XET=1` experiment.
+Both belong to P1 step 4 now rather than here.
 
 ---
 

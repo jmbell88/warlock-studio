@@ -443,9 +443,10 @@ def draw(app: Any, ctx: Any) -> None:
             ):
                 if blocked:
                     # Greyed, but never a dead end: the click goes to the one
-                    # place that can change the answer, with exactly these rows
-                    # already ticked.
-                    model_gate.request_install(ctx, model_gate.mode_block(ctx, key))
+                    # place that can change the answer -- Packs or Models,
+                    # whichever this mode is actually waiting on (F4), with the
+                    # model rows already ticked when it is Models.
+                    model_gate.request_for_mode(ctx, key)
                 else:
                     app._set_mode(key)
 

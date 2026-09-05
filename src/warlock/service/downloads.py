@@ -266,6 +266,19 @@ def _maintenance(what: str) -> Any:
 _STAGING_SUFFIXES = (".fetch.part", ".fetch.bak")
 
 
+def _is_resumable(path: Path) -> bool:
+    """Whether ``path`` is a staging tree a later fetch could continue into.
+
+    Read off the marker the fetch worker writes rather than re-deriving it: the
+    name is imported from that module so the two cannot drift, and the *match*
+    against a spec is deliberately not decided here -- the child does that, and
+    a sweep that guessed would be a second opinion about the same question.
+    """
+    from ..pipelines.fetch_worker import RESUME_NAME
+
+    return path.is_dir() and (path / RESUME_NAME).is_file()
+
+
 def _sweep_staging(jobs: list[fetch_mod.Job], *, spare: set[str] | None = None) -> None:
     """Remove staging trees an interrupted fetch left behind. Never raises.
 
@@ -279,6 +292,16 @@ def _sweep_staging(jobs: list[fetch_mod.Job], *, spare: set[str] | None = None) 
     race in exactly the wrong direction: the sweep sees ``.thing.fetch.part``,
     correctly identifies it as the litter of an interrupted fetch, and deletes
     the only copy of the files the rollback was about to put back.
+
+    **A tree carrying a resume marker is spared for the same reason** (F1,
+    2026-09-05). Since the fetch worker began keeping its staging tree across a
+    failed attempt, "left behind by an interrupted fetch" and "the part of a 16
+    GB download that already landed" are the same directory, and a sweep that
+    could not tell them apart would restore the very failure resuming exists to
+    end: the user presses Install, the sweep deletes the eight minutes they
+    already spent, and the attempt starts at zero again. The marker is what
+    tells them apart, and the child owns the decision to honour or wipe it --
+    it is the only side that knows the spec the tree was staged for.
     """
     spared = spare or set()
     for parent in {job.dest.parent for job in jobs}:
@@ -291,6 +314,9 @@ def _sweep_staging(jobs: list[fetch_mod.Job], *, spare: set[str] | None = None) 
                 continue
             if str(path) in spared:
                 log.info("keeping staging an open transaction still needs: %s", path)
+                continue
+            if _is_resumable(path):
+                log.info("keeping a resumable partial download: %s", path)
                 continue
             log.warning("removing staging left by an interrupted fetch: %s", path)
             with contextlib.suppress(OSError):
@@ -358,6 +384,14 @@ def sweep_staging(svc: WarlockService) -> list[str]:
             continue
         for path in entries:
             if not path.name.endswith(_STAGING_SUFFIXES) or str(path) in spared:
+                continue
+            if _is_resumable(path):
+                # Spared here as well as in ``_sweep_staging`` (F1): this runs
+                # when the Models pane opens, which is exactly when a user who
+                # has just watched a download fail comes back to press Install
+                # again. Reclaiming their partial download at that moment would
+                # be the worst possible timing for it.
+                log.info("keeping a resumable partial download: %s", path)
                 continue
             log.warning("removing staging left by an interrupted fetch: %s", path)
             with contextlib.suppress(OSError):
@@ -1002,6 +1036,12 @@ def _run_worker(
                 result = {}
     if not result.get("ok"):
         detail = result.get("error") or f"the fetch worker exited with code {code}"
+        # The untranslated exception, when the child sent one (F2). It is not
+        # shown to anyone -- it goes to ``warlock.log`` so that the next
+        # diagnosis has the same evidence this one needed.
+        raw = result.get("detail")
+        if raw:
+            log.warning("fetch of %s raised: %s", job.repo_id or job.url, raw)
         if not result.get("error"):
             # No result file means the child died before it could write one, so
             # its stderr is the only thing that knows why.
