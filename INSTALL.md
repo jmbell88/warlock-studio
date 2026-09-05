@@ -12,8 +12,8 @@ This covers the packaged Windows installer only. If you want to run Warlock Stud
 - **An NVIDIA GPU with CUDA, 16 GB VRAM or more**, for 3D reconstruction and image generation. Tested on an RTX 5090 (32 GB); a 4080/5080-class card or better is a comfortable fit. Keep your NVIDIA driver up to date via the NVIDIA app or GeForce Experience.
 - **32 GB of system RAM**, recommended. Windows counts the GPU's memory allocation against your system RAM as well as VRAM, so a low-RAM machine can refuse to start jobs even when VRAM is free.
 - **Free disk space** for four things, each sized separately below: the installer download, the installed base runtime, whichever dependency packs you choose, and whichever model weights you choose. All four together were roughly 35 GB under the old all-in-one installer; the base install alone is much smaller now, and the exact figures for this build are:
-  - Installer download: **[TBD — measure from release-candidate build]**
-  - Installed base runtime: **[TBD — measure from release-candidate build]**
+  - Installer download: **about 810 MB** (846,950,916 bytes)
+  - Installed base runtime: **about 1.4 GB** — most of it the vendored TRELLIS and CUDA binaries (840 MB) and the bundled Python runtime (425 MB)
   - Dependency packs: see [Step 4](#step-4-add-dependency-packs), sized per pack
   - Model weights: see [First launch](#first-launch), sized per model
 - **A 1920×1080 or larger display** at 100% scaling. The app window opens at 1600×950.
@@ -22,7 +22,7 @@ This covers the packaged Windows installer only. If you want to run Warlock Stud
 ## Step 1: Download Warlock Studio
 
 1. Go to the **Releases** page of the [Warlock Studio GitHub repository](https://github.com/jmbell88/warlock-studio) and open the latest release.
-2. Under **Assets**, download `WarlockSetup-v0.0.35.exe` (version numbers change between releases) — a single file, size **[TBD — measure from release-candidate build]**. There is nothing to unzip and no other file to fetch alongside it. Its SHA-256 is **[TBD — measure from release-candidate build]**; the release page lists the current build's actual hash.
+2. Under **Assets**, download `WarlockSetup-v0.0.35.exe` (version numbers change between releases) — a single file, size **about 810 MB**. There is nothing to unzip and no other file to fetch alongside it. Its SHA-256 is **`254b3af9bce570564e24e0f61a75dba0e7c8ceee34f1f7b423af199ccf8d2383`**; the release page lists the current build's actual hash.
 3. Wait for the download to finish before opening it. Your browser may warn that a file this large is unusual; that's expected for an installer that carries its own Python runtime and GPU libraries.
 
 ## Step 2: Install Warlock Studio
