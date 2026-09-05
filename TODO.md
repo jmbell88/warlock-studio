@@ -2,26 +2,28 @@
 
 Written 2026-08-21, consolidating the four plan files that had accumulated at
 the root and in `docs/`; rewritten 2026-08-25 as a priority list after a
-whole-tree review closed everything on it that code could close. Git holds
-every earlier version and every deleted plan (`git log --all --diff-filter=D`).
+whole-tree review closed everything on it that code could close; purged
+2026-09-04 of every entry that had since closed. Git holds every earlier
+version and every deleted plan (`git log --all --diff-filter=D`).
 
-**This file has two kinds of entry and no others.**
+**This file has three kinds of entry and no others.**
 
 1. **Work only a human can do**: art direction, authoring keyframes, opening a
-   file in real Aseprite or real Tiled, running a card, buying a certificate,
-   making a decision. None of it is derivable from the tree and none of it can
-   be closed by writing code.
+   file in real Aseprite or real Tiled, running a card, listening, making a
+   decision. None of it is derivable from the tree and none of it can be
+   closed by writing code.
 2. **Work that is fully specified and deliberately unstarted** — today that is
    Troupe's phases 7 and 8 alone (P13), each here with the argument that
-   makes it actionable, not as a title. Phase 6 closed on 2026-09-03 with the
-   re-render merge, its last unbuilt item.
+   makes it actionable, not as a title.
+3. **Open audit findings** (the section at the end): code work the 2026-09-04
+   static audit found and did not fix. Each is buildable and is struck out the
+   day it is built; the section is deleted when it is empty.
 
 **The moment an item could be built, it is built and struck out rather than
 tracked.** A plan whose boxes disagree with the tree is worse than no plan, and
 that is why every other roadmap file in this repository's history was deleted
-rather than ticked. Nothing here is blocked on finding time. Every claim in
-this file was verified against the tree on 2026-08-25, and P7, P10 and P15–P18
-against the tree on 2026-08-29.
+rather than ticked. Entry numbers are stable: a closed entry's number is not
+reused, and what it decided is one line under *Closed records* at the bottom.
 
 **This file has no `§N` API.** `tests/test_ux_todo_fixes.py` refuses any
 citation of this filename from `src/` or `scripts/`. What a module needs to
@@ -35,48 +37,23 @@ so that "done" is recognisable without re-deriving it.
 
 ---
 
-## P1. Run the installer end to end, then on a clean machine
+## P1. Run the installer on a clean machine
 
-**Why it is yours:** hardware. `installer/build.ps1`, `installer/warlock.iss`,
-the runtime manifest and `verify_runtime.py` were built on 2026-08-22. **They
-were executed for the first time on 2026-08-26** and the first two bullets
-below are settled; everything from the relocated install down is still owed,
-and none of it has been seen on a machine that is not this one.
+**Why it is yours:** hardware. The installer was built for the first time on
+2026-08-26 and rebuilt at 0.0.31 on 2026-09-03 (2.91 GB payload, ~800 s
+compile, 6.61 GB installed; single exe, `DiskSpanning=no`). Two things it
+reproduced both times and which are the path, not an edge case: `iscc` is not
+on PATH (`-Iscc` is needed) and the default index does not serve cu128, so the
+pinned-index retry in `build.ps1` is load-bearing. A default per-user `/SILENT`
+install was proved the same day. Everything below has never been seen on a
+machine that is not this one.
 
 **Do:**
-- ~~`pwsh installer\build.ps1` on a Windows machine with `uv`, a uv-managed
-  CPython 3.13 and Inno Setup 6. Confirm the staged smoke test and the
-  `torch.version.cuda == "12.8"` assert pass; record payload size and compile
-  time.~~ **Done 2026-08-26.** Staged smoke test and CUDA assert both pass, but
-  the assert only passes on the *retry* path: the default index does not serve
-  cu128, so the first `uv pip sync` always fails and the pinned-index retry is
-  load-bearing rather than a fallback. `iscc` was not on PATH (it is under
-  `%LOCALAPPDATA%\Programs\Inno Setup 6`), so `-Iscc` was needed. **2.91 GB
-  payload, 855 s compile, 6.16 GB installed.** **Rebuilt at 0.0.31 on
-  2026-09-03** — the first build since, and the only thing that had gone stale
-  in eight days was the artefact itself: the version lockstep, `uv.lock`, the
-  runtime manifest against the vendored Trellis 0.6.0 binaries and both
-  `verify_runtime` passes were all already correct, and nothing in `build.ps1`
-  or `warlock.iss` needed touching, because both take whole directories rather
-  than a file list. Every finding above reproduced exactly: `-Iscc` still
-  needed, and the cu128 retry taken again — twice now, so it is the path, not
-  an edge case. **2.91 GB payload (2,914,492,749 bytes), 797 s compile, 6.61 GB
-  staged.** The installed footprint has grown 0.45 GB since 0.0.29;
-  `INSTALL.md`'s two size figures were moved to match.
-- ~~Settle single-exe versus disk spanning.~~ **Decided 2026-08-26: single
-  exe.** The ~4 GB payload compresses to one 2.91 GB executable, so
-  `DiskSpanning=no`. `DiskSliceSize` stays in `warlock.iss`, inert, so the
-  decision is one line to reverse. `INSTALL.md` and `tests/test_installer.py`
-  were both rewritten off the three-file assumption.
-- Install per-user, then once with `/DIR=C:\Temp\WarlockApp /SILENT`. A default
-  per-user `/SILENT` install was proved on 2026-08-26 (shortcuts, uninstall
-  entry, and `warlock doctor` exiting 0 from `{app}` against the real model
-  library) — but a *silent* install shows no wizard, so the relocated `/DIR`
-  case and every wizard-page claim below remain unseen. With
-  `$env:WARLOCK_HOME` at a scratch directory: the Start Menu shortcut launches
-  under `pythonw`, the checkout-shape gate passes, the fatal banners name the
-  two missing-weights rows, the first-run overlay shows correct GPU verdicts,
-  ~23 GB and the disk check, and the wizard's first page renders `LICENSE`.
+- Install once with `/DIR=C:\Temp\WarlockApp /SILENT`. With `$env:WARLOCK_HOME`
+  at a scratch directory: the Start Menu shortcut launches under `pythonw`, the
+  checkout-shape gate passes, the fatal banners name the two missing-weights
+  rows, the first-run overlay shows correct GPU verdicts, ~23 GB and the disk
+  check, and the wizard's first page renders `LICENSE`.
 - Prove the fetch pipeline under the bundled interpreter: one small row end to
   end (dinov2, 0.4 GB), then SDXL and one reference generation. For TRELLIS,
   copy an existing `~/.warlock/models/trellis2-gguf` into the scratch home to
@@ -90,130 +67,32 @@ and none of it has been seen on a machine that is not this one.
 Two things the code review could not check: `pythonw.exe` has no console, so a
 crash *before* `_setup_logging` attaches closes silently — if that happens, run
 `python -m warlock` from a terminal to see it. And an unsigned exe means
-SmartScreen's "More info → Run anyway" (see P9).
+SmartScreen's "More info → Run anyway" (code signing was answered no for the
+closed beta; see Closed records).
 
-**Expected outcome:** ~~a recorded build (size, time, one-exe-or-spanning
-decision)~~ — recorded above — and a first **non-developer** install that
-generated an asset. The build half is done; the half that matters is not. Until
-a machine without `uv`, Python or a CUDA toolkit has installed this and made
-something, the project has no shippable artifact, whatever the tree says.
+**Expected outcome:** a first **non-developer** install that generated an
+asset. Until a machine without `uv`, Python or a CUDA toolkit has installed
+this and made something, the project has no shippable artifact, whatever the
+tree says.
 
-## P2. ~~Purge `examples/` from git history before the repository goes public~~
+## P3. Re-examine the `trellis_tex_res = 512` pin
 
-**Done 2026-09-03, and verified from what GitHub serves rather than from the
-local repository.** `git filter-repo --path examples/ --invert-paths`, then the
-remote was **deleted and recreated** rather than force-pushed, because a force
-push does not delete anything on GitHub: unreachable objects stay fetchable by
-SHA until it garbage-collects, which it only does on request. Recreating cost
-nothing measurable -- the repository was private with no releases, no issues,
-no pull requests and no stars.
+**Why it is yours:** a card and a judgement. The graded mesh run closed on
+2026-09-02 (props-v1 11 of 22 usable, fantasy-v1 10 of 20; see Closed
+records), and this is what survived from its first decision rule.
 
-A mirror clone taken immediately before the rewrite is at
-`D:/Projects/_archive/warlock-pre-purge.git`, with a README beside it saying
-what it still contains and why it must never be pushed. **Delete it once you
-have worked in the rewritten repository long enough to be satisfied** -- keeping
-it indefinitely means keeping the problem indefinitely.
-
-| | Before | After |
-|---|---|---|
-| `git log --all -- examples/` | 7 add-commits | **empty** |
-| Reachable `examples/` objects | 23 | **0** |
-| Commits | 963 | 963 |
-| Tags | 2 | 2 |
-| Pack size | 96.7 MiB | 71.6 MiB |
-| `master` tree hash | `b2bcdb40...` | `b2bcdb40...` |
-
-Three things the rehearsal and the run turned up that the plain command does
-not mention, kept because the next rewrite will meet them again:
-
-- **`filter-repo` deletes the `origin` remote**, by design, so a rewritten
-  history cannot be pushed back by reflex.
-- **It migrates remote-tracking refs into local branches and rewrites those
-  too.** `origin/claude/sirens-audio-mode-planning-gbyypk` existed only on the
-  remote and carried eight commits touching `examples/`; a rehearsal in a clone
-  with no GitHub remote-tracking refs could not show this, and predicted the
-  branch would be left behind. It was not -- it arrived rewritten, and was then
-  deleted outright as it held nothing not already in `master`.
-- **`gh repo delete` needs the `delete_repo` scope**, which is not in a default
-  `gh` token: `gh auth refresh -h github.com -s delete_repo`. That grant also
-  brings `workflow`, which turns out to be required anyway to push changes to
-  anything under `.github/workflows/`.
-
-The original entry follows for the record.
-
-
-**Why it is yours:** it rewrites every commit SHA and needs a force-push, and
-the moment is yours to pick — **before** publishing, never after; a public
-repo's history is cloned within minutes and a later rewrite cannot recall them.
-
-`examples/` was untracked and gitignored on 2026-08-24 and
-`tests/test_release_hygiene.py` refuses it coming back, but the blobs remain in
-every earlier commit: `light_world.png` and `zelda_1.jpg` (Nintendo material),
-`*_base.obj`, `*_base.blend`, `*_spritesheet.png` (ULPC-derived, CC-BY-SA/GPL,
-no attribution file anywhere).
-
-**Do:** `git filter-repo --path examples/ --invert-paths`, force-push, have
-every collaborator re-clone. If the ULPC files are wanted back, they come back
-with an attribution file naming source and licence —
-`src/warlock/pipelines/birefnet/ATTRIBUTION.md` is the shape. The Nintendo pair
-does not come back.
-
-**Rehearsed on 2026-09-03 against a throwaway clone, and it is clean.** All 962
-commits survive, both tags survive (`v0.0.29-imgui`, `archive/plotter-wave-2`),
-all five local branches survive, the pack drops 96.7 MiB → 71.6 MiB, and the
-rewritten `HEAD` tree hash is **byte-identical** to the current one — so the
-working tree provably does not move. `git log --all -- examples/` is empty
-afterwards. Two things the rehearsal turned up that the plain command does not
-mention:
-
-- **`filter-repo` deletes the `origin` remote** (by design, so a rewritten
-  history cannot be pushed back by reflex). It has to be re-added before any
-  push.
-- **`origin/claude/sirens-audio-mode-planning-gbyypk` exists only on the
-  remote**, and it carries eight commits that touch `examples/`. Rewriting the
-  five local branches and force-pushing them would leave that branch pointing
-  at unpurged history and every blob still reachable. It has **zero** commits
-  that are not already in `master`, so deleting it on GitHub is the whole fix
-  — but it has to be done, and it is invisible from the local branch list.
-
-**And the force-push is not the end of it.** GitHub keeps unreachable objects
-fetchable by SHA after a force-push and only garbage-collects on request, so a
-rewritten-but-not-collected repository still serves the blobs to anyone who
-knows the hash. Either open a support request to have it collected, or —
-simpler for a private solo repository — delete the remote repository and
-push the rewritten history to a fresh one.
-
-**Expected outcome:** `git log --all -- examples/` is empty and the repository
-can be made public without redistributing art it may not.
-
-## P3. ~~One GPU afternoon: a graded mesh run at the shipped default~~
-
-**Done 2026-09-02.** Two corpora through `text → sdxl_cfg → TRELLIS` at the
-shipped defaults, graded blind in Review on the −5..+5 scale the same
-afternoon: props-v1 on trellis.cpp v0.6.0 is **11 of 22 usable** (8 of 16 on
-easy+medium; `docs/measurements/2026-09-02-trellis-060-props.md`), fantasy-v1
-is **10 of 20** (`docs/measurements/2026-09-02-fantasy-v1.md`). The same
-grades closed `docs/measurements/2026-09-02-hole-audit-vs-grade.md` (the silhouette audit is
-the reviewer's `holes` tag to the mesh on v0.5.4; the reroll converted 0 of 5;
-`mesh_retries` stays 0) and settled the guidance sweep's open-form question.
-The README states the figure. The library was cleaned on 2026-09-03 once the
-open sweeps were reviewed; the verdict rows stay. P10's decisions are unblocked.
-
-What survived as a human item, from the props document's first decision rule:
-
-- **Re-examine the `trellis_tex_res = 512` pin.** Reproduce the auto-tex-res
-  noise with `trellis-cli.exe --tex-res 1024` on one reference from props-v1
-  (a byte-stable one — the rock, jug or loaf, not the pouch or branches). If
-  the texture is clean on v0.6.0, a measurement document lifts the pin; if
-  not, it records the reproduction and the pin stays. One reference, one
-  judgement, well under an hour of card time.
+**Do:** reproduce the auto-tex-res noise with `trellis-cli.exe --tex-res 1024`
+on one byte-stable reference from props-v1 (the rock, jug or loaf — not the
+pouch or branches). If the texture is clean on v0.6.0, a measurement document
+lifts the pin; if not, it records the reproduction and the pin stays. One
+reference, one judgement, well under an hour of card time.
 
 ## P4. A textured, rigged humanoid `.glb` — one file, three jobs
 
-**Why it is yours:** art. Both `examples/*_base.obj` carry no texture, so every
-Troupe frame to date quantises into the pale end of whatever ramp it is given.
-The palette ramps are installed (`~/.warlock/palettes/cosmos`, `light_world`)
-and proven on 2D; **this file is the only thing between them and a verdict on
+**Why it is yours:** art. Every Troupe frame to date quantises into the pale
+end of whatever ramp it is given because no textured base mesh exists. The
+palette ramps are installed (`~/.warlock/palettes/cosmos`, `light_world`) and
+proven on 2D; **this file is the only thing between them and a verdict on
 Troupe.** The same file is the base mesh the Troupe manual chapter assumes, and
 the tutorial sample for chapter 11.
 
@@ -224,28 +103,19 @@ naming needs a mapping table); no very short bones (Blender silently deletes a
 bone below a fraction of the mesh's largest dimension *and takes its children*
 — fingers and toes are the usual casualties); under ~300k faces; male and
 female variants; a licence permitting commercial redistribution of rendered
-sprites. `examples/` cannot supply it (ULPC, CC-BY-SA/GPL: reference and
-validation only).
+sprites.
 
 **Do:** author or commission it; put it through **Send to Troupe** (library
 menu, inspector, or the picker inside Troupe) with `palette=cosmos`.
 
 **Partially unblocked 2026-08-30.** `tests/fixtures/humanoid/cesium_man.glb`
-(CesiumMan, CC-BY 4.0 Cesium — see `tests/fixtures/humanoid/ATTRIBUTION.md`)
-is textured, rigged,
-+Z up, A-pose-ish and 4,672 polys, so **P5 is now runnable**. It does *not*
-close this entry: it is a 3,273-vertex specification sample with a small JPEG
-and no female variant, so a ramp verdict taken on it is a claim about
-CesiumMan rather than about character art anyone would ship. The authored or
-commissioned mesh is still owed, and this entry stays open until it exists.
-
-Putting a rigged mesh through the path found three silent defects that no
-TRELLIS reconstruction could ever have exposed — a skin guard defeated by the
-incoming weights, two skeletons in the export, and a doubled Y-up→Z-up rotation
-that fitted the skeleton to an arm span under half its real width. All three
-are fixed (`_strip_incoming_rig`) and pinned by
-`tests/test_rig_supplied_mesh.py`; the argument is in
-`docs/measurements/2026-08-30-art-verdicts-preregistration.md` Q5.
+(CesiumMan, CC-BY 4.0 — `tests/fixtures/humanoid/ATTRIBUTION.md`) is textured,
+rigged, +Z up, A-pose-ish and 4,672 polys, so **P5 is runnable**. It does not
+close this entry: a ramp verdict taken on a 3,273-vertex specification sample
+with a small JPEG and no female variant is a claim about CesiumMan, not about
+character art anyone would ship. Putting it through the path found and fixed
+three silent rig defects (`_strip_incoming_rig`, `tests/test_rig_supplied_mesh.py`,
+`docs/measurements/2026-08-30-art-verdicts-preregistration.md` Q5).
 
 **Expected outcome:** the first Troupe sheet with real colour, and a verdict on
 whether the ramp works at sprite scale. Unblocks P5 and P11.
@@ -253,13 +123,12 @@ whether the ramp works at sprite scale. Unblocks P5 and P11.
 ## P5. Run a `charsheet` job end to end against real Blender
 
 **Why it is yours:** a card. Troupe Phase 4's job has never run on hardware.
-The pieces either side of it have (Phase 0d), and the render call is
-`rigging.sheet_spec` + `run_worker` exactly as `_sheet` makes it — but the
-end-to-end run is owed, and it is how you find out that the clip edits from P8
-reach a rendered sheet.
+The pieces either side of it have, and the render call is `rigging.sheet_spec`
++ `run_worker` exactly as `_sheet` makes it — but the end-to-end run is owed,
+and it is how you find out that the clip edits from P8 reach a rendered sheet.
 
-**Do:** with P4's mesh (or any rigged humanoid), **Send to Troupe**, wait for
-the rig and the sheet, open the sheet in Troupe.
+**Do:** with P4's mesh (or CesiumMan), **Send to Troupe**, wait for the rig and
+the sheet, open the sheet in Troupe.
 
 **Expected outcome:** a rendered sheet from the shipped clips, or the first
 real defect in the chain. Either is worth more than the tests.
@@ -275,51 +144,37 @@ own two halves cannot catch an error both halves make together
 worth authoring first. **Start with the tilemap ones** — `tilemap-rgb`,
 `tilemap-indexed`, `spare-tileset`: their chunk field order was written by
 inverting the *reader*, field for field, and has never been checked against a
-file Aseprite itself wrote. That is the highest-value five minutes on this
-list. In the same sitting: every RGB and grayscale file now carries a palette
-chunk derived from the art's own colours, including a 1-entry transparent
-palette on a blank document — check Aseprite is happy with that rather than
-replacing its default with a single swatch.
+file Aseprite itself wrote. In the same sitting: every RGB and grayscale file
+carries a palette chunk derived from the art's own colours, including a
+1-entry transparent palette on a blank document — check Aseprite is happy with
+that rather than replacing its default with a single swatch.
 
 **Expected outcome:** either the tilemap chunk order is confirmed and
 `docs/COMPAT.md`'s Aseprite rows can say "opened in Aseprite 1.3.x", or a
 field-order bug is found that no test could have — and it gets a fixture from
-the real app, which is what makes the corpus test worth having.
+the real app.
 
-## P7. Author `.tmx`/`.tsx` fixtures in real Tiled, then lift the version pin
+## P7. Author `.tmx`/`.tsx` fixtures in real Tiled
 
 **Why it is yours:** the same rule as P6. Every map under
 `tests/plotter/fixtures/tiled/` was produced by this editor, so every
 `round-trips` row in `docs/COMPAT.md`'s Tiled part is a round trip against
-ourselves. `tests/plotter/fixtures/tiled/FIXTURES.md` lists what is owed and
-in what order.
+ourselves. `TILED_VERSION` already moved to `1.12.2` on 2026-08-29 against
+files outside this repository; that moved one attribute and left no golden the
+suite can re-run.
 
-**Do, in order:**
-1. Author the fixtures in Tiled 1.12.x and drop them in. **Still owed**, and
-   `basic-ortho` is still the first one: 8×8 orthogonal at 16 px, one external
-   tileset, two layers with the second at 0.5 opacity, and one tile flipped
-   each way (`X`/`Y`/`Z` while stamping). Save it twice — `.tmx` and an
-   exported `.tmj` — because the manifest keys on stems having both.
-2. ~~Only then move `tsx.TILED_VERSION` (`studio/plotter/tsx.py`) from `1.10.2`
-   to `1.12.2`.~~ **Done 2026-08-29: it is `1.12.2`.** The gate was "a real
-   Tiled 1.12.2 opens one of our exports without complaint", and both halves
-   were exercised against files in the `D:\Projects\RPG` repository: a Plotter
-   export (150×150 orthogonal, three CSV layers, external `tilesets/*.tsx`)
-   was opened and worked on in Tiled 1.12.x, and a map Tiled 1.12.2 itself
-   wrote (640×360, two external tilesets with a `firstgid` split) reads in
-   Plotter. `docs/COMPAT.md` records both and what they do not cover.
-3. Re-check a grid pack's `.tsx` geometry: pow2 rounding is off by default
-   now, so the standing verification is stale. **Still owed** — the maps
-   checked in step 2 came from image tilesets, not from a Packwright grid
-   pack, so nothing about `tsxout`'s margin/spacing/columns arithmetic was
-   exercised in Tiled.
+**Do:**
+1. Author the fixtures in Tiled 1.12.x per `tests/plotter/fixtures/tiled/FIXTURES.md`.
+   `basic-ortho` first: 8×8 orthogonal at 16 px, one external tileset, two
+   layers with the second at 0.5 opacity, one tile flipped each way. Save it
+   twice — `.tmx` and an exported `.tmj` — because the manifest keys on stems
+   having both.
+2. Re-check a grid pack's `.tsx` geometry in Tiled: pow2 rounding is off by
+   default now, and the 2026-08-29 maps came from image tilesets, so nothing
+   about `tsxout`'s margin/spacing/columns arithmetic has been exercised there.
 
 **Expected outcome:** the Tiled rows of `docs/COMPAT.md` become claims about
-Tiled rather than about ourselves. ~~and `TILED_VERSION` says what it means.~~
-The version half is closed; the corpus half is the one that matters and it is
-untouched — the 2026-08-29 check was done on files outside this repository, so
-it moved one attribute and left no golden the suite can re-run. Steps 1 and 3
-are what turn the rows themselves.
+Tiled rather than about ourselves.
 
 ## P8. Author the 22 keyframes
 
@@ -335,31 +190,26 @@ shipped clips** is always available. Manual: *Poser → Editing clips*. Decide
 first whether it is you or an animator.
 
 Two things to know before starting. **Easing does nothing at the current
-segment lengths**: it reshapes where inside a step frames land, so it needs a
-step of ≥3 frames, and every shipped step is 1 or 2 — `ease` is a smoothstep
-whose only interior sample is exactly 0.5, so `idle`'s `ease` renders
-identically to `linear` today (`ease_in`/`ease_out` do differ; the panel says
-so). And **the arms hang slightly forward** on the shipped keys.
+segment lengths**: it needs a step of ≥3 frames and every shipped step is 1 or
+2, so `idle`'s `ease` renders identically to `linear` today. And **the arms
+hang slightly forward** on the shipped keys.
 
 **The brief, per clip.** Judge each at 16–32 px through the Troupe preview,
-not as a 3D pose; the preview's heatmap (built 2026-09-02, `troupe/qa.py`)
-flags silhouette pops, foot-line jitter, a loop seam and cross-direction drift
-per cell, so use it as the measuring tool and click a flagged square to land
-on the frame.
+whose heatmap (`troupe/qa.py`) flags silhouette pops, foot-line jitter, a loop
+seam and cross-direction drift per cell; click a flagged square to land on the
+frame.
 
 - **Idle** (cyclic): a breath — one or two pixels of vertical bob, shoulders
-  and chest, nothing else moves. The seam must be invisible; the heatmap's
-  `seam` flag is the check.
+  and chest, nothing else. The seam must be invisible (`seam` flag).
 - **Walk** (cyclic): two contacts, two passing poses, the bob passing through
-  zero between them; arms counter-swing the legs. Feet stay on the ground
-  line at the contacts (`foot` flag) and the silhouette changes smoothly
-  (`shape` flag).
-- **Run** (cyclic): the same four poses with a flight phase — both feet off the
-  ground for one frame — a forward lean, and a larger arm swing. Read it in
-  profile first: the knee drive is where the current clip crumples.
-- **Attack** (one-shot): anticipation (a wind-up, 1–2 frames), the hit (the
-  frame with the most silhouette change, and the one to draw first), recovery
-  back to idle's first pose so the return does not pop.
+  zero between them; arms counter-swing the legs. Feet on the ground line at
+  the contacts (`foot`), silhouette changing smoothly (`shape`).
+- **Run** (cyclic): the same four poses with a flight phase, a forward lean and
+  a larger arm swing. Read it in profile first: the knee drive is where the
+  current clip crumples.
+- **Attack** (one-shot): anticipation (1–2 frames), the hit (the frame with the
+  most silhouette change, and the one to draw first), recovery back to idle's
+  first pose so the return does not pop.
 - **Jump** (one-shot): crouch, launch, apex (held), fall, land in a crouch,
   recover. The apex is the readable frame; the landing is the second.
 
@@ -370,18 +220,9 @@ sheet and record the values in
 **Expected outcome:** clips that look like movement at 32 px, verified through
 P5. This is the most important art task in the programme.
 
-## ~~P9. Decide: code signing~~
-
-**Answered 2026-09-03: no, for the closed beta.** The reasoning, the two named
-revisit triggers (a public download link, or the first report of somebody
-stopping at the wall) and the option actually priced when they fire (Azure
-Trusted Signing, not an OV certificate) are recorded in `docs/INVARIANTS.md`.
-A recorded no was one of the two outcomes this item asked for, so it is closed
-rather than carried.
-
 ## P10. Decide: what the model picker offers
 
-**Why it is yours:** editorial calls that P3's number should inform.
+**Why it is yours:** editorial calls that the graded run's numbers now inform.
 
 - `juggernaut` and `dreamshaper` have **no hits anywhere in
   `docs/measurements/`** and sit in the picker as peers of the default at
@@ -391,123 +232,48 @@ rather than carried.
   (`docs/measurements/2026-08-17-reference-source-bench.md`).
 - `turbo` is labelled non-commercial (the disclosure half). Whether it is also
   labelled *draft* is an editorial call.
-- ~~Tile sheets: `docs/measurements/2026-08-18-tile-sheet-grid.md` says the
-  mechanism works and the output is "one continuous brick wall" or
-  "near-identical grey mush", and names the answer — "N materials, one grid".
-  Ship that, mark the feature experimental, or hold it.~~ **Done 2026-08-29:
-  shipped.** The Layout control offers Materials and Terrain set alongside the
-  old path, which is labelled *Grid (legacy)* and kept only because a 3/4 or
-  isometric tile cannot wrap and so cannot be seamless. What is owed now is the
-  verdict, which is P15.
 
-**Expected outcome:** each of the four is a decision recorded in the model
-registry's own comments (or a measurement document), after which the picker
-stops offering what has not earned its place.
+**Expected outcome:** each is a decision recorded in the model registry's own
+comments (or a measurement document), after which the picker stops offering
+what has not earned its place.
 
-## P11. Decide: two Troupe design questions
+## P11. Decide: two Troupe questions
 
 **Why it is yours:** design, not implementation.
 
-- **Where does the "judge clips as pixels" preview live?** The plan asked for a
-  live low-res sprite preview in Poser. **It cannot go there as built**:
-  `template_preview` (`service/poses.py`) builds an armature-only GLB, so
-  Poser's preview is a meshless armature and there is nothing to pixelise.
-  Either Poser learns to load a rigged asset for preview, or the pixel verdict
-  stays in Troupe where the mesh is. The scrubber shipped as the fast loop,
-  which is right either way.
-- ~~**Phase 6, the cleanup workflow** (P13) — the hard item, "re-render one
-  animation without discarding hand edits", is a design problem that should be
-  a conversation before it is a commit.~~ **Decided 2026-09-02, in
-  conversation:** the merge happens **in Inker**, three-way, because Inker is
-  the only place the hand edits exist and Troupe holds no document by
-  invariant. (1) When a sheet opens in Inker, the importer records a digest of
-  each cell's rendered pixels in the document as an additive `animation.json`
-  key written only when set, the way `groups` is. (2) The character-sheet job
-  gains a `subset` parameter — a list of `(animation, direction)` runs — and
-  the worker renders only those, copying every other cell from the previous
-  atlas through a staged write, published as a new sheet id. (3) Inker gets a
-  **Merge re-render** op: per cell it compares the recorded base digest, the
-  current pixels and the new render; untouched cells take the render, cells
-  the user edited where the render did not change keep the edit, and cells
-  where both changed are **conflicts, marked in the timeline**. **Default on
-  conflict: keep the hand edit and flag the cell** — nothing painted is ever
-  overwritten silently; the user resolves per cell or per run. Deferred to its
-  own plan; the two cheaper phase-6 items were built first (P13) and the
-  merge's cell addressing is theirs (`inker/sheetscope.py`).
+- **Where does the "judge clips as pixels" preview live?** It cannot go in
+  Poser as built: `template_preview` (`service/poses.py`) builds an
+  armature-only GLB, so there is nothing to pixelise. Either Poser learns to
+  load a rigged asset for preview, or the pixel verdict stays in Troupe where
+  the mesh is.
 - **`plotter-wave-2`.** The branch last moved 2026-08-14 and holds 52 unmerged
-  commits; master has moved several hundred since. It is gated on P7's Tiled
-  fixtures and on a whole-branch review. Three outcomes: rebase and finish it,
-  cherry-pick what still applies, or delete it and let history hold it. **A
-  branch delete needs an explicit ask.**
+  commits; master has moved several hundred since. Gated on P7's fixtures and
+  a whole-branch review. Three outcomes: rebase and finish it, cherry-pick what
+  still applies, or delete it. **A branch delete needs an explicit ask.**
 
-**Expected outcome:** three recorded decisions; the first and second turn into
-buildable specs, the third into a branch operation.
+**Expected outcome:** two recorded decisions; the first turns into a buildable
+spec, the second into a branch operation.
 
-## P12. ~~Troupe Phase 0e — judge humanoid reconstruction from a single image~~
+## P13. Troupe phases 7 and 8 — fully specified, deliberately unstarted
 
-**Answered 2026-08-30: no. The generated-character path is not viable at the
-shipped default.** Three humanoids went through `text → sdxl_cfg → TRELLIS` as
-part of the props-v1 corpus and were judged on this entry's own rubric — limb
-separation and silhouette, not face fidelity. The verdict: **limbs are bent and
-stretched**. The pre-registered bottom rule fires, and the exact count does not
-matter, since the viable rule needed 2 or 3 of 3.
-
-The `_init_frame` distortion bug is ruled out as a confound: these jobs carried
-no init image and no conditioning, so that path was never entered. It is the
-reconstruction's own geometry.
-
-**What it decides:** Phase 7 is not worth planning on the generated-character
-path, which is the decision this entry existed to take before the investment
-rather than after. The **supplied-base-mesh path is the one to build on**, and
-it became runnable the same day (see P4/P5). This says nothing about whether a
-better reconstruction — a multi-view backend, say — could carry characters; it
-is a verdict on the shipped single-view default.
-
-Recorded in `docs/measurements/2026-08-30-sdxl-cfg-props.md`, which also carries
-the corpus finding this is consistent with: 16 of 21 good references became
-unusable meshes, with `holes` the dominant defect tag.
-
-## P13. Troupe phases 6, 7 and 8 — fully specified, deliberately unstarted
-
-The second kind of entry. Phases 0a–0d and 1–5 are implemented and verified;
+The second kind of entry. Phases 0a–0d and 1–6 are implemented and verified;
 what they established is in `docs/INVARIANTS.md`, and the measured ULPC facts
-are passing oracles in `studio/troupe/ulpc.py`.
-
-**Phase 6 — the cleanup workflow.** Export exists (`inker/sheetout.py`,
-`aseout.py`, `packwright/tsxout.py`); the work is the loop:
-- ~~*Propagate a correction* across frames / direction / animation. Inker's
-  ranged ops (`_doc_ranges.py`) are most of the machinery; through the write
-  funnel, addressed by uid.~~ **Built 2026-09-02**: `inker/sheetscope.py`
-  (the addressing), `inker/_doc_sheet.py` (one funnel, five verbs), the strip
-  under the timeline transport, the **Sheet** menu.
-- ~~*Mirror-assisted cleanup.* Measured on the reference sheets: W/E mirroring
-  leaves 36–37 differing pixels confined to the face, and every non-zero shift
-  is far worse (443 px at ±1) — real facial asymmetry, not a centring offset.
-  A fix on one side can be offered on the other, face excluded.~~ **Built
-  2026-09-02**: `inker/mirror.py`, the face box at 30 % of the alpha bbox by
-  default, a live diff on the canvas, apply per cell or per run.
-- ~~*Re-render one animation without discarding hand edits.*~~ **Built
-  2026-09-03**, as designed in P11. Three parts: `inker/sheetmerge.py` holds the
-  digest and the five-verdict comparison, and the base rides in `animation.json`
-  as an additive `sheet` key the way `groups` does; `charsheet.check_subset` /
-  `subset_indices` plus `sheet.pack(only=)` and `sheet.compose_cells` are the
-  subset arithmetic, and `service.troupe.rerender_charsheet` is the door — it
-  copies its pixel settings from the row that made the sheet, so the new cells
-  match the ones they land beside. `_doc_sheet.merge_render` is the sixth verb,
-  and on conflict the hand edit stands and the cell is flagged. Two ordering
-  traps are recorded where they bite: the pixel-art pass is not idempotent, so
-  the compose happens *after* the quantise, and the palette is pinned off the
-  base atlas or a subset would derive its own.
+are passing oracles in `studio/troupe/ulpc.py`. Phase 6 closed on 2026-09-03
+with the three-way re-render merge (`inker/sheetmerge.py`,
+`service.troupe.rerender_charsheet`, `_doc_sheet.merge_render`; on conflict the
+hand edit stands and the cell is flagged).
 
 **Phase 7 — layered equipment (deferred until whole-character generation
-works).** *Multi-GLB scene composition*: `op_sheet` takes one `source_glb` and
-equipment items are separate assets by construction, so the task is composing
-N GLBs under a shared camera, not splitting one (`op_rig` joins every mesh into
-one object, which is why splitting is a dead end). *Per-part passes with depth*
-give correct per-direction occlusion for free; the depth machinery is proven in
-`blender_worker._depth_material` and can move onto the sheet path. *Garment
-fitting*: skin-weight transfer by proximity (Blender Data Transfer) — hugging
-garments first; capes and long skirts are a separate problem.
+works, which P12 measured it does not at the shipped default).** *Multi-GLB
+scene composition*: `op_sheet` takes one `source_glb` and equipment items are
+separate assets by construction, so the task is composing N GLBs under a
+shared camera, not splitting one (`op_rig` joins every mesh into one object,
+which is why splitting is a dead end). *Per-part passes with depth* give
+correct per-direction occlusion for free; the depth machinery is proven in
+`blender_worker._depth_material`. *Garment fitting*: skin-weight transfer by
+proximity (Blender Data Transfer) — hugging garments first; capes and long
+skirts are a separate problem. The supplied-base-mesh path (P4/P5) is untouched
+by P12's verdict and is the one to build on.
 
 **Phase 8 — reconsider only against a working system.** *AI restyle*:
 `create_pixel_sheet` with `structure_lock` over a rendered sheet; note
@@ -516,540 +282,399 @@ exact is `pixelsheet.remask()` stamping the render's own alpha back, and
 `check_restylable` refuses `frame_size × columns > 1024`. Opt-in, measured,
 never default. *A learned pixel refiner*: once cleanup is routine,
 `(render, hand-cleaned)` pairs accumulate for free, perfectly registered, over
-a fixed palette — a well-posed supervised problem that automates the cleanup
-step rather than relearning pose transfer. *More animations*: hurt, death,
-cast, climb are additive. *Natural-language character description*: only over
-a working catalog, only local weights through `fetch_worker`, following the
-`expand.py` precedent.
+a fixed palette. *More animations*: hurt, death, cast, climb are additive.
+*Natural-language character description*: only over a working catalog, only
+local weights through `fetch_worker`.
 
-**Expected outcome:** none until P11 and P12 say the programme continues; the
-value of this entry is that nobody re-plans it.
-
-**P12 answered on 2026-08-30, and it answered no** for the generated-character
-path: limbs came back bent and stretched. Phase 7's own parenthesis already
-defers it "until whole-character generation works", so that phase stays where it
-is — the gate did not need moving, it needed measuring, and now it has been.
-
-What this does *not* do is close the entry. Phases 6 and 8 never depended on
-generated characters, and the **supplied-base-mesh path is untouched by the
-verdict** — a user's own rigged humanoid reaches Troupe without the
-reconstruction being involved at all, which is the path P4/P5 opened the same
-day. P11's two design questions are still yours and still open.
+**Expected outcome:** none until P11 says the programme continues; the value
+of this entry is that nobody re-plans it.
 
 ## P14. Listen to Sirens, on a machine with a sound card
 
 **Why it is yours:** hardware, and the plainest instance of it in this file.
-Sirens landed complete on 2026-08-27 across six landings and **nobody has ever
-heard it**. Every box it was built on is headless and silent, so the synthesis
-is proved the only way it could be — a byte-identical render corpus, a
-`wavout` reader that is exactly its writer's inverse, a perf budget, and a
-pane-draw test with no GPU behind it — and none of that is the same as a person
-saying "that is a pulse wave and it is in tune". The device path
-(`studio/sirens_audio.py`, `pygame.mixer`) has been exercised by tests that
-assert it *degrades* when there is no device, which is the opposite half of the
-question. It belongs beside P5, P6 and P7 — the entries that are "run
-this against the real thing", as do P15 and P16 below — and it is numbered here
-rather than inserted in place only because inserting it would renumber twelve
-entries and thirty-seven cross-references, in a file whose own rule is that a
-plan disagreeing with the tree is worse than none. Everything appended after it
-is numbered by the same rule and read by priority, not by number.
+Sirens landed complete on 2026-08-27 and **nobody has ever heard it**. Every
+box it was built on is headless, so the synthesis is proved the only way it
+could be — a byte-identical render corpus, a `wavout` reader that is its
+writer's inverse, a perf budget — and none of that is a person saying "that is
+a pulse wave and it is in tune".
 
-**Do:** open Sirens on a machine with audio and a display, and go through the
-tutorial (`docs/manual/14-making-a-soundtrack.md`) as written, out loud:
+**Do:** open Sirens on a machine with audio and go through
+`docs/manual/14-making-a-soundtrack.md` as written, out loud:
 
-- Write a bar on the triangle and press Space. Is it in tune against a
-  reference pitch? Is the tempo the BPM the transport claims?
+- Write a bar on the triangle and press Space. In tune against a reference
+  pitch? Is the tempo the BPM the transport claims?
 - Drag a decay into a volume envelope and hear the shape change. Drag the
-  release marker and hold a long note — the tail should take over audibly.
-  Then write `Shift+Backtick` (`~~~`) under one note and a backtick (`===`)
-  under another: the first should let go into that tail, the second should stop
-  dead. That pair is the whole argument for the release half of an envelope and
-  the difference is not something a test can hear.
-- Type into the other four columns, which only became possible in the sixth
-  landing. A volume digit should make one row quieter; an `F` and two digits in
-  the effect and parameter columns should change the tempo *from that row on*
-  and not from the top; an arpeggio or a vibrato should sound like the thing it
-  is named after rather than merely different.
-- Drop a `.wav` on the window, point a sample instrument at it, and play it
-  from the grid at three different pitches.
-- Audition a sound effect. Confirm the song's own buffer is untouched: play the
-  song again straight afterwards and hear the song rather than the effect.
+  release marker and hold a long note. Then write `~~~` under one note and
+  `===` under another: the first should let go into the tail, the second stop
+  dead.
+- Type into the other four columns. A volume digit should make one row
+  quieter; an `F` and two digits should change the tempo *from that row on*;
+  an arpeggio or vibrato should sound like the thing it is named after.
+- Drop a `.wav` on the window, point a sample instrument at it, play it from
+  the grid at three pitches.
+- Audition a sound effect, then play the song again and hear the song.
 - Export into an empty folder. Open `song.wav`, a stem and an `sfx/` file in
-  something that is **not** this app. Confirm the loop points in `song.wav`
-  actually loop in a player that reads `smpl`, and that a stem lines up
-  sample-for-sample with the mix.
-- Save, close, reopen. Confirm the song is the song.
+  something that is **not** this app. Confirm the `smpl` loop points loop, and
+  that a stem lines up sample-for-sample with the mix.
+- Save, close, reopen.
 
 **Expected outcome:** either the mode is what the manual says it is, or the
-first defect that only a listener could find — a panning error, a tuning
-error, a click at a loop point, a mixer that opens at the wrong rate. The tests
-cannot produce either verdict, which is exactly why this is here.
+first defect only a listener could find — a panning error, a tuning error, a
+click at a loop point, a mixer that opens at the wrong rate.
 
 ## P15. Judge a generated terrain set, and open it in real Tiled
 
-**Why it is yours:** a card, then eyes, then an application this repository does
-not have. The seamless path has been through real weights exactly once — four
-isolated 1024px materials in `tests/test_tileset_gpu.py` on 2026-08-29 — and
-**nothing has generated a terrain set end to end.** The blob-47 construction is
-proved by a map round-trip identity on real AI texture, which is the strongest
-evidence available without a person looking, and it is still evidence about the
-compositing rather than about the art.
+**Why it is yours:** a card, then eyes, then an application this repository
+does not have. The seamless path has been through real weights exactly once
+(four isolated 1024px materials, `tests/test_tileset_gpu.py`, 2026-08-29) and
+**nothing has generated a terrain set end to end.** This is also where the
+*Keep one style across the list* checkbox (P18, built 2026-08-30) gets its
+verdict.
 
-**Do:** Create → Sheet → **Terrain set**, two surfaces that ought to meet (grass
-into dirt is the honest first try), at 32px. Then take the sheet into Plotter,
-paint with the **Terrain** tool, and look at the joins where the brush turns a
-corner and where two strokes meet. Then export the map and **open it in Tiled**.
+**Do:** Create → Sheet → **Terrain set**, two surfaces that ought to meet
+(grass into dirt), at 32px. Take the sheet into Plotter, paint with the
+**Terrain** tool, look at the joins where the brush turns a corner and where
+two strokes meet. Export the map and **open it in Tiled** — our writer and
+reader agree on the 47-case ordering by construction, so only Tiled can catch
+an error both make.
 
-That last step is P6 and P7's argument, not a new one: a round trip through our
-own two halves cannot catch an error both halves make together, and a terrain
-set is the case where that matters most, because our writer and our reader agree
-on the 47-case ordering by construction.
-
-**Expected outcome:** either the first generated tileset that a person would
-actually paint a map with, or the first defect in the chain that only a painted
-map shows — a coverage field that is right and reads wrong, a boundary that is
-too soft at 16px, two materials whose scales disagree.
+**Expected outcome:** either the first generated tileset a person would
+actually paint a map with, or the first defect only a painted map shows.
 
 ## P16. Judge an eight-direction action sprite sheet at 32px
 
-**Why it is yours:** art. The seven pose guides are verified as *guides* — the
-mirror rule is pinned, every authored row was rendered and looked at, and four
-were rewritten because of what that showed — but **nothing has been through SDXL
-with them.** Whether a guide that reads correctly as a stick figure produces a
-character that reads correctly as an attack is not a question the tests can
-reach.
+**Why it is yours:** art. The seven pose guides are verified as *guides*, but
+**nothing has been through SDXL with them.**
 
-**Do:** one character, one reference, then `attack8` at 32px (eight generations,
-about three minutes) and `walk8` at 32px. Play the walk at 10fps in Inker and
-turn the character through all eight directions. Judge three things separately:
-does one identity survive all eight bands; does the action read as the action;
-and does the front row, which is a literal copy of the back row with a different
-prompt clause, look like a different picture.
+**Do:** one character, one reference, then `attack8` at 32px and `walk8` at
+32px. Play the walk at 10fps in Inker through all eight directions. Judge
+three things separately: does one identity survive all eight bands; does the
+action read as the action; does the front row, a literal copy of the back row
+with a different prompt clause, look like a different picture.
 
-Three limits are already recorded rather than hidden, so they are not the
-finding: front and back rows are copies (the convention `walk.json` and
-`idle8.json` already set), `run8`'s knee-drive frames read a little like a
-crumple in profile, and `cast8`'s release is weaker head-on than in profile
-because a forward thrust has nowhere to go in an orthographic front view.
+Known and recorded, so not the finding: front and back rows are copies,
+`run8`'s knee-drive reads a little like a crumple in profile, and `cast8`'s
+release is weaker head-on than in profile.
 
 **Expected outcome:** the art verdict on whether the whole action set is worth
-having — which is the decision that says whether the remaining guides are worth
-authoring, and whether P17 is a question at all.
+having, and whether P17 is a question at all.
 
 ## P17. Decide whether four-direction guides are wanted
 
-**Why it is yours:** editorial. `SPRITE_DIRECTION_COUNTS` is `(4, 8)` and the
-action table plans a `walk4` as readily as a `walk8`, but the menu is discovered
-from the guide files on disk and only the `*8.json` files ship — so the
-Directions control has exactly one option today, which is a control that cannot
-be operated.
+**Why it is yours:** editorial. `SPRITE_DIRECTION_COUNTS` is `(4, 8)` but only
+`*8.json` guides ship, so the Directions control has exactly one option. The
+case for four is half the generations and half the wait; the case against is
+that a four-direction sheet and the legacy `walk` are near-neighbours, and the
+guides are art.
 
-The case for four is real: it is half the generations and half the wait, and the
-two legacy kinds (`turnaround`, the four-frame `walk`) already cover part of that
-ground. The case against is that a four-direction sheet and a legacy walk are
-near-neighbours that would need explaining, and that the guides are art — six
-more files of authored joint coordinates, each rendered and looked at.
+**Do:** decide. If yes, author `idle4`, `walk4`, `run4`, `attack4`, `cast4`,
+`hurt4` (and `jump4` if the eight-direction jump survives P16) in
+`src/warlock/templates/sprite_guides/`, four views each in the legacy row order
+front/left/right/back, with P8's brief. The loader, planner, door and form
+already take a four-direction kind.
 
-**Do:** decide. If yes, the work after the decision is authoring, not coding:
-the loader, the planner, the door and the form already take a four-direction
-kind, and the legacy row order (front/left/right/back, not the preset's
-front/left/back/right) is already pinned so a four-direction sheet lands in the
-vocabulary every draft on disk already uses.
+**The one step that is code, whichever way it goes:** while discovery finds a
+single count, show the eight-direction count as a label rather than a
+one-item combo, and let the combo reappear the day a second count ships.
 
-**The one step that is code, whichever way the decision goes:** until `*4.json`
-guides exist on disk the Directions control is a one-item menu, and a control
-with one option is a control that cannot be operated. Make it honest — show
-the eight-direction count as a fact (a label, not a combo) whenever the
-discovery in `spritesynth.py` (`TEMPLATE_DIR`, the `<type>.json` loader) finds
-a single count, and let the combo reappear on its own the day a second count
-ships. `SPRITE_DIRECTION_COUNTS` in `generation.py` stays `(4, 8)`, since the
-vocabulary is right; it is the *offer* that is wrong.
-
-**If yes, the six guides to author** (`src/warlock/templates/sprite_guides/`,
-same joint-coordinate shape as the `*8.json` beside them, each rendered and
-looked at): `idle4`, `walk4`, `run4`, `attack4`, `cast4`, `hurt4`, and
-`jump4` if the eight-direction jump survives P16's verdict. Four views each —
-front, left, right, back in the legacy row order — with the same keyframe
-brief as P8, since a four-direction sheet is the same motion seen from fewer
-places rather than a simpler motion.
-
-**Expected outcome:** either six authored guides and a Directions control with
-two options, or the control removed and the eight-direction count stated as a
-fact rather than offered as a choice.
-
-## P18. ~~Decide what `style_lock` should look like, or remove it~~
-
-**Decided and built 2026-08-30:** the small answer. A *Keep one style across the
-list* checkbox on the Materials arm, with the sentence about what it costs (the
-IP-Adapter, ~1.2 GB) beside it, and the door now requires the encoder's weights
-when it is set. The verdict on the output is P15's. The original entry follows for
-the record.
-
-**Why it was yours:** design. It was built and it was unreachable. In the service
-and the worker, a materials sheet with `style_lock` set generates the first
-material and then uses it as the style reference for every one after it, so that
-N surfaces read as one artist's set rather than as N generations; `vram.py` even
-accounts for the extra adapter it loads. **No pane offers it and no route sets
-it**, so today it is a field that is always False and a branch that never runs —
-exactly the defect this session spent itself removing everywhere else.
-
-**Do:** decide one of three. A checkbox on the Materials arm ("keep one style
-across the list"), which is the small answer and needs a sentence saying what it
-costs. Folding it into the profile, beside the palette and the style LoRA, which
-is where "two sheets of one character match" already lives. Or deleting it, on
-the argument that a shared seed and a shared prompt template already do most of
-the work and an unmeasured second mechanism is not worth a control.
-
-Whichever way it goes, it is a decision first: shipping a control for a
-capability nobody has looked at the output of would only move the problem.
-
-**Expected outcome:** a reachable control with a sentence beside it, or 40-odd
-lines deleted and the fact recorded — and either way, no more unreachable
-branch.
-
----
+**Expected outcome:** either six authored guides and a two-option control, or
+the count stated as a fact.
 
 ## P19. Measure the generated Flourish texture against the procedural one
 
-**Why it is yours:** a GPU afternoon, and a judgement.
+**Why it is yours:** a GPU afternoon, and a judgement. The texture door is
+built and defaults to nothing: every preset is procedural. Whether a generated
+flame or ember *beats* the procedural core at 128 px is a measurement, and the
+earlier prompt expander was deleted for shipping without one.
 
-The texture door is built (`inker_flourish.submit_texture` → a reference job →
-`key_out_black`, or the matting model when present → an asset of the effect),
-and it defaults to *nothing*: every preset is procedural and no layer names a
-generated texture until you give it one. Whether a generated flame or ember
-*beats* the procedural core at 128 px, and again after the pixel pass, is a
-measurement, not a design decision, and the earlier prompt expander was deleted
-for shipping without one.
+**Do:** generate five textures with the shipped prompt template (flame, ember,
+rune, skull, shard); put each on the fireball's *Sparks* and on a *sprite*
+layer at 128 px, painterly and pixel. Judge beside the procedural version and
+write a document under `docs/measurements/` with the verdict, the prompts, and
+whether the black key or the matting model made the better cutout. If a
+texture wins, the preset gets it as a file beside its JSON; the door stays
+opt-in either way.
 
-- Generate five textures with the shipped prompt template (a flame, an ember, a
-  rune, a skull, a shard) and put each on the fireball's *Sparks* and on a
-  *sprite* layer at 128 px, painterly and pixel.
-- Judge beside the procedural version, and write
-  a new document under `docs/measurements/` with the verdict, the
-  prompts, and whether the black key or the matting model made the better
-  cutout.
-- If a texture wins, the preset that wants it gets it as a *file* under
-  `studio/inker/flourish/presets/` textures beside the JSON -- the recipe
-  format already names assets by id -- and the door stays opt-in either way.
-
-**Expected outcome:** one measurement document; presets changed only if it says
-so.
+**Expected outcome:** one measurement document; presets changed only if it
+says so.
 
 ## P20. Pick the Flourish prompt's text model, measure it, pin it
 
-**Why it is yours:** a CPU afternoon and a judgement, and the one entry in this
-programme that touches the offline invariant's stated exception.
+**Why it is yours:** a CPU afternoon and a judgement, and the one entry that
+touches the offline invariant's stated exception. The door is gated on a
+directory (`inker_flourish.TEXT_MODEL_DIR`), not a registry row, because every
+`models.py` entry carries a revision pin and the pin comes from this
+measurement.
 
-The door is built and gated on a *directory*, not a registry row:
-`inker_flourish.TEXT_MODEL_DIR` (`<model root>/text-instruct/`), probed for
-`config.json` plus safetensors, read by `pipelines/recipe_worker.py` in a
-one-shot child in the kill-on-close job, its answer landed only through
-`keywords.apply_diff` (every value clamped, every unknown name dropped and
-reported). Without weights the field uses `keywords.apply`, deterministic and
-pinned by tests. It is not in `models.py` because every entry there carries a
-fetch pinned to a revision (`tests/test_fetch.py`) and the pin comes from the
-measurement below -- the prompt expander of v0.0.30 shipped without one and
-was deleted for it.
-
-- Candidates: Qwen2.5-0.5B-Instruct and 1.5B-Instruct, SmolLM2-1.7B-Instruct.
-  Place one at a time in `text-instruct/`; doctor's row goes green.
-- The fixed prompt set: twenty sentences, half inside the keyword vocabulary
-  ("colder, more sparks"), half outside it ("make it look like it is
-  underwater", "the kind of fire a necromancer would cast"). For each, the
-  `[model]` toast versus the `[keywords]` toast, and whether the rendered
-  effect did what the sentence said. Time per prompt on the CPU.
-- Write a new document under `docs/measurements/`. If a model
-  beats the vocabulary on the outside half without losing the inside half,
-  add a `TextModel` table to `models.py` with a **pinned revision** and a
-  `fetch.Kind("text", ...)`, and switch `text_model_dir` to read it; if none
-  does, delete `recipe_worker.py` and the door, and keep the vocabulary --
-  the v0.0.30 rule, applied before shipping rather than after.
+**Do:** candidates Qwen2.5-0.5B-Instruct, 1.5B-Instruct, SmolLM2-1.7B-Instruct,
+one at a time in `text-instruct/`. Twenty fixed sentences, half inside the
+keyword vocabulary and half outside. For each, the `[model]` toast versus the
+`[keywords]` toast, whether the effect did what the sentence said, and CPU time
+per prompt. Write a document under `docs/measurements/`. If a model beats the
+vocabulary on the outside half without losing the inside half, add a pinned
+`TextModel` row to `models.py`; if none does, delete `recipe_worker.py` and the
+door.
 
 **Expected outcome:** one measurement document and one of the two edits.
 
 ## P21. Judge restyled keyframes against the procedural frames
 
-**Why it is yours:** a GPU afternoon, and the judgement the plan deferred.
+**Why it is yours:** a GPU afternoon. `Flourish → Restyle keyframes…` is
+built and opt-in; a crossfade of two diffusion frames is exactly where the plan
+expected it to fail.
 
-`Flourish -> Restyle keyframes...` is built and opt-in: N anchor frames of one
-phase go through the image model as img2img (`inker_flourish.submit_restyle`,
-one reference job each), and `flourish/keyframes.interpolate` fills the span by
-crossfading under the recipe's own displacement field, landing as a snapshot
-track inside the group (`Document.insert_flourish_track`). Whether that is
-ever better than the procedural frames -- for a painted look, a woodcut, a
-portal the primitives cannot make -- is the question, and a crossfade of two
-diffusion frames is exactly where the plan expected it to fail.
-
-- The fireball's *explosion* and the portal's *loop*, three and five
-  keyframes, strengths 0.4 and 0.7, two subjects each ("oil painting", "ink
-  woodcut"). Play them beside the procedural layer.
-- Write a new document under `docs/measurements/`: does the
-  in-between read as motion or as a fade; does the model keep the silhouette
-  at 0.4; is five keyframes enough for a twelve-frame phase.
-- If it never reads as motion, the door goes: delete `keyframes.py`, the
-  restyle door and its popup, and this entry. If it does for some phases,
-  the manual says which, and the measurement says why.
+**Do:** the fireball's *explosion* and the portal's *loop*, three and five
+keyframes, strengths 0.4 and 0.7, "oil painting" and "ink woodcut". Play beside
+the procedural layer. Write a document under `docs/measurements/`: does the
+in-between read as motion or a fade; does the model keep the silhouette at 0.4;
+is five keyframes enough for a twelve-frame phase. If it never reads as motion,
+delete `keyframes.py`, the door and its popup.
 
 **Expected outcome:** one measurement document and one of the two edits.
 
 ## P22. Write what the closed beta is told it has not seen
 
 **Why it is yours:** it is a claim about the product, made in your name, to
-people you invited.
+people you invited. Only Troupe carries an **Experimental** chip. Four other
+surfaces have evidence gaps and no chip: Sirens has never been heard (P14),
+Muse has never been heard (P23), Plotter's Tiled interop has only round-tripped
+against itself (P7), Troupe's sheet job has never run against real Blender
+(P5), and Warlock-written `.aseprite` files have never been opened in Aseprite
+(P6).
 
-Only Troupe carries an **Experimental** chip (`modes.MATURITY`). Two other
-surfaces have comparable evidence gaps and no chip: **Sirens** has never been
-heard on a machine with a sound card (P14 — the engine is asserted sample by
-sample and nobody has listened to it), and **Plotter's Tiled interop** has only
-ever round-tripped through Warlock's own reader and writer (P7). Troupe's
-character-sheet job has never run against real Blender (P5) and Warlock-written
-`.aseprite` files have never been opened in real Aseprite (P6).
+**Do:** name them, by mode, in whatever the invite is — a note beside the
+download. One sentence each: what runs, what has never been checked against the
+other implementation, what to report if it breaks. **Not by adding chips**: a
+chip is a permanent statement about design; these are temporary statements
+about evidence, and the beta is what removes them.
 
-**Do:** name those five, by mode, in whatever the invite is — a note beside the
-download, not buried in `docs/`. One sentence each: what runs, what has never
-been checked against the other implementation, and what to report if it breaks.
-
-**Not by adding chips.** A maturity chip is a permanent statement about a mode's
-design; these are temporary statements about *evidence*, and the beta is the
-thing that removes them. A chip added now would have to be argued away later,
-and the argument would be "somebody finally listened to it", which is not what
-the chip means. The chip stays for Troupe, whose gap is a design one (prompt-to-
-character is measured not to work), and the rest goes in the release note.
-
-**Expected outcome:** an invited user who hits one of these five knows they hit
-a known gap rather than a bug, and reports the right thing. It also converts
-P5, P6, P7 and P14 from work you owe yourself into work the beta can close.
+**Expected outcome:** an invited user who hits one of these knows they hit a
+known gap, and reports the right thing.
 
 ## P23. Hear Muse, and give its two VRAM figures real numbers
 
-**Why it is yours:** hardware twice over -- a card big enough to load an 8.3 GB
-model, and ears. It is P14's argument applied to the mode built beside Sirens,
-plus one measurement that a person has to start.
-
-Everything provable without a card is proved: the worker's protocol and the
-client's spawn/cancel/kill machinery run in the parallel suite with no weights
-anywhere (`tests/test_music_worker.py`, `tests/test_music_client.py`), the panes
-draw headless, and the door's refusals are asserted one field at a time. What
-none of that answers is whether the model produces music, whether a cancel
-actually interrupts a real sampling loop, and what the thing costs.
+**Why it is yours:** a card big enough for an 8.3 GB model, and ears.
+Everything provable without a card is proved; what none of it answers is
+whether the model produces music, whether a cancel interrupts a real sampling
+loop, and what the thing costs.
 
 **Do:**
 
-- `uv sync --extra music`, then download the weights from Settings -> Models and
-  confirm `uv run warlock doctor` flips the ACE-Step row from absent to present.
-- `uv run pytest tests/test_music_gpu.py -m gpu -n 0`. The seeded-checksum pair
-  is the parity check for the vendored code; the cancel test is the only proof
-  that `WARLOCK 1/5` reaches the loop rather than merely being in the file.
-  **Its first job is now confirming the writer fix on hardware.** `WARLOCK 5/5`
-  makes a take 44.1 kHz 16-bit PCM instead of 48 kHz float, which is what makes
-  "Open in Sirens" work at all -- it had never worked, for the mode's whole life,
-  because nothing exercised the real reader. `tests/test_music_format.py` pins it
-  without weights; what this lane adds is that a take the *model* produced (rather
-  than a synthetic tensor) opens in the tracker.
-- `uv run pytest tests/test_music_gpu.py -m gpu -n 0` again for the derived
-  tasks, which are the new surface: retake at 0.2 and at 0.8, an extend of a
-  60 s take, a repaint of one phrase, an edit of the tags alone. Cancel each one
-  mid-run -- the `edit` especially, since its cancel hook is a *second* loop and
-  has never been exercised.
-- In the app: type style tags, ask for two takes at 60 s, and listen to both.
-  Is it music? Do the tags do anything -- does "sparse percussion, minor key"
-  produce something recognisably different from "upbeat chiptune, major"? Write
-  a lyric block with `[verse]`/`[chorus]` and confirm the words are sung rather
-  than approximated.
-- Cancel mid-generation. The child must die, the row must read **cancelled**
-  and not failed, and the next take must still run without a restart.
-- Kill the app mid-generation and confirm no `music_worker` process survives.
-- Press **Open in Sirens** on a take, then play the sample from the grid at
-  three pitches. This is the whole bridge, and the tests assert the doors it
-  goes through rather than the sound that comes out.
+- `uv sync --extra music`, download the weights from Settings → Models, confirm
+  `uv run warlock doctor` flips the ACE-Step row.
+- `uv run pytest tests/test_music_gpu.py -m gpu -n 0`. The cancel test is the
+  only proof `WARLOCK 1/5` reaches the loop. Its first job is confirming on
+  hardware that a take the *model* produced (44.1 kHz 16-bit PCM, `WARLOCK 5/5`)
+  opens in Sirens.
+- The derived tasks: retake at 0.2 and 0.8, extend a 60 s take, repaint one
+  phrase, edit the tags alone. Cancel each mid-run — the `edit` especially,
+  whose cancel hook is a second loop and has never been exercised.
+- In the app: two takes at 60 s from style tags, and listen. Is it music? Do
+  the tags do anything? Does a `[verse]`/`[chorus]` lyric block get sung?
+- Cancel mid-generation: child dies, row reads **cancelled**, next take runs
+  without a restart. Kill the app mid-generation: no `music_worker` survives.
+- **Open in Sirens** on a take; play the sample from the grid at three pitches.
 
 **The measurement.** `models.MusicModel.vram_gib` (10.0) and `host_peak_gib`
-(12.0) are **documented estimates and nothing more**, which is the one thing in
-this feature that is knowingly unfinished: admission prices a music job off
-them, and under-pricing admits a job that OOMs at load -- the exact failure the
-door exists to prevent. `test_the_registry_figures_are_not_under_the_real_cost`
-prints both measured figures and asserts only the safe direction. Take them from
-a real run and publish `docs/measurements/<date>-ace-step-vram.md`, then replace
-the two constants with the measured numbers plus a citation, the way every other
-corpus-keyed constant in this repo carries one.
-
-**Also owed, if the measurement suggests it:** `cpu_offload` and
-`overlapped_decode` are class attributes on `music_worker._Server`, deliberately
-not `Config` fields -- a config field costs a `SETTINGS` row and a bidirectional
-test, and no measurement yet says they need to be knobs. Set them by hand in a
-GPU-lane experiment first; promote them only if the numbers say so.
+(12.0) are documented estimates. Take them from a real run, publish
+`docs/measurements/<date>-ace-step-vram.md`, replace the constants with cited
+numbers. `cpu_offload` and `overlapped_decode` stay class attributes on
+`music_worker._Server` until a measurement says they need to be knobs.
 
 **Expected outcome:** either the mode is what chapters 16 and 35 say it is, or
-the first defect only a listener could find -- and two constants that are
-measured rather than guessed.
+the first defect only a listener could find — and two constants measured
+rather than guessed.
 
 ## P24. Judge the loop finder, and hear a stem split
 
-**Why it is yours:** ears, again, and a card. Everything here is arithmetic that
-runs and produces *an* answer; whether the answer is any good is a listening
-question, and no test can be written for it.
+**Why it is yours:** ears, again, and a card.
 
-**The loop finder.** `studio/muse/loops.py` searches a take for the two positions
-where the music most nearly repeats. Its machinery is tested against signals
-whose right answer is a fact -- a tone that repeats, silence, a phrase structure
-built to have one join -- but real generated music is not that, and three of its
-constants were **chosen by ear and ship saying so**: `W_CONTEXT` (1.5),
-`W_LEVEL` (0.6) and `W_LENGTH` (2.0).
+**The loop finder.** `studio/muse/loops.py`'s `W_CONTEXT` (1.5), `W_LEVEL`
+(0.6) and `W_LENGTH` (2.0) were **chosen by ear and ship saying so**. Generate
+a dozen takes across styles, run **Find loop points**, listen to the best
+candidate looping four or five times, then try the numbered alternatives. Does
+the top candidate usually win? Does it favour quiet moments (`W_LEVEL` too
+strong) or merely spectrally similar ones (`W_CONTEXT` too weak)? Is `MIN_SPAN`
+(0.35) too generous for a two-minute take? Does a 0 ms crossfade click and does
+500 ms audibly duck? Either write `docs/measurements/<date>-loop-weights.md` or
+leave the constants with their honest "unmeasured" comments — **an honest
+unmeasured constant beats a measured-sounding one**.
 
-**Do:** generate a dozen takes across a few styles, run **Find loop points** on
-each, and listen to the best candidate looping four or five times. Then, for a
-handful, try the numbered alternatives. Questions worth answering: does the top
-candidate usually beat the others? Does the finder favour quiet moments (which
-would mean `W_LEVEL` is doing too much) or moments that merely share a spectrum
-(which would mean `W_CONTEXT` is doing too little)? Is `MIN_SPAN` (0.35) too
-generous for a two-minute take?
+**Stem separation** has never been run. Download it from Settings → Models and
+confirm the red non-commercial marker appears at the moment you agree. Split
+three or four takes (percussive, vocal, ambient) and listen to each stem for
+**bleed**; chapter 35 promises "a little", which a listener has to confirm or
+correct. Cancel a split mid-run: row cancelled, no child, the take reads as
+unsplit rather than partly split.
 
-Then either write `docs/measurements/<date>-loop-weights.md` -- a dozen takes,
-which weighting each chose, which a listener preferred -- or leave the constants
-alone with their honest "unmeasured" comments. **An honest unmeasured constant
-beats a measured-sounding one**, so leaving them is a real outcome and not a
-failure to finish.
+**The measurements.** `SeparationModel.vram_gib` (4.0), `host_peak_gib` (4.0)
+and `vram.MUSIC_SOURCE_GIB` (1.0) are guesses. Take all three from real runs —
+the third from an `extend` of a 240 s take — and publish
+`docs/measurements/<date>-hdemucs-separation.md` with wall clock beside them.
+`segment_seconds` (10.0) is the knob if separation is slower than about a
+minute for a four-minute take.
 
-Also worth an ear: the **crossfade**. 40 ms is the default; does a seam at 0 ms
-click on real material, and does 500 ms audibly duck?
-
-**Stem separation.** Ship-labelled non-commercial, and the code is written and
-tested down to the door -- but no separation has ever been run.
-
-**Do:**
-
-- Download it from Settings -> Models. Confirm the red non-commercial marker and
-  its warning appear at the moment you agree (this is the wording fix's only
-  visual check), and that `uv run warlock doctor` flips the row.
-- Split three or four takes -- something percussive, something with vocals,
-  something ambient -- and listen to each of the four stems for **bleed**. A
-  hi-hat in the "other" stem or a synth pad in "vocals" is the failure mode, and
-  the manual currently promises "a little bleed", which is a claim a listener has
-  to confirm or correct.
-- Cancel a split mid-run. The row must read cancelled, no child may survive, and
-  no half-written stem may be left where `files.ready` would serve it (the
-  sidecar is deleted first for exactly this reason -- confirm the take reads as
-  unsplit afterwards rather than as partly split).
-
-**The measurements this owes.** `SeparationModel.vram_gib` (4.0) and
-`host_peak_gib` (4.0) are guesses in `MusicModel`'s tradition, as is
-`vram.MUSIC_SOURCE_GIB` (1.0, what encoding a reference costs on top of the
-pipe). Take all three from real runs -- the third from an `extend` of a 240 s
-take, which is the largest encode the mode can be asked for -- and publish
-`docs/measurements/<date>-hdemucs-separation.md` with the wall clock beside them.
-`segment_seconds` (10.0) is the knob that trades wall clock against peak VRAM; if
-separation is slower than about a minute for a four-minute take, that is the
-figure to move.
-
-**Expected outcome:** three measured constants instead of three guesses, a
-verdict on the three loop weights, and either a confirmation of the bleed
-sentence in chapter 35 or a better one.
+**Expected outcome:** three measured constants, a verdict on the loop weights,
+and either a confirmation of chapter 35's bleed sentence or a better one.
 
 ## P25. Decide: is a non-commercial stem model worth shipping at all
 
-**Why it is yours:** it is a licensing judgement about what this app is *for*,
-and I have made the reversible half of it rather than the whole.
+**Why it is yours:** a licensing judgement about what this app is *for*.
+Hybrid Demucs ships **labelled** `commercial=False` with a `license_note` and
+the red marker; the reasoning is in `docs/MODELS.md`. It is the second
+non-commercial entry beside SDXL-Turbo, and unlike Turbo it is optional.
 
-Hybrid Demucs ships **labelled** `commercial=False`, with a `license_note` and
-the red marker the download dialog already draws. The reasoning is in
-`docs/MODELS.md`: the code is MIT, but Meta stated the trained weights are for
-scientific purposes only and this checkpoint was trained the same way with no new
-grant. Open-Unmix is not an escape (MIT code, CC BY-NC-SA dataset).
+**The question:** for an app whose purpose is making assets people sell, is
+"labelled and optional" the right answer, or should the feature not be offered?
 
-That makes it the second non-commercial entry in the registry, beside
-SDXL-Turbo -- and unlike Turbo it is *optional*, so a user who never presses
-**Stems** never touches it.
-
-**The question:** for an app whose stated purpose is making assets people sell,
-is "labelled and optional" the right answer, or should the feature not be offered
-at all? Shipping it says stems are worth having on non-commercial terms; removing
-it says a tool for selling assets should not have a button whose output cannot be
-sold.
-
-**If the answer is remove:** the surface is small and named -- the
-`SeparationModel` table, `pipelines/separation_worker.py`, `separate_job`, the
-`separate` arms in `_q_music`/`_q_jobs`/`vram`/`validation`/`progress`, the four
-`files.MEDIA` keys, the tray button, and chapter 35's Stems section. The
-`url`/`sha256` transport in `models.Fetch` should **stay** either way: it is the
-only thing in the registry that can pin a non-Hub artifact, and the next one will
-want it.
+**If remove:** the surface is the `SeparationModel` table,
+`pipelines/separation_worker.py`, `separate_job`, the `separate` arms in
+`_q_music`/`_q_jobs`/`vram`/`validation`/`progress`, the four `files.MEDIA`
+keys, the tray button, and chapter 35's Stems section. The `url`/`sha256`
+transport in `models.Fetch` **stays** either way.
 
 ## Also owed, smaller
 
 - **Tutorial sample assets** (art): a 32×32 `.ora` sprite with a few layers
   and frames for the Inker chapters; a 16 px tileset of sixteen to twenty-four
   tiles with a terrain set for Plotter and Packwright; a low-poly `crate.glb`
-  for Clay; the humanoid from P4 for Troupe. Original and project-licensed —
-  nothing from `examples/`, nothing procedurally generated. If they land:
-  `src/warlock/assets/tutorial/`, added to the hatchling force-include beside
-  `docs/manual/`, under about a megabyte, used by the last section of
-  chapters 05, 07, 09, 10 and 11. **Expected outcome:** the "Try it" sections
-  gain a starting file for readers who would rather learn the tools than
-  design a character in the same ten minutes.
-- ~~**Read the first 3.12 CI run.**~~ **Read 2026-09-03, and it was not
-  green: fourteen failures.** Six were rig paths that *fail* rather than skip
-  when `bpy` is absent — which is precisely the "rigging unavailable"
-  degradation the 3.12 floor existed to keep working, so the floor's own
-  premise was false. Five were list-ordering assertions that tie on a coarse
-  clock, two were load-sensitive, and one was a `MemoryError`. Of the two
-  outcomes this item allowed, the answer was **a raised floor to 3.13**: `bpy`
-  is 3.13-only so rigging can never work below it, and the installer packs its
-  own 3.13 runtime so nobody running the shipped product was on 3.12 anyway.
-  `requires-python` is now `>=3.13` and the leg is retired with the reason
-  written where it ran. The remaining eight failures were never 3.12-specific
-  and two of them are fixed (see the closed records); the rest have not been
-  reproduced on 3.13 and are not known to exist there.
+  for Clay; the humanoid from P4 for Troupe. Original and project-licensed. If
+  they land: `src/warlock/assets/tutorial/`, added to the hatchling
+  force-include, under about a megabyte, used by the last section of chapters
+  05, 07, 09, 10 and 11.
+- **Delete the pre-purge mirror** at `D:/Projects/_archive/warlock-pre-purge.git`
+  once you have worked in the rewritten repository long enough to be
+  satisfied. Keeping it indefinitely means keeping the problem indefinitely.
+
+---
+
+## Audit 2026-09-04 — open findings
+
+The third kind of entry. A ten-slice static audit on 2026-09-04 (after the two
+sweeps that landed as `b19a9d47` and `cb019390`) found these and did not fix
+them. Each is buildable; strike it out the day it lands, with the regression
+test the audit rule requires for Medium and above. Delete the section when it
+is empty. No Critical was found.
+
+**High**
+
+- **Muse: Play after Stop discards the loop region, crossfade and position.**
+  `panes/muse_player.py` `_transport` calls `seek` (a no-op when nothing is
+  sounding) then `muse_mode.play`, which always re-submits the decode and
+  replaces the whole `Player` with defaults. Resume in place with `_play_from`
+  when the loaded player already holds this job's PCM. Test in
+  `tests/test_muse_player.py`: loop + xfade survive a stop/play cycle.
+- **Doctor: the fatal TRELLIS GGUF row is green on a zero-byte file.**
+  `doctor._gguf_check` uses `fetch.present`, which is `is_file()`; only the
+  base-model branch calls `fetch.suspect_files`. Fold the engine kind in,
+  mirroring the base branch.
+- **Three undo doors push a step per drag frame** — the class `cb019390`
+  fixed in seven siblings: Plotter's layer-stack Opacity (`plotter_layers.py`
+  `_opacity_row`), Packwright's Padding and Extrude
+  (`panes/packwright_settings.py`), and the tileset Terrain tab's Wang-colour
+  swatch and probability (`panes/plotter_tileset_editor.py` →
+  `MapDoc.replace_tileset`, which pushes unconditionally). Add
+  `controls.fold_undo` between field and write; add each door to
+  `tests/test_undo_gesture_doors.py`. The swatch is a popup picker, whose
+  sliders fold per component — verify that case rather than assume it.
+
+**Medium**
+
+- **Doctor: every other model row has the same zero-byte blind spot** (LoRA,
+  IP-Adapter, ControlNet, music, separation, pose, matting loops). One shared
+  helper, one zero-byte test per kind.
+- **Doctor: `_exe_check` and `_gltfpack_check` accept a directory.** `exists()`
+  → `is_file()`. A directory named `trellis-server.exe` must fail the fatal row.
+- **Inker: the layer-opacity drag can orphan its undo step.** `inker_menu.py`
+  seeds the "before" value with `setdefault` and pops only on deactivation; an
+  interrupted drag leaves the change unrecorded and poisons the next drag's
+  "before". Refresh on `is_item_activated()`, or use `fold_undo`.
+- **Troupe QA: a blank frame can lose its "worst" ranking.** `qa.score_sheet`'s
+  blank branch never raises `worst_ratio`, so a later marginal warn overwrites
+  it. Give blank a ratio above any metric.
+
+**Low**
+
+- **Clay: `ObjectPropsEdit`, `MaterialEdit`, `MaterialListEdit` carry no
+  `cost`**, so they weigh zero to eviction.
+- **`service.files.job_dir_file` trusts its `name` argument by docstring
+  alone.** Reject separators and `..`, or check against `MEDIA`.
+
+**Docs** (each a one-line edit unless noted)
+
+- `README.md` lists twelve modes and omits Muse.
+- `docs/manual/20-overview.md` lists Sirens twice and out of rail order.
+- `THIRD-PARTY-NOTICES.md` omits Hybrid Demucs and claims every checkpoint
+  comes from Hugging Face.
+- `CONTRIBUTING.md` says "three extras" under a four-extra command, and
+  "~12,000 tests" where the suite is 16,000+.
+- `CHANGELOG.md` 0.0.32 never announces Muse as a mode.
+- `docs/manual/39-installation.md`'s extras table omits `music`.
+- `docs/manual/40-configuration.md` does not list `WARLOCK_T2I_IN_PROCESS`.
+- `docs/MODELS.md` has an unclosed code fence swallowing the rigging heading.
+- `SECURITY.md`'s untrusted-file list omits `.wsng`.
+- `docs/manual/31-plotter.md` says "Choose image…" for a button that reads
+  "Choose..."; `docs/manual/08-rigging-and-posing.md` capitalises "Adjust
+  Joints".
+
+---
 
 ## Closed records (kept so nobody re-derives them)
 
-- **Host commit (D1/D2/D3).** A model load never gave its host memory back:
-  `flux_klein_distilled` charged +21.1 GiB and returned 0.1. Closed 2026-08-22
-  by the t2i child process (`pipelines/text2image_worker.py`,
-  `t2i_client.Text2ImageClient`; `WARLOCK_T2I_IN_PROCESS=1` restores the old
-  arrangement): in the child, 24.08 GiB charged / 24.08 returned. The child-pid
-  reporting defect was closed by reading the kill-on-close job
-  (`winjob.job_pids`), and the orphaning claim was refuted by measurement.
+- **P2, purge `examples/` from history.** Done 2026-09-03: `git filter-repo`,
+  then the remote deleted and recreated rather than force-pushed, because
+  GitHub keeps unreachable objects fetchable by SHA. 963 commits and both tags
+  survive; `git log --all -- examples/` is empty; `master`'s tree hash did not
+  move. Three traps for the next rewrite: `filter-repo` deletes `origin`; it
+  migrates remote-tracking refs into local branches and rewrites those too;
+  `gh repo delete` needs the `delete_repo` scope. The mirror is the item under
+  *Also owed*.
+- **P3, the graded mesh run.** Done 2026-09-02: props-v1 on trellis.cpp
+  v0.6.0 is 11 of 22 usable, fantasy-v1 10 of 20
+  (`docs/measurements/2026-09-02-trellis-060-props.md`,
+  `docs/measurements/2026-09-02-fantasy-v1.md`); the hole audit closed
+  (`docs/measurements/2026-09-02-hole-audit-vs-grade.md`). The tex-res pin
+  survived as the new P3.
+- **P9, code signing.** Answered no for the closed beta on 2026-09-03. The
+  revisit triggers and the priced option (Azure Trusted Signing) are in
+  `docs/INVARIANTS.md`.
+- **P10's tile-sheet half.** Shipped 2026-08-29 as Materials and Terrain set,
+  with the old path labelled *Grid (legacy)*; the verdict is P15.
+- **P11's phase-6 design.** Decided 2026-09-02 and built 2026-09-03: the merge
+  happens in Inker, three-way, and on conflict the hand edit stands.
+- **P12, humanoid reconstruction from a single image.** Answered no on
+  2026-08-30: limbs come back bent and stretched at the shipped default
+  (`docs/measurements/2026-08-30-sdxl-cfg-props.md`). Phase 7 stays deferred;
+  the supplied-base-mesh path is untouched.
+- **P18, `style_lock`.** Built 2026-08-30 as the *Keep one style across the
+  list* checkbox on the Materials arm, with its cost beside it.
+- **The 3.12 CI leg.** Read 2026-09-03: fourteen failures, six of them rig
+  paths that fail rather than skip without `bpy`. The floor was raised to 3.13
+  (`bpy` is 3.13-only and the installer packs its own 3.13 runtime).
+- **Host commit (D1/D2/D3).** Closed 2026-08-22 by the t2i child process;
   `docs/measurements/2026-08-22-trampoline-child-pids.md` and
   `docs/INVARIANTS.md` hold the figures and the stdin-reader rule.
-- **Release audit (2026-08-24).** `REPORT.md` (written at `bd41c75`, deleted
-  2026-08-25 once every code-closable finding was closed): GPL-3.0,
-  sdist allowlist, licence disclosure in the picker, `THIRD-PARTY-NOTICES.md`
-  staged into the installer, the zip ceiling as a subclass. What it left to a
-  human is P1, P2, P3, P9 and P10 above.
-- **GPU lane.** `uv run pytest -m gpu -n 0`: 26 passed, 0 errors on
-  2026-08-21, top-down tile sheets included; the isometric guide and the 3/4
-  clause remain unproven on a card and are part of P3's afternoon.
-- **Art direction and palettes.** References supplied and ramps installed
-  2026-08-21 (`~/.warlock/palettes/cosmos`, `light_world`); the derivation
-  drops any colour filling complete scanlines before ranking, because the map
-  rip's canvas ranked first by coverage.
+- **Release audit (2026-08-24).** `REPORT.md` deleted 2026-08-25 once every
+  code-closable finding closed: GPL-3.0, sdist allowlist, licence disclosure
+  in the picker, notices staged into the installer.
+- **GPU lane.** 26 passed, 0 errors on 2026-08-21; the isometric guide and the
+  3/4 clause remain unproven on a card.
+- **Art direction and palettes.** Ramps installed 2026-08-21
+  (`~/.warlock/palettes/cosmos`, `light_world`).
 
 ## Not on this list on purpose
 
 Decisions with arguments beside them, not backlog:
 
 - **Scale and crop of a tilemap layer** stay refused, permanently. They
-  resample, and a tileset cannot follow a resample — there is no permutation
-  to teach, only a re-cut, which is a different operation.
+  resample, and a tileset cannot follow a resample.
 - **A hexagonal 120° tile rotation** stays refused: not a permutation of the
-  pixel grid, and the standing bar for a tile transform is that it invents no
-  colour. `docs/COMPAT.md` carries the argument.
-- **Pen/tablet pressure, ICC colour, per-frame palettes, ~~per-cel opacity~~,
-  ~~per-cel z-index~~** and the rest of the Aseprite parity programme's named
-  non-goals, in `docs/INVARIANTS.md`. Per-cel opacity was struck out on
-  2026-08-30 and per-cel z-index the same day: each could be built, so each was
-  built (divergences #1 and #12, retired in place there), and this file's own
-  rule is that an item which could be built is struck through rather than left
-  standing as a decision it is no longer. The z-index is the one that cost
-  something to build — it turns the compositor's below-cache off for a
-  document that uses it, measured in
-  `docs/measurements/2026-08-30-cel-z-below-cache.md`.
-- **The Aseprite P1 backlog** was waved after all, on 2026-08-22, by the UX
-  refactor's Wave 6. The rule that said it never would be was reversed in
-  `docs/INVARIANTS.md` on the same day, and this line said the opposite until
-  2026-08-30. What that wave shipped, and what it deliberately left, lives in
-  `docs/INVARIANTS.md`.
+  pixel grid. `docs/COMPAT.md` carries the argument.
+- **Pen/tablet pressure, ICC colour, per-frame palettes** and the rest of the
+  Aseprite parity programme's named non-goals, in `docs/INVARIANTS.md`.
+  Per-cel opacity and z-index were built on 2026-08-30 and struck from this
+  list (`docs/measurements/2026-08-30-cel-z-below-cache.md`).
 - **An LLM director for Troupe.** No LLM infrastructure exists, a local HTTP
-  endpoint would be the first socket in the app besides the trellis client, and
-  it would break `HF_HUB_OFFLINE=1`. The user approves a *picture*, which is a
-  better interface than a manifest.
+  endpoint would be the first socket in the app besides the trellis client,
+  and it would break `HF_HUB_OFFLINE=1`. The user approves a *picture*, which
+  is a better interface than a manifest.
