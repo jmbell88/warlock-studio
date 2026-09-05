@@ -118,7 +118,18 @@ def _run_doctor(*, verify: bool = False) -> None:
     config = get_config()
     checks = run_checks(config)
     for check in checks:
-        status = "OK" if check.ok else ("FATAL" if check.fatal else "WARN")
+        # Four words, not three. A row that is merely not downloaded yet is
+        # the ordinary state of a fresh install, and printing WARN against it
+        # told a user with nothing wrong that something was wrong. The exit
+        # code below keys on ``fatal`` alone, so SETUP rows leave it at 0.
+        if check.ok:
+            status = "OK"
+        elif check.fatal:
+            status = "FATAL"
+        elif check.pending_install:
+            status = "SETUP"
+        else:
+            status = "WARN"
         print(f"[{status}] {check.name}: {check.detail}")
     # After the checks, not before (S140): the checks are the answer and this is
     # the context for it. A host whose rows disagree with the documentation

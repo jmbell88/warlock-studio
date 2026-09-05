@@ -50,10 +50,50 @@ def test_gguf_check_finds_weight_files(tmp_path):
     assert checks["TRELLIS GGUF weights"].ok is True
 
 
-def test_gguf_check_reports_missing_dir_as_fatal(tmp_path):
+def test_gguf_check_reports_missing_weights_as_a_pending_install(tmp_path):
+    """Absent weights are a download not made, not a broken install.
+
+    This asserted ``fatal is True`` until 2026-09-04. Fatal put a red banner on
+    every fresh launch and made ``warlock doctor`` exit 1 on a machine with
+    nothing wrong with it -- the weights are a first-run download, and
+    Settings -> Models is the button that fixes it. The exe beside it stays
+    fatal, because the installer ships that one.
+    """
     checks = {c.name: c for c in run_checks(_config(tmp_path))}
-    assert checks["TRELLIS GGUF weights"].ok is False
-    assert checks["TRELLIS GGUF weights"].fatal is True
+    row = checks["TRELLIS GGUF weights"]
+    assert row.ok is False
+    assert row.fatal is False
+    assert row.pending_install is True
+
+
+def test_a_check_may_not_be_both_broken_and_merely_uninstalled(tmp_path):
+    """The two claims are exclusive, and the constructor says so.
+
+    They are read by different consumers -- the exit code and the startup
+    banner key on ``fatal``, the health band and Home's row key on
+    ``pending_install`` -- so a row claiming both would be reported twice and
+    counted twice.
+    """
+    import pytest
+
+    from warlock.doctor import Check
+
+    with pytest.raises(ValueError):
+        Check("both", False, "", fatal=True, pending_install=True)
+
+
+def test_nothing_is_fatal_on_a_host_that_has_simply_downloaded_nothing(tmp_path):
+    """The whole point of the change, asserted end to end.
+
+    ``_config`` points every root at an empty directory, which is exactly the
+    shape of a machine five minutes after the installer finishes. The only
+    fatal row left is the vendored exe, and that one is present in a real
+    install because the installer stages it.
+    """
+    checks = run_checks(_config(tmp_path))
+    fatal = [c.name for c in checks if not c.ok and c.fatal]
+    assert fatal == ["trellis-server.exe"], fatal
+    assert any(c.pending_install for c in checks)
 
 
 def test_birefnet_check_is_not_fatal_when_missing(tmp_path):

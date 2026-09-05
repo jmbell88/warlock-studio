@@ -37,7 +37,7 @@ Open the Start Menu and launch **Warlock Studio**.
 
 The first time it opens, a **Set up this PC** panel appears:
 
-![Set up this PC: the GPU and VRAM readout, three readiness verdicts, and the required downloads](docs/manual/img/01-first-run.png)
+![Set up this PC: the GPU and VRAM readout, three readiness verdicts, and the downloads generation needs](docs/manual/img/01-first-run.png)
 
 It runs three live checks against your actual GPU and VRAM — not a guess:
 
@@ -47,7 +47,7 @@ It runs three live checks against your actual GPU and VRAM — not a guess:
 | Image generation | Whether the image model fits your VRAM budget |
 | Rigging | Whether the rigging tool is available |
 
-Below that, it lists the two downloads it needs, with sizes, and tells you up front if your disk doesn't have room:
+Below that, it lists the two downloads *generation* needs, with sizes, and tells you up front if your disk doesn't have room:
 
 - **TRELLIS.2 GGUF weights** — about 16 GB
 - **SDXL 1.0** — about 7 GB
@@ -55,13 +55,13 @@ Below that, it lists the two downloads it needs, with sizes, and tells you up fr
 Two buttons:
 
 - **Download models** — starts both downloads in the background. The app stays fully usable (and offline) otherwise.
-- **Not now** — skip for later. The same downloads are always reachable at **Settings → Models**.
+- **Not now** — skip for good, not just for now. Nothing is owed: the app is fully usable without either download, and the same rows are always reachable at **Settings → Models**. The Home screen keeps one quiet line offering them again.
 
 A few things worth knowing so you don't worry unnecessarily:
 
 - There's no time estimate shown, since it depends entirely on your internet connection. It's fine to leave it running and come back later.
 - A cancelled or failed download is safe to retry — it doesn't leave a broken, half-downloaded mess behind.
-- Most of the app — drawing, tile maps, the asset library, and more — works immediately with **zero downloads**. Only AI image and 3D generation need the two model packages, so the rest of the app isn't "broken" while they finish.
+- Most of the app — drawing, tile maps, the asset library, and more — works immediately with **zero downloads**. Only AI image and 3D generation need the two model packages, so the rest of the app isn't "broken" while they finish. **Create** and **Muse** are greyed out in the left-hand rail until their models are present — clicking a greyed one takes you to Settings → Models with exactly those downloads already ticked, rather than opening a workspace whose buttons would all refuse.
 
 Separately, the Home screen offers a dismissible **"New here?"** guided tour with **Start** and **Not now** buttons. It's entirely optional and never launches on its own.
 

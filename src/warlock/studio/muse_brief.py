@@ -219,21 +219,36 @@ def _step(form: dict[str, Any], field: str, values: tuple[int, ...], *, cast: An
 def _generate(ctx: Any, *, enabled: bool) -> None:
     """The press. Always visible, which is the point of the bar.
 
-    Disabled only while a submit is in flight. It is deliberately *not* also
-    disabled on an empty prompt or on missing weights: the service refuses both
-    with a sentence naming the control, which is more use than a dead button --
-    and unlike Create there is no plan block below to carry the list, so a
-    refusal that never arrives is a refusal nobody reads.
+    Disabled while a submit is in flight, and **also when the music weights are
+    not on this host**. An empty prompt is still left to the service, and the
+    reasoning above still holds for it: a refusal naming the control is more
+    use than a dead button.
+
+    Missing weights are the case where that stopped being true. There is no
+    fallback -- Muse refuses outright rather than generating something worse --
+    so the answer never changes until an 8 GB download happens, and finding
+    that out by pressing the button was the whole complaint. The Recipe pane
+    now carries the notice and the Install button; this is the same fact on the
+    control, so the two agree and the reason is on the hover.
     """
+    from ..service import jobs as svc_jobs
+    from .panes import model_gate
+
+    blocked = bool(model_gate.missing(ctx, svc_jobs.MUSIC_ROWS))
     with focus.item(ctx.state, FOCUS_PANE, "generate") as focused:
         pressed = widgets.primary_button(
             "Generate",
             (sp(GENERATE_W), sp(TAGS_H)),
-            enabled=enabled,
+            enabled=enabled and not blocked,
+            reason=(
+                "The music model is not downloaded. See the Recipe panel."
+                if blocked
+                else ""
+            ),
             tooltip="Ctrl+Enter",
         )
         anchors.mark("muse/generate")
-        if focused and enabled and _enter_pressed():
+        if focused and enabled and not blocked and _enter_pressed():
             pressed = True
     if pressed:
         muse_mode.generate(ctx)

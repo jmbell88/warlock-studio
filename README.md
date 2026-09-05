@@ -142,12 +142,20 @@ uv sync --extra studio --extra text2image --extra rig --extra music
 ```
 
 Then start the app. **It will offer you the ~23 GB of model weights on first
-run** — a first-run panel names your GPU and its VRAM, lists exactly what needs
+run, and nothing is owed if you decline** — a first-run panel names your GPU and its VRAM, lists exactly what needs
 downloading with the combined size, and refuses up front if the disk cannot
 hold it. The same rows live in **Settings → Models** afterwards, where you can
 add or remove individual models; a removal tells you what it would actually
 free before you confirm, which matters because four of the registered recipes
 share one 7 GB checkpoint.
+
+Nothing above is required to *run* Warlock. The eight editing workspaces --
+Inker, Clay, Poser, Troupe, Plotter, Packwright and the Sirens tracker -- open
+and work with an empty model directory, and `warlock doctor` exits 0 on a
+machine that has downloaded none of it, reporting the absent rows as `[SETUP]`
+rather than as failures. What the weights buy is generation: **Create** and
+**Muse** are greyed out in the rail until theirs are present, and clicking a
+greyed one opens Settings -> Models with those rows already ticked.
 
 > Some models restrict what you may do with what they generate. SDXL-Turbo is
 > under a **non-commercial** research licence and Playground v2.5 has a

@@ -100,6 +100,15 @@ _RANGES: tuple[tuple[str, float, float], ...] = (
 _SCHEDULERS = ("euler", "heun", "pingpong")
 _CFG_TYPES = ("apg", "cfg", "cfg_star")
 
+#: The registry rows Muse's two actions need, for the panes' pre-emptive gate.
+#:
+#: Derived from the same defaults ``validation.check_weights`` refuses on, so
+#: the notice ahead of the button and the refusal at the door cannot name
+#: different downloads. Siblings of ``sprites.SPRITE_ROWS`` and
+#: ``sheets.PIXEL_SHEET_ROWS``.
+MUSIC_ROWS: tuple[str, ...] = (f"music:{models.DEFAULT_MUSIC_MODEL}",)
+SEPARATION_ROWS: tuple[str, ...] = (f"separation:{models.DEFAULT_SEPARATION}",)
+
 
 def create_music_job(
     svc: WarlockService,

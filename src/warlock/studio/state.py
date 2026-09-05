@@ -587,6 +587,26 @@ def filters_from_stored(stored: Any) -> Filters:
     return Filters(**keep)
 
 
+#: Injected once at startup by ``App.setup_context``; ``None`` everywhere else.
+#:
+#: The same shape as ``widgets.set_install_offer``, and for the same reason:
+#: the answer needs ``ctx.model_rows``, and this module sits below the panes
+#: and must not learn about a Ctx. A hook keeps the one-door contract (H14,
+#: scanned by ``tests/test_mode_writes.py``) instead of adding a second check
+#: at each of the rail, the palette and ``App._set_mode``, which is exactly the
+#: three-copies-that-drift shape ``set_mode`` itself was written to end.
+#:
+#: ``None`` means "say yes", so headless tests and the frames before the model
+#: answers land behave as they always did.
+_MODE_AVAILABLE: Any = None
+
+
+def set_mode_gate(fn: Any) -> None:
+    """Install the predicate ``set_mode`` consults. ``None`` clears it."""
+    global _MODE_AVAILABLE
+    _MODE_AVAILABLE = fn
+
+
 def set_mode(state: AppState, key: str) -> bool:
     """Switch modes, recording where Esc should go back to. -> whether it moved.
 
@@ -604,6 +624,12 @@ def set_mode(state: AppState, key: str) -> bool:
     palette's tests hand it.
     """
     if key == state.mode:
+        return False
+    # A mode whose weights are not downloaded refuses to open, and returning
+    # False is the existing contract ("whether it moved") rather than a new
+    # one. Placed after the same-mode early return so that a gated mode you are
+    # somehow already in does not trap you: leaving is always a different key.
+    if _MODE_AVAILABLE is not None and not _MODE_AVAILABLE(key):
         return False
     state.previous_mode = state.mode
     state.mode_observed = key

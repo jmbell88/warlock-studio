@@ -70,7 +70,16 @@ def items(ctx: Any) -> list[StatusItem]:
         out.append(StatusItem("queue", f"Queue {running} active / {queued} waiting"))
 
     checks = list(getattr(getattr(ctx, "runtime", None), "checks", []) or [])
-    failures = sum(1 for check in checks if not getattr(check, "ok", False))
+    # Downloads not made yet are not issues. Counting them put "28 issue(s)"
+    # in the status bar of a fresh install with nothing wrong with it -- the
+    # same false alarm the startup banner used to raise, in the one place a
+    # user glances at to decide whether the app is healthy.
+    failures = sum(
+        1
+        for check in checks
+        if not getattr(check, "ok", False)
+        and not getattr(check, "pending_install", False)
+    )
     errors = len(getattr(ctx.state, "errors", []) or [])
     if failures or errors:
         out.append(StatusItem("health", f"{failures + errors} issue(s)", True))

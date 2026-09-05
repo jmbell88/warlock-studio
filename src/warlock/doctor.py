@@ -52,10 +52,33 @@ VOLATILE_AFTER = "CUDA"
 
 @dataclass(frozen=True, slots=True)
 class Check:
+    """One diagnostic row.
+
+    ``fatal`` and ``pending_install`` are different claims about a failing row
+    and only one of them may be true. ``fatal`` means *this install is broken*:
+    something the installer ships is missing, and nothing the user can do in
+    the app will fix it. ``pending_install`` means *you have not downloaded
+    this yet*, which is the ordinary state of a fresh machine and must not be
+    reported as a fault -- a red banner on first launch taught every new user
+    that a working app was broken, which is the incident this field exists for.
+
+    Note the unrelated ``_BLENDER_PENDING``/``_MUSIC_DEPS_PENDING`` further
+    down this module: those are ``ok=True`` placeholders meaning *the probe
+    has not finished*, a third thing again. Hence the longer name here.
+    """
+
     name: str
     ok: bool
     detail: str
     fatal: bool
+    pending_install: bool = False
+
+    def __post_init__(self) -> None:
+        # A row cannot be both "your install is broken" and "you have not
+        # installed this yet"; the banner and the exit code read the two
+        # differently and a row claiming both would be reported twice.
+        if self.fatal and self.pending_install:
+            raise ValueError(f"{self.name}: fatal and pending_install are exclusive")
 
 
 def run_checks(
@@ -370,6 +393,18 @@ def trellis_gguf_hint(config: Config) -> str:
     return fetch.download_text(config, "engine", models.ENGINE_MODELS["trellis_gguf"])
 
 
+def _registry_row(kind: str, label: str, ok: bool, detail: str) -> Check:
+    """One downloadable registry row.
+
+    Never fatal, and ``pending_install`` whenever it is absent: every row this
+    builds is a model the user can install from Settings -> Models, so "not
+    downloaded" is a setup step rather than a fault. Written once because the
+    nine call sites were nine copies of the same four arguments, and the
+    ``fatal=False`` in each was the only thing saying so.
+    """
+    return Check(fetch.check_name(kind, label), ok, detail, fatal=False, pending_install=not ok)
+
+
 def _exe_check(config: Config) -> Check:
     ok = config.trellis_server_exe.exists()
     detail = (
@@ -391,7 +426,16 @@ def _gguf_check(config: Config) -> Check:
         f"{config.trellis_models_dir} ({', '.join(missing[:3])}) -- download with:\n"
         f"  {trellis_gguf_hint(config)}"
     )
-    return Check("TRELLIS GGUF weights", ok, detail, fatal=True)
+    # **Not fatal, unlike the exe beside it, and the difference is the whole
+    # point.** ``trellis-server.exe`` is staged by the installer, so its
+    # absence is a broken install and nothing in the app can fix it. These
+    # weights are a download the user has not made yet -- the ordinary state
+    # of every fresh machine, and Settings -> Models is the button that fixes
+    # it. Reporting it as fatal put a red banner on a healthy first launch and
+    # made ``warlock doctor`` exit 1 on a machine with nothing wrong with it.
+    return Check(
+        "TRELLIS GGUF weights", ok, detail, fatal=False, pending_install=not ok
+    )
 
 
 def _birefnet_check(config: Config) -> Check:
@@ -407,7 +451,19 @@ def _birefnet_check(config: Config) -> Check:
     )
     # Named for the process that loads it: there is a second BiRefNet on the
     # host now (see _matting_checks) and the two are different downloads.
-    return Check("trellis: birefnet.gguf (background removal)", ok, detail, fatal=False)
+    #
+    # ``pending_install`` because this file arrives *inside* the trellis2-gguf
+    # download (it is in that spec's own probe list), so an absent one is the
+    # same not-downloaded-yet state the row above reports, not a fault of its
+    # own. Left as a plain warning it was the one amber row a fresh install
+    # still showed, which is exactly the false alarm this change removes.
+    return Check(
+        "trellis: birefnet.gguf (background removal)",
+        ok,
+        detail,
+        fatal=False,
+        pending_install=not ok,
+    )
 
 
 def _gltfpack_check(config: Config) -> Check:
@@ -705,7 +761,7 @@ def _t2i_checks(config: Config) -> list[Check]:
                 f"not found at {path} -- unavailable; download with:\n"
                 f"  {fetch.download_text(config, 'base', spec)}"
             )
-        checks.append(Check(fetch.check_name("base", spec.label), ok, detail, fatal=False))
+        checks.append(_registry_row("base", spec.label, ok, detail))
     for lora in models.STYLE_LORAS.values():
         path = config.t2i_model_root / "loras" / lora.filename
         ok = fetch.present(config, "lora", lora)
@@ -717,7 +773,7 @@ def _t2i_checks(config: Config) -> list[Check]:
                 f"  {fetch.download_text(config, 'lora', lora)}"
             )
         )
-        checks.append(Check(fetch.check_name("lora", lora.label), ok, detail, fatal=False))
+        checks.append(_registry_row("lora", lora.label, ok, detail))
     for adapter in models.IP_ADAPTERS.values():
         root = config.t2i_model_root / adapter.dir_name
         weights = root / adapter.subfolder / adapter.weight_name
@@ -733,7 +789,7 @@ def _t2i_checks(config: Config) -> list[Check]:
                 f"{missing} not found under {root} -- conditioning unavailable; "
                 f"download with:\n  {fetch.download_text(config, 'adapter', adapter)}"
             )
-        checks.append(Check(fetch.check_name("adapter", adapter.label), ok, detail, fatal=False))
+        checks.append(_registry_row("adapter", adapter.label, ok, detail))
     for cn in models.CONTROLNETS.values():
         path = config.t2i_model_root / cn.dir_name
         ok = fetch.present(config, "control", cn)
@@ -745,7 +801,7 @@ def _t2i_checks(config: Config) -> list[Check]:
                 f"  {fetch.download_text(config, 'control', cn)}"
             )
         )
-        checks.append(Check(fetch.check_name("control", cn.label), ok, detail, fatal=False))
+        checks.append(_registry_row("control", cn.label, ok, detail))
     checks.extend(_metric_checks(config))
     return checks
 
@@ -781,7 +837,7 @@ def _metric_checks(config: Config) -> list[Check]:
             else f"not found at {path} -- benchmark metric unavailable; download with:\n"
             f"  {fetch.download_text(config, 'metric', spec)}"
         )
-        checks.append(Check(fetch.check_name("metric", spec.label), ok, detail, fatal=False))
+        checks.append(_registry_row("metric", spec.label, ok, detail))
     return checks
 
 
@@ -817,7 +873,7 @@ def _music_checks(config: Config) -> list[Check]:
                 f"  {fetch.download_text(config, 'music', spec)}"
             )
         checks.append(
-            Check(fetch.check_name("music", spec.label), ok, detail, fatal=False)
+            _registry_row("music", spec.label, ok, detail)
         )
     return checks
 
@@ -906,7 +962,7 @@ def _separation_checks(config: Config) -> list[Check]:
                 f"  {fetch.download_text(config, 'separation', spec)}"
             )
         checks.append(
-            Check(fetch.check_name("separation", spec.label), ok, detail, fatal=False)
+            _registry_row("separation", spec.label, ok, detail)
         )
     return checks
 
@@ -945,7 +1001,7 @@ def _pose_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
                 f"bbox-proportional fit; download with:\n"
                 f"  {fetch.download_text(config, 'pose', spec)}"
             )
-        checks.append(Check(fetch.check_name("pose", spec.label), ok, detail, fatal=False))
+        checks.append(_registry_row("pose", spec.label, ok, detail))
     return checks
 
 
@@ -1123,7 +1179,7 @@ def _matting_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         # different BiRefNets -- one GGUF inside trellis-server, this one on
         # the host for 2D exports -- and a user with rough edges has to be able
         # to tell which download the row is asking for.
-        checks.append(Check(fetch.check_name("matting", spec.label), ok, detail, fatal=False))
+        checks.append(_registry_row("matting", spec.label, ok, detail))
     return checks
 
 
@@ -1163,4 +1219,4 @@ def _text_checks(config: Config) -> list[Check]:
             "by a measurement still owed; to try one, place an instruct "
             f"model's config.json and safetensors in {path}"
         )
-    return [Check("text model: Flourish prompt", ok, detail, fatal=False)]
+    return [Check("text model: Flourish prompt", ok, detail, fatal=False, pending_install=not ok)]

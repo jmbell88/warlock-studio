@@ -155,8 +155,15 @@ def _item(
     tooltip: str = "",
     badge: str = "",
     height: float = 0.0,
+    enabled: bool = True,
 ) -> bool:
     """One row of the rail. -> whether it was clicked.
+
+    ``enabled=False`` dims the row and marks it, but **keeps the button live**.
+    imgui shows nothing for a genuinely disabled item, and a rail item that
+    neither opens nor explains itself is the worst of both -- so the click is
+    still reported and the caller sends it somewhere useful (Settings, with the
+    missing rows already ticked) rather than opening the mode.
 
     An ``invisible_button`` with the glyph and label drawn under it by hand,
     rather than a button with a label: the two have to sit at fixed positions
@@ -185,6 +192,10 @@ def _item(
             sp(tokens.RADIUS_M),
         )
     alpha = 1.0 if selected else (0.85 if lit > 0.0 else 0.65)
+    if not enabled:
+        # Dimmer than the dimmest live row, so "not available" reads as a
+        # different state rather than as "not hovered".
+        alpha *= 0.45
     colour = imgui.get_color_u32(theme.rgba(theme.TEXT if selected else theme.MUTED, alpha))
     glyph_w = imgui.calc_text_size(icon)
     draw.add_text(
@@ -294,6 +305,9 @@ def _caption(text: str, height: float) -> None:
 
 def draw(app: Any, ctx: Any) -> None:
     """The whole column, inside the host window. Nothing else is a header."""
+    # Local: panes sit above this module, and rail is drawn by main.
+    from .panes import model_gate
+
     box = width()
     pad = sp(tokens.SP_1)
     imgui.push_style_var(imgui.StyleVar_.window_padding.value, (pad, pad))
@@ -408,17 +422,32 @@ def draw(app: Any, ctx: Any) -> None:
             # arrives here with its sentence and its maturity already attached.
             note = modes.MATURITY_NOTE.get(key, "")
             purpose = modes.PURPOSE.get(key, "")
+            # Why a mode cannot open, if it cannot. Answered from
+            # ``ctx.model_rows`` rather than the disk, because this runs sixty
+            # times a second; ``model_gate`` owns the answer so the grey here
+            # and ``set_mode``'s refusal cannot disagree.
+            blocked = model_gate.mode_reason(ctx, key)
+            tooltip = f"{purpose} {note}".strip() if note else purpose
+            if blocked:
+                tooltip = f"{purpose} {blocked}".strip()
             if _item(
                 key,
                 label,
                 icon,
                 item_w,
                 selected=key == current,
-                tooltip=f"{purpose} {note}".strip() if note else purpose,
-                badge=modes.MATURITY.get(key, ""),
+                tooltip=tooltip,
+                badge="Download" if blocked else modes.MATURITY.get(key, ""),
                 height=item_h,
+                enabled=not blocked,
             ):
-                app._set_mode(key)
+                if blocked:
+                    # Greyed, but never a dead end: the click goes to the one
+                    # place that can change the answer, with exactly these rows
+                    # already ticked.
+                    model_gate.request_install(ctx, model_gate.mode_block(ctx, key))
+                else:
+                    app._set_mode(key)
 
     imgui.pop_style_var()
     imgui.end_child()

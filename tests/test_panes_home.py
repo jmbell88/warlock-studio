@@ -239,8 +239,12 @@ def test_home_draws_the_actionable_rows_and_the_rail_still_gets_all_of_them():
     this install healthy". What narrowed is what *Home* draws: the library row
     counted assets on a screen whose lower half is now assets."""
     assert "library" not in landing.HOME_STATUS
+    # "review" and "setup" are both *conditional* rows -- one appears when
+    # something is unreviewed, the other when generation is not downloaded yet
+    # -- so neither is expected in a default ctx's list.
     assert set(landing.HOME_STATUS) <= {r.key for r in landing.status_rows(_ctx())} | {
-        "review"
+        "review",
+        "setup",
     }
 
 

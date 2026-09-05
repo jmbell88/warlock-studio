@@ -281,6 +281,25 @@ MATURITY_NOTE: dict[str, str] = {
     ),
 }
 
+#: Registry rows a mode's *primary work* cannot happen without.
+#:
+#: Row keys as literals rather than ``f"base:{models.DEFAULT_BASE_MODEL}"``,
+#: because this module imports :mod:`.icons` and nothing else and must stay
+#: importable without dragging the registry in.
+#: ``tests/test_mode_gate.py`` asserts every key here resolves through
+#: ``fetch.find``, so a renamed model breaks a test rather than silently
+#: ungating a mode.
+#:
+#: Only the two generation modes are listed. The eight editing workspaces need
+#: no weights at all, and Home, Library, Review and **Settings** are never
+#: gated -- Settings is where the download lives, so gating it would lock the
+#: user out of the only thing that unlocks anything.
+NEEDS_ROWS: dict[str, tuple[str, ...]] = {
+    "create": ("engine:trellis_gguf", "base:sdxl_cfg"),
+    "muse": ("music:ace_step_v1",),
+}
+
+
 # **There is no positional Alt+digit binding, and there deliberately is not.**
 # It existed while there were ten modes and ten digits, on the argument that the
 # binding was the picture on screen rather than a second table. That argument

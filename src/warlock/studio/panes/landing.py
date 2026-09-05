@@ -306,7 +306,12 @@ class Status:
 
 def _health_status(ctx: Any) -> Status:
     checks = list(getattr(ctx.runtime, "checks", []) or [])
-    failing = [c for c in checks if not c.ok]
+    # Downloads the user has not made yet are **not** "things needing
+    # attention": on a fresh install every model row is failing, and counting
+    # them here greeted a new user with "17 things need attention" about an
+    # app with nothing wrong with it. They have their own row below, which
+    # says what they are and offers the button.
+    failing = [c for c in checks if not c.ok and not getattr(c, "pending_install", False)]
     fatal = [c for c in failing if c.fatal]
     if not checks:
         return Status("health", icons.LOADER, "Issues - still checking", theme.MUTED)
@@ -397,8 +402,42 @@ def _review_status(ctx: Any) -> Status | None:
     )
 
 
+def _setup_status(ctx: Any) -> Status | None:
+    """"Generation is not set up yet", or None once it is.
+
+    The calm, persistent counterpart to the first-run panel. That panel can be
+    dismissed -- deliberately, because an offer that must be answered before
+    the app can be used is a toll rather than an offer -- and before this there
+    was nothing left saying what the dismissed offer had been about.
+
+    Answered from ``ctx.model_rows`` rather than the disk, ``model_gate``'s
+    doctrine and for its reason: this runs on the frame thread. An empty
+    snapshot says nothing, so a headless ctx and the first frame before the
+    answers land both stay quiet rather than claiming everything is missing.
+    """
+    from . import model_gate
+    from .first_run import GENERATION_ROWS
+
+    rows = model_gate.missing(ctx, GENERATION_ROWS)
+    if not rows:
+        return None
+    total = sum(float(row.get("size_gib") or 0.0) for row in rows)
+    noun = "download" if len(rows) == 1 else "downloads"
+    return Status(
+        "setup",
+        icons.DOWNLOAD,
+        f"Generation is not set up yet - {len(rows)} {noun}, about {total:.0f} GB",
+        theme.MUTED,
+        "settings",
+        settings_category="models",
+    )
+
+
 def status_rows(ctx: Any) -> list[Status]:
     found = [_health_status(ctx), _queue_status(ctx), _library_status(ctx)]
+    setup = _setup_status(ctx)
+    if setup is not None:
+        found.append(setup)
     review = _review_status(ctx)
     if review is not None:
         found.append(review)
@@ -453,7 +492,7 @@ def pump(ctx: Any) -> None:
 #: rendering of one fact, after the rail's badge and the doctor banner -- and
 #: ``visible_home_rows`` already suppressed it whenever the banner was up,
 #: which is half of this argument made and then stopped.
-HOME_STATUS = ("queue", "review")
+HOME_STATUS = ("setup", "queue", "review")
 
 #: How many bullets the What's New card shows before "all release notes".
 #: Three is a summary; the eighth bullet of a release is a changelog, and a

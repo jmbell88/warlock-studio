@@ -19,6 +19,7 @@ from imgui_bundle import imgui
 
 from .. import focus, muse_mode, widgets
 from ..manual import render as manual_render
+from . import model_gate
 
 #: This pane's key in the focus ring.
 FOCUS_PANE = "muse-recipe"
@@ -48,6 +49,15 @@ def draw(ctx: Any) -> None:
 
     widgets.pane_title("Recipe")
     manual_render.help_button(ctx, "muse-recipe")
+
+    # Ahead of every control, for ``model_gate``'s reason: Muse has no
+    # fallback -- a take either generates or it does not -- so learning about
+    # an 8 GB download only after writing a prompt and pressing Generate was
+    # the worst moment to learn it. The refusal at the door is still the
+    # authority; this is the courtesy in front of it.
+    from ...service import jobs as svc_jobs
+
+    model_gate.draw(ctx, svc_jobs.MUSIC_ROWS, what="Generating music")
 
     with focus.item(ctx.state, FOCUS_PANE, "infer_step"):
         _, form["infer_step"] = widgets.labeled_slider_int(

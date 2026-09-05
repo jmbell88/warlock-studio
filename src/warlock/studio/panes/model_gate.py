@@ -33,7 +33,14 @@ def missing(ctx: Any, row_keys: tuple[str, ...]) -> list[dict[str, Any]]:
     the answers land) must read as "nothing to say", not as "everything is
     missing" -- which would lock both features on a fully-installed host.
     """
-    by_key = {str(row.get("row_key")): row for row in (ctx.model_rows or [])}
+    # ``getattr`` rather than an attribute read: this is now called from the
+    # rail and from Home, which draw against contexts (and test doubles) built
+    # before the snapshot exists. A ctx with no ``model_rows`` at all is the
+    # same "nothing to say" as an empty one -- see the docstring above --
+    # rather than an AttributeError in a draw function.
+    by_key = {
+        str(row.get("row_key")): row for row in (getattr(ctx, "model_rows", None) or [])
+    }
     return [
         by_key[key]
         for key in row_keys
@@ -103,3 +110,43 @@ def install_offer(ctx: Any, field: str) -> bool:
     if controls.small_button(label):
         request_install(ctx, tuple(rows))
     return True
+
+
+def mode_block(ctx: Any, key: str) -> tuple[str, ...]:
+    """Which of a mode's required rows are missing. Empty means it can open.
+
+    The rail's grey-out and ``state.set_mode``'s refusal are both this
+    function, so the picture and the behaviour cannot disagree.
+
+    **A mode is only blocked on a machine with no work on it.** Create's later
+    stages (mesh, rig, pose, export) act on jobs that already exist, and Muse
+    plays and exports takes it did not have to generate -- so greying purely on
+    absent weights would lock a user out of finished work after they removed a
+    model to reclaim disk. ``cache.total`` is the whole library, so the gate
+    fires exactly on the case it is for: a fresh install with nothing in it.
+    """
+    from .. import modes
+
+    rows = modes.NEEDS_ROWS.get(key) or ()
+    if not rows or not missing(ctx, rows):
+        return ()
+    cache = getattr(ctx, "cache", None)
+    if cache is not None and (getattr(cache, "total", 0) or 0) > 0:
+        return ()
+    return tuple(row["row_key"] for row in missing(ctx, rows))
+
+
+def mode_reason(ctx: Any, key: str) -> str:
+    """The sentence the greyed rail item shows, or "" when it is not gated."""
+    blocked = mode_block(ctx, key)
+    if not blocked:
+        return ""
+    by_key = {
+        str(row.get("row_key")): row for row in (getattr(ctx, "model_rows", None) or [])
+    }
+    total = sum(float((by_key.get(k) or {}).get("size_gib") or 0.0) for k in blocked)
+    noun = "download" if len(blocked) == 1 else "downloads"
+    return (
+        f"Needs {len(blocked)} {noun} you haven't made yet "
+        f"(about {total:.0f} GB). Click to choose them in Settings."
+    )

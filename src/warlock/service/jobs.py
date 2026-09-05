@@ -66,6 +66,8 @@ from ._jobs_list import (  # noqa: F401  -- the facade's re-export
     storage_sizes,
 )
 from ._jobs_music import (  # noqa: F401  -- the facade's re-export
+    MUSIC_ROWS,
+    SEPARATION_ROWS,
     create_music_job,
     derive_music_job,
 )

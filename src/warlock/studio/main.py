@@ -780,6 +780,12 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         from .panes import model_gate
 
         widgets_mod.set_install_offer(lambda field: model_gate.install_offer(self.app_ctx, field))
+        # And the mode gate, at the one door every switch already goes through
+        # (H14). Bound the same way and replaced the same way; ``state`` itself
+        # must not learn what a Ctx is.
+        from .state import set_mode_gate
+
+        set_mode_gate(lambda key: not model_gate.mode_block(self.app_ctx, key))
         self.app_ctx.load_presets = self.load_presets
         self.app_ctx.refresh_rig_data = self._refresh_rig_side_data
         self.eta = Eta()
@@ -836,8 +842,17 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         imported -- no CUDA -- used to show only as a Home chip.
         """
         ctx = self.app_ctx
+        # ``pending_install`` is excluded, and it is the reason this filter
+        # exists in this shape: a fresh install has every model row failing,
+        # and banner-ing them meant the first thing a new user saw was a red
+        # wash listing downloads they had not made yet. Those rows are offered
+        # by the first-run panel and by Home's status row instead.
         failed = [
-            c for c in self.runtime.checks if not c.ok and (c.fatal or c.name == "trellis port")
+            c
+            for c in self.runtime.checks
+            if not c.ok
+            and not c.pending_install
+            and (c.fatal or c.name == "trellis port")
         ]
         for check in failed:
             ctx.state.note_error(f"{check.name}: {check.detail}")

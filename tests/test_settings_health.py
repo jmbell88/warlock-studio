@@ -20,8 +20,17 @@ from warlock.studio.panes import app_settings
 from warlock.studio.state import AppState
 
 
-def _check(name: str, ok: bool, *, fatal: bool = False, detail: str = "") -> SimpleNamespace:
-    return SimpleNamespace(name=name, ok=ok, fatal=fatal, detail=detail)
+def _check(
+    name: str,
+    ok: bool,
+    *,
+    fatal: bool = False,
+    detail: str = "",
+    pending: bool = False,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name, ok=ok, fatal=fatal, detail=detail, pending_install=pending
+    )
 
 
 # --- the rows ---------------------------------------------------------------
@@ -163,3 +172,53 @@ def test_dismissing_twice_does_not_double_the_record():
     state.note_error("the same failure")
     state.dismiss_errors()
     assert state.dismissed_errors == ["the same failure"]
+
+
+# --- downloads not made yet are not faults (2026-09-04) ----------------------
+
+
+def test_a_pending_download_is_not_counted_as_needing_attention():
+    """This string is the number Home's health row shows.
+
+    On a fresh install every model row is failing, and counting them here said
+    "27 of 41 need attention" about an app with nothing wrong with it.
+    """
+    rows = app_settings.health_rows(
+        [_check("a", True), _check("sdxl", False, pending=True)]
+    )
+    assert app_settings.health_summary(rows) == (
+        "Everything checks out. 1 optional download not installed."
+    )
+
+
+def test_a_real_failure_still_leads_the_count_past_the_pending_ones():
+    rows = app_settings.health_rows(
+        [_check("a", True), _check("port", False), _check("sdxl", False, pending=True)]
+    )
+    assert app_settings.health_summary(rows) == "1 of 3 need attention."
+
+
+def test_setup_rows_sit_below_the_warnings_and_above_the_green():
+    """A fresh install is mostly setup rows; putting them first would bury the
+    one row that actually needs a decision."""
+    rows = app_settings.health_rows(
+        [
+            _check("ok", True),
+            _check("sdxl", False, pending=True),
+            _check("warn", False),
+            _check("dead", False, fatal=True),
+        ]
+    )
+    assert [row.name for row in rows] == ["dead", "warn", "sdxl", "ok"]
+
+
+def test_a_pending_row_is_muted_rather_than_amber():
+    rows = app_settings.health_rows([_check("sdxl", False, pending=True)])
+    assert rows[0].colour == theme.MUTED
+    assert rows[0].glyph == icons.DOWNLOAD
+
+
+def test_a_pasted_report_calls_a_setup_step_a_setup_step():
+    """It said FAIL, which sent people looking for a fault that was not there."""
+    rows = app_settings.health_rows([_check("sdxl", False, pending=True, detail="not here")])
+    assert app_settings.health_report(rows) == "SETUP sdxl: not here"

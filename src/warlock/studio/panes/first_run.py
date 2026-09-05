@@ -23,7 +23,14 @@ from . import model_gate
 
 MARKER = "first-run.json"
 POPUP = "Welcome to Warlock"
-REQUIRED_ROWS: tuple[str, str] = ("engine:trellis_gguf", "base:sdxl_cfg")
+#: What *generation* needs -- not what the app needs.
+#:
+#: Renamed from ``REQUIRED_ROWS`` on 2026-09-04. Nothing here is required to
+#: run Warlock: the eight non-generative workspaces (Inker, Clay, Plotter,
+#: Packwright, Sirens and the rest) open and work with none of it on disk. The
+#: old name was read as "the app requires these", which is what put a red
+#: banner and a blocking-looking panel in front of a healthy first launch.
+GENERATION_ROWS: tuple[str, str] = ("engine:trellis_gguf", "base:sdxl_cfg")
 
 
 def marker_path(config: Any) -> Path:
@@ -58,7 +65,7 @@ def snapshot(ctx: Any) -> dict[str, Any]:
     # screen. The snapshot is retaken when the health poll lands.
     three_d_ready = bool(_settled(cuda) and _settled(budget))
 
-    entries = [fetch.find(key) for key in REQUIRED_ROWS]
+    entries = [fetch.find(key) for key in GENERATION_ROWS]
     chosen = [entry for entry in entries if entry is not None]
     jobs = fetch.plan(ctx.svc.config, chosen)
     missing_jobs = fetch.plan(
@@ -142,7 +149,7 @@ def dismiss(ctx: Any) -> bool:
 
 def download_models(ctx: Any) -> None:
     if dismiss(ctx):
-        model_gate.request_install(ctx, REQUIRED_ROWS)
+        model_gate.request_install(ctx, GENERATION_ROWS)
 
 
 def take_the_tour(ctx: Any) -> None:
@@ -188,8 +195,11 @@ def draw(ctx: Any) -> None:
     info = getattr(ctx, "first_run_info", None) or {}
     imgui.text_wrapped("Set up this PC")
     widgets.muted_wrapped(
-        "Warlock runs locally. Check what this machine can do, then download "
-        "the two required model packages when you are ready."
+        "Warlock runs locally. Nothing here is needed to start work: drawing, "
+        "modelling, tile maps, atlases and the tracker all work right now, "
+        "with nothing downloaded. Generating references, meshes and music "
+        "needs the models below, and you can fetch them whenever you like -- "
+        "here, or later from Settings -> Models."
     )
 
     imgui.dummy((0, sp(tokens.SP_2)))
@@ -208,9 +218,12 @@ def draw(ctx: Any) -> None:
     _verdict("Rigging", info.get("rigging") or {})
 
     imgui.dummy((0, sp(tokens.SP_2)))
-    widgets.field_label("Required downloads")
+    # "Required downloads", and each row "required", until 2026-09-04. Nothing
+    # here is required to run the app -- only to generate -- and the word was
+    # the panel's main reason for reading as a toll rather than an offer.
+    widgets.field_label("Needed to generate")
     for row in info.get("rows") or ():
-        suffix = "installed" if row.get("present") else "required"
+        suffix = "installed" if row.get("present") else "not downloaded"
         imgui.text_wrapped(f"{row.get('label')} — {suffix}")
     refusal = info.get("disk_refusal")
     if refusal:
@@ -220,6 +233,9 @@ def draw(ctx: Any) -> None:
     label = f"Download models (~{download_gib:.0f} GB)"
     if widgets.primary_button(label, (-1, sp(36))):
         download_models(ctx)
+    # Not a deferral of something owed: it dismisses the panel for good and
+    # leaves a fully usable app. Home keeps a quiet row offering the same
+    # download, so declining here loses nothing.
     if controls.button("Not now", (-1, 0), role=controls.ButtonRole.SECONDARY):
         dismiss(ctx)
     if controls.button("Show me around first", (-1, 0), role=controls.ButtonRole.GHOST):

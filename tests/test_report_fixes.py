@@ -385,7 +385,10 @@ def test_the_rail_passes_the_purpose_and_the_badge_through():
 
     source = inspect.getsource(rail)
     assert "modes.PURPOSE.get(key" in source
-    assert "badge=modes.MATURITY.get(key" in source
+    # The badge argument gained a second source on 2026-09-04 (a gated mode
+    # shows "Download" instead), so the pin is on the maturity lookup reaching
+    # it rather than on the exact spelling of the argument.
+    assert "modes.MATURITY.get(key" in source
     assert "modes.MATURITY_NOTE.get(key" in source
 
 

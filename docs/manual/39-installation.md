@@ -70,10 +70,15 @@ that `vendor/trellis/trellis-server.exe` exists.
 The vendored build is **v0.6.0** (2026-08-19). If you keep the binary somewhere else, point
 `WARLOCK_TRELLIS_EXE` at it — see [Environment variables](40-configuration.md#environment-variables).
 
-A missing binary is one of the **fatal** startup checks: no reconstruction engine means no mesh, and
-there is nothing to degrade to. The other two are the TRELLIS GGUF weights, for the same reason, and
-the VRAM budget — that last one is fatal only when the budget cannot hold a lone reconstruction, so
-on a card large enough it never fires and only two rows can ever be red.
+A missing binary is a **fatal** startup check: no reconstruction engine means no mesh, and there is
+nothing to degrade to. The binary ships with the installer, so on an installed copy its absence
+means something is genuinely broken. The only other fatal row is the VRAM budget, and that one is
+fatal only when the budget cannot hold a lone reconstruction, so on a card large enough it never
+fires.
+
+The TRELLIS GGUF weights are **not** fatal, and were until 2026-09-04. They are a download you have
+not made yet rather than a fault: a fresh install has none of them, which is normal, so they are
+reported as a **setup** row instead of a red one. See [Checking the install](#checking-the-install) below.
 
 ## gltfpack
 
@@ -336,16 +341,23 @@ uv run warlock          # opens the desktop app
 `doctor` prints one row per check, and the split between **fatal** and non-fatal is the whole point
 of reading it:
 
-- **Fatal** — `trellis-server.exe` and the TRELLIS GGUF weights. Without either, no mesh job can
-  run at all.
-- **Non-fatal** — everything else: `birefnet.gguf`, `gltfpack`, CUDA, free disk space (it wants at
-  least 5 GB), the trellis port, every image model, style LoRA, IP-Adapter, ControlNet and metric
-  model, and Blender. Each of these costs you one capability and nothing more, so each is reported
-  individually with the command that fixes it. A single "weights" row could not tell you *which* of
-  five downloads you skipped.
+- **`[FATAL]`** — this install is broken and nothing you can do in the app will fix it:
+  `trellis-server.exe` (which the installer ships) and a VRAM budget too small for one
+  reconstruction. A fatal row is the only thing that makes `warlock doctor` exit non-zero.
+- **`[SETUP]`** — you have not downloaded this yet, which is the ordinary state of a fresh
+  machine: the TRELLIS GGUF weights, every image model, style LoRA, IP-Adapter, ControlNet, metric,
+  pose, matting, music and stem-separation row. Each is reported individually with the command that
+  fixes it, because a single "weights" row could not tell you *which* of five downloads you
+  skipped. **Setup rows are not failures.** They do not raise the startup banner, they are not
+  counted by the Issues badge, and they leave `doctor`'s exit code at 0.
+- **`[WARN]`** — something is off but the app works: `gltfpack`, `birefnet.gguf` beyond the pack,
+  CUDA, free disk space (it wants at least 5 GB), the trellis port, and Blender. Each costs you one
+  capability and nothing more.
 
 The same checks run when the app starts, and their result is the **Issues** badge in the navigation
-rail's footer: amber when a non-fatal check failed, red for a fatal one or a dead GPU worker. It is
+rail's footer: amber when a warning fired, red for a fatal one or a dead GPU worker. Setup rows are
+deliberately excluded — on a fresh install they are most of the list, and counting them said "28
+issue(s)" about an app with nothing wrong with it. The badge is
 not there at all when everything passed — a permanent "OK" badge is noise. Click it for the full
 list, a **Copy details** button and a shortcut to the log file. When nothing is failing, the same
 list is reachable from the command palette (Ctrl+K, "Issues").

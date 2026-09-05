@@ -489,6 +489,11 @@ class HealthRow:
     #: What happens *if* it fails, so it is set on passing rows too. Only
     #: meaningful alongside ``ok``; see ``health_rows``' band.
     fatal: bool = False
+    #: Failing only because the user has not downloaded it yet. Its own band
+    #: below the warnings, and muted rather than amber: on a fresh install
+    #: these are most of the list, and painting thirty setup steps the colour
+    #: of a fault is the same false alarm the startup banner used to raise.
+    pending_install: bool = False
 
 
 def health_rows(checks: Iterable[Any]) -> list[HealthRow]:
@@ -511,6 +516,15 @@ def health_rows(checks: Iterable[Any]) -> list[HealthRow]:
     for check in checks:
         ok = bool(getattr(check, "ok", False))
         fatal = bool(getattr(check, "fatal", False))
+        pending = bool(getattr(check, "pending_install", False))
+        if ok:
+            glyph, colour = icons.CHECK, theme.OK
+        elif pending:
+            # A download glyph, not a cross: nothing has gone wrong, and the
+            # row is naming a step rather than reporting a failure.
+            glyph, colour = icons.DOWNLOAD, theme.MUTED
+        else:
+            glyph, colour = icons.CIRCLE_X, (theme.ERR if fatal else theme.WARN)
         rows.append(
             HealthRow(
                 name=str(getattr(check, "name", "")),
@@ -518,10 +532,11 @@ def health_rows(checks: Iterable[Any]) -> list[HealthRow]:
                 # Lucide, as the status pills are: "o" and "x" were the last
                 # hand-spelled state glyphs in the app, and a lowercase o at
                 # 11 px beside a red x is two letters rather than two shapes.
-                glyph=icons.CHECK if ok else icons.CIRCLE_X,
-                colour=theme.OK if ok else (theme.ERR if fatal else theme.WARN),
+                glyph=glyph,
+                colour=colour,
                 ok=ok,
                 fatal=fatal,
+                pending_install=pending,
             )
         )
 
@@ -530,8 +545,13 @@ def health_rows(checks: Iterable[Any]) -> list[HealthRow]:
         # flag -- it says what happens if it ever fails -- so anything reading
         # "fatal" without "not ok" first would reorder the green band too.
         if row.ok:
-            return 2
-        return 0 if row.fatal else 1
+            return 3
+        if row.fatal:
+            return 0
+        # Setup steps sit below the real warnings and above the green band:
+        # on a fresh install they are most of the list, and putting them first
+        # would bury the one row that actually needs a decision.
+        return 2 if row.pending_install else 1
 
     # ``sorted`` is stable, so doctor's own order survives inside each band.
     return sorted(rows, key=band)
@@ -543,15 +563,30 @@ def health_summary(rows: list[HealthRow]) -> str:
         # Not an error state: the first poll lands a moment after the window
         # opens, so an empty list means "not yet" and never "nothing to say".
         return "No checks have run yet."
-    failing = [row for row in rows if not row.ok]
+    # Setup steps are counted separately, never as things needing attention:
+    # this string is the number Home's health row shows, and on a fresh
+    # install "27 of 41 need attention" described an app with nothing wrong.
+    failing = [row for row in rows if not row.ok and not row.pending_install]
+    pending = [row for row in rows if row.pending_install]
     if not failing:
+        if pending:
+            noun = "download" if len(pending) == 1 else "downloads"
+            return f"Everything checks out. {len(pending)} optional {noun} not installed."
         return "Everything checks out."
     return f"{len(failing)} of {len(rows)} need attention."
 
 
 def health_report(rows: list[HealthRow]) -> str:
     """What *Copy details* puts on the clipboard: the list, as pasteable text."""
-    return "\n".join(f"{'ok' if row.ok else 'FAIL'} {row.name}: {row.detail}" for row in rows)
+
+    def word(row: HealthRow) -> str:
+        if row.ok:
+            return "ok"
+        # A setup step is not a failure, and a pasted report that called it one
+        # sent people looking for a fault that was not there.
+        return "SETUP" if row.pending_install else "FAIL"
+
+    return "\n".join(f"{word(row)} {row.name}: {row.detail}" for row in rows)
 
 
 def _health(ctx: Any) -> None:

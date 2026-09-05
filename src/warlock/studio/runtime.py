@@ -130,7 +130,16 @@ class Runtime:
         self.checks = doctor.run_checks(self.config, probe_slow=False)
         for check in self.checks:
             if not check.ok:
-                level = log.critical if check.fatal else log.warning
+                # A download the user has not made yet is logged at info: it is
+                # worth a line (support reads these logs) but a fresh install
+                # would otherwise open with a screenful of warnings describing
+                # nothing wrong.
+                if check.fatal:
+                    level = log.critical
+                elif check.pending_install:
+                    level = log.info
+                else:
+                    level = log.warning
                 level("doctor: %s -- %s", check.name, check.detail)
         # Before the Worker exists. vram.probe() reads the card without
         # importing torch, so this stays cheap. This is what preserves the

@@ -198,10 +198,22 @@ try {
     $env:WARLOCK_HOME = $SmokeHome
     $DoctorOutput = (& $StagedPython -m warlock doctor 2>&1 | Out-String)
     $DoctorExit = $LASTEXITCODE
-    if ($DoctorExit -ne 1) {
-        throw "staged doctor should report missing required models (exit 1), got $DoctorExit"
+    # Exit 0, and that is the assertion. A stage with no model weights is a
+    # *healthy* install -- weights are first-run downloads and the exe is
+    # staged -- so anything non-zero here means a fatal row this build should
+    # not have. This asserted exit 1 until 2026-09-04, back when absent
+    # weights were fatal; that made "the installer works" and "the machine has
+    # no models yet" indistinguishable.
+    if ($DoctorExit -ne 0) {
+        throw "staged doctor should be healthy with no weights (exit 0), got $DoctorExit`n$DoctorOutput"
     }
-    foreach ($Expected in @("trellis-server.exe", "TRELLIS GGUF weights", "SDXL 1.0")) {
+    # The exe is staged, so it must be OK. The two weight rows must be present
+    # and marked SETUP: this is what proves no model weights were staged, so
+    # the strings stay even though the exit code no longer depends on them.
+    if ($DoctorOutput -notmatch "\[OK\] trellis-server\.exe") {
+        throw "staged doctor did not report trellis-server.exe as OK"
+    }
+    foreach ($Expected in @("[SETUP] TRELLIS GGUF weights", "SDXL 1.0")) {
         if (-not $DoctorOutput.Contains($Expected)) {
             throw "staged doctor output did not mention $Expected"
         }
