@@ -22,7 +22,9 @@ no sentence beside it reads as a broken app rather than as a fact about the mach
 ## Starting a song
 
 With nothing open, the middle column offers **New song** and **Open a file...**, and lists what you
-had open recently. `Ctrl+N` and `Ctrl+O` do the same from the keyboard. The document's own format is
+had open recently. `Ctrl+N` and `Ctrl+O` do the same from the keyboard, and once a song is open the
+**Song file** panel carries the same **New**, **Open...**, **Save** and **Save As...** buttons every
+workspace has, over the file's path and one line saying whether it is saved. The document's own format is
 `.wsng` — a zip holding the song as JSON, its patterns as numpy arrays and any imported samples as
 WAVs.
 

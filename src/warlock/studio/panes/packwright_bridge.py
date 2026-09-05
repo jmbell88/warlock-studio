@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, packwright_mode, widgets
+from .. import icons, packwright_mode, widgets
 from ..manual import render as manual_render
 
 
@@ -32,12 +32,17 @@ def draw(ctx: Any) -> None:
         _recent(ctx)
         return
 
-    width = widgets.grid_width(2)
-    if controls.button(f"{icons.PLUS} New", (width, 0)):
-        packwright_mode.new_document(ctx)
-    imgui.same_line()
-    if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
-        packwright_mode.ask_open(ctx)
+    # The shared header -- see ``widgets.document_header``. The busy gate is
+    # ``tab.busy`` rather than ``tab.saving`` because an export in flight also
+    # has to hold the four buttons.
+    widgets.document_header(
+        tab,
+        new=lambda: packwright_mode.new_document(ctx),
+        open_=lambda: packwright_mode.ask_open(ctx),
+        save=lambda: packwright_mode.save(ctx, tab),
+        save_as=lambda: packwright_mode.save_as(ctx, tab),
+        saving=tab.busy,
+    )
 
     ready = not tab.busy
     # ``pack_stale_why`` and not merely "is there an atlas": a failed repack
@@ -47,7 +52,7 @@ def draw(ctx: Any) -> None:
     # Two gates, and every button below is behind one or both of them. Hoisted
     # so the four of them explain the same state in the same words -- the
     # ``_VIEWPORT_WHY`` pattern.
-    busy_why = "This atlas is being written; the buttons come back when it lands."
+    busy_why = widgets.DOCUMENT_SAVING_WHY
     # There is no Pack button and there never was: packing is automatic, run
     # from the centre pane's pump whenever ``pack_dirty`` is set. This used to
     # send the user hunting for a control that does not exist, which is the
@@ -55,22 +60,6 @@ def draw(ctx: Any) -> None:
     packed_why = tab.pack_stale_why or (
         "Nothing is packed yet. Add images -- packing runs by itself."
     )
-    imgui.dummy((0, 4))
-    if widgets.disabled_button(
-        f"{icons.SAVE} Save (Ctrl+S)", ready, (width, 0), reason=busy_why
-    ):
-        packwright_mode.save(ctx, tab)
-    imgui.same_line()
-    if widgets.disabled_button("Save As...", ready, (width, 0), reason=busy_why):
-        packwright_mode.save_as(ctx, tab)
-    if tab.busy:
-        # What the two greyed buttons above mean. ``clay_bridge._facts`` is the
-        # model: a disabled control with nothing saying why reads as broken.
-        widgets.muted("Saving...")
-    if tab.path is not None:
-        widgets.muted(str(tab.path))
-    if tab.dirty:
-        widgets.muted("Unsaved changes.")
 
     imgui.dummy((0, 8))
     _history(ctx, tab)

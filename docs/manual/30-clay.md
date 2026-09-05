@@ -17,8 +17,9 @@ open at once.
 
 With nothing open, the middle column offers **New model** and **Open a file...**, and lists the
 documents you had open recently — clicking one reopens it, and hovering it shows the full path. The
-document panel on the right offers the same two buttons. Once a document is open, `Ctrl+N` and
-`Ctrl+O` do the same two things from the keyboard.
+document panel on the right offers the same two buttons, with **Save** and **Save As...** beside
+them once a document is open — the same four buttons every workspace has, over the file's path and
+one line saying whether it is saved. `Ctrl+N` and `Ctrl+O` do the same two things from the keyboard.
 
 Choosing **Clay** from the Home screen opens an empty document for you when there is nothing open
 already. When there is, it leaves your documents exactly as they were — the documents *are* the

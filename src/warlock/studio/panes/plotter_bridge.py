@@ -55,24 +55,19 @@ def draw(ctx: Any) -> None:
         _recent(ctx)
         return
 
-    # **The facts, and the two verbs a hand reaches for without a menu.** The
-    # nine buttons that were here -- New, Open, Save, Save As, the two exports,
-    # the library export -- are the Map menu's rows now (W3.1), which is where
-    # a user coming from Tiled looks for them. What a panel is for is what is
-    # left: where this map lives, whether it is written, and how deep the undo
-    # stack is. Clay's bridge is the same size for the same reason.
-    # **One sentence about where this map stands**, not two. Written as a
-    # ladder because the states are exclusive and the first draft printed
-    # "Not saved to a file yet." *and* "Saved." on the same screen -- which the
-    # screenshot pass caught, and which is the kind of thing only a picture
-    # does catch.
-    if tab.path is None:
-        widgets.muted(
-            "Not saved to a file yet." if tab.dirty else "Nothing to save yet."
-        )
-    else:
-        imgui.text_wrapped(str(tab.path))
-        widgets.muted("Unsaved changes." if tab.dirty else "Saved.")
+    # The shared document header (2026-09-05). This pane had deliberately
+    # given its nine buttons to the Map menu (W3.1); the four file verbs came
+    # back the day every workspace got the same header, because a user who
+    # found Save in Packwright's pane and not in this one read that as a gap.
+    # The status line is the same one-sentence ladder the first draft of this
+    # pane was fixed to -- it lives in ``widgets.document_status_text`` now.
+    widgets.document_header(
+        tab,
+        new=lambda: plotter_mode.ask_new_document(ctx),
+        open_=lambda: plotter_mode.ask_open(ctx),
+        save=lambda: plotter_mode.save(ctx, tab),
+        save_as=lambda: plotter_mode.save_as(ctx, tab),
+    )
     if not tab.doc.tilesets:
         widgets.muted_wrapped(
             "No tileset yet -- Tileset > Import a tileset. A Tiled map needs "

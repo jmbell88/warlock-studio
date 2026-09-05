@@ -536,6 +536,88 @@ def asset_summary(job: dict[str, Any], *, now: float | None = None) -> None:
         imgui.tree_pop()
 
 
+# --- the document header ----------------------------------------------------
+#
+# The 2026-09-05 consistency review: Packwright and Clay each hand-rolled a
+# New/Open/Save/Save As grid in their bridge pane, Sirens and Plotter had
+# deliberately removed theirs in favour of the File menu, and Inker had no
+# file block at all -- so the same four verbs were in a different place in
+# every workspace, and the saved-state line under them was worded three ways
+# ("Unsaved changes." / "unsaved changes" / a four-rung ladder). The decision
+# that day was *header everywhere*: one grid, one ladder, every document mode,
+# with the File menu keeping its rows. ``controls.DOCUMENT_ACTION_ORDER`` had
+# declared the order since the redesign and nothing read it; this does.
+
+#: The button text for each of the first four document actions, keyed by the
+#: word ``controls.DOCUMENT_ACTION_ORDER`` uses for it. The shortcut is on the
+#: face of Save because it is the one of the four a hand reaches for a hundred
+#: times a session; the other three are pressed once.
+DOCUMENT_ACTION_LABELS: dict[str, str] = {
+    "New": f"{icons.PLUS} New",
+    "Open": f"{icons.FOLDER_OPEN} Open...",
+    "Save": f"{icons.SAVE} Save (Ctrl+S)",
+    "Save As": "Save As...",
+}
+
+#: Why Save and Save As are out while a write is in flight. One sentence for
+#: every mode, because a greyed control with nothing saying why reads as broken.
+DOCUMENT_SAVING_WHY = "This document is being written; the buttons come back when it lands."
+
+
+def document_status_text(path: Any, dirty: bool, saving: bool = False) -> str:
+    """One sentence about where this document stands.
+
+    A ladder because the states are exclusive: the first Plotter draft printed
+    "Not saved to a file yet." *and* "Saved." on one screen, which only a
+    screenshot caught. The path is not part of it -- it is drawn wrapped on
+    its own line by :func:`document_header`, because a path is a fact to copy
+    and a status is a fact to glance at.
+    """
+    if saving:
+        return "Saving..."
+    if path is None:
+        return "Not saved to a file yet." if dirty else "Nothing to save yet."
+    return "Unsaved changes." if dirty else "Saved."
+
+
+def document_header(
+    tab: Any,
+    *,
+    new: Any,
+    open_: Any,
+    save: Any,
+    save_as: Any,
+    saving: bool | None = None,
+) -> None:
+    """The four document verbs in a 2x2 grid, then the path and the status line.
+
+    ``tab`` supplies ``path`` and ``dirty``; ``saving`` defaults to the tab's
+    own flag and is overridable for the modes whose "busy" is wider than a
+    save. The four callables take no arguments -- each mode passes a lambda
+    over its own ``*_mode`` function, so the button and the File menu row and
+    the shortcut all run the same code.
+    """
+    if saving is None:
+        saving = bool(getattr(tab, "saving", False))
+    order = controls.DOCUMENT_ACTION_ORDER
+    labels = [DOCUMENT_ACTION_LABELS[word] for word in order[:4]]
+    width = grid_width(2)
+    if controls.button(labels[0], (width, 0)):
+        new()
+    imgui.same_line()
+    if controls.button(labels[1], (width, 0)):
+        open_()
+    if disabled_button(labels[2], not saving, (width, 0), reason=DOCUMENT_SAVING_WHY):
+        save()
+    imgui.same_line()
+    if disabled_button(labels[3], not saving, (width, 0), reason=DOCUMENT_SAVING_WHY):
+        save_as()
+    path = getattr(tab, "path", None)
+    if path is not None:
+        imgui.text_wrapped(str(path))
+    muted(document_status_text(path, bool(getattr(tab, "dirty", False)), saving))
+
+
 # ``quality.AUDIT_UNINFORMATIVE``, named here where its readers already look.
 # It moved out of this module on 2026-09-03 because ``review_mode`` needed the
 # threshold and was importing imgui-bearing ``widgets`` for it from inside a

@@ -641,7 +641,9 @@ tell those two apart.
 
 ## Files
 
-`Ctrl+S` saves. A map's own format is `.wmap`, a single file that embeds its tileset images, so it
+`Ctrl+S` saves, and the **Map file** panel carries the same **New**, **Open...**, **Save** and
+**Save As...** buttons every workspace has, over the file's path and one line saying whether it is
+saved. A map's own format is `.wmap`, a single file that embeds its tileset images, so it
 can be moved or sent without a folder of dependencies. Two saves of an unchanged map produce
 byte-identical files, which means a content hash means something and a diff shows only what you
 actually changed.

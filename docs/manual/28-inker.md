@@ -1391,7 +1391,9 @@ exactly where it was.
 ## Pipeline bridges
 
 Inker is wired into the pipeline in both directions. The **Generation** panel, at the foot of the
-right-hand column, is where that shows: four buttons — **Make 3D**, **Save as reference**, **Add to
+right-hand column, is where that shows. Above it, under **Drawing file**, sit the same **New**,
+**Open...**, **Save** and **Save As...** buttons every workspace has, over the file's path and one
+line saying whether it is saved. Then the four buttons — **Make 3D**, **Save as reference**, **Add to
 Packwright** and **Revert to original** — over one line saying what this document is attached to. A
 button you cannot press right now is greyed with the reason in its tooltip rather than hidden, which
 is the point of the panel: **Revert to original** is unavailable on a drawing that was never opened

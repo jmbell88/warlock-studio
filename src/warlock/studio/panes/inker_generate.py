@@ -37,9 +37,10 @@ from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_menu
 
-#: The least this pane may be squeezed to, in design px: the heading, four
-#: full-width buttons and the link line under them.
-GENERATE_FLOOR = 180.0
+#: The least this pane may be squeezed to, in design px: the file header's
+#: two rows and status line, the heading, four full-width buttons and the
+#: link line under them.
+GENERATE_FLOOR = 270.0
 
 #: The ops, in the order the File menu registers them, with the one-line note
 #: that says what each is *for*. The names are checked against the registry at
@@ -61,10 +62,25 @@ def ops() -> list[Any]:
 def draw(ctx: Any) -> None:
     anchors.mark_window("inker/generate")
     state = inker_mode.ensure(ctx)
+    tab = state.active
+    if tab is not None:
+        # The shared document header every workspace carries (2026-09-05).
+        # Inker was the one mode with no file block in any pane -- its verbs
+        # were menu rows only -- so a user who had just met Save in Clay's
+        # pane looked here and found nothing.
+        widgets.section("Drawing file")
+        widgets.document_header(
+            tab,
+            new=lambda: inker_mode.new_document(ctx, 1024, 1024),
+            open_=lambda: inker_mode.ask_open(ctx),
+            save=lambda: inker_mode.save(ctx, tab),
+            save_as=lambda: inker_mode.save_as(ctx, tab),
+            saving=tab.busy,
+        )
+        imgui.dummy((0, sp(8)))
     widgets.section("Generation")
     # After the heading, never before it: ``help_button`` is a ``same_line``.
     manual_render.help_button(ctx, "inker-generate")
-    tab = state.active
 
     for op, (_name, note) in zip(ops(), OPS, strict=True):
         enabled = bool(op.enabled(state, tab))

@@ -1,8 +1,8 @@
 """Sirens' right-bottom pane: where this song lives, and the undo stack.
 
-``plotter_bridge``'s shape and its reasoning: the facts about the file, the two
-history verbs, and the recent list. New/Open/Save are the File menu's rows,
-which is where a user looks for them.
+``plotter_bridge``'s shape and its reasoning: the shared document header (the
+four file verbs and the status line -- ``widgets.document_header``), the two
+history verbs, and the recent list. The File menu carries the same rows.
 
 **Export is here rather than in the transport**, next to Save and the file's
 own path, because that is what it is: the second thing this document can be
@@ -38,14 +38,16 @@ def draw(ctx: Any) -> None:
         _recent(ctx)
         return
 
-    # **One sentence about where this song stands**, not two: the states are
-    # exclusive and a panel that printed "Not saved to a file yet." *and*
-    # "Saved." on the same screen is what ``plotter_bridge`` was fixed for.
-    if tab.path is None:
-        widgets.muted("Not saved to a file yet." if tab.dirty else "Nothing to save yet.")
-    else:
-        imgui.text_wrapped(str(tab.path))
-        widgets.muted("Unsaved changes." if tab.dirty else "Saved.")
+    # The shared header: the four file verbs and the one-sentence status
+    # ladder, the same in every document mode (2026-09-05). The File menu
+    # keeps its rows; these are the same functions a second way.
+    widgets.document_header(
+        tab,
+        new=lambda: sirens_mode.new_document(ctx),
+        open_=lambda: sirens_mode.ask_open(ctx),
+        save=lambda: sirens_mode.save(ctx, tab),
+        save_as=lambda: sirens_mode.save_as(ctx, tab),
+    )
 
     imgui.dummy((0, 8))
     _history(ctx, tab)

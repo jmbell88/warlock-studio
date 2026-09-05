@@ -24,7 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, controls, icons, widgets
+from .. import clay_mode, icons, widgets
 from ..manual import render as manual_render
 
 #: What this pane refuses to shrink past, in design pixels: the path line, the
@@ -98,12 +98,6 @@ def _facts(tab: Any) -> None:
         f"{len(visible)} of {len(doc.objects)} objects visible  -  "
         f"{triangles:,} triangles  -  {len(doc.materials)} materials"
     )
-    if tab.saving:
-        widgets.busy("Saving")
-    elif tab.dirty:
-        widgets.muted("unsaved changes")
-    else:
-        widgets.muted("saved")
 
 
 def _triangles(mesh: Any) -> int:
@@ -116,23 +110,17 @@ def _triangles(mesh: Any) -> int:
 
 
 def _files(ctx: Any, tab: Any) -> None:
-    """The file row for an *open* document. ``draw`` returns before this when
-    there is none, because New and Open belong to the empty canvas."""
-    width = widgets.grid_width(2)
-    if controls.button(f"{icons.PLUS} New", (width, 0)):
-        clay_mode.new_document(ctx)
-    imgui.same_line()
-    if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
-        clay_mode.ask_open(ctx)
-    imgui.begin_disabled(tab.saving)
-    if controls.button(f"{icons.SAVE} Save (Ctrl+S)", (width, 0)):
-        clay_mode.save(ctx, tab)
-    imgui.same_line()
-    if controls.button("Save As...", (width, 0)):
-        clay_mode.save_as(ctx, tab)
-    imgui.end_disabled()
-    if tab.path is not None:
-        widgets.muted(str(tab.path))
+    """The file row for an *open* document -- the shared header, so it is the
+    same four buttons and the same status ladder every other workspace has.
+    ``draw`` returns before this when there is none, because New and Open also
+    belong to the empty canvas."""
+    widgets.document_header(
+        tab,
+        new=lambda: clay_mode.new_document(ctx),
+        open_=lambda: clay_mode.ask_open(ctx),
+        save=lambda: clay_mode.save(ctx, tab),
+        save_as=lambda: clay_mode.save_as(ctx, tab),
+    )
     imgui.dummy((0, 8))
 
 
