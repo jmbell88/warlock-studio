@@ -371,7 +371,8 @@ A song holds 64 effects.
 
 ## Exporting the audio
 
-**Export audio...** in the Song file panel asks for a *folder* rather than a filename, and writes:
+**Export audio...** (`Ctrl+Shift+E`) in the Song file panel asks for a *folder* rather than a
+filename, and writes:
 
 | File | What it is |
 | --- | --- |

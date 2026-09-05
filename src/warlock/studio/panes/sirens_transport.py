@@ -48,9 +48,9 @@ def draw(ctx: Any) -> None:
     # this app is held twice.
     playing = sirens_audio.tag() == tab.uid
     width = widgets.grid_width(2)
-    label = f"{icons.SQUARE} Stop" if playing else f"{icons.PLAY} Play"
-    if widgets.disabled_button(
-        f"{label} (Space)", device, (width, 0), reason=sirens_audio.unavailable_reason()
+    if widgets.transport(
+        "sirens", playing, enabled=device, size=(width, 0),
+        reason=sirens_audio.unavailable_reason(),
     ):
         sirens_mode.toggle_play(ctx, tab)
     imgui.same_line()
@@ -117,7 +117,7 @@ def draw(ctx: Any) -> None:
         # state a user waits through instead of reading.
         widgets.muted_wrapped(tab.render_error)
     elif tab.rendering or tab.render_dirty:
-        widgets.muted("Rendering...")
+        widgets.busy("Rendering")
     elif tab.pcm is None:
         widgets.muted("Nothing in the order list to play yet.")
     else:

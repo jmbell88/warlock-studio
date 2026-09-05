@@ -54,7 +54,7 @@ def draw(ctx: Any, view: Any) -> None:
 
 def _rows(ctx: Any, state: Any, tab: Any, doc: Any) -> None:
     widgets.secondary(f"{doc.element_mode} mode")
-    imgui.separator()
+    controls.menu_separator()
     if tab.saving:
         # The gate every other control in the app has, and the one this menu
         # did not: ``enabled`` never consulted it, so every row stayed
@@ -63,10 +63,10 @@ def _rows(ctx: Any, state: Any, tab: Any, doc: Any) -> None:
         # said nothing. Told once, at the top, rather than as fifteen greyed
         # rows with no reason attached.
         widgets.secondary("Saving...")
-        imgui.separator()
+        controls.menu_separator()
     for op in clay_ops.menu(doc.element_mode):
         if op.separator_before:
-            imgui.separator()
+            controls.menu_separator()
         clicked, _ = controls.menu_item(op.label, op.key, False, op.enabled(doc) and not tab.saving)
         if not clicked:
             continue
@@ -112,7 +112,7 @@ def params_popup(ctx: Any, state: Any, tab: Any) -> None:
     widgets.popup_chrome(_imgui=imgui)
     values = state.op_params.setdefault(op.name, clay_ops.defaults_for(op))
     imgui.text(op.label.rstrip("."))
-    imgui.separator()
+    controls.menu_separator()
     if op.hint:
         # Above the fields, not below them: it is about which op you are in
         # rather than about a number, so a user who is in the wrong one should

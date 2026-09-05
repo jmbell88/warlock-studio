@@ -188,6 +188,9 @@ def test_major_panes_have_roles_and_no_production_pane_child_calls():
 
 
 FORBIDDEN = {
+    # The rule between two groups: ``widgets.divider`` in a pane,
+    # ``controls.menu_separator`` in a menu (2026-09-05).
+    "separator",
     "button",
     "small_button",
     "input_text",

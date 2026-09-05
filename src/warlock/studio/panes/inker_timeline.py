@@ -222,7 +222,7 @@ def _note_items(ctx: Any, key: str, title: str, note: Any, apply: Any) -> None:
     one value, so "change the colour, keep the text" is expressed here, once,
     rather than as a keyword-and-sentinel signature on three methods.
     """
-    imgui.separator()
+    widgets.divider()
     if controls.selectable(f"Properties...##{key}", False)[0]:
         _ask_note(ctx, title, note, apply)
     size = sp(CELL) * 0.7
@@ -420,7 +420,7 @@ def draw(ctx: Any) -> None:
     _tick(tab)
     if tab.doc.anim is not None:
         _transport(ctx, tab)
-        imgui.separator()
+        widgets.divider()
         # Between the transport and the grid, and only on a sheet document:
         # the strip is about the cells the grid shows, and an ordinary
         # animation has no scope for it to offer.
@@ -498,15 +498,9 @@ def _transport(ctx: Any, tab: Any) -> None:
         toolbar.Item(key, label, tooltip=tip, enabled=not tab.busy, pinned=True)
         for key, label, tip in _STEPS
     ]
+    label, glyph, tip = widgets.transport_label(tab.playing)
     items.append(
-        toolbar.Item(
-            "play",
-            "Stop" if tab.playing else "Play",
-            icons.SQUARE if tab.playing else icons.PLAY,
-            tooltip="Stop playback" if tab.playing else "Play the clip (Space)",
-            enabled=not tab.saving,
-            pinned=True,
-        )
+        toolbar.Item("play", label, glyph, tooltip=tip, enabled=not tab.saving, pinned=True)
     )
     items += [
         toolbar.Item(key, label, tooltip=tip, enabled=not tab.busy, pinned=True)
@@ -1257,7 +1251,7 @@ def _frame_menu(tab: Any, index: int) -> None:
     if controls.menu_item_simple("Duplicate (linked)"):
         doc.set_current_frame(index)
         doc.add_frame(index + 1, link=True)
-    imgui.separator()
+    widgets.divider()
     # Disabled at the ends rather than clicked-and-ignored: an enabled item that
     # does nothing reads as a bug in the move, not as "there is nowhere to go".
     last = len(doc.anim.frames) - 1
@@ -1269,10 +1263,10 @@ def _frame_menu(tab: Any, index: int) -> None:
     if controls.menu_item_simple("Move right"):
         doc.move_frame(index, index + 1)
     imgui.end_disabled()
-    imgui.separator()
+    widgets.divider()
     if controls.menu_item_simple("Delete"):
         doc.remove_frame(index)
-    imgui.separator()
+    widgets.divider()
     # A one-frame span, renamed and stretched from the tag's own menu below.
     # The alternative -- a modal asking for a name and a range up front -- is
     # three answers for something the user is about to look at and adjust
@@ -1598,7 +1592,7 @@ def _group_menu(ctx: Any, tab: Any, doc: Any, group_uid: int) -> None:
         doc.set_group_props(group_uid, isolate=not node.isolate)
     if controls.selectable("Locked", bool(node.locked))[0]:
         doc.set_group_props(group_uid, locked=not node.locked)
-    imgui.separator()
+    widgets.divider()
     if controls.selectable("Ungroup", False)[0]:
         # The fold goes with the group: keeping it would fold the uid shut
         # again the moment a redo brought the group back.
@@ -1801,19 +1795,19 @@ def _row_menu(ctx: Any, tab: Any, doc: Any, index: int) -> None:
     if controls.selectable("Layer properties...", False)[0]:
         doc.set_active_layer(index)
         ctx.state.inker.pending_dialog = "inker-layer-properties"
-    imgui.separator()
+    widgets.divider()
     if controls.selectable("Move up", False)[0]:
         doc.move_layer(index, index + 1)
     if controls.selectable("Move down", False)[0]:
         doc.move_layer(index, index - 1)
-    imgui.separator()
+    widgets.divider()
     if controls.selectable(f"Duplicate{span or ' layer'}", False)[0]:
         doc.duplicate_layers(rows)
     if controls.selectable(f"Merge down{span}", False)[0]:
         doc.merge_range(min(rows), max(rows))
     if controls.selectable(f"Delete{span or ' layer'}", False)[0]:
         doc.remove_layers(rows)
-    imgui.separator()
+    widgets.divider()
     if controls.selectable(f"Group{span}", False)[0]:
         doc.group_layers(rows)
     if doc.group_of.get(_member_uid(doc, index)) is not None and controls.selectable(
@@ -2103,7 +2097,7 @@ def _range_menu(ctx: Any, tab: Any) -> None:
     state = ctx.state.inker
     doc = tab.doc
     rect = tab.range_sel
-    imgui.separator()
+    widgets.divider()
     widgets.muted("Range")
     # With no range, the corner is where the user is: the active track and the
     # playhead. Only Paste can be reached in that state, and "put it here" is
@@ -2130,7 +2124,7 @@ def _range_menu(ctx: Any, tab: Any) -> None:
     ):
         doc.paste_cels(state.cel_clip, t0, f0)
 
-    imgui.separator()
+    widgets.divider()
     if controls.menu_item_simple("Clear cels", enabled=has_range, reason=no_range):
         doc.clear_range(t0, t1, f0, f1)
     if controls.menu_item_simple("Link cels", enabled=has_range, reason=no_range):
@@ -2138,7 +2132,7 @@ def _range_menu(ctx: Any, tab: Any) -> None:
     if controls.menu_item_simple("Unlink cels", enabled=has_range, reason=no_range):
         doc.unlink_range(t0, t1, f0, f1)
 
-    imgui.separator()
+    widgets.divider()
     square = doc.size[0] == doc.size[1]
     for label, run, needs_square in RANGE_VERBS:
         # Disabled, never hidden -- this menu's rule, stated at the top -- and
@@ -2155,7 +2149,7 @@ def _range_menu(ctx: Any, tab: Any) -> None:
     ):
         doc.fill_range(state.fg, t0, t1, f0, f1)
 
-    imgui.separator()
+    widgets.divider()
     if controls.menu_item_simple("Duplicate frames", enabled=has_range, reason=no_range):
         doc.duplicate_range(f0, f1)
     if controls.menu_item_simple(
@@ -2167,7 +2161,7 @@ def _range_menu(ctx: Any, tab: Any) -> None:
     if controls.menu_item_simple("Delete frames", enabled=has_range, reason=no_range):
         doc.remove_range(f0, f1)
 
-    imgui.separator()
+    widgets.divider()
     imgui.set_next_item_width(sp(90))
     changed, value = controls.input_int(
         "ms##rangems", state.range_ms, 10, 50, enabled=has_range, reason=no_range
@@ -2193,7 +2187,7 @@ def _range_export_items(
     The gate is passed in rather than recomputed: these rows sat inside the
     caller's ``begin_disabled`` and are greyed for exactly the caller's reason.
     """
-    imgui.separator()
+    widgets.divider()
     for label, kind in (
         ("Export range → sheet...", "sheet"),
         ("Export range → GIF...", "gif"),
@@ -2377,7 +2371,7 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
     for key in animation.DIRECTIONS:
         if controls.menu_item_simple(key.capitalize(), "", tag.direction == key):
             doc.set_tag(index, direction=key)
-    imgui.separator()
+    widgets.divider()
     # The tag's own span, and its own looping: a tag is the one part of the
     # timeline that already says both which frames it covers and how many times
     # they play, so exporting one needs nothing typed.
@@ -2385,7 +2379,7 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
         inker_mode.export_tag(ctx, tab, "sheet", index)
     if controls.menu_item_simple("Export tag → GIF..."):
         inker_mode.export_tag(ctx, tab, "gif", index)
-    imgui.separator()
+    widgets.divider()
     if controls.menu_item_simple("Delete tag"):
         doc.remove_tag(index)
         state.tag_editing = -1

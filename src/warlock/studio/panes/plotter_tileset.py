@@ -486,13 +486,13 @@ def _tileset_bar(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
         state.palette_zoom_fit = True
     imgui.same_line()
     if controls.button(
-        f"{icons.MINUS}##palette-zoom-out",
+        f"{icons.ZOOM_OUT}##palette-zoom-out",
         tooltip="Zoom out (Ctrl+wheel over the palette)",
     ):
         state.palette_zoom_rung = -1
     imgui.same_line()
     if controls.button(
-        f"{icons.PLUS}##palette-zoom-in",
+        f"{icons.ZOOM_IN}##palette-zoom-in",
         tooltip="Zoom in (Ctrl+wheel over the palette)",
     ):
         state.palette_zoom_rung = 1

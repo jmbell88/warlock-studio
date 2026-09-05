@@ -53,6 +53,7 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, sp(tokens.SP_2)))
     _history(ctx, tab)
     imgui.dummy((0, sp(tokens.SP_2)))
+    widgets.section("Export")
     _export(ctx, tab)
     _recent(ctx)
 
@@ -70,21 +71,34 @@ def _export(ctx: Any, tab: Any) -> None:
 
     doc = tab.doc
     ready = bool(doc.order or doc.oneshots)
-    if widgets.disabled_button(
+    if widgets.primary_button(
         f"{icons.DOWNLOAD} Export audio...",
-        ready and not tab.busy,
         (-1, 0),
+        enabled=ready and not tab.busy,
         reason=(
             "This song is being written; the button comes back when it lands."
             if ready
             else "There is nothing in the order list to export yet."
         ),
+        tooltip="Ctrl+Shift+E",
     ):
         sirens_mode.export_files(ctx, tab)
-    # The reverse bridge, beside the export because it is the same gesture --
-    # "take this song somewhere" -- and the two destinations are a folder and
-    # the other audio mode. ``muse_mode.open_in_sirens`` is the leg the manual
-    # already documented; this is the one it called deliberately unbuilt.
+    _closeness(ctx)
+    counts = [f"{len(doc.channels)} stem(s)"]
+    if doc.oneshots:
+        counts.append(f"{len(doc.oneshots)} effect(s)")
+    imgui.dummy((0, sp(tokens.SP_1)))
+    widgets.muted_wrapped(
+        f"Into a folder you pick: {sirens_mode.SONG_NAME}, then"
+        f" {sirens_mode.STEM_DIR}/ and {sirens_mode.SFX_DIR}/ -- "
+        + " and ".join(counts)
+        + ". The .wsng is the composition; every WAV is derived from it."
+    )
+    # The reverse bridge, under the heading every workspace's in-app exits
+    # share: a folder is an export, the other audio mode is a move inside the
+    # app. ``muse_mode.open_in_sirens`` is the leg the manual already
+    # documented; this is the one it called deliberately unbuilt.
+    widgets.exits()
     if widgets.disabled_button(
         f"{icons.MUSIC} Compose in Muse...",
         bool(doc.order) and not tab.busy,
@@ -102,17 +116,6 @@ def _export(ctx: Any, tab: Any) -> None:
         from .. import muse_mode
 
         muse_mode.compose_from_sirens(ctx, tab)
-    _closeness(ctx)
-    counts = [f"{len(doc.channels)} stem(s)"]
-    if doc.oneshots:
-        counts.append(f"{len(doc.oneshots)} effect(s)")
-    imgui.dummy((0, sp(tokens.SP_1)))
-    widgets.muted_wrapped(
-        f"Into a folder you pick: {sirens_mode.SONG_NAME}, then"
-        f" {sirens_mode.STEM_DIR}/ and {sirens_mode.SFX_DIR}/ -- "
-        + " and ".join(counts)
-        + ". The .wsng is the composition; every WAV is derived from it."
-    )
 
 
 def _history(ctx: Any, tab: Any) -> None:
@@ -122,23 +125,14 @@ def _history(ctx: Any, tab: Any) -> None:
     and the chord carry the same side effects -- the caret clamp and the
     re-render, both of which belong to *undoing* rather than to the keyboard.
     """
-    from imgui_bundle import imgui
-
-    doc = tab.doc
-    width = widgets.grid_width(2)
-    if widgets.disabled_button(
-        f"{icons.UNDO} Undo", doc.history.can_undo, (width, 0), reason="Nothing to undo yet."
-    ):
-        sirens_mode.undo(ctx, tab)
-    imgui.same_line()
-    if widgets.disabled_button(
-        f"{icons.REDO} Redo",
-        doc.history.can_redo,
-        (width, 0),
-        reason="Nothing to redo: this is the newest step.",
-    ):
-        sirens_mode.redo(ctx, tab)
-    widgets.muted(f"{len(doc.history)} step(s)")
+    widgets.history_block(
+        ctx,
+        tab,
+        key="sirens",
+        undo=lambda: sirens_mode.undo(ctx, tab),
+        redo=lambda: sirens_mode.redo(ctx, tab),
+        step=lambda index: sirens_mode.step_history(ctx, tab, index),
+    )
 
 
 def _recent(ctx: Any) -> None:

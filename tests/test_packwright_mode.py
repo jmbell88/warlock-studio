@@ -849,5 +849,5 @@ def test_the_settings_pane_offers_the_repack_r_already_did() -> None:
     source = (pathlib.Path(panes.__file__).parent / "packwright_settings.py").read_text(
         encoding="utf-8"
     )
-    assert "Repack (R)" in source
+    assert "Repack now" in source
     assert "packwright_mode.request_repack(" in source

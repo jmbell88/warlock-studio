@@ -234,7 +234,7 @@ def _grid(ctx: Any, jobs: list[Any]) -> None:
     ctx.state.preview[library.COLUMNS_SLOT] = count
 
     _tools(ctx, jobs)
-    imgui.separator()
+    widgets.divider()
     height = -_footer_height(ctx)
     if imgui.begin_child("library-full/cells", (0, height)):
         if not jobs:

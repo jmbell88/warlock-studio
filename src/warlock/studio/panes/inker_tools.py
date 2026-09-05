@@ -591,7 +591,7 @@ def _slices(ctx: Any, state: Any, tab: Any) -> None:
         # index moves the moment one above it is deleted.
         if controls.selectable(f"{entry.name}##slice{entry.uid}", selected)[0]:
             state.slice_uid = entry.uid
-    if doc.slices and controls.button("Export slices as PNGs", (-1, 0)):
+    if doc.slices and controls.button("Export slices as PNGs...", (-1, 0)):
         inker_mode.export_slices(ctx, tab)
     chosen = doc.slice_by_uid(state.slice_uid)
     if chosen is not None:

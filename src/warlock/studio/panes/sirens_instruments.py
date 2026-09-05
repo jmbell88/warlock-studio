@@ -55,7 +55,7 @@ def draw(ctx: Any) -> None:
         sirens_mode.request_rerender(ctx, tab)
     imgui.same_line()
     if widgets.disabled_button(
-        f"{icons.TRASH} Remove",
+        f"{icons.TRASH} Delete",
         editable and state.instrument is not None,
         (width, 0),
         reason=busy_why if editable else "No instrument is selected.",
@@ -152,7 +152,7 @@ def _sample(ctx: Any, tab: Any, selected: Any) -> None:
     imgui.same_line()
     held = selected.sample if selected.sample in doc.samples else ""
     if widgets.disabled_button(
-        f"{icons.TRASH} Remove",
+        f"{icons.TRASH} Delete",
         editable and bool(held),
         (width, 0),
         reason="This instrument has no sample." if editable else "",

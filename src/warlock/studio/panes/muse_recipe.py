@@ -15,8 +15,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from imgui_bundle import imgui
-
 from .. import focus, muse_mode, widgets
 from ..manual import render as manual_render
 from . import model_gate
@@ -118,7 +116,7 @@ def draw(ctx: Any) -> None:
             ),
         )
 
-    imgui.separator()
+    widgets.divider()
     _seed(ctx, form)
 
 

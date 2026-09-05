@@ -98,7 +98,7 @@ def draw(ctx: Any) -> None:
     # code that lays that row out. Chapter 08's body has no other way in from
     # here.
     _filters(ctx, jobs)
-    imgui.separator()
+    widgets.divider()
     _read_error(ctx)
     height = -_footer_reserve()
     # Hoisted out of the card loop (B20): each queued card used to rebuild the
@@ -869,7 +869,7 @@ def _overflow(ctx: Any, job: Any) -> None:
         ctx.toast("Job id copied.", "success")
     if controls.menu_item("Open folder", "", False)[0]:
         _open_folder(ctx, job_id)
-    imgui.separator()
+    widgets.divider()
     if controls.menu_item("Rename...", "", False)[0]:
         ctx.prompts.ask(
             dialogs.Prompt(
@@ -934,7 +934,7 @@ def _overflow(ctx: Any, job: Any) -> None:
 
             pose_panel.open_in_poser(ctx, job)
         _send_to_troupe_item(ctx, job)
-    imgui.separator()
+    widgets.divider()
     if controls.menu_item("Delete", "Delete", False)[0]:
         # No confirm (J91): the trash *is* the confirmation, and it is a better
         # one -- an undo the user can take an hour later beats a question they
@@ -1494,7 +1494,7 @@ def _bulk(ctx: Any, jobs: list[Any]) -> None:
         return
     shown = {job["id"] for job in jobs}
     hidden = sum(1 for job_id in picked if job_id not in shown)
-    imgui.separator()
+    widgets.divider()
     imgui.text(f"{len(picked)} selected" + (f" ({hidden} not shown)" if hidden else ""))
     imgui.same_line()
     items = [

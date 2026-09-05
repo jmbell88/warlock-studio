@@ -159,7 +159,7 @@ def _descale_row(ctx: Any, tab: Any, *, refused: bool = False) -> bool:
     width, height = transform.descale_size(tab.doc.size, scale, found["phase"])
     if not width or not height:
         return False
-    imgui.separator()
+    widgets.divider()
     widgets.muted(f"Detected a {scale} px pixel grid - true size {width} x {height}")
     if widgets.disabled_button(
         "Descale",
@@ -317,7 +317,7 @@ def _scale_dialog(ctx: Any, tab: Any, *, opening: bool = False) -> None:
     widgets.muted(f"Current: {old[0]} x {old[1]} px")
     imgui.same_line()
     manual_render.help_button_inline(ctx, "inker-image-size")
-    imgui.separator()
+    widgets.divider()
 
     units = widgets.segmented_control(
         "##scale-units",
@@ -385,7 +385,7 @@ def _scale_dialog(ctx: Any, tab: Any, *, opening: bool = False) -> None:
         imgui.close_current_popup()
     imgui.end_disabled()
 
-    imgui.separator()
+    widgets.divider()
     imgui.begin_disabled(tab.busy)
     if widgets.disabled_button(
         "Scale",
@@ -432,7 +432,7 @@ def _canvas_dialog(ctx: Any, tab: Any, *, opening: bool = False) -> None:
     widgets.muted(f"Current: {old[0]} x {old[1]} px")
     imgui.same_line()
     manual_render.help_button_inline(ctx, "inker-canvas-size")
-    imgui.separator()
+    widgets.divider()
 
     changed, relative = controls.checkbox(
         "Relative",
@@ -472,7 +472,7 @@ def _canvas_dialog(ctx: Any, tab: Any, *, opening: bool = False) -> None:
     # this is the sentence that says it.
     widgets.muted(f"The old image lands at {offset[0]}, {offset[1]}.")
 
-    imgui.separator()
+    widgets.divider()
     imgui.begin_disabled(tab.busy)
     if widgets.disabled_button(
         "Resize",

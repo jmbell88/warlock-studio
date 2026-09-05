@@ -913,7 +913,7 @@ def _start(ctx: Any) -> None:
     had, above the thing the user actually came back for. The menu says the
     same six words; the button says there is one place to start.
     """
-    if widgets.primary_button(f"{icons.PLUS}  New...", (sp(160), 0)):
+    if widgets.primary_button(f"{icons.PLUS} New...", (sp(160), 0)):
         imgui.open_popup("landing-new")
     if imgui.begin_popup("landing-new"):
         widgets.popup_chrome(_imgui=imgui)
@@ -930,7 +930,7 @@ def _start(ctx: Any) -> None:
     # reconstructed or built in Clay, and a dropped ``.glb`` reached Clay
     # alone, which refuses a rigged one because it has no skinning.
     imgui.same_line()
-    if widgets.ghost_button(f"{icons.BOX}  Import mesh..."):
+    if widgets.ghost_button(f"{icons.BOX} Import mesh..."):
         from . import library
 
         library.pick_and_import_mesh(ctx)

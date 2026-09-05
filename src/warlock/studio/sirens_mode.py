@@ -598,6 +598,7 @@ _MOVED: dict[str, str] = {
     "_caret_kind": "sirens_play",
     "_column_ceiling": "sirens_edit",
     "_ctrl_key": "sirens_keys",
+    "step_history": "sirens_edit",
     "_playable": "sirens_play",
     "_touch": "sirens_edit",
     "_write_at_caret": "sirens_edit",

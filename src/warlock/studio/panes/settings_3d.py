@@ -406,7 +406,7 @@ def _rig(ctx: Any, form: dict[str, Any]) -> None:
 
 def _submit(ctx: Any, form: dict[str, Any]) -> None:
     imgui.dummy((0, sp(8)))
-    imgui.separator()
+    widgets.divider()
     state = ctx.state
     source = ctx.cache.get(state.source_job)
     problems = validate(source)

@@ -331,9 +331,8 @@ def goto_popup(ctx: Any, state: Any, tab: Any) -> None:
         cell = state.hover_cell or (0, 0)
         form = {"x": int(cell[0]), "y": int(cell[1])}
         ctx.state.preview[key] = form
-    imgui.text("Go to coordinate")
+    widgets.popup_title("Go to coordinate")
     widgets.muted(f"0, 0 to {int(doc.width) - 1}, {int(doc.height) - 1}")
-    imgui.separator()
     _, form["x"] = controls.input_int("Column##goto-x", int(form["x"]), 1)
     _, form["y"] = controls.input_int("Row##goto-y", int(form["y"]), 1)
     imgui.dummy((0, sp(tokens.SP_1)))
@@ -485,7 +484,7 @@ def _setup_body(ctx: Any, form: dict, key: str) -> None:
     imgui.dummy((0, sp(6)))
     widgets.field_label("Then")
     for label, value in (
-        (f"{icons.PLUS} Add a tileset from a file", plotter_setup.NEXT_FILE),
+        (f"{icons.PLUS} Add a tileset from a file...", plotter_setup.NEXT_FILE),
         ("Nothing yet", plotter_setup.NEXT_EMPTY),
     ):
         # Through ``controls`` rather than imgui: an AST guard rejects a pane

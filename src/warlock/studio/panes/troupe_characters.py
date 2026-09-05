@@ -93,7 +93,7 @@ def _row_menu(ctx: Any, state: Any, character: dict[str, Any]) -> None:
     is_active = character["id"] == state.job_id
     if controls.menu_item_simple("Select"):
         troupe_mode.select(ctx, character["id"])
-    imgui.separator()
+    widgets.divider()
     if controls.menu_item_simple(
         "Open the sheet in Inker",
         "",

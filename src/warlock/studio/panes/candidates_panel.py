@@ -52,7 +52,7 @@ def draw(ctx: Any) -> None:
     selected = ctx.state.selected
     for member in group.members:
         _member(ctx, group, member, selected == member["id"])
-    imgui.separator()
+    widgets.divider()
 
 
 #: How wide a candidate's "A"/"B" picker button is, in design pixels. Wide

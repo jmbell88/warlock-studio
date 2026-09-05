@@ -163,7 +163,7 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, sp(tokens.SP_2)))
     sources = bool(tab.doc.sources)
     if widgets.disabled_button(
-        f"{icons.REFRESH} Repack (R)",
+        f"{icons.REFRESH} Repack now",
         editable and sources,
         (-1, 0),
         reason=(
@@ -178,4 +178,4 @@ def draw(ctx: Any) -> None:
     # above is greyed, and a greyed explanation reads as one more dead control.
     if not editable:
         imgui.dummy((0, sp(tokens.SP_2)))
-        widgets.muted("Saving...")
+        widgets.busy("Saving")

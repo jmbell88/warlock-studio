@@ -127,7 +127,7 @@ def _verbs(ctx: Any, state: Any, tab: Any) -> None:
     busy = tab.busy
     tilemap = doc.active_tilemap_uid() is not None
     if widgets.disabled_button(
-        f"{icons.PLUS} New tilemap layer",
+        f"{icons.PLUS} Add a tilemap layer",
         not busy and bool(doc.tilesets),
         (width, 0),
         reason=(

@@ -193,10 +193,9 @@ def _transport(ctx: Any, state: Any) -> None:
     movement = troupe_mode.preview_movement(ctx)
     manual_render.help_button(ctx, "troupe-preview")
 
-    # ``SQUARE`` for pause: the icon set is lucide 0.525.0 pinned to the
-    # codepoints in ``icons.py``, and it has no pause glyph -- a stop square is
-    # the nearest thing in it, and inventing a codepoint would draw a box.
-    glyph = icons.SQUARE if state.playing else icons.PLAY
+    # Stop over the stop square, ``widgets.transport_label``'s one spelling
+    # for every transport in the app; this row labelled it as a pause.
+    label, glyph, tip = widgets.transport_label(state.playing)
     frames = int((movement or {}).get("frames") or 1)
 
     # **A row, not a same_line chain.** This was four bare ``same_line`` calls,
@@ -206,7 +205,7 @@ def _transport(ctx: Any, state: Any) -> None:
     # play/back/forward are the row's reason for existing, and a Play hidden
     # in a menu is not a transport.
     def _trailing() -> None:
-        widgets.muted(f"frame {state.frame + 1} of {frames}")
+        widgets.frame_counter(state.frame, frames)
         imgui.same_line()
         # 110, not less: an ``input_int`` spends most of its width on the two
         # step buttons, and at UI scale 1.5 a narrower field squeezes the
@@ -232,12 +231,7 @@ def _transport(ctx: Any, state: Any) -> None:
             state.speed = float(name)
 
     row = [
-        toolbar.Item(
-            key="play",
-            label="Pause" if state.playing else "Play",
-            icon=glyph,
-            pinned=True,
-        ),
+        toolbar.Item(key="play", label=label, icon=glyph, tooltip=tip, pinned=True),
         toolbar.Item(key="back", label="Previous frame", icon=icons.ARROW_LEFT, pinned=True),
         toolbar.Item(key="fwd", label="Next frame", icon=icons.CHEVRON_RIGHT, pinned=True),
     ]

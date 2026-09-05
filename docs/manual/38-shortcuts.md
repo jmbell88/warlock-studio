@@ -487,5 +487,5 @@ low, and the caret rings whichever one is next — while volume takes one. See
 Those are *letter* positions rather than physical key positions, so the layout is right for anyone
 arriving from another tracker and wrong on an AZERTY keyboard.
 
-There is no binding for the export — it opens a folder picker, and it is the **Export audio...**
-button on the Song file panel.
+`Ctrl+Shift+E` is the export — the chord every document mode gives its file export — and it is the
+same **Export audio...** button on the Song file panel, which opens a folder picker.

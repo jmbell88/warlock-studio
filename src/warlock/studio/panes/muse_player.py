@@ -212,7 +212,8 @@ def _grip_at(one: Any, offset: float, width: float) -> str:
 
 def _transport(ctx: Any, one: Any) -> None:
     playing = muse_mode.is_playing(ctx, one.job)
-    if controls.button("Stop" if playing else "Play", role="primary"):
+    # Not primary: a transport is never a pane's commit verb (Generate is).
+    if widgets.transport("muse-player", playing, shortcut=""):
         if playing:
             muse_mode.stop(ctx)
         else:

@@ -43,7 +43,9 @@ BRIDGE_FLOOR = 170.0
 def draw(ctx: Any) -> None:
     state = clay_mode.ensure(ctx)
     tab = state.active
-    widgets.section("Document")
+    # "Model file", the shape of every other bridge's heading ("Drawing file",
+    # "Map file", "Song file", "Atlas file"); this one said "Document".
+    widgets.section("Model file")
     manual_render.help_button(ctx, "clay-bridge")
     if tab is None:
         # The recent list and nothing else -- Plotter's bridge exactly (B5).
@@ -72,23 +74,14 @@ def _history(ctx: Any, tab: Any) -> None:
     ``tab.doc.undo()`` here, so the button and the chord carry the same side
     effects (see the history block in that module).
     """
-    from imgui_bundle import imgui
-
-    doc = tab.doc
-    width = widgets.grid_width(2)
-    if widgets.disabled_button(
-        f"{icons.UNDO} Undo", doc.history.can_undo, (width, 0), reason="Nothing to undo yet."
-    ):
-        clay_mode.undo(ctx, tab)
-    imgui.same_line()
-    if widgets.disabled_button(
-        f"{icons.REDO} Redo",
-        doc.history.can_redo,
-        (width, 0),
-        reason="Nothing to redo: this is the newest step.",
-    ):
-        clay_mode.redo(ctx, tab)
-    widgets.muted(f"{len(doc.history)} step(s)")
+    widgets.history_block(
+        ctx,
+        tab,
+        key="clay",
+        undo=lambda: clay_mode.undo(ctx, tab),
+        redo=lambda: clay_mode.redo(ctx, tab),
+        step=lambda index: clay_mode.step_history(ctx, tab, index),
+    )
 
 
 def _facts(tab: Any) -> None:

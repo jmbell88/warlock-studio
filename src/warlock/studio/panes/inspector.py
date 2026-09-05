@@ -149,7 +149,7 @@ def draw(ctx: Any) -> None:
     # "loading" alone would not say *which*.
     viewer = getattr(ctx, "viewer", None)
     if viewer is not None and getattr(viewer, "pending", None) is not None:
-        widgets.muted(f"Loading {job.get('name') or job['id']}...")
+        widgets.busy(f"Loading {job.get('name') or job['id']}")
     _meta(ctx, job)
     if job.get("status") == "error":
         _error(ctx, job)
@@ -806,7 +806,7 @@ def _reference(ctx: Any, job: Any) -> None:
     if isinstance(hint, dict) and hint.get("edge_fraction") is not None:
         # The number that answers "my silhouette lock did nothing": near zero
         # means the detector found no structure, not that it was ignored.
-        widgets.muted(f"{hint['kind']} hint: {float(hint['edge_fraction']) * 100:.1f}% edges")
+        widgets.muted(f"{hint['kind']} hint: {float(hint['edge_fraction']) * 100:.0f}% edges")
 
     if ctx.textures is None:
         return
@@ -1209,7 +1209,7 @@ def _quality(ctx: Any, job: Any) -> None:
             widgets.muted(f"pivot at feet: {report['grounded']}")
     if isinstance(audit, dict) and audit.get("worst") is not None:
         ratio = float(audit["worst"])
-        widgets.muted(f"visible openings: {ratio * 100:.1f}%")
+        widgets.muted(f"visible openings: {ratio * 100:.0f}%")
         # P120, and only where the number actually misleads. A *high* reading
         # is real evidence of a hole and needs no caveat; a low one is what a
         # solid slab measures, which is the dominant failure mode.

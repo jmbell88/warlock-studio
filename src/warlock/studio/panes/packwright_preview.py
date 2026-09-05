@@ -41,7 +41,10 @@ def draw(ctx: Any) -> None:
         if tab.pack_error:
             widgets.text_colored(theme.ERR, tab.pack_error)
         else:
-            widgets.muted("Packing..." if tab.packing else "Add a sprite to see the atlas.")
+            if tab.packing:
+                widgets.busy("Packing")
+            else:
+                widgets.muted("Add a sprite to see the atlas.")
         return
     if tab.pack_stale_why:
         # Above the picture rather than instead of it: the last good atlas is

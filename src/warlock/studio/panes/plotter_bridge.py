@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, plotter_mode, tokens, widgets
+from .. import icons, plotter_mode, tokens, verbs, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -77,7 +77,27 @@ def draw(ctx: Any) -> None:
 
     imgui.dummy((0, sp(tokens.SP_2)))
     _history(ctx, tab)
+    _exits(ctx, tab)
     _recent(ctx)
+
+
+def _exits(ctx: Any, tab: Any) -> None:
+    """The library export, under the heading every workspace's exits share.
+    It was Ctrl+E and a Map-menu row only: the one document mode whose bridge
+    offered no way out of the mode (2026-09-05)."""
+    from imgui_bundle import imgui
+
+    imgui.dummy((0, sp(tokens.SP_2)))
+    widgets.exits()
+    ready = bool(tab.doc.tilesets) and not tab.busy
+    if widgets.disabled_button(
+        f"{icons.UPLOAD} {verbs.EXPORT_TO_LIBRARY}",
+        ready,
+        (-1, 0),
+        reason="This map is being written." if tab.doc.tilesets else "Add a tileset first.",
+        tooltip="Ctrl+E",
+    ):
+        plotter_mode.export_library(ctx, tab)
 
 
 def _history(ctx: Any, tab: Any) -> None:
@@ -89,69 +109,27 @@ def _history(ctx: Any, tab: Any) -> None:
     ``tab.doc.undo()`` here, so the button and the chord carry the same side
     effects (see the history block in that module).
     """
-    from imgui_bundle import imgui
-
-    doc = tab.doc
-    width = widgets.grid_width(2)
-    if widgets.disabled_button(
-        f"{icons.UNDO} Undo", doc.history.can_undo, (width, 0), reason="Nothing to undo yet."
-    ):
-        plotter_mode.undo(ctx, tab)
-    imgui.same_line()
-    if widgets.disabled_button(
-        f"{icons.REDO} Redo",
-        doc.history.can_redo,
-        (width, 0),
-        reason="Nothing to redo: this is the newest step.",
-    ):
-        plotter_mode.redo(ctx, tab)
-    if controls.button(
-        f"{len(doc.history)} step(s)##plotter-history",
-        (-1, 0),
-        tooltip="Every step, with the head marked. Click one to go there.",
-    ):
-        imgui.open_popup(HISTORY_POPUP)
-    _history_popup(ctx, tab)
+    widgets.history_block(
+        ctx,
+        tab,
+        key="plotter",
+        undo=lambda: plotter_mode.undo(ctx, tab),
+        redo=lambda: plotter_mode.redo(ctx, tab),
+        step=lambda index: plotter_mode.step_history(ctx, tab, index),
+        opened="(the map as opened)",
+    )
 
 
 def _history_popup(ctx: Any, tab: Any) -> None:
-    """The Undo History panel, as a popover rather than a tenth pane.
-
-    ``inker_menu._history_popup``'s shape and its whole argument: a pane would
-    be a column of one list, on screen all session, for a thing reached when
-    something has gone wrong -- and it would want a share, a floor, a help
-    target and a place in every saved layout.
-
-    **It holds no list of its own.** The rows are ``UndoStack.history()`` and a
-    click is ``step_to``, so what is drawn is what the stack holds -- which is
-    how an undo panel goes wrong, by keeping a copy that drifts once the byte
-    budget evicts a step.
-
-    The step count was already on screen and was already the right label for
-    this; making it the button is one control rather than two, and it is the
-    thing a reader is looking at when they want the list.
-    """
-    from imgui_bundle import imgui
-
-    if not imgui.begin_popup(HISTORY_POPUP):
-        return
-    widgets.popup_chrome(_imgui=imgui)
-    history = tab.doc.history
-    steps = history.history()
-    done = sum(1 for _label, is_done in steps if is_done)
-    widgets.secondary(f"{len(steps)} step(s)")
-    imgui.separator()
-    if controls.selectable("(the map as opened)##plotter-undo-0", done == 0)[0]:
-        plotter_mode.step_history(ctx, tab, 0)
-    for index, (label, is_done) in enumerate(steps):
-        # The *count of done steps* this row stands for, which is the number
-        # ``step_to`` takes: row 0 is "one step done".
-        wanted = index + 1
-        at_head = is_done and wanted == done
-        row = f"{label}  <" if at_head else (label if is_done else f"{label}  (undone)")
-        if controls.selectable(f"{row}##plotter-undo{index}", at_head)[0]:
-            plotter_mode.step_history(ctx, tab, wanted)
-    imgui.end_popup()
+    """The Undo History popover, by the name the smoke test opens it under.
+    The drawing is ``widgets.history_popup``, shared with every bridge."""
+    widgets.history_popup(
+        HISTORY_POPUP,
+        tab,
+        lambda index: plotter_mode.step_history(ctx, tab, index),
+        key="plotter",
+        opened="(the map as opened)",
+    )
 
 
 def _recent(ctx: Any) -> None:

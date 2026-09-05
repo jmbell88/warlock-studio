@@ -379,7 +379,7 @@ def _phases(recipe: Any) -> tuple[Any, bool]:
             f"{phase.name}##fl-phase-{i}", int(phase.frames), 1, 60
         )
         imgui.same_line()
-        l_changed, loop = controls.checkbox(f"loop##fl-loop-{i}", bool(phase.loop))
+        l_changed, loop = controls.checkbox(f"Loop##fl-loop-{i}", bool(phase.loop))
         if f_changed or l_changed:
             phases[i] = replace(phase, frames=int(frames), loop=bool(loop))
             changed = True

@@ -675,3 +675,12 @@ def redo(ctx: Any, tab: Any) -> None:
     tab.doc.redo()
     tab.render_dirty = True
     clamp_caret(ctx, tab)
+
+
+def step_history(ctx: Any, tab: Any, index: int) -> bool:
+    """Jump to a position in the undo stack -- the history popover's door,
+    carrying :func:`undo`'s side effects for :func:`undo`'s reason."""
+    moved = tab.doc.history.step_to(tab.doc, index)
+    tab.render_dirty = True
+    clamp_caret(ctx, tab)
+    return moved

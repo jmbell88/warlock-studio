@@ -163,7 +163,7 @@ def _float_bar(ctx: Any, state: Any, tab: Any) -> None:
         tab.doc.commit_floating()
     elif hit == "cancel":
         tab.doc.cancel_floating()
-    imgui.separator()
+    widgets.divider()
 
 
 def _gesture_bar(ctx: Any, state: Any, tab: Any) -> None:
@@ -194,7 +194,7 @@ def _gesture_bar(ctx: Any, state: Any, tab: Any) -> None:
         inker_mode.commit_gesture(state, tab)
     elif hit == "cancel":
         state.clear_gesture()
-    imgui.separator()
+    widgets.divider()
 
 
 def _selection_bar(ctx: Any, state: Any, tab: Any) -> None:
@@ -266,7 +266,7 @@ def _tool_bar(ctx: Any, state: Any, tab: Any) -> None:
         imgui.open_popup(OPTIONS_POPUP)
     _dynamics_popup(ctx, state, tab, behind)
     _panels_popup(ctx, state, tab)
-    imgui.separator()
+    widgets.divider()
 
 
 def symmetry_trailing(ctx: Any, state: Any) -> Any:
@@ -432,7 +432,7 @@ def _symmetry_popup(ctx: Any, state: Any) -> None:
             if changed:
                 _symmetry_hit(ctx, state, f"sym/{axis}")
                 axes = brush.axes_of(state.symmetry)
-        imgui.separator()
+        widgets.divider()
         changed, _radial = controls.checkbox(
             "Radial##popsym/radial", RADIAL_AXIS in axes
         )
@@ -453,7 +453,7 @@ def _symmetry_popup(ctx: Any, state: Any) -> None:
                 state.radial_count = int(count)
                 inker_mode.persist(ctx)
         _symmetry_axis(ctx, state)
-        imgui.separator()
+        widgets.divider()
         # Disabled rather than hidden: a reset that appears only once something
         # is set is a control the user cannot learn is there.
         dirty = bool(axes) or state.symmetry_axis is not None or (
@@ -555,11 +555,11 @@ def _view_popup(ctx: Any, state: Any) -> None:
         if imgui.is_item_deactivated_after_edit():
             inker_mode.persist(ctx)
         _op_row(ctx, inker_ops, "grid_from_selection")
-        imgui.separator()
+        widgets.divider()
         for key in ("toggle_rulers", "toggle_pixel_grid", "toggle_layer_edges",
                     "toggle_tile_numbers"):
             _op_row(ctx, inker_ops, key)
-        imgui.separator()
+        widgets.divider()
         widgets.muted("This document")
         for mode, label in inker_ops.TILED_MODES:
             _op_row(ctx, inker_ops, f"tiled_{mode}", label=label)

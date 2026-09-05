@@ -317,6 +317,9 @@ def _row(ctx: Any, state: Any, tab: Any, source: Any, editable: bool) -> None:
             # exported sidecar does not carry.
             packwright_mode.rename_source(ctx, tab, source.uid, name)
         _pivot_row(ctx, tab, source)
-        if widgets.destructive_button(f"{icons.TRASH} Remove", (-1, 0)):
+        # Remove, not Delete: the source leaves this atlas and the file it
+        # came from is untouched. ``MINUS`` is the detach glyph; ``TRASH`` is
+        # for what destroys the thing (2026-09-05).
+        if controls.button(f"{icons.MINUS} Remove", (-1, 0)):
             packwright_mode.remove_source(ctx, source.uid, tab)
     imgui.pop_id()

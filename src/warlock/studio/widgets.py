@@ -762,6 +762,178 @@ def busy(label: str, *, note: str = "") -> None:
         muted(note)
 
 
+# --- one transport, one history block, one divider (2026-09-05) --------------
+
+
+def transport_label(playing: bool, *, shortcut: str = "Space") -> tuple[str, str, str]:
+    """``(label, glyph, tooltip)`` for a play/stop control.
+
+    The second consistency pass found the transport spelt six ways across
+    seven panes: "Pause" over a stop square in Troupe, no glyph in three
+    places, the shortcut inside the label in Sirens and inside the tooltip in
+    Inker, and a *primary* Play in Muse. One vocabulary: ``PLAY``/``SQUARE``
+    (the icon set has no pause glyph -- lucide 0.525.0 pinned to the
+    codepoints in ``icons.py``, and inventing one would draw a box), "Play"
+    or "Stop", and the shortcut in the tooltip where every other control
+    keeps its chord. The two toolbar-drawn transports build their
+    ``toolbar.Item`` from this so the row and the button agree.
+    """
+    label = "Stop" if playing else "Play"
+    glyph = icons.SQUARE if playing else icons.PLAY
+    tooltip = f"{label} ({shortcut})" if shortcut else label
+    return label, glyph, tooltip
+
+
+def transport(
+    key: str,
+    playing: bool,
+    *,
+    enabled: bool = True,
+    reason: str = "",
+    size: tuple[float, float] = (0, 0),
+    shortcut: str = "Space",
+    tooltip: str = "",
+) -> bool:
+    """The play/stop button, as :func:`transport_label` spells it. -> clicked.
+
+    Never primary: a transport is not a pane's commit verb, and the accent is
+    reserved for the one action per group that *is*.
+    """
+    label, glyph, tip = transport_label(playing, shortcut=shortcut)
+    return disabled_button(
+        f"{glyph} {label}##transport-{key}", enabled, size, reason=reason, tooltip=tooltip or tip
+    )
+
+
+def frame_counter(index: int, total: int, *, extra: str = "") -> None:
+    """``Frame 3 of 12`` -- muted, one spelling. Was ``3/12`` in Inker's
+    preview, ``frame 3 of 12`` in Troupe's and ``Frame 3 of 12, tile 4`` in
+    Plotter's tileset editor."""
+    text = f"Frame {int(index) + 1} of {int(total)}"
+    muted(f"{text}, {extra}" if extra else text)
+
+
+def divider() -> None:
+    """The rule between two groups in a pane -- ``controls.menu_separator``'s
+    twin for everything that is not a menu. Forty raw ``imgui.separator()``
+    calls sat in the panes beside a control layer whose whole point is that
+    nothing presentational is drawn from a pane directly; the AST guard now
+    refuses the raw call and this is the door."""
+    imgui.separator()
+
+
+def popup_title(label: str) -> None:
+    """A popup's heading: the label face over a rule.
+
+    "Map properties", "Go to coordinate", "New canvas" and "Map size" were
+    each ``imgui.text`` in body face followed by a bare separator, so a popup
+    announced itself in the register of its own body copy while every pane
+    heading used ``fonts.label``. Same face as :func:`section`, without the
+    block and the gap a section carries -- a popup is small and starts at its
+    own padding.
+    """
+    with fonts.label(imgui):
+        imgui.text(label)
+    divider()
+
+
+#: The heading every workspace's in-app exits sit under. Clay, Packwright and
+#: Troupe had it; Inker's exits were under "Generation", Plotter had none on
+#: screen at all, and Sirens' were under its Export block (2026-09-05).
+EXITS_HEADING = "Take it somewhere"
+
+
+def exits() -> None:
+    section(EXITS_HEADING)
+
+
+#: The two refusals every Undo/Redo pair prints. One spelling.
+_UNDO_WHY = "Nothing to undo yet."
+_REDO_WHY = "Nothing to redo: this is the newest step."
+
+
+def history_rows(tab: Any, step: Any, *, key: str, opened: str) -> None:
+    """The undo stack as selectable rows, head marked; a click is ``step``.
+
+    **Holds no list of its own.** The rows are ``UndoStack.history()`` and a
+    click hands the *count of done steps* to ``step`` -- which is the mode's
+    door (``plotter_mode.step_history``: a jump can undo an object selection
+    out of existence, and a pane calling the stack directly would leave the
+    Properties pane pointing at an object no layer holds). Inker's popover
+    called ``history.step_to`` itself until 2026-09-05, the thing Plotter's
+    docstring forbids.
+    """
+    history = tab.doc.history
+    steps = history.history()
+    done = sum(1 for _label, is_done in steps if is_done)
+    secondary(f"{len(steps)} step(s)")
+    divider()
+    if controls.selectable(f"{opened}##{key}-undo-0", done == 0)[0]:
+        step(0)
+    for index, (label, is_done) in enumerate(steps):
+        wanted = index + 1
+        at_head = is_done and wanted == done
+        row = f"{label}  <" if at_head else (label if is_done else f"{label}  (undone)")
+        if controls.selectable(f"{row}##{key}-undo{index}", at_head)[0]:
+            step(wanted)
+
+
+def history_popup(popup: str, tab: Any, step: Any, *, key: str, opened: str) -> None:
+    """The Undo History panel as a popover rather than a tenth pane: a pane
+    would be a column of one list, on screen all session, for a thing reached
+    when something has gone wrong."""
+    if not imgui.begin_popup(popup):
+        return
+    popup_chrome(_imgui=imgui)
+    history_rows(tab, step, key=key, opened=opened)
+    imgui.end_popup()
+
+
+def history_block(
+    ctx: Any,
+    tab: Any,
+    *,
+    key: str,
+    undo: Any,
+    redo: Any,
+    step: Any = None,
+    opened: str = "(the document as opened)",
+) -> None:
+    """Undo, Redo and the step count, in every bridge pane.
+
+    Four bridges drew this pair by hand -- each with the comment "while Inker
+    drew the same pair twice", and Inker's bridge drew it zero times; Plotter
+    alone made the count a button onto the history popover, Clay had the
+    ``step_history`` door with no caller. One block: the pair, and the count
+    as the popover's button wherever the mode has a ``step`` door. ``undo`` and
+    ``redo`` are the *mode's* functions rather than ``tab.doc.undo()`` so the
+    button and the chord carry the same side effects.
+    """
+    doc = tab.doc
+    width = grid_width(2)
+    if disabled_button(
+        f"{icons.UNDO} Undo##{key}-undo", doc.history.can_undo, (width, 0), reason=_UNDO_WHY
+    ):
+        undo()
+    imgui.same_line()
+    if disabled_button(
+        f"{icons.REDO} Redo##{key}-redo", doc.history.can_redo, (width, 0), reason=_REDO_WHY
+    ):
+        redo()
+    count = f"{len(doc.history)} step(s)"
+    if step is None:
+        muted(count)
+        return
+    popup = f"{key}-undo-history"
+    if controls.button(
+        f"{count}##{key}-history",
+        (-1, 0),
+        tooltip="Every step, with the head marked. Click one to go there.",
+    ):
+        imgui.open_popup(popup)
+    history_popup(popup, tab, step, key=key, opened=opened)
+
+
 def combo(
     label: str,
     value: str,

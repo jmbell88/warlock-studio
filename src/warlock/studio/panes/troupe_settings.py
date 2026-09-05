@@ -115,7 +115,9 @@ def _existing_mesh(ctx: Any, form: dict[str, Any]) -> None:
     busy = ctx.busy(f"troupe-send:{current}")
     if busy:
         widgets.busy("Sending")
-    if widgets.disabled_button(verbs.send_to("troupe"), not busy, (-1, 0)):
+    # The pane's commit verb, so it is the primary -- the rank the same verb
+    # has in Clay's and Packwright's bridges.
+    if widgets.primary_button(verbs.send_to("troupe"), (-1, 0), enabled=not busy):
         troupe_mode.send_to_troupe(ctx, chosen, form)
     widgets.cost_note(
         "A mesh that is not rigged is rigged first, as a humanoid. Then the "

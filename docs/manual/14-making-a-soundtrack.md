@@ -106,8 +106,8 @@ to about a third, then a loop point so it sustains there.
 
 One pattern is one bar of one idea. A song is several patterns in an order.
 
-In the **Order** panel, press **+ Pattern** for a second one, write something different into it, then
-press **+ To order** to append it. The two lists are deliberately separate: adding a pattern does not
+In the **Order** panel, press **+ Add a pattern** for a second one, write something different into it,
+then press **+ Add to the order** to append it. The two lists are deliberately separate: adding a pattern does not
 put it in the order, and removing an order entry does not delete the pattern — which is what lets one
 pattern appear in the order three times.
 

@@ -92,11 +92,14 @@ def draw(ctx: Any) -> None:
     # ``_pipeline``. The Export block above stays named for what it writes: it
     # produces files for another application, not a move inside the app.
     widgets.section("Take it somewhere")
-    if widgets.disabled_button(
-        f"{icons.UPLOAD} {verbs.EXPORT_TO_LIBRARY} (Ctrl+E)",
-        ready and packed,
+    # Primary, as Clay's is: the same verb is the same rank in every bridge.
+    # The chord is in the tooltip, where every other control keeps its own.
+    if widgets.primary_button(
+        f"{icons.UPLOAD} {verbs.EXPORT_TO_LIBRARY}",
         (-1, 0),
+        enabled=ready and packed,
         reason=busy_why if not ready else packed_why,
+        tooltip="Ctrl+E",
     ):
         packwright_mode.export_library(ctx, tab)
     widgets.muted_wrapped(
@@ -116,23 +119,14 @@ def _history(ctx: Any, tab: Any) -> None:
     ``tab.doc.undo()`` here, so the button and the chord carry the same side
     effects (see the history block in that module).
     """
-    from imgui_bundle import imgui
-
-    doc = tab.doc
-    width = widgets.grid_width(2)
-    if widgets.disabled_button(
-        f"{icons.UNDO} Undo", doc.history.can_undo, (width, 0), reason="Nothing to undo yet."
-    ):
-        packwright_mode.undo(ctx, tab)
-    imgui.same_line()
-    if widgets.disabled_button(
-        f"{icons.REDO} Redo",
-        doc.history.can_redo,
-        (width, 0),
-        reason="Nothing to redo: this is the newest step.",
-    ):
-        packwright_mode.redo(ctx, tab)
-    widgets.muted(f"{len(doc.history)} step(s)")
+    widgets.history_block(
+        ctx,
+        tab,
+        key="packwright",
+        undo=lambda: packwright_mode.undo(ctx, tab),
+        redo=lambda: packwright_mode.redo(ctx, tab),
+        step=lambda index: packwright_mode.step_history(ctx, tab, index),
+    )
 
 
 def _recent(ctx: Any) -> None:

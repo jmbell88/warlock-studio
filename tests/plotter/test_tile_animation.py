@@ -16,6 +16,7 @@ only the real dispatch can catch it.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pytest
@@ -150,6 +151,19 @@ class Widgets:
         self.press = press
         self.icon_buttons: list[tuple[str, bool]] = []
         self.text: list[str] = []
+        # The transport is ``widgets.transport`` since 2026-09-05 (one helper
+        # for every play/stop in the app); it is pressed by the *button*
+        # label the ``Controls`` fake holds, so the two fakes share it.
+        self.controls: Any = None
+
+    def transport(self, key, playing, **_kw) -> bool:
+        label = f"{'Stop' if playing else 'Play'}##tsplay"
+        self.controls.buttons.append(label)
+        return label == self.controls.press
+
+    def frame_counter(self, index, total, *, extra="") -> None:
+        text = f"Frame {index + 1} of {total}"
+        self.text.append(f"{text}, {extra}" if extra else text)
 
     def icon_button(self, label, _tooltip, *, enabled=True, **_kw) -> bool:
         self.icon_buttons.append((label, enabled))
@@ -221,6 +235,7 @@ def _run(monkeypatch, scene, *, icon="", button=""):
     ctx, state, tab, doc = scene
     widgets = Widgets(icon)
     controls = Controls(button)
+    widgets.controls = controls
     monkeypatch.setattr(editor, "widgets", widgets)
     monkeypatch.setattr(editor, "controls", controls)
     editor._animation_tab(ctx, state, tab, doc.tilesets[0], 0)
@@ -314,7 +329,7 @@ def test_the_preview_names_the_frame_it_is_showing(monkeypatch, tab_scene):
     # wide enough that the test's own overhead cannot land it on a neighbour.
     state.tileset_play_at = time.monotonic() - 0.12
     widgets, _controls = _run(monkeypatch, tab_scene)
-    assert any("Frame 2 of 3, tile 1." in line for line in widgets.text)
+    assert any("Frame 2 of 3, tile 1" in line for line in widgets.text)
 
 
 def test_the_preview_says_so_when_it_is_stopped(monkeypatch, tab_scene):

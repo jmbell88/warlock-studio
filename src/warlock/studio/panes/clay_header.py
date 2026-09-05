@@ -85,7 +85,7 @@ def draw(ctx: Any, view: Any = None) -> None:
         imgui.open_popup(PROPORTIONAL_POPUP)
     _snap_popup(state)
     _proportional_popup(state)
-    imgui.separator()
+    widgets.divider()
 
 
 def _items(state: Any) -> list[Any]:

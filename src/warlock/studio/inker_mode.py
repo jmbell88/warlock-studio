@@ -1356,6 +1356,18 @@ def _nudge_viewer(ctx: Any, tab: InkerDoc) -> None:
 # --- closing and guarding ---------------------------------------------------
 
 
+def step_history(ctx: Any, tab: InkerDoc, index: int) -> bool:
+    """Jump to a position in the undo stack -- the history popover's door.
+
+    Here rather than in the pane, ``plotter_mode``'s rule: the popover called
+    ``history.step_to`` and ``invalidate_all`` itself, the one surface onto
+    the stack that bypassed the mode.
+    """
+    moved = tab.doc.history.step_to(tab.doc, index)
+    tab.doc.invalidate_all()
+    return moved
+
+
 def tool_label(ctx: Any) -> str:
     """The active tool's name, for the status bar's shared branch."""
     state = getattr(ctx.state, "inker", None)

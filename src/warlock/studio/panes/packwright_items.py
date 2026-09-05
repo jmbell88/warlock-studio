@@ -61,7 +61,7 @@ def draw(ctx: Any) -> None:
             f"{layout.cell_w} x {layout.cell_h}"
         )
     if tab.packing:
-        widgets.muted("Repacking...")
+        widgets.busy("Repacking")
 
     imgui.dummy((0, sp(tokens.SP_2)))
     by_key = {source.key: source for source in tab.doc.sources}

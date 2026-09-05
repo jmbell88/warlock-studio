@@ -88,7 +88,7 @@ checkpoint alone is larger than the VRAM budget. Both carry the measured figure 
 **Recommended for this GPU** line under the list names the best base model your card can actually
 hold. All of it is skipped on a host with no measurable GPU: an unknown budget is not a shortfall.
 
-**Removing a model.** A downloaded row carries a **Remove** button, and hovering it says how much
+**Deleting a model.** A downloaded row carries a **Delete** button, and hovering it says how much
 removing would actually free. That figure is usually smaller than the download was, and deliberately: the four SDXL 1.0
 recipes share one 7 GB checkpoint, so removing *SDXL 1.0 + Hyper-SD* deletes only its own 0.8 GB
 adapter and leaves the weights the other three are still standing on. The checkpoint goes when the

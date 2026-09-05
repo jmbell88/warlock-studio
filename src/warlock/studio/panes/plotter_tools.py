@@ -468,7 +468,7 @@ def draw(ctx: Any) -> None:
     )
     if hit:
         _hit(ctx, state, hit)
-    imgui.separator()
+    widgets.divider()
 
 
 def terrains_of(doc: Any) -> list[tuple[int, int, Any]]:
@@ -600,10 +600,9 @@ def map_settings_popup(ctx: Any, state: Any, tab: Any) -> None:
         return
     widgets.popup_chrome(_imgui=imgui)
     doc = tab.doc
-    imgui.text("Map properties")
-    imgui.separator()
+    widgets.popup_title("Map properties")
     if tab.busy:
-        widgets.muted("Saving...")
+        widgets.busy("Saving")
         imgui.end_popup()
         return
     widgets.section("Metadata")
@@ -723,8 +722,7 @@ def resize_popup(ctx: Any, state: Any, tab: Any) -> None:
     widgets.popup_chrome(_imgui=imgui)
     # The title says which map this is, because the form under it is a
     # different form on each: an infinite map has no width and height to set.
-    imgui.text("Map size" if tab.doc.infinite else "Resize the map")
-    imgui.separator()
+    widgets.popup_title("Map size" if tab.doc.infinite else "Resize the map")
     _resize_form(ctx, tab)
     imgui.end_popup()
 

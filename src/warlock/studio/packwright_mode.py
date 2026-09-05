@@ -700,6 +700,15 @@ def redo(ctx: Any, tab: Any) -> None:
     _drop_stale_selection(ensure(ctx), tab)
 
 
+def step_history(ctx: Any, tab: Any, index: int) -> bool:
+    """Jump to a position in the undo stack -- the history popover's door,
+    carrying :func:`undo`'s side effects for :func:`undo`'s reason."""
+    moved = tab.doc.history.step_to(tab.doc, index)
+    tab.pack_dirty = True
+    _drop_stale_selection(ensure(ctx), tab)
+    return moved
+
+
 
 def handle_key(ctx: Any, event: Any) -> bool:
     """Packwright's keyboard. Returns whether the key was consumed; the app

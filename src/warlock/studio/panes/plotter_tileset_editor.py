@@ -130,7 +130,7 @@ def draw(ctx: Any) -> None:
     if changed:
         state.tileset_tab = picked
     which = state.tileset_tab if state.tileset_tab in TABS else TABS[0]
-    imgui.separator()
+    widgets.divider()
     if which == "Tiles":
         _tiles_tab(ctx, state, tab, ref, index)
     elif which == "Collision":
@@ -148,7 +148,7 @@ def _tiles_tab(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
     """The atlas at a readable size, and the per-tile form beside it."""
 
     _tile_grid(ctx, state, ref)
-    imgui.separator()
+    widgets.divider()
     local = int(state.editing_tile)
     meta = ref.tileset.meta_of(local)
     widgets.muted(f"Tile {local}")
@@ -653,11 +653,7 @@ def _preview(
         u0, v0, u1, v1 = tileset_ref.uv(shown_id)
         imgui.image(widgets.texture_ref(texture), (side, side), (u0, v0), (u1, v1))
     playing = bool(state.tileset_playing)
-    if controls.button(
-        ("Stop##tsplay" if playing else "Play##tsplay"),
-        (widgets.grid_width(3), 0),
-        selected=playing,
-    ):
+    if widgets.transport("tileset", playing, size=(widgets.grid_width(3), 0), shortcut=""):
         state.tileset_playing = not playing
         # Restart from frame 0 every time, which is what makes Play readable as
         # "show me this animation" rather than "resume wherever the clock is".
@@ -668,7 +664,7 @@ def _preview(
     elif showing is None:
         widgets.muted(f"Stopped. Tile {shown_id}.")
     else:
-        widgets.muted(f"Frame {showing + 1} of {len(frames)}, tile {shown_id}.")
+        widgets.frame_counter(showing, len(frames), extra=f"tile {shown_id}")
 
 
 # --- Terrain -----------------------------------------------------------------
@@ -892,7 +888,7 @@ def _terrain_tab(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
         return
     at = _wangset_at(state, sets)
     wangset = sets[at]
-    imgui.separator()
+    widgets.divider()
     _wang_colours(ctx, state, tab, index, sets, at, wangset)
     if not wangset.colours:
         widgets.muted_wrapped(
@@ -900,7 +896,7 @@ def _terrain_tab(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
             "none has nothing it can say about a tile."
         )
         return
-    imgui.separator()
+    widgets.divider()
     widgets.muted("Tile")
     _tile_grid(ctx, state, ref)
     local = int(state.editing_tile)

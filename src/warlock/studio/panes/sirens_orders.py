@@ -48,7 +48,7 @@ def draw(ctx: Any) -> None:
 
     width = widgets.grid_width(2)
     if widgets.disabled_button(
-        f"{icons.PLUS} Pattern", editable, (width, 0), reason=_BUSY_WHY
+        f"{icons.PLUS} Add a pattern", editable, (width, 0), reason=_BUSY_WHY
     ):
         pattern = doc.add_pattern()
         sirens_mode.request_rerender(ctx, tab)
@@ -70,7 +70,7 @@ def draw(ctx: Any) -> None:
     else:
         add_why = _BUSY_WHY
     if widgets.disabled_button(
-        f"{icons.PLUS} To order", addable, (width, 0), reason=add_why
+        f"{icons.PLUS} Add to the order", addable, (width, 0), reason=add_why
     ):
         current = state.pattern or doc.patterns[0].uid
         if doc.set_order(list(doc.order) + [current]):
@@ -146,7 +146,7 @@ def _order(ctx: Any, state: Any, tab: Any, editable: bool) -> None:
         # The *entry*, not the pattern (S3): a chorus at 00 and 03 used to draw
         # both rows highlighted at once, because a uid cannot tell them apart.
         selected = state.pattern == uid and state.order_index in (None, index)
-        mark = f"{icons.REFRESH} " if looping and doc.loop_order == index else ""
+        mark = f"{icons.UNDO} " if looping and doc.loop_order == index else ""
         if controls.selectable(
             f"{index:02d}  {mark}{_name_of(doc, uid)}###sirens-order-{index}", selected
         )[0]:
@@ -204,7 +204,7 @@ def _order(ctx: Any, state: Any, tab: Any, editable: bool) -> None:
         sirens_mode.request_rerender(ctx, tab)
     if 0 <= doc.loop_order < len(order):
         widgets.muted(
-            f"{icons.REFRESH} back to {doc.loop_order:02d}  "
+            f"{icons.UNDO} back to {doc.loop_order:02d}  "
             f"{_name_of(doc, order[doc.loop_order])}"
         )
 

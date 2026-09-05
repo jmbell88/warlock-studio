@@ -121,10 +121,12 @@ def _actions(ctx: Any, job: dict[str, Any], job_id: str) -> None:
     """
     ready = str(job.get("status") or "") == "done"
     playing = muse_mode.is_playing(ctx, job_id)
-    if widgets.ghost_button(
-        "Stop" if playing else "Play",
+    if widgets.transport(
+        f"muse-{job_id}",
+        playing,
         enabled=ready,
         reason="" if ready else "this take has not finished yet",
+        shortcut="",
     ):
         if playing:
             muse_mode.stop(ctx)
@@ -281,12 +283,12 @@ def derive_popup(ctx: Any) -> None:
     widgets.pane_title(label)
     if note:
         widgets.muted_wrapped(note)
-    imgui.separator()
+    widgets.divider()
 
     for name in muse_mode.DERIVE_CONTROLS[task]:
         _derive_field(ctx, derive, name, task)
 
-    imgui.separator()
+    widgets.divider()
     _, derive["count"] = widgets.labeled_slider_int(
         "How many",
         int(derive["count"]),
@@ -296,7 +298,7 @@ def derive_popup(ctx: Any) -> None:
     )
     widgets.field_error(ctx.state, "count")
 
-    if controls.button("Queue it", role="primary") and muse_mode.derive(ctx):
+    if controls.button("Queue it", role=controls.ButtonRole.PRIMARY) and muse_mode.derive(ctx):
         imgui.close_current_popup()
     imgui.same_line()
     if controls.button("Cancel"):

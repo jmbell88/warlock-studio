@@ -575,7 +575,7 @@ def _row_menu(ctx: Any, doc: Any, layer: Any, editable: bool) -> None:
                     doc.move_layer(layer.uid, len(group.children), parent_uid=group.uid)
                 imgui.pop_id()
             imgui.end_menu()
-        imgui.separator()
+        widgets.divider()
         if controls.menu_item_simple("Duplicate"):
             doc.duplicate_layer(layer.uid)
         if controls.menu_item_simple("Merge down"):
@@ -1037,7 +1037,7 @@ def _object_form(
     layer, obj = found
     widgets.section("Object")
     if not editable:
-        widgets.muted("Saving...")
+        widgets.busy("Saving")
         return
     if layer.locked:
         # Read-only rather than hidden: the form is how you *look* at an

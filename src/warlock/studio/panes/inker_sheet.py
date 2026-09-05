@@ -135,7 +135,7 @@ def draw_strip(ctx: Any, tab: Any) -> None:
     _press(ctx, "sheet_shift", "Shift selection across scope")
 
     # -- row 2: the mirror ---------------------------------------------------
-    imgui.separator()
+    widgets.divider()
     opposite = sheetscope.opposite(run.direction)
     if opposite is None:
         widgets.muted(f"{run.direction} has no mirror direction.")

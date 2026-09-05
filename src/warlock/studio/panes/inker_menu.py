@@ -92,7 +92,7 @@ def _params_popup(ctx: Any, state: Any) -> None:
             return
         values = state.op_params.setdefault(op.name, inker_ops.defaults_for(op))
         imgui.text(op.label.rstrip("."))
-        imgui.separator()
+        controls.menu_separator()
         if op.hint:
             imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + sp(HINT_WRAP))
             widgets.muted(op.hint)
@@ -173,25 +173,15 @@ def _history_popup(ctx: Any, state: Any, tab: Any) -> None:
     with controls.menu_popup(HISTORY_POPUP) as opened:
         if not opened:
             return
-        history = tab.doc.history
-        steps = history.history()
-        widgets.secondary(f"{len(steps)} step(s)")
-        imgui.separator()
-        if controls.selectable("(the document as opened)", not any(done for _label, done in steps))[
-            0
-        ]:
-            history.step_to(tab.doc, 0)
-        for index, (label, done) in enumerate(steps):
-            # The *count of done steps* this row represents, which is the
-            # number ``step_to`` takes: row 0 is "one step done".
-            wanted = index + 1
-            at_head = done and (index + 1 == sum(1 for _l, d in steps if d))
-            row = f"{label}{'  <' if at_head else ''}"
-            if not done:
-                row = f"{label}  (undone)"
-            if controls.selectable(f"{row}##undo{index}", at_head)[0]:
-                history.step_to(tab.doc, wanted)
-                tab.doc.invalidate_all()
+        # The rows are ``widgets.history_rows``, shared with every bridge; a
+        # click is ``inker_mode.step_history``, the mode's door, where this
+        # popover called ``history.step_to`` itself until 2026-09-05.
+        widgets.history_rows(
+            tab,
+            lambda index: inker_mode.step_history(ctx, tab, index),
+            key="inker",
+            opened="(the document as opened)",
+        )
 
 
 def _shortcut_rows() -> list[tuple[str, str, str, str, str]]:
@@ -290,7 +280,7 @@ def _shortcuts_popup(ctx: Any, state: Any) -> None:
                 widgets.muted("Refine the search to see more entries.")
                 break
         if state.shortcut_target:
-            imgui.separator()
+            controls.menu_separator()
             state.shortcut_draft = widgets.input_text(
                 "Bindings##shortcut-bindings", state.shortcut_draft, max_length=160
             )
@@ -322,7 +312,7 @@ def _shortcuts_popup(ctx: Any, state: Any) -> None:
                     state, kind, target, state.shortcut_context, state.shortcut_trigger
                 )
                 inker_mode.persist(ctx)
-        imgui.separator()
+        controls.menu_separator()
         if controls.button("Copy JSON##shortcut-export"):
             imgui.set_clipboard_text(inker_ops.shortcuts_json(state.shortcut_overrides))
             state.say("Shortcut overrides copied as JSON.")

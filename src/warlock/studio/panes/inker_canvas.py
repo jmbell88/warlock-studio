@@ -334,7 +334,7 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
             # re-renders every frame and cannot say this every time, but the
             # user is looking at this row the whole while.
             widgets.muted("Too big for RotSprite -- turning with nearest neighbour.")
-    imgui.separator()
+    widgets.divider()
 
 
 def _transform_action(ctx: Any, doc: Any, key: str) -> None:
@@ -446,13 +446,13 @@ def new_popup(ctx: Any) -> None:
     if not imgui.begin_popup("new-canvas"):
         return
     widgets.popup_chrome(_imgui=imgui)
-    imgui.text("New canvas")
+    widgets.popup_title("New canvas")
     for width, height in inker_mode.NEW_PRESETS:
         if controls.button(f"{width} x {height}", (sp(160), 0)):
             inker_mode.new_document(ctx, width, height)
             imgui.close_current_popup()
 
-    imgui.separator()
+    widgets.divider()
     key = "inker_new_size"
     width, height = ctx.state.preview.get(key) or inker_mode.NEW_PRESETS[1]
     imgui.set_next_item_width(sp(72))

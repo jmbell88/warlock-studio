@@ -65,7 +65,7 @@ def draw(ctx: Any) -> None:
         _add(ctx, state, tab)
     imgui.same_line()
     if widgets.disabled_button(
-        f"{icons.TRASH} Remove",
+        f"{icons.TRASH} Delete",
         editable and state.oneshot is not None,
         (width, 0),
         reason=busy_why if editable else "No sound effect is selected.",

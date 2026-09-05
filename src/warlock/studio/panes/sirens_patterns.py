@@ -193,7 +193,7 @@ def _channel_popup(ctx: Any, tab: Any, channel: Any, index: int) -> None:
         )
         if changed:
             sirens_mode.update_channel(ctx, channel.uid, name=str(name)[: inst.MAX_NAME_LEN])
-        imgui.text("Voice")
+        widgets.field_label("Voice")
         imgui.set_next_item_width(sp(140))
         # ``##``-hidden with the name above: imgui puts a combo's label to its
         # right, where it is simply not drawn -- ``sirens_instruments``' note.

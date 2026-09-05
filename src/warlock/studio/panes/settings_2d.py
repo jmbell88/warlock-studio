@@ -1874,7 +1874,7 @@ def _plan_footer(ctx: Any, form: dict[str, Any]) -> None:
     the first problem as its tooltip and this is the list.
     """
     imgui.dummy((0, sp(8)))
-    imgui.separator()
+    widgets.divider()
     _generation_plan(ctx, form, problems_for(ctx, form))
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from pathlib import Path
 
 import pytest
 
@@ -289,3 +290,141 @@ def test_export_waits_for_a_save_in_every_document_mode():
     assert not docmodes.blocked_while_writing(saving, "c")
     playing = SimpleNamespace(saving=False, busy=True)
     assert docmodes.blocked_while_writing(playing, "z")
+
+
+# --- feel the same: transports, verbs, glyphs, busy, bridges (B1-B13) --------
+
+
+def _pane_sources() -> dict[str, str]:
+    from warlock.studio import panes
+
+    root = Path(panes.__file__).parent
+    return {path.name: path.read_text(encoding="utf-8") for path in root.glob("*.py")}
+
+
+def test_every_transport_is_the_one_helper():
+    """Six spellings across seven panes -- "Pause" over a stop square, no
+    glyph, the chord in the label, a primary Play."""
+    from warlock.studio import widgets
+
+    sources = _pane_sources()
+    for name in (
+        "sirens_transport.py",
+        "inker_preview.py",
+        "muse_player.py",
+        "muse_results.py",
+        "plotter_tileset_editor.py",
+    ):
+        assert "widgets.transport(" in sources[name], name
+    for name in ("inker_timeline.py", "troupe_preview.py"):
+        assert "widgets.transport_label(" in sources[name], name
+    for name, text in sources.items():
+        assert '"Pause"' not in text, name
+        assert re.search(r'"Stop" if .* else "Play"', text) is None, name
+    label, glyph, tip = widgets.transport_label(True)
+    assert (label, tip) == ("Stop", "Stop (Space)")
+    assert widgets.transport_label(False)[0] == "Play"
+    assert widgets.transport_label(False, shortcut="")[2] == "Play"
+
+
+def test_frame_counters_are_one_spelling():
+    sources = _pane_sources()
+    for name in ("inker_preview.py", "troupe_preview.py", "plotter_tileset_editor.py"):
+        assert "widgets.frame_counter(" in sources[name], name
+    for name in ("inker_preview.py", "troupe_preview.py", "plotter_tileset_editor.py"):
+        assert 'f"frame {' not in sources[name], name
+        assert 'imgui.text(f"{index + 1}/' not in sources[name], name
+
+
+def test_delete_destroys_and_remove_detaches():
+    """Sirens said Remove for an instrument it destroys; Packwright said
+    Remove with a trash glyph for a source whose file stays on disk."""
+    sources = _pane_sources()
+    assert 'f"{icons.TRASH} Remove"' not in sources["sirens_instruments.py"]
+    assert 'f"{icons.TRASH} Delete"' in sources["sirens_instruments.py"]
+    assert 'f"{icons.TRASH} Delete"' in sources["sirens_effects.py"]
+    assert 'f"{icons.MINUS} Remove"' in sources["packwright_sources.py"]
+    for name, text in sources.items():
+        assert "TRASH} Remove" not in text, name
+
+
+def test_zoom_wears_the_zoom_glyphs_and_no_icon_is_an_empty_string():
+    from warlock.studio import icons
+
+    sources = _pane_sources()
+    assert "icons.ZOOM_OUT}##palette-zoom-out" in sources["plotter_tileset.py"]
+    assert "icons.ZOOM_IN}##palette-zoom-in" in sources["plotter_tileset.py"]
+    for name in dir(icons):
+        if name.isupper():
+            assert getattr(icons, name) != "", f"icons.{name} draws nothing"
+
+
+def test_a_shortcut_lives_in_the_tooltip_never_in_the_label():
+    sources = _pane_sources()
+    for name, text in sources.items():
+        assert not re.search(r'f?"\{icons\.\w+\} [^"\n]*\((Ctrl\+\w+|Space|R)\)"', text), name
+        assert "(Ctrl+E)" not in text and "(Space)\"" not in text and "Repack (R)" not in text, name
+
+
+def test_every_bridge_has_one_primary_and_the_exits_heading():
+    """Packwright's library export was a plain button where Clay's is the
+    primary; Troupe's Send and Sirens' export had no primary at all; Plotter
+    had no exit on screen and Inker's sat under "Generation"."""
+    from warlock.studio import widgets
+
+    sources = _pane_sources()
+    for name in ("packwright_bridge.py", "sirens_bridge.py", "troupe_settings.py"):
+        assert "widgets.primary_button(" in sources[name], name
+    for name in (
+        "clay_bridge.py",
+        "packwright_bridge.py",
+        "troupe_bridge.py",
+        "plotter_bridge.py",
+        "sirens_bridge.py",
+        "inker_generate.py",
+    ):
+        heading = f'"{widgets.EXITS_HEADING}"'
+        assert "widgets.exits()" in sources[name] or heading in sources[name], name
+    assert 'widgets.section("Model file")' in sources["clay_bridge.py"]
+    assert 'section("Document")' not in sources["clay_bridge.py"]
+    for name, text in sources.items():
+        assert 'role="primary"' not in text, name
+
+
+def test_every_bridge_draws_the_one_history_block():
+    """Four bridges drew the pair by hand, each saying Inker drew it twice;
+    Inker drew it nowhere, and its popover stepped the stack directly."""
+    from warlock.studio import inker_mode, packwright_mode, sirens_mode
+
+    sources = _pane_sources()
+    for name in (
+        "clay_bridge.py",
+        "plotter_bridge.py",
+        "packwright_bridge.py",
+        "sirens_bridge.py",
+        "inker_generate.py",
+    ):
+        assert "widgets.history_block(" in sources[name], name
+        assert "Nothing to undo yet." not in sources[name], name
+    assert "widgets.history_rows(" in sources["inker_menu.py"]
+    assert "history.step_to(" not in sources["inker_menu.py"]
+    assert "widgets.recent_files(" in sources["inker_generate.py"]
+    for module in (inker_mode, packwright_mode, sirens_mode):
+        assert callable(module.step_history)
+
+
+def test_busy_is_one_spelling():
+    sources = _pane_sources()
+    for name, text in sources.items():
+        assert not re.search(r'widgets\.muted\((f?)"[A-Z][a-z]+ing\.\.\."\)', text), name
+
+
+def test_no_pane_draws_a_raw_separator_or_a_heading_as_body_text():
+    from warlock.studio import widgets
+
+    sources = _pane_sources()
+    for name, text in sources.items():
+        assert "imgui.separator()" not in text, name
+        for title in ("Map properties", "Go to coordinate", "New canvas", "Resize the map"):
+            assert f'imgui.text("{title}"' not in text, (name, title)
+    assert callable(widgets.divider) and callable(widgets.popup_title)

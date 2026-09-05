@@ -269,7 +269,7 @@ def _controls(
 
     poses = (ctx.state.preview or {}).get("poses") or []
     if poses:
-        imgui.text("Rows")
+        widgets.field_label("Rows")
         for pose in poses:
             checked = pose["id"] in form["poses"]
             # The pose id, not a fixed "##row": two poses may share a name, and

@@ -28,11 +28,12 @@ is worse than a menu row.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import anchors, inker_mode, inker_ops, widgets
+from .. import anchors, inker_mode, inker_ops, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_menu
@@ -77,8 +78,22 @@ def draw(ctx: Any) -> None:
             save_as=lambda: inker_mode.save_as(ctx, tab),
             saving=tab.busy,
         )
-        imgui.dummy((0, sp(8)))
-    widgets.section("Generation")
+        imgui.dummy((0, sp(tokens.SP_2)))
+        # The Undo/Redo pair and the history popover every other bridge
+        # draws. Four bridges' comments said "while Inker drew the same pair
+        # twice"; it drew it nowhere (2026-09-05).
+        widgets.history_block(
+            ctx,
+            tab,
+            key="inker",
+            undo=lambda: tab.doc.undo(),
+            redo=lambda: tab.doc.redo(),
+            step=lambda index: inker_mode.step_history(ctx, tab, index),
+        )
+        imgui.dummy((0, sp(tokens.SP_2)))
+    # Inker's exits -- Make 3D, Save as reference, Add to Packwright -- under
+    # the heading every workspace puts over the same verbs.
+    widgets.exits()
     # After the heading, never before it: ``help_button`` is a ``same_line``.
     manual_render.help_button(ctx, "inker-generate")
 
@@ -96,6 +111,13 @@ def draw(ctx: Any) -> None:
         imgui.dummy((0, sp(4)))
 
     _link(tab)
+    if tab is None:
+        # The recent list, which every other bridge offers and this one did
+        # not; ``inker_mode.recent_paths`` existed with no pane reading it.
+        widgets.recent_files(
+            inker_mode.recent_paths(ctx),
+            lambda path: inker_mode.open_path(ctx, Path(path)),
+        )
 
 
 def link_line(tab: Any) -> str:

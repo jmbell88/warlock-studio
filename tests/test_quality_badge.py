@@ -82,4 +82,4 @@ def test_the_inspector_reports_visible_openings_from_the_audit(monkeypatch):
 
     inspector._quality(None, _job(worst=0.05))
 
-    assert "visible openings: 5.0%" in lines
+    assert "visible openings: 5%" in lines

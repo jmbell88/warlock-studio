@@ -1066,7 +1066,7 @@ def _lora_import_form(ctx: Any) -> None:
     form = ctx.state.preview.get("lora_import")
     if not form:
         return
-    widgets.muted(f"Importing {Path(form['source']).name}")
+    widgets.busy(f"Importing {Path(form['source']).name}")
     # ``on_edit``: this form read the recorded refusal and never cleared it, so
     # a ring could only be dismissed by a *successful* submit.
     with forms.Form(
@@ -1256,7 +1256,7 @@ def _remove_control(ctx: Any, row: dict[str, Any], busy: bool) -> None:
         found = ctx.progress(key)
         widgets.progress_bar(float(found.get("percent") or 0.0) if found else 0.0)
         return
-    if widgets.disabled_button(f"{icons.TRASH} Remove##{row_key}", not busy):
+    if widgets.disabled_button(f"{icons.TRASH} Delete##{row_key}", not busy):
         _confirm_removal(ctx, row)
     freed = float(row.get("freed_gib") or 0.0)
     if freed and imgui.is_item_hovered():

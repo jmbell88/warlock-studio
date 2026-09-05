@@ -198,7 +198,7 @@ def _context_menu(ctx: Any, state: Any, doc: Any, obj: Any) -> None:
         clay_mode._duplicate_selection(ctx, state, doc)
     if controls.menu_item(f"{icons.EYE} Solo", "", False)[0]:
         doc.isolate([obj.uid])
-    imgui.separator()
+    widgets.divider()
     if controls.menu_item(f"{icons.TRASH} Delete", "Del", False)[0]:
         doc.remove_object(obj.uid)
     imgui.end_popup()
