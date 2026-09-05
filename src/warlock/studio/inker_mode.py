@@ -95,7 +95,26 @@ SAVE_AS_FILTER = ORA_FILTER + ASEPRITE_FILTER
 # saved *somewhere else*, deliberately, through the Save As the user sees.
 WRITABLE_SUFFIXES = (".ora", ".png")
 
-NEW_PRESETS = ((512, 512), (1024, 1024), (2048, 2048))
+# The sizes the New dialog offers, smallest first. The four under 512 are the
+# reason this list changed: Inker is a pixel-art editor and its own Manual
+# walks the reader through a 32x32 sprite and a 128x128 spell effect, neither
+# of which the three square presets it used to carry could make -- so the
+# tutorial's first instruction was to ignore the dialog and type.
+NEW_PRESETS = (
+    (32, 32),
+    (64, 64),
+    (128, 128),
+    (256, 256),
+    (512, 512),
+    (1024, 1024),
+    (2048, 2048),
+)
+
+#: The size a new canvas is unless the user says otherwise. **A constant, not
+#: ``NEW_PRESETS[1]``**, which is what it used to be read as: an index into a
+#: list that is expected to grow is a default that moves silently the next
+#: time somebody adds a size to the front of it.
+NEW_DEFAULT = (64, 64)
 
 # The largest canvas the New dialog will make. Not a limit of the engine, which
 # is happy with anything numpy can allocate -- it is a limit on what a *typed*

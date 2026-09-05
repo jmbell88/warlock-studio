@@ -28,10 +28,12 @@ above the canvas — the context bar — and it holds what the tool in your hand
 is under the canvas instead, in the status bar: the cursor position, the layer, the zoom, the seam
 figure and the one word that says whether there is anything unsaved.
 
-**New** offers three square presets and, under them, width and height fields for anything else —
-1920 × 1080, a tall banner, a tile. Sizes are clamped rather than refused, up to 8192 px a side: the
-fields are being typed into, and there is nothing useful to show halfway through a number. The
-figure you get is the one printed on the Create button.
+**New** offers a **Preset** dropdown — 32, 64, 128, 256, 512, 1024 and 2048 square, starting at
+64 × 64 — and, under it, width and height fields for anything the list cannot say: 1920 × 1080, a
+tall banner, a tile. Picking a preset fills the two fields, so a size that is nearly right can be
+nudged by hand rather than typed from scratch. Sizes are clamped rather than refused, up to 8192 px
+a side: the fields are being typed into, and there is nothing useful to show halfway through a
+number. The figure you get is the one printed on the Create button.
 
 Changing the size of a document you already have is a different pair of operations, and they are two
 rows in the **Sprite** menu: **Image size…** (`Ctrl+Alt+I`) resamples the picture, and **Canvas
@@ -767,7 +769,10 @@ Above the grid are the **Blend** mode, the **Opacity** slider, the
 two lock toggles and — on an animated document — the **Cels** toggle, and they always describe the
 *active* layer. Each row in the list is an eye
 (visibility), a thumbnail and the layer's name — hovering a row shows its blend, opacity and locks,
-and a locked layer wears a small padlock beside its name. Under the list is the action strip:
+and a locked layer wears a small padlock beside its name. Rows are faintly banded, every other one,
+so a name can be tracked across to its cels on a stack too tall to hold in the eye; group headers
+are not banded, because they are not layers and banding them would break the alternation of the
+layers under them. Under the list is the action strip:
 **add**, **duplicate**, **group**, **merge down**, **flatten** and **delete**, as icon buttons whose
 names are in their tooltips. Dragging the opacity slider previews live but records a single undo
 step when you let go, rather than one step per pixel of drag.

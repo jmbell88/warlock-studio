@@ -8,12 +8,14 @@ save. None of that needs GL, so none of it is left to the smoke test.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pytest
 
 from warlock.studio import inker, inker_mode, inker_state
 from warlock.studio.inker_state import InkerDoc, InkerState, PaintView
+from warlock.studio.panes import inker_canvas
 
 
 def _tab(name="a.png", path=None, size=(16, 16)):
@@ -1159,6 +1161,75 @@ def test_a_new_document_cannot_be_asked_for_a_gigabyte_by_one_stray_digit():
     ctx = _PaletteCtx()
     doc = inker_mode.new_document(ctx, 20480, 20480)
     assert doc.doc.size == (inker_mode.NEW_MAX, inker_mode.NEW_MAX)
+
+
+def test_the_new_dialog_offers_the_sizes_a_pixel_artist_actually_starts_from():
+    """The three square presets were 512, 1024 and 2048 -- and the Manual's own
+    tutorials walk the reader through a 32x32 sprite and a 128x128 spell, so
+    the first instruction in both was to ignore the presets and type."""
+    from warlock.studio import inker_mode
+
+    assert {(32, 32), (64, 64), (128, 128), (256, 256)} <= set(inker_mode.NEW_PRESETS)
+    assert tuple(sorted(inker_mode.NEW_PRESETS)) == inker_mode.NEW_PRESETS
+    for size in inker_mode.NEW_PRESETS:
+        assert inker_mode.clamp_canvas(*size) == size, "a preset is never clamped"
+
+
+def test_the_default_size_is_a_constant_and_not_a_position_in_the_preset_list():
+    """It was read as ``NEW_PRESETS[1]``. An index into a list that is expected
+    to grow is a default that moves the next time a size is added in front of
+    it -- which is exactly what adding the four small sizes just did."""
+    from warlock.studio import inker_mode
+
+    assert inker_mode.NEW_DEFAULT == (64, 64)
+    assert inker_mode.NEW_DEFAULT in inker_mode.NEW_PRESETS
+
+    source = inspect.getsource(inker_canvas)
+    assert "NEW_PRESETS[1]" not in source
+    assert "inker_mode.NEW_DEFAULT" in source
+
+
+def test_a_typed_size_still_reads_as_a_size_in_the_preset_box():
+    """``widgets.combo`` shows the raw key for a value not in its table, and a
+    typed 1920x1080 is never in the table -- so the key has to be the label,
+    or the box reads one way for a preset and another for a custom size."""
+    for size in inker_mode.NEW_PRESETS:
+        assert inker_canvas._preset_key(size) == f"{size[0]} x {size[1]}"
+    assert inker_canvas._preset_key((1920, 1080)) == "1920 x 1080"
+
+    source = inspect.getsource(inker_canvas.new_popup)
+    assert "_preset_key(size), _preset_key(size)" in source
+
+
+def test_the_empty_screen_offers_one_size_and_the_dialog_for_the_rest():
+    """``nothing_open`` draws its head as the primary and its tail as ghosts,
+    and seven equal buttons would say the seven sizes matter equally -- which
+    is the claim the dropdown exists to stop making."""
+    source = inspect.getsource(inker_canvas._empty)
+    assert "for width, height in inker_mode.NEW_PRESETS" not in source
+    assert "inker_mode.NEW_DEFAULT" in source
+    assert 'imgui.open_popup("new-canvas")' in source
+
+
+def test_the_menu_and_ctrl_n_actually_open_the_new_canvas_dialog():
+    """``inker_ops`` registers New as ``dialog("new-canvas")`` and
+    ``inker_bridge.popups`` hands back any name it does not own, for its owner
+    to answer. Nothing answered: ``new_popup`` never read ``pending_dialog``,
+    and the only ``open_popup`` for the id was the empty-state button, which is
+    off screen the moment a document exists. So File > New and Ctrl+N left the
+    field set for ever and drew nothing."""
+    from warlock.studio import inker_ops
+
+    op = inker_ops.get("new")
+    assert op is not None and op.key == "Ctrl+N"
+
+    source = inspect.getsource(inker_canvas.new_popup)
+    assert 'state.pending_dialog == "new-canvas"' in source
+    assert 'imgui.open_popup("new-canvas")' in source
+    # Cleared before opening, or the popup is re-opened every frame and can
+    # never be dismissed -- ``inker_menu``'s pattern for its own four.
+    opened = source.index('imgui.open_popup("new-canvas")')
+    assert source.index('state.pending_dialog = ""') < opened
 
 
 # --- canvas rotation and the flipped view (Ink9) ------------------------------

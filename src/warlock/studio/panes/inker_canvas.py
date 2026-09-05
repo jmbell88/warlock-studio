@@ -426,6 +426,20 @@ def _transform_trailing(state: Any, doc: Any) -> tuple[float, Any] | None:
     return (width, draw_it)
 
 
+def _preset_key(size: tuple[int, int]) -> str:
+    """How a size is spelled in the dropdown, as both the key and the label.
+
+    A key rather than an index, ``widgets.combo``'s own rule: this table is
+    expected to gain sizes, and an index would silently become a different one
+    the next time it did. The *same* string is the label because a typed size
+    is not in the table at all -- ``combo`` falls back to showing the raw key
+    for a value it does not know, so any second spelling would mean the box
+    reads "1920 x 1080" for a preset and "1920x1080" for a custom size, which
+    is two formats for one thing in one control.
+    """
+    return f"{size[0]} x {size[1]}"
+
+
 def new_popup(ctx: Any) -> None:
     """The presets, and the custom size the presets could not express.
 
@@ -438,29 +452,57 @@ def new_popup(ctx: Any) -> None:
     document, because there is no document yet -- and because reopening the
     dialog after a mistake should offer the number that was nearly right.
 
+    **A dropdown rather than a button per preset.** Three sizes fitted as three
+    buttons; seven is a wall, and six of them would be wrong every time. The
+    combo writes into the same width and height fields a typed size uses, so
+    there is still exactly one commit point -- the Create button, which prints
+    the figure it is about to make -- and picking a preset and then nudging it
+    by hand is one gesture instead of two.
+
     **Public, and drawn by two panes.** A popup belongs to the window that
     begins it, so the bridge panel's New button (the UI redesign, wave 4.2) cannot
     open one registered here: each pane registers its own and opens that one.
     The body is shared rather than copied, which is the whole reason this is
     not a private helper.
     """
+    state = inker_mode.ensure(ctx)
+    if state.pending_dialog == "new-canvas":
+        # **The menu's door, which led nowhere.** ``inker_ops`` registers New
+        # as ``dialog("new-canvas")`` and ``inker_bridge.popups`` hands any
+        # name it does not own back for its owner to answer -- and this, the
+        # owner, never read the field. So File > New and Ctrl+N set it, the
+        # bridge handed it back every frame, and nothing ever opened: the only
+        # ``open_popup`` for this id was the empty-state button, which is off
+        # screen the moment a document exists. Cleared before opening, the
+        # pattern ``inker_menu`` already uses for its four.
+        state.pending_dialog = ""
+        imgui.open_popup("new-canvas")
     if not imgui.begin_popup("new-canvas"):
         return
     widgets.popup_chrome(_imgui=imgui)
     widgets.popup_title("New canvas")
-    for width, height in inker_mode.NEW_PRESETS:
-        if controls.button(f"{width} x {height}", (sp(160), 0)):
-            inker_mode.new_document(ctx, width, height)
-            imgui.close_current_popup()
+    key = "inker_new_size"
+    width, height = ctx.state.preview.get(key) or inker_mode.NEW_DEFAULT
+    width, height = int(width), int(height)
+
+    imgui.set_next_item_width(sp(152))
+    picked = widgets.labeled_combo(
+        "Preset",
+        _preset_key((width, height)),
+        [(_preset_key(size), _preset_key(size)) for size in inker_mode.NEW_PRESETS],
+        sp(152),
+    )
+    for size in inker_mode.NEW_PRESETS:
+        if picked == _preset_key(size) and (width, height) != size:
+            width, height = size
+            ctx.state.preview[key] = size
 
     widgets.divider()
-    key = "inker_new_size"
-    width, height = ctx.state.preview.get(key) or inker_mode.NEW_PRESETS[1]
     imgui.set_next_item_width(sp(72))
-    changed_w, width = controls.input_int("W##newcanvas", int(width), 0)
+    changed_w, width = controls.input_int("W##newcanvas", width, 0)
     imgui.same_line()
     imgui.set_next_item_width(sp(72))
-    changed_h, height = controls.input_int("H##newcanvas", int(height), 0)
+    changed_h, height = controls.input_int("H##newcanvas", height, 0)
     if changed_w or changed_h:
         # Clamped on the way *into* the field as well as on the way out, or the
         # box goes on showing a number that is not what the button would make.
@@ -480,19 +522,23 @@ def _empty(ctx: Any, state: Any) -> None:
     # is the primary and the rest are ghosts (``widgets.nothing_open``'s rule):
     # this screen used to draw five identical buttons, which is a menu claiming
     # every entry matters equally when four of them are variations on one.
+    # One preset, not seven. ``nothing_open`` draws its head as the primary and
+    # its tail as ghosts, and that hierarchy is the whole claim the screen
+    # makes -- seven equal buttons would say the seven sizes matter equally,
+    # which is the thing the dropdown was introduced to stop saying. The one
+    # that gets a button is the default, and every other size is one click
+    # further on, in the popup that lists them all.
+    default_w, default_h = inker_mode.NEW_DEFAULT
     actions = [
         (
-            f"New {width} x {height}",
-            lambda w=width, h=height: inker_mode.new_document(ctx, w, h),
-        )
-        for width, height in inker_mode.NEW_PRESETS
-    ]
-    actions += [
+            f"New {default_w} x {default_h}",
+            lambda: inker_mode.new_document(ctx, default_w, default_h),
+        ),
         # The same popup the bridge panel's New button opens, rather than a
         # second set of fields. ``draw`` registers it in *this* window on the
         # empty branch too, which is what makes opening it by name from here
         # enough.
-        ("New custom size...", lambda: imgui.open_popup("new-canvas")),
+        ("New canvas...", lambda: imgui.open_popup("new-canvas")),
         ("Open a file...", lambda: inker_mode.ask_open(ctx)),
     ]
     widgets.nothing_open(

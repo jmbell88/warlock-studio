@@ -12,8 +12,9 @@ kept through a re-render, an export per phase. Ten minutes.
 
 ## A blank canvas
 
-Open **Inker** from the rail and make a new 128×128 document (`Ctrl+N`). Anything works — a
-sprite you are already animating, too — but a blank canvas shows the effect on its own.
+Open **Inker** from the rail and make a new document at the **128 x 128** preset (`Ctrl+N`).
+Anything works — a sprite you are already animating, too — but a blank canvas shows the effect
+on its own.
 
 ## Insert a fireball
 

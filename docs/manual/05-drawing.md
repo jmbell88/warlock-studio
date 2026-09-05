@@ -12,7 +12,8 @@ This chapter covers still images. The timeline gets [its own chapter](06-animati
 
 ## Getting a canvas
 
-`Ctrl+N` starts a document, `Ctrl+O` opens one. Documents are tabs, and `Ctrl+Tab` cycles them.
+`Ctrl+N` starts a document — a preset dropdown from 32 × 32 up to 2048, or your own width and
+height — and `Ctrl+O` opens one. Documents are tabs, and `Ctrl+Tab` cycles them.
 
 The window is three columns and a strip: colour on the left, canvas in the middle, the toolbox and
 the pipeline bridges on the right, and the timeline — layers down, frames across — always along the
@@ -156,7 +157,7 @@ rather than discovered.
 
 ## Try it
 
-1. `Ctrl+N` for a 32×32 document.
+1. `Ctrl+N`, then pick **32 x 32** from the preset dropdown.
 2. Switch the colour mode to Indexed and build a small palette — six or eight colours.
 3. Set the ink to **Copy** and draw a simple object with the brush on a pixel nib.
 4. Add a layer, set it to **Multiply** at about 60% opacity, and paint shadow on it.
