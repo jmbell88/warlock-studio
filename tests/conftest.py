@@ -363,6 +363,15 @@ def _roomy_device_memory(monkeypatch):
     ``vram.live_memory`` is the status bar's NVML meter, whose tests set
     ``Sampler.reading`` directly and so assert nothing about a live figure.
 
+    Both of those gained an edge onto this one on 2026-09-04 and the pin still
+    holds, in the safe direction. ``device_memory`` now consults
+    ``live_memory`` as its second rung -- but this fixture replaces
+    ``device_memory`` wholesale, so that call never runs and no NVML reading
+    can reach a test through it. And ``probe`` now falls back to
+    ``device_memory`` when torch is *absent*, which on a machine without torch
+    routes it into this pin rather than to None. A test that wants either real
+    reader must say so, as ``real_device_memory`` does.
+
     A full card rather than a plausible one, and a 32 GiB one rather than an
     enormous one: the budget has to clear ``COEXIST_GIB`` so the auto-selected
     mode stays coexist, which is what the suite was written against, and a

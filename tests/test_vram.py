@@ -359,19 +359,96 @@ def test_the_total_and_budget_overrides_parse(monkeypatch):
     assert Config().vram_total_gib is None
 
 
+class _Exploding:
+    class cuda:
+        @staticmethod
+        def is_available():
+            raise RuntimeError("driver fell over")
+
+
 def test_a_reading_never_raises(monkeypatch, real_device_memory):
     """Takes the genuine reader back off ``conftest._roomy_device_memory``:
     this is the one test that is about what the reader does, so a pinned
-    figure would answer it without the reader running at all."""
+    figure would answer it without the reader running at all.
 
-    class Exploding:
-        class cuda:
-            @staticmethod
-            def is_available():
-                raise RuntimeError("driver fell over")
-
-    monkeypatch.setitem(__import__("sys").modules, "torch", Exploding)
+    ``live_memory`` is pinned to None so this stays about the *torch* rung.
+    Without that pin the answer depends on whether the machine running the
+    suite has an NVIDIA driver, which is exactly the kind of
+    verdict-moves-with-the-host failure ``_roomy_device_memory`` exists to
+    stop -- it went green here and would have gone red on any CI box.
+    """
+    monkeypatch.setattr(vram, "live_memory", lambda: None)
+    monkeypatch.setitem(__import__("sys").modules, "torch", _Exploding)
     assert vram.device_memory() is None
+
+
+def test_a_card_the_driver_can_see_is_not_hidden_by_a_broken_torch(monkeypatch, real_device_memory):
+    """The NVML rung, added 2026-09-04.
+
+    A torch that raises used to mean "no device", and no device means
+    ``vram.plan`` reports "no CUDA device detected" and **admission control is
+    off entirely** -- the one outcome this module exists to prevent. NVML
+    ships with the driver and answers regardless.
+    """
+    reading = vram.DeviceMemory(total_gib=32.0, free_gib=30.0, name="NVML GPU")
+    monkeypatch.setattr(vram, "live_memory", lambda: reading)
+    monkeypatch.setitem(__import__("sys").modules, "torch", _Exploding)
+    assert vram.device_memory() is reading
+
+
+def test_a_live_driver_reading_beats_a_stale_published_one(monkeypatch, real_device_memory):
+    """Ordering, and the reason for it.
+
+    ``publish`` carries a figure a *child* took, possibly a minute ago, and its
+    own docstring calls a stale reading "the card as of the last time anyone
+    looked". NVML is taken now, so it outranks it for the same reason torch
+    does.
+    """
+    import sys as _sys
+
+    live = vram.DeviceMemory(total_gib=32.0, free_gib=30.0, name="NVML GPU")
+    monkeypatch.setattr(vram, "live_memory", lambda: live)
+    monkeypatch.delitem(_sys.modules, "torch", raising=False)
+    vram.publish(free_gib=1.0, total_gib=32.0, name="stale child reading")
+    assert vram.device_memory() is live
+
+
+def test_a_published_reading_still_answers_where_the_driver_cannot(monkeypatch, real_device_memory):
+    """The third rung is still load-bearing: ``_nvml`` is win32-only, so on any
+    other platform the child's reading is the only one there is."""
+    import sys as _sys
+
+    monkeypatch.setattr(vram, "live_memory", lambda: None)
+    monkeypatch.delitem(_sys.modules, "torch", raising=False)
+    vram.publish(free_gib=4.0, total_gib=32.0, name="child reading")
+    found = vram.device_memory()
+    assert found is not None and found.name == "child reading"
+
+
+def test_probe_answers_from_the_driver_when_torch_is_not_installed(monkeypatch, real_device_memory):
+    """The half of the fix that ``device_memory`` alone could not reach.
+
+    ``doctor._vram_check`` calls ``probe()`` on its ``probe=True`` path and
+    never consults ``device_memory`` there, so a bare ``return None`` on
+    ImportError sent it straight to the "no CUDA device at all" branch --
+    **fatal** -- on a working RTX machine whose only sin was not having torch
+    installed. That is the state the base install is in once ``text2image``
+    becomes a capability pack.
+    """
+    import builtins
+
+    reading = vram.DeviceMemory(total_gib=32.0, free_gib=30.0, name="NVML GPU")
+    monkeypatch.setattr(vram, "live_memory", lambda: reading)
+    monkeypatch.delitem(__import__("sys").modules, "torch", raising=False)
+    real_import = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name == "torch" or name.startswith("torch."):
+            raise ImportError("No module named 'torch'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+    assert vram.probe() is reading
 
 
 def test_no_test_reads_the_real_card(request):

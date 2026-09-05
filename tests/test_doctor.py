@@ -767,3 +767,49 @@ def test_the_commit_row_is_in_the_volatile_set(tmp_path):
     assert "host memory" in names
     static = [c.name for c in doctor.static_checks(config, probe_slow=False)]
     assert "host memory" not in static
+
+
+# --- a card the driver can see, on a host with no torch (2026-09-04) ---------
+
+
+def test_the_vram_row_is_not_fatal_on_a_carded_host_that_has_no_torch(tmp_path, monkeypatch):
+    """The prerequisite for making ``text2image`` a downloadable pack.
+
+    ``vram.probe()`` returned None the moment torch was absent, and
+    ``_vram_check``'s ``probe=True`` path never consults ``device_memory``, so
+    it took the "no CUDA device at all" branch and reported **fatal**: *"no
+    CUDA device means 3D reconstruction cannot run at all"* -- on a working
+    RTX machine. Nothing about the card had changed; only the Python package
+    set had, and trellis-server does not use torch in the first place.
+
+    Pinned to a fake reading rather than the real driver so the verdict does
+    not move with the machine running the suite.
+    """
+    from warlock import vram
+
+    reading = vram.DeviceMemory(total_gib=32.0, free_gib=30.0, name="NVML GPU")
+    monkeypatch.setattr(vram, "live_memory", lambda: reading)
+    monkeypatch.setattr(vram, "probe", lambda: vram.device_memory())
+    monkeypatch.delitem(__import__("sys").modules, "torch", raising=False)
+
+    row = doctor._vram_check(_config(tmp_path), probe=True)
+    assert row.fatal is False
+    assert row.ok is True
+    assert "no CUDA device" not in row.detail
+
+
+def test_the_vram_row_is_still_fatal_when_there_really_is_no_card(tmp_path, monkeypatch):
+    """The other direction, so the fix above cannot quietly disarm the row.
+
+    A host with no card genuinely cannot reconstruct -- there is no CPU
+    fallback -- and an amber "admission control is off" row reads as good news.
+    """
+    from warlock import vram
+
+    monkeypatch.setattr(vram, "live_memory", lambda: None)
+    monkeypatch.setattr(vram, "probe", lambda: None)
+    monkeypatch.setattr(vram, "device_memory", lambda: None)
+
+    row = doctor._vram_check(_config(tmp_path), probe=True)
+    assert row.fatal is True
+    assert "no CUDA device" in row.detail

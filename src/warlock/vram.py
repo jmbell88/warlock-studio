@@ -495,13 +495,41 @@ def device_memory() -> DeviceMemory | None:
     allocation -- ``mem_get_info`` wraps ``cudaMemGetInfo``, which reports the
     device, not the process.
 
-    Falls back to the last reading ``publish`` was given. Torch first, always:
-    a reading this process can take now beats one a child took a minute ago.
+    Three rungs, in order of how well each one describes *now*:
+
+    1. **Torch**, if something else has already imported it. Unchanged, and
+       first for ``publish``'s stated reason -- a reading this process can take
+       now beats one a child took a minute ago -- and so a GPU test and the
+       in-process fallback keep the figures they always had.
+    2. **NVML**, which is ``nvidia-smi``'s own interface, ships with the driver
+       and needs no package at all. Added 2026-09-04; see :func:`live_memory`,
+       which is the same call and whose docstring named this commit.
+    3. **The last published reading**, from the text2image child. Last because
+       it is the only rung that can be stale.
+
+    NVML sits *above* ``publish`` rather than below it because a reading taken
+    now beats one taken a minute ago for exactly the reason torch does, and
+    *below* torch so that nothing about the existing device figures moves on a
+    host that has torch loaded.
+
+    Two consequences worth stating. On a host with the driver but no torch --
+    which is what the base install becomes once ``text2image`` is a capability
+    pack -- this returns a real device instead of None, so admission control is
+    **on** rather than silently disabled and ``doctor._vram_check`` no longer
+    declares a perfectly good RTX card absent. And on WDDM, NVML's *free* is
+    the dedicated-device figure rather than ``cudaMemGetInfo``'s virtualized
+    view (this module's opening caveat), so where this rung is the one that
+    answers, admission leans on a figure that cannot include shared system
+    memory. ``total`` is exact either way, and total-minus-headroom is what the
+    gate is built on.
     """
     torch = sys.modules.get("torch")
     live = None if torch is None else _read(torch)
     if live is not None:
         return live
+    driver = live_memory()
+    if driver is not None:
+        return driver
     with _published_lock:
         return _published
 
@@ -553,9 +581,10 @@ def live_memory() -> DeviceMemory | None:
     module's docstring) -- so the meter can read fuller than the gate does.
     That is the meter being the better figure, not either one being broken.
 
-    :func:`device_memory` is deliberately left alone. Promoting NVML into its
-    ladder would improve admission control too, and that is a VRAM-admission
-    change belonging in its own commit, verified under ``-m gpu``.
+    :func:`device_memory` now calls this as its second rung (2026-09-04, the
+    commit this paragraph used to ask for). This function stays separate and
+    stays NVML-only: it is the meter's reading, and it must not silently become
+    a stale published figure or a torch one taken before the last job ended.
     """
     session = _nvml()
     if session is None:
@@ -641,7 +670,13 @@ def probe() -> DeviceMemory | None:
     try:
         import torch
     except ImportError:
-        return None
+        # Not "no answer" any more. NVML ships with the driver, so a host with
+        # a card and no torch -- which is what the base install becomes once
+        # ``text2image`` is a capability pack -- still has a definitive total.
+        # Returning None here made ``doctor._vram_check`` take its "no CUDA
+        # device at all" branch and mark a working RTX machine **fatal**, on
+        # the one path (``probe=True``) that never consults ``device_memory``.
+        return device_memory()
     return _read(torch)
 
 

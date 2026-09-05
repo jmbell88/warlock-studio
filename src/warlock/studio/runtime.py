@@ -141,11 +141,19 @@ class Runtime:
                 else:
                     level = log.warning
                 level("doctor: %s -- %s", check.name, check.detail)
-        # Before the Worker exists. vram.probe() reads the card without
-        # importing torch, so this stays cheap. This is what preserves the
-        # documented "read once at startup" invariant: queue.py goes on
-        # reading a plain bool off the config and never learns that it was
-        # resolved.
+        # Before the Worker exists. This is what preserves the documented
+        # "read once at startup" invariant: queue.py goes on reading a plain
+        # bool off the config and never learns that it was resolved.
+        #
+        # This comment used to claim ``vram.probe()`` "reads the card without
+        # importing torch, so this stays cheap", which was never true --
+        # ``probe`` is the variant *permitted* to import torch and its own
+        # docstring says so, which is why ``doctor`` stopped calling it (C29,
+        # 1,511 ms per cold start). It is the right call *here*, where a
+        # definitive answer before the Worker exists is worth the seconds; the
+        # sentence was simply describing a different function. Since
+        # 2026-09-04 it does answer without torch on a host that has none, by
+        # falling through to ``device_memory``'s NVML rung.
         self._note("Measuring the graphics card")
         self.vram_plan = self._resolve_vram()
 

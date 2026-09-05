@@ -256,16 +256,22 @@ def test_trim_on_a_client_with_no_child_does_not_spawn_one(client):
 def test_the_childs_device_reading_reaches_vram(
     client, tmp_path, monkeypatch, real_device_memory
 ):
-    """`vram.device_memory` returns None without torch in this process.
+    """`vram.device_memory` has no torch reading to take in this process.
 
     Once the pipe lives in a child, that is the app's steady state -- so the
     figure admission reads has to come from the child or it does not exist.
+
+    ``live_memory`` is pinned to None so this stays about the *published*
+    rung. It gained a rung above it on 2026-09-04 (NVML, which needs no
+    torch), and without the pin this test asserts the child's figure on a
+    machine with no NVIDIA driver and the real card's on a machine with one.
 
     Takes the real reader back off ``conftest._roomy_device_memory``: this is
     about the reader's own fallback chain, and a pinned figure would satisfy
     the assertion without the chain being walked at all.
     """
     monkeypatch.setattr(vram, "_published", None)
+    monkeypatch.setattr(vram, "live_memory", lambda: None)
     monkeypatch.delitem(sys.modules, "torch", raising=False)
     client.generate("x", tmp_path / "x.png")
     reading = vram.device_memory()
