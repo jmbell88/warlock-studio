@@ -3139,7 +3139,15 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         busy = set(ctx.tasks.busy_keys)
         if any(k.startswith("download:") for k in busy):
             lines.append("A model download is in progress and will be stopped.")
-        if any(k.startswith(("export", "save:", "bake:")) for k in busy):
+        # muse-05: this used to be ``k.startswith(("export", "save:", "bake:"))``,
+        # which only ever matched the Library's bulk "export-folder"/"export-zip"
+        # keys -- every per-mode export queues as "<mode>-export:<name>" (Muse,
+        # Sirens, Clay, Inker, Packwright, Plotter all do this), and none of
+        # those *start with* "export", so a quit mid-export got no warning at
+        # all. Matching "-export:" anywhere in the key, not just as a prefix,
+        # catches every mode that follows this naming convention -- present or
+        # future -- without keeping a hand-maintained list of prefixes here.
+        if any(k.startswith(("export", "save:", "bake:")) or "-export:" in k for k in busy):
             lines.append("An export is still being written.")
         # H02: named alongside downloads and exports rather than omitted. The
         # commit phase (pip writing into ``site-packages``) is not offered

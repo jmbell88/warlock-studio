@@ -76,6 +76,23 @@ ARTIFACTS_TILE = (
 # are.
 ARTIFACTS_TILESHEET = (("input.png", "Tile sheet PNG"),)
 
+# What a finished *take* can hand over: the three compressed/lossless
+# re-encodings of track.wav, lazily derived exactly the way the mesh exports
+# derive from model.glb (``service.derive.get_file``, the DERIVED_AUDIO arm).
+#
+# track.wav itself is deliberately not a fourth row here. Every other list
+# above ends with (or leads with) the artifact its derivations came from --
+# model.glb/source.glb, input.png -- but a take's WAV already has a save
+# dialog of its own, Muse's own player's "Export the track"
+# (studio/muse_io.py), which writes the identical bytes. A second button
+# here would be a second door to the same file rather than the door the
+# 2026-09-05 audit (finding muse-01) found missing.
+ARTIFACTS_MUSIC = (
+    ("track.flac", "FLAC"),
+    ("track.mp3", "MP3"),
+    ("track.ogg", "OGG"),
+)
+
 
 def artifacts_for(job: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     """The Export tab's grid for one job.
@@ -94,6 +111,12 @@ def artifacts_for(job: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     the two from drifting is ``test_the_grid_offers_exactly_what_each_stage_
     can_derive``, which fails on a name added to one and not the other: a
     label missing here is not a wrong button, it is no button at all.
+
+    A music job gets its own branch for the same reason a mesh job does not
+    fall through to the 2D lists: ``ARTIFACTS`` and ``ARTIFACTS_MUSIC`` share
+    nothing (not even a source row -- see that tuple's comment), so a music
+    job answered with the mesh default used to draw eight permanently
+    blocked buttons and no audio one (the 2026-09-05 audit, finding muse-01).
     """
     stage = job.get("stage")
     if stage == "tile":
@@ -102,4 +125,6 @@ def artifacts_for(job: dict[str, Any]) -> tuple[tuple[str, str], ...]:
         return ARTIFACTS_2D
     if stage == "tilesheet":
         return ARTIFACTS_TILESHEET
+    if stage == "music":
+        return ARTIFACTS_MUSIC
     return ARTIFACTS

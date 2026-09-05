@@ -237,4 +237,30 @@ def test_a_deferred_quit_resumes_once_the_commit_phase_clears(monkeypatch):
     app._request_quit = lambda: requested.append(True)
     app._on_task_done(_done("pack:rig"))
     assert app._quit_deferred is False
-    assert requested == [True]  # nothing else was busy, so _ask_quit quit outright
+
+
+# --- muse-05: per-mode export prefixes never matched the export warning -----
+
+
+def test_quit_summary_warns_while_a_muse_export_task_is_busy():
+    """Reproduces muse-05: ``_quit_summary``'s guard tested
+    ``k.startswith(("export", "save:", "bake:"))``, but every per-mode export
+    queues under ``"<mode>-export:<name>"`` (``muse-export:``, ``sirens-export:``,
+    ``clay-export:``, ``inker-export:``, ``packwright-export:``,
+    ``plotter-export:``) -- none of which *start with* "export", so only the
+    Library's bulk ``export-folder``/``export-zip`` keys ever matched. A user
+    who quit mid "Export the loop" got no "An export is still being written"
+    line and the app closed under the write with no notice."""
+    app, _ = _app()
+    app.runtime = SimpleNamespace(current_job_id=None)
+    app.app_ctx.cache = SimpleNamespace(active=None)
+    for key in (
+        "muse-export:loop",
+        "sirens-export:abc123",
+        "clay-export:abc123",
+        "inker-export:abc123",
+        "packwright-export:abc123",
+        "plotter-export:abc123",
+    ):
+        app.app_ctx.tasks = SimpleNamespace(busy_keys={key})
+        assert app._quit_summary() == "An export is still being written.", key

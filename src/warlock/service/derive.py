@@ -159,6 +159,20 @@ def derivable(name: str) -> bool:
     return name in files.DERIVED
 
 
+def derivable_audio(name: str) -> bool:
+    """Whether ``name`` can be produced from *this job's* track.wav on demand.
+
+    Its own function beside ``derivable`` and ``derivable_2d`` rather than a
+    widened ``DERIVED``, for the reason ``DERIVED_AUDIO`` is its own tuple in
+    ``files.py``: a music job's grid must never light a mesh button and a
+    mesh job's must never light an audio one. Before this existed (the
+    2026-09-05 audit, finding muse-01) a music job's Downloads grid had no
+    way to ask this question at all -- it asked ``derivable()``, which only
+    knows the mesh tuple, so every row it drew was permanently blocked.
+    """
+    return name in files.DERIVED_AUDIO
+
+
 def derivable_2d(name: str, stage: str | None) -> bool:
     """Whether ``name`` can be produced from *this stage's* input.png.
 

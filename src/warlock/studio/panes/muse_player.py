@@ -193,18 +193,42 @@ def _input(ctx: Any, one: Any, origin: Any, width: float) -> None:
         muse_mode.seek(ctx, seconds)
 
     if imgui.is_item_deactivated():
+        if _grabbed:
+            # muse-03 (2026-09-05 audit): the drag just settled the region --
+            # exactly the moment the loop cache goes stale -- so recompute it
+            # on a task now rather than paying for the miss inside the next
+            # ``_play_from``. Not fired on every frame of the drag itself:
+            # that would turn the one blend the old code deferred into dozens.
+            muse_mode.precompute_loop(ctx)
         _grabbed = ""
 
 
 def _grip_at(one: Any, offset: float, width: float) -> str:
-    """Which marker, if either, is under ``offset``. -> "start"/"end"/""."""
+    """Which marker, if either, is under ``offset``. -> "start"/"end"/"".
+
+    **muse-06** (2026-09-05 audit): this used to return the *first* grip
+    within reach in a fixed ``("start", "end")`` order, so a click plainly
+    closer to the end grip was reported as a grab on start whenever a region
+    narrower than two grips on screen put both within reach at once -- exactly
+    the region a user is narrowing, and exactly the marker that then moved the
+    wrong way. Scoring both and returning the nearer one fixes that; a click
+    equidistant from both keeps the old order (start) as a stable tie-break.
+    """
     if one.loop_start is None or one.loop_end is None:
         return ""
     reach = sp(GRIP_W)
+    candidates = []
     for seconds, name in ((one.loop_start, "start"), (one.loop_end, "end")):
-        if abs(waveform.at(seconds, one.duration, width) - offset) <= reach:
-            return name
-    return ""
+        distance = abs(waveform.at(seconds, one.duration, width) - offset)
+        if distance <= reach:
+            candidates.append((distance, name))
+    if not candidates:
+        return ""
+    # Sorted by distance only, and ``sort`` is stable: a tie -- equidistant
+    # from both grips -- keeps "start", the order the pair was built in,
+    # rather than an arbitrary one.
+    candidates.sort(key=lambda pair: pair[0])
+    return candidates[0][1]
 
 
 # --- the rows ----------------------------------------------------------------
@@ -237,6 +261,19 @@ def _transport(ctx: Any, one: Any) -> None:
         sirens_audio.set_volume(level)
 
 
+def _no_region_reason(has_region: bool) -> str:
+    """Why "Play the loop" and "Clear" are greyed. -> "" when they are not.
+
+    **muse-07** (2026-09-05 audit): this used to be a string literal chosen
+    inline in each button's ternary, so nothing could assert it without an
+    imgui frame -- the 2026-09-02 review's T4 defect, in the one mode whose
+    reasons had not been pulled out that way. Both buttons call this rather
+    than carrying their own copy, so the two cannot say different things about
+    the same fact.
+    """
+    return "" if has_region else "no loop region yet"
+
+
 def _loop_row(ctx: Any, one: Any) -> None:
     if one.finding:
         widgets.busy("Looking for loop points", note="A full pass over the take.")
@@ -247,16 +284,11 @@ def _loop_row(ctx: Any, one: Any) -> None:
     imgui.same_line()
 
     has_region = one.loop_start is not None and one.loop_end is not None
-    if controls.button(
-        "Play the loop",
-        enabled=has_region,
-        reason="" if has_region else "no loop region yet",
-    ):
+    region_reason = _no_region_reason(has_region)
+    if controls.button("Play the loop", enabled=has_region, reason=region_reason):
         muse_mode.play_region(ctx)
     imgui.same_line()
-    if controls.button(
-        "Clear", enabled=has_region, reason="" if has_region else "no loop region yet"
-    ):
+    if controls.button("Clear", enabled=has_region, reason=region_reason):
         muse_mode.set_region(ctx, None, None)
 
     if len(one.candidates) > 1:
@@ -271,11 +303,16 @@ def _loop_row(ctx: Any, one: Any) -> None:
         return
 
     imgui.set_next_item_width(sp(180.0))
-    changed, fade = controls.slider_float(
-        "Crossfade (ms)##muse", float(one.xfade_ms), 0.0, MAX_XFADE_MS
+    # ``commit=True``: the value tracks the drag live (still read every frame
+    # below), but ``settled`` is only ``True`` the frame the drag releases --
+    # muse-03 (2026-09-05 audit) recomputes the loop cache there, not on every
+    # frame of the drag, which would turn the one deferred blend into dozens.
+    settled, fade = controls.slider_float(
+        "Crossfade (ms)##muse", float(one.xfade_ms), 0.0, MAX_XFADE_MS, commit=True
     )
-    if changed:
-        one.xfade_ms = float(fade)
+    one.xfade_ms = float(fade)
+    if settled:
+        muse_mode.precompute_loop(ctx)
     imgui.same_line()
     if controls.button("Export the loop"):
         muse_io.export_loop(ctx, one)
@@ -287,16 +324,26 @@ def _loop_row(ctx: Any, one: Any) -> None:
     # is the half that stops the press being offered.
     plain = one.xfade_ms <= 0.0
     if controls.button(
-        "Export with loop points",
-        enabled=plain,
-        reason=(
-            ""
-            if plain
-            else "a crossfaded seam cannot be written as loop points -- those"
-            " samples are not in the take"
-        ),
+        "Export with loop points", enabled=plain, reason=_export_points_reason(plain)
     ):
         muse_io.export_with_points(ctx, one)
+
+
+def _export_points_reason(plain: bool) -> str:
+    """Why "Export with loop points" is greyed. -> "" over a plain seam.
+
+    **muse-07** (2026-09-05 audit), pulled out beside ``_no_region_reason``
+    for the same reason: the crossfaded-seam refusal was a string literal
+    chosen inline in the button's ternary, untestable without an imgui frame.
+    ``muse_io.export_with_points`` refuses the same case at the door -- this
+    is only the half that stops the press being offered.
+    """
+    if plain:
+        return ""
+    return (
+        "a crossfaded seam cannot be written as loop points -- those samples"
+        " are not in the take"
+    )
 
 
 __all__ = ["GRAPH_H", "GRIP_W", "STRIP_H", "draw", "should_draw"]

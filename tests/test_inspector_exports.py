@@ -102,7 +102,8 @@ def test_every_estimated_map_says_so_on_its_button():
 
 
 def test_the_grid_offers_exactly_what_each_stage_can_derive():
-    """The label tuples and ``derived_2d_for`` are one list written twice.
+    """The label tuples and ``derived_2d_for``/``DERIVED_AUDIO`` are one list
+    written twice.
 
     The grid is literals so the *order* can be a UI decision, which means a
     name added to ``TILE_2D`` or ``REFERENCE_2D`` and not to the tuple beside
@@ -119,6 +120,36 @@ def test_the_grid_offers_exactly_what_each_stage_can_derive():
         # in the derivable set.
         assert "input.png" in offered
         assert offered - {"input.png"} == set(svc_files.derived_2d_for(stage))
+    # A music job's own row, on the same footing rather than skipped: its
+    # source is track.wav instead of input.png, and (see ARTIFACTS_MUSIC's
+    # comment) that source is deliberately not itself a grid row, so nothing
+    # is subtracted before the comparison. The 2026-09-05 audit (muse-01)
+    # found the branch this asserts against missing entirely.
+    offered = {n for n, _label in widgets.artifacts_for(_job(stage="music"))}
+    assert offered == set(svc_files.DERIVED_AUDIO)
+
+
+def test_a_finished_take_has_a_ui_control_that_requests_its_flac_mp3_or_ogg_export():
+    """The 2026-09-05 audit, finding muse-01.
+
+    The manual (docs/manual/35-muse.md) promises FLAC/MP3/OGG "produced on
+    first request and cached beside the track, the same way the mesh exports
+    work". Before this fix ``artifacts_for`` had no music branch, so a music
+    job fell through to the mesh ``ARTIFACTS`` tuple: eight mesh buttons, all
+    permanently blocked because a music job never has a model.glb, and no
+    audio button anywhere in the grid.
+    """
+    job = _job(stage="music", files=["track.wav"])
+    names = [n for n, _label in widgets.artifacts_for(job)]
+    assert "track.flac" in names
+    assert "track.mp3" in names
+    assert "track.ogg" in names
+    # And the mesh grid must not leak into it -- the flip side of the same
+    # finding: a music row that also offered eight dead mesh buttons would
+    # still read as broken.
+    assert "model.glb" not in names
+    assert "model.stl" not in names
+    assert inspector._derivable(job, {"track.wav"}, "track.flac")
 
 
 def test_a_reference_is_not_offered_a_wrap_preview():

@@ -23,7 +23,8 @@ seam it exists to fix measurably *worse* than doing nothing, and shipping those
 samples into exported loop files; a code read of Sirens — a mode nobody has yet
 heard, which is still true after this release — found six more defects, every
 one of them green under a passing suite. Eleven fixes, each with a regression
-test that fails against the code as it was.
+test that fails against the code as it was. A later audit of Muse the same day
+added the seven below, on the same terms.
 
 - **Muse's loop crossfade made the seam worse than applying no fade at all.**
   The blend ended the loop body on `head[fade - 1]`, so playback wrapped to
@@ -92,6 +93,52 @@ test that fails against the code as it was.
   region, crossfade and candidates. A bounded record of three floats per take
   brings them back — deliberately not the ~42 MB-per-take PCM cache the player
   refuses to keep.
+- **A finished take offered eight mesh downloads and no audio one.** The
+  Downloads grid is keyed on a job's stage, and a music job matched no branch,
+  so it fell through to the mesh list: `model.glb`, `model.fbx` and six more,
+  every one permanently blocked, while the FLAC, MP3 and OGG the manual
+  promises had no button anywhere in the app. The backend had been complete the
+  whole time — `files.DERIVED_AUDIO`, the lazy-derive branch, `audioout` — and
+  the entire gap was the path from a press to `ctx.save_artifact`.
+  `derive.derivable_audio` is now the stage-aware question the grid asks, so a
+  music job gains the three formats and a mesh job gains nothing.
+- **Exporting a loop froze the window for half a second, every press.** The
+  crossfade blend and the whole WAV encode ran on the frame thread before the
+  task was submitted; only the file picker and the disk write were off it. On a
+  240 s take that is ~0.5 s of dropped frames, paid again on every export
+  because nothing caches the encode. Both now happen inside the task.
+- **The first Play after marking a loop stalled before any sound.** The
+  crossfaded body is cached under `(start, end, fade)` — precisely the three
+  numbers a *Find loop points* or a marker drag has just changed — so the first
+  audition after either always paid the full blend on the frame thread, ~100 ms
+  on a 240 s take, for the one action the loop strip exists for. The blend now
+  runs on a task as soon as a region or a crossfade settles, and never mid-drag.
+  The first attempt at this fix introduced a worse bug than it closed and is
+  worth recording: the task wrote the cache's key and its buffer as two separate
+  statements, so a Play for a newer region landing between them left the player
+  claiming one key while holding another's buffer — the wrong crossfade, both in
+  what you heard and in what `export_loop` then wrote to the file you named. The
+  computation is now pure and returns the pair as one value; the frame thread is
+  the only writer.
+- **A cancelled or killed loop derivation could truncate the take it was
+  rolling.** The rolled WAV was written back over `track.wav` in place. It is
+  now staged to a temp sibling and replaced, which is what every other writer
+  onto a served name in that file already did.
+- **Quitting mid-export warned about nothing.** The confirmation names a
+  download or an export in progress, but its export test only matched the
+  Library's bulk keys: all six per-mode export tasks — Muse, Sirens, Clay,
+  Inker, Packwright, Plotter — begin with the mode's own name and so matched
+  nothing, and the app quit under an unfinished write in silence. The guard now
+  matches the `-export:` convention the six share rather than a list that the
+  seventh mode would be left out of.
+- **A tight loop region's end marker moved its start instead.** The waveform
+  asked which grip a click was on by returning the first one within reach,
+  always testing start before end, so on a region narrower than two grips —
+  which is the region you are trying to tighten — dragging the end grabbed the
+  start. It now takes the nearer of the two.
+- Muse's greyed controls state their reasons through pure functions that can be
+  asserted without drawing a frame, which is what the rest of the app's modes
+  did in the 2026-09-02 review and this one did not.
 - The `screenshots/` set was regenerated against this build: it predated Muse
   and so had no picture of it, and every other mode's chrome had moved on.
 

@@ -249,8 +249,24 @@ def play(ctx: Any, job_id: str) -> None:
 
 
 def on_task_done(ctx: Any, done: Any) -> None:
-    """Adopt a decoded take, or a set of loop points. Routed by key prefix."""
+    """Adopt a decoded take, a set of loop points, or a precomputed loop
+    cache. Routed by key prefix."""
     key, result = done.key, done.result
+    if key.startswith(muse_io.CACHE_PREFIX):
+        # **incident-2026-09-05b.** The one place the loop-cache pair is
+        # written now, on the frame thread, which is what makes the two
+        # statements below safe: nothing else ever touches them. Adopted
+        # only if the key it was computed for is still the one wanted --
+        # a later region change, or a different take loaded in the
+        # meantime, must not have a stale-but-internally-consistent answer
+        # land on top of whatever is already current.
+        one = player(ctx)
+        if one is not None and result is not None:
+            cache_key, buffer = result
+            if muse_io.loop_cache_key(one) == cache_key:
+                one.loop_cache = buffer
+                one.loop_cache_key = cache_key
+        return
     if key.startswith(muse_io.FIND_PREFIX):
         one = player(ctx)
         if one is not None and one.job == key[len(muse_io.FIND_PREFIX) :]:
@@ -580,6 +596,44 @@ def choose_candidate(ctx: Any, index: int) -> None:
         return
     candidate = one.candidates[index]
     set_region(ctx, candidate.start / one.rate, candidate.end / one.rate)
+    precompute_loop(ctx)
+
+
+def precompute_loop(ctx: Any) -> None:
+    """Recompute the crossfaded loop body on a task now that the region or
+    the crossfade has settled, so the next ``_play_from`` finds it already
+    cached.
+
+    **muse-03** (2026-09-05 audit): ``_play_from`` calls ``muse_io.loop_body``
+    on the frame thread, and that function computes on a cache miss -- which
+    used to be exactly what happened on the very first Play after ``Find loop
+    points`` or a marker drag, since the cache key is ``(start, end, fade)``
+    and those are precisely the numbers that just changed. On a 240 s take
+    that stall was ~100 ms, for the action (auditioning a seam while judging a
+    crossfade) the strip exists for.
+
+    Called from every place a region or a crossfade *settles* -- a candidate
+    chosen, a marker drag's release, the ``[``/``]`` keys, the crossfade
+    slider's release -- and nowhere a value merely changes mid-drag: doing
+    this on every frame of a drag would turn the one O(n) blend the old code
+    paid for into dozens.
+
+    **The task only computes; `on_task_done` installs it (incident-2026-09-05b,
+    a correction to this finding's first pass).** Submitting ``loop_body``
+    itself as the task moved the blend off the frame thread but left it
+    writing the cache pair -- two separate statements -- from the task
+    thread, which a ``_play_from`` call for a *different*, newer key could
+    interleave with, pairing one key with the other's buffer. This submits
+    ``compute_loop_cache`` instead, which touches nothing on ``player``; see
+    its docstring for the exact interleaving this closes.
+    """
+    one = player(ctx)
+    if one is None:
+        return
+    key = muse_io.loop_cache_key(one)
+    if key is None or one.loop_cache_key == key:
+        return  # no region, or already current -- nothing to precompute
+    ctx.submit(f"{muse_io.CACHE_PREFIX}{one.job}", muse_io.compute_loop_cache, one)
 
 
 # --- keys -------------------------------------------------------------------
@@ -665,9 +719,11 @@ def handle_key(ctx: Any, event: Any) -> bool:
         # ``set_region`` orders the pair, so setting a start past the end is a
         # region with its two markers swapped rather than an invalid one.
         set_region(ctx, position(ctx), one.loop_end if one.loop_end is not None else one.duration)
+        precompute_loop(ctx)
         return True
     if event.key == pygame.K_RIGHTBRACKET:
         set_region(ctx, one.loop_start if one.loop_start is not None else 0.0, position(ctx))
+        precompute_loop(ctx)
         return True
     if event.key == pygame.K_l:
         find_loops(ctx)

@@ -9,6 +9,18 @@ during a splitter drag. Each had a sibling in the tree that already did it
 right (the GLB parse/adopt split, the ``inker-recover`` task), and each is
 now that shape.
 
+**Muse joined the list on 2026-09-05**, for two doors the 2026-09-02 sweep
+never reached because Muse did not exist for it: ``muse_io.export_loop`` and
+``export_with_points`` ran their crossfade blend and their whole WAV byte
+encode before ``ctx.submit`` was ever called (muse-02), and
+``muse_mode._play_from`` paid for that same blend on the frame thread on
+exactly the press that follows a fresh region or crossfade, because
+``loop_body``'s cache always misses on the params that just changed
+(muse-03). Both are now the same shape as the rest of this file: the compute
+moved inside what ``ctx.submit`` runs, either directly (the export) or as a
+precompute fired wherever a region or crossfade *settles* so the next call is
+a cache hit (the player).
+
 The guard here is behavioural where it can be: a ctx whose ``submit`` runs
 the task on a *real worker thread* and joins, with the expensive function
 spied to record which thread it ran on. A regression that moves the decode
@@ -34,7 +46,16 @@ from test_inker_mode import _PaletteCtx
 from test_sirens_mode import FakeCtx as SirensCtx
 from test_sirens_mode import _tab as sirens_tab
 
-from warlock.studio import clay_mode, inker, inker_mode, packwright_io, troupe_mode
+from warlock.studio import (
+    clay_mode,
+    inker,
+    inker_mode,
+    muse_io,
+    muse_mode,
+    muse_state,
+    packwright_io,
+    troupe_mode,
+)
 from warlock.studio.clay import document as clay_document
 from warlock.studio.clay import serialize as clay_serialize
 from warlock.studio.inker_state import InkerDoc
@@ -414,3 +435,143 @@ def test_the_settings_flush_waits_for_the_mouse_button_to_come_up():
     guarded = "if not imgui.is_any_mouse_down():\n            self.app_ctx.settings.tick()"
     assert guarded in source
     assert source.count("settings.tick()") == 1
+
+
+# --- 8/9. Muse's loop-cache precompute and export encode ---------------------
+
+
+class _MuseCtx(_Threaded):
+    def __init__(self) -> None:
+        self.state = SimpleNamespace(muse=None)
+        self.submitted, self.tags, self.result = [], [], None
+        self.toasts: list[tuple[str, str]] = []
+
+    def toast(self, text: str, level: str = "info", *a: Any, **k: Any) -> None:
+        self.toasts.append((text, level))
+
+
+class _MuseDevice:
+    """``sirens_audio``, stubbed to the one call ``play_region`` needs."""
+
+    def play(self, pcm: Any, rate: int = 44100, *, tag: str = "", loops: int = 0) -> bool:
+        return True
+
+
+def _muse_take(ctx: Any, seconds: float = 240.0) -> Any:
+    pcm = (
+        np.random.default_rng(0).standard_normal((int(seconds * 44100), 2)) * 5000
+    ).astype(np.int16)
+    state = muse_mode.ensure(ctx)
+    state.player = muse_state.Player(job="take", pcm=pcm, rate=44100, duration=seconds)
+    return state.player
+
+
+def test_export_loop_does_not_block_the_frame_thread_encoding_a_240_second_take(
+    monkeypatch, tmp_path
+):
+    """muse-02: the crossfade blend and the whole WAV byte encode used to run
+    before ``ctx.submit`` was ever reached in ``export_loop``, so both ran on
+    the frame thread on every press -- and again on every press, since nothing
+    cached the encode itself. Both now live inside the closure ``_save`` hands
+    to ``ctx.submit``.
+    """
+    ctx = _MuseCtx()
+    one = _muse_take(ctx)
+    muse_mode.set_region(ctx, 10.0, 230.0)
+    monkeypatch.setattr(muse_io.dialogs, "save_file", lambda *a, **k: tmp_path / "loop.wav")
+    blend = _spy(monkeypatch, muse_io.loops_mod, "crossfade")
+    encode = _spy(monkeypatch, muse_io, "_wav")
+
+    muse_io.export_loop(ctx, one)
+
+    assert blend == [WORKER]
+    assert encode == [WORKER]
+    assert (tmp_path / "loop.wav").exists()
+
+
+def test_playing_a_freshly_marked_loop_region_does_not_block_the_frame_thread(monkeypatch):
+    """muse-03: ``loop_body``'s cache key is ``(start, end, fade)``, so it
+    always missed on the very first Play after a region changed -- the press
+    that follows ``Find loop points`` (``choose_candidate``, here) landing a
+    result. ``choose_candidate`` now precomputes the body on a task, so
+    ``play_region``'s own call into ``loop_body`` is a cache hit and never
+    calls the blend itself.
+    """
+    from warlock.studio.muse.loops import Candidate
+
+    ctx = _MuseCtx()
+    monkeypatch.setattr(muse_mode, "sirens_audio", _MuseDevice())
+    one = _muse_take(ctx)
+    one.candidates = [Candidate(int(10.0 * 44100), int(230.0 * 44100), 0.9)]
+    blend = _spy(monkeypatch, muse_io.loops_mod, "crossfade")
+
+    muse_mode.choose_candidate(ctx, 0)
+    assert blend == [WORKER], "the blend ran on the task when the region settled"
+    # incident-2026-09-05b: the task only answers with a value now; landing
+    # it is ``on_task_done``'s job, on the frame thread.
+    muse_mode.on_task_done(ctx, _Done(ctx.submitted[-1], ctx.result))
+
+    muse_mode.play_region(ctx)
+    assert blend == [WORKER], "and play found it already cached -- no second call"
+
+
+def test_a_stale_precompute_result_cannot_pair_its_key_with_a_newer_buffer(monkeypatch):
+    """incident-2026-09-05b, a correction to muse-03: submitting
+    ``muse_io.loop_body`` itself as the precompute task moved the blend off
+    the frame thread, but ``loop_body`` also writes
+    ``player.loop_cache``/``loop_cache_key`` -- two separate statements,
+    straight onto the shared ``Player`` -- and it was doing that from the
+    task thread. A ``_play_from`` call for a *different*, newer region,
+    landing between those two statements, paired one key with the other's
+    buffer:
+
+        1. task (key A): loop_cache = A
+        2. frame (key B): loop_cache = B
+        3. frame (key B): loop_cache_key = B
+        4. task (key A): loop_cache_key = A
+
+    -- leaving the player claiming key A while holding B's buffer, which
+    ``export_loop`` would then write to the file the user named. That is
+    exactly the ordinary case of marking a region and pressing Play before a
+    ~100 ms blend has finished.
+
+    Deterministic, not timing-dependent: ``compute_loop_cache`` is called
+    directly to get A's answer as a plain value (proving, first, that doing
+    so touches nothing on ``one`` -- there is nothing left here to tear), a
+    newer region B is set and precomputed for real in the ordinary way, and
+    only then does A's stale answer arrive at ``on_task_done``. The claim
+    this closes: the buffer the player ends up holding must match the key it
+    claims to be.
+    """
+    ctx = _MuseCtx()
+    one = _muse_take(ctx, seconds=100.0)
+    muse_mode.set_region(ctx, 10.0, 90.0)
+    a_key = muse_io.loop_cache_key(one)
+
+    a_result = muse_io.compute_loop_cache(one)
+    assert a_result[0] == a_key, "the pair returned is at least internally consistent"
+    assert one.loop_cache is None and one.loop_cache_key is None, (
+        "compute_loop_cache must not touch the player -- that is the whole "
+        "fix: nothing but on_task_done, on the frame thread, may write the "
+        "cache pair"
+    )
+
+    # The frame thread moves on before A's answer arrives: a newer region,
+    # precomputed and landed in full -- a self-consistent pair, the one
+    # write that installs both fields.
+    muse_mode.set_region(ctx, 0.0, 40.0)
+    muse_mode.precompute_loop(ctx)
+    muse_mode.on_task_done(ctx, _Done(ctx.submitted[-1], ctx.result))
+    b_key, b_buffer = ctx.result
+
+    # A's stale-but-internally-consistent answer lands last.
+    muse_mode.on_task_done(
+        ctx, _Done(f"{muse_io.CACHE_PREFIX}{one.job}", a_result)
+    )
+
+    assert one.loop_cache_key == b_key, "a stale key must not overwrite a newer one"
+    assert one.loop_cache is b_buffer, "nor may a stale buffer sit under a newer key"
+    # The claim M09 exists to make, checked directly: whatever key the player
+    # is claiming, the buffer underneath it must be that key's own blend.
+    expected = muse_io.loops_mod.crossfade(one.pcm, *one.loop_cache_key)
+    assert np.array_equal(one.loop_cache, expected)

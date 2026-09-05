@@ -189,6 +189,25 @@ def _roll_wav(data: bytes, seconds: float) -> bytes:
     return out.getvalue()
 
 
+def _stage_rolled_wav(output: Any, seconds: float) -> None:
+    """Roll ``track.wav`` back, staged, so a kill mid-roll cannot corrupt it.
+
+    The 2026-09-05 audit (muse-04) found this read-then-write-in-place onto
+    ``track.wav`` -- the job's served artifact name -- while every other
+    writer onto a served name in this module stages to a temp sibling and
+    ``replace``s it: ``_write_stems_sidecar`` below, and ``separation_worker``'s
+    per-stem ``.tmp``. A process killed between the read and the write left a
+    truncated or corrupt ``track.wav`` on disk with no temp file ever having
+    existed to prove it. The temp name matches ``_write_stems_sidecar``'s
+    ``.<name>.tmp`` convention -- a bare ``track.wav.tmp`` could collide with
+    a concurrent writer using the same convention on a different file, which
+    is its own recorded incident (M03).
+    """
+    tmp = output.with_name(f".{output.name}.tmp")
+    tmp.write_bytes(_roll_wav(output.read_bytes(), seconds))
+    tmp.replace(output)
+
+
 def _write_stems_sidecar(out_dir: Any, spec: Any, result: dict[str, Any], job_id: str) -> None:
     """``stems.json``, written **last**, as the completion gate.
 
@@ -275,9 +294,7 @@ class MusicOps:
                 # the artifact becomes final: a take committed still rolled is
                 # a take whose bars start in the wrong place.
                 await asyncio.to_thread(
-                    lambda: output.write_bytes(
-                        _roll_wav(output.read_bytes(), -float(params.get("roll", 0.0)))
-                    )
+                    _stage_rolled_wav, output, -float(params.get("roll", 0.0))
                 )
             # The moment the WAV is on disk and nothing else can undo it. A
             # cancel that arrives after this point would leave a finished

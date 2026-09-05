@@ -533,3 +533,64 @@ def test_a_cancelled_picker_writes_no_file(ctx, device, monkeypatch, tmp_path):
     monkeypatch.setattr(muse_io.dialogs, "save_file", lambda *a, **k: None)
     muse_io.export_loop(ctx, one)
     assert list(tmp_path.glob("*.wav")) == []
+
+
+# --- the grips (muse-06) ------------------------------------------------------
+
+
+def test_grip_at_picks_the_nearer_marker_when_both_are_in_reach():
+    """muse-06: ``_grip_at`` used to return the *first* grip within reach in a
+    fixed ``("start", "end")`` order, so a click plainly closer to the end
+    grip was reported as a grab on start whenever the region was narrow enough
+    -- on screen -- to put both grips within reach at once. That is exactly
+    the region a user is trying to tighten: one narrower than two grips wide.
+
+    10 px/second here, a 0.6 s region (6 px, under the 5 px-either-side reach
+    that puts both grips in range at once), clicked one pixel from the end
+    marker and five from the start. Fails against the unfixed code, which
+    returns "start" because it is checked first and is still, barely, within
+    reach.
+    """
+    from warlock.studio.panes import muse_player
+
+    one = muse_state.Player(job="a", duration=100.0, loop_start=10.0, loop_end=10.6)
+    width = 1000.0  # 10 design pixels per second, at the tokens.SCALE default
+    assert muse_player._grip_at(one, 105.0, width) == "end"
+
+
+def test_grip_at_breaks_an_exact_tie_toward_start():
+    """The mirror of the case above: equidistant from both grips, the pick
+    must still be deterministic rather than whichever the loop visits last."""
+    from warlock.studio.panes import muse_player
+
+    one = muse_state.Player(job="a", duration=100.0, loop_start=10.0, loop_end=10.6)
+    width = 1000.0
+    assert muse_player._grip_at(one, 103.0, width) == "start"
+
+
+# --- the disabled reasons (muse-07) -------------------------------------------
+
+
+def test_muse_disabled_control_reasons_are_pure_and_testable():
+    """muse-07: every disabled-control sentence in the player strip and the
+    brief used to be a string literal chosen inline in the ternary passed to
+    the draw call, so a change to ``has_region`` or ``plain`` that made a
+    reason stale or wrong would be caught by nothing -- the 2026-09-02
+    review's T4 defect, in the one mode whose reasons had not been extracted
+    the way ``plotter_menu._layer_reason``, ``inker_mode._no_document_reason``
+    and ``overlay.cancel_reason`` were. These are asserted with no imgui frame
+    at all, which is the point.
+    """
+    from warlock.studio import muse_brief
+    from warlock.studio.panes import muse_player
+
+    assert muse_player._no_region_reason(True) == ""
+    assert muse_player._no_region_reason(False) == "no loop region yet"
+
+    assert muse_player._export_points_reason(True) == ""
+    blocked = muse_player._export_points_reason(False)
+    assert "loop points" in blocked and blocked != ""
+
+    assert muse_brief._generate_reason(False) == ""
+    missing = muse_brief._generate_reason(True)
+    assert "not downloaded" in missing

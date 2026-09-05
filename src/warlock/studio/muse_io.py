@@ -40,6 +40,12 @@ log = logging.getLogger(__name__)
 EXPORT_PREFIX = "muse-export:"
 FIND_PREFIX = "muse-loops:"
 
+#: ``muse_mode.precompute_loop``'s task key, one per job so a second region
+#: tweak before the first blend lands is refused rather than queued -- the
+#: newer call wins on the *next* settle, which is the loop-cache's existing
+#: "not invalidated eagerly" policy applied to when it is *filled* too.
+CACHE_PREFIX = "muse-loopcache:"
+
 
 def read_track(path: Any) -> dict[str, Any]:
     """A take's WAV as ``int16`` frames, its rate, its envelope and its length.
@@ -115,6 +121,75 @@ def _wav(pcm: Any, rate: int, loop: tuple[int, int] | None = None) -> bytes:
     return wavout.wav_bytes(data.astype(np.float32) / 32767.0, rate, loop=loop)
 
 
+def loop_cache_key(player: Any) -> tuple[int, int, int] | None:
+    """``(start, end, fade)`` in samples -- the three numbers that decide the
+    seam, and so the cache key both :func:`loop_body` and
+    ``muse_mode.precompute_loop`` key on. -> ``None`` with no usable region.
+
+    Split out of ``loop_body`` so the precompute task can ask "is the cache
+    already current" without paying for -- or risking -- the blend itself.
+    """
+    if player.loop_start is None or player.loop_end is None:
+        return None
+    rate = int(player.rate)
+    start = int(player.loop_start * rate)
+    end = int(player.loop_end * rate)
+    if end <= start:
+        return None
+    fade = int(player.xfade_ms * rate / 1000.0)
+    return (start, end, fade)
+
+
+def _blend(player: Any, key: tuple[int, int, int]) -> Any:
+    """The crossfade itself, for exactly ``key`` -- pure, and it never reads
+    or writes ``player.loop_cache``/``loop_cache_key``.
+
+    Split out of :func:`loop_body` by **incident-2026-09-05b**, a correction
+    to muse-03: see that function's docstring for why nothing but the frame
+    thread may touch the cache pair. Both :func:`compute_loop_cache` (the
+    precompute task) and :func:`export_loop` (the export task) call this
+    directly, on a task thread, precisely because it has nothing left to tear.
+    """
+    return loops_mod.crossfade(player.pcm, *key)
+
+
+def compute_loop_cache(player: Any) -> tuple[tuple[int, int, int], Any] | None:
+    """The ``(key, buffer)`` pair for the region as it stands right now.
+    -> ``None`` with no usable region. Task work: pure, safe on any thread.
+
+    **incident-2026-09-05b**, a correction to muse-03. The first pass at that
+    finding had ``muse_mode.precompute_loop`` submit ``loop_body`` itself as
+    the task -- which moved the *blend* off the frame thread, but the blend
+    was never the whole story: ``loop_body`` also writes
+    ``player.loop_cache``/``loop_cache_key``, in two separate statements,
+    straight onto the shared ``Player``. Two different keys' writes could
+    then interleave --
+
+    1. task (key A): ``player.loop_cache = A``
+    2. frame (key B): ``player.loop_cache = B``
+    3. frame (key B): ``player.loop_cache_key = B``
+    4. task (key A): ``player.loop_cache_key = A``
+
+    -- leaving the player claiming key A while holding B's buffer, which is
+    exactly the ordinary case of marking a region and pressing Play before a
+    ~100 ms blend has finished. ``export_loop`` reads the same two fields, so
+    the wrong bytes would land under the name the user chose -- M09's claim
+    ("what you hear" and "what gets written" are the same buffer) broken by a
+    race rather than a bug in the blend itself.
+
+    The fix is not a lock; it is having only one thread ever write the pair.
+    This function computes and returns it as a single value, touching nothing
+    on ``player``; ``muse_mode.on_task_done`` is what installs the result,
+    and it does that on the frame thread -- the same thread ``_play_from``
+    calls :func:`loop_body` from, so the two writers can never overlap with
+    each other or with themselves.
+    """
+    key = loop_cache_key(player)
+    if key is None:
+        return None
+    return key, _blend(player, key)
+
+
 def loop_body(player: Any) -> Any:
     """The crossfaded loop -- the *one* buffer both the audition and
     :func:`export_loop` play. -> ``None`` with no usable region.
@@ -138,18 +213,19 @@ def loop_body(player: Any) -> Any:
     while a loop sounds does not itself restart the buffer on the channel
     (``muse_player``'s "re-played on release only" rule), but the next Play or
     seek picks up the new blend.
+
+    **Frame-thread only (incident-2026-09-05b).** The two statements below
+    are not atomic together, so this may be called from exactly one thread --
+    the frame thread, via ``muse_mode._play_from``. Neither ``export_loop``
+    nor the muse-03 precompute task calls this any more; they call
+    :func:`_blend`/:func:`compute_loop_cache`, which touch nothing on
+    ``player``, for that reason.
     """
-    if player.loop_start is None or player.loop_end is None:
+    key = loop_cache_key(player)
+    if key is None:
         return None
-    rate = int(player.rate)
-    start = int(player.loop_start * rate)
-    end = int(player.loop_end * rate)
-    if end <= start:
-        return None
-    fade = int(player.xfade_ms * rate / 1000.0)
-    key = (start, end, fade)
     if player.loop_cache_key != key:
-        player.loop_cache = loops_mod.crossfade(player.pcm, start, end, fade)
+        player.loop_cache = _blend(player, key)
         player.loop_cache_key = key
     return player.loop_cache
 
@@ -162,17 +238,36 @@ def export_loop(ctx: Any, player: Any) -> None:
     window. ``dialogs.save_file`` rather than ``select_folder`` because this
     writes one file under a name the user chooses, which is the case that
     picker is for.
+
+    **muse-02** (2026-09-05 audit): the blend and the whole WAV byte encode
+    (``_wav``) used to run right here, before ``_save`` was ever reached -- on
+    the frame thread, since nothing had submitted anything yet. A 240 s take
+    made that a visible freeze on every press, and the cost was paid again
+    every time because nothing cached the *encode*. Both now live inside the
+    closure ``_save`` hands to ``ctx.submit``, so the frame thread sees only
+    the request and, later, the result.
+
+    **Calls ``_blend``, not ``loop_body`` (incident-2026-09-05b).** This runs
+    on the export task's own thread, and ``loop_body`` writes the shared
+    cache pair in two statements that are only safe from one thread at a
+    time -- the frame thread, which this is not. ``_blend`` computes fresh
+    every time instead, which costs a redundant O(n) blend on the rare
+    press that follows one right after a Play, paid for on a task either way.
     """
     if not _has_region(ctx, player):
         return
     rate = int(player.rate)
-    body = loop_body(player)
-    if body is None:
-        return
-    # ``loop=(0, len)``: the whole file *is* the loop, which is the difference
-    # between this product and the other one.
-    data = _wav(body, rate, loop=(0, int(body.shape[0])))
-    _save(ctx, data, "loop.wav", "Export the loop")
+
+    def make() -> bytes | None:
+        key = loop_cache_key(player)
+        if key is None:
+            return None
+        body = _blend(player, key)
+        # ``loop=(0, len)``: the whole file *is* the loop, which is the
+        # difference between this product and the other one.
+        return _wav(body, rate, loop=(0, int(body.shape[0])))
+
+    _save(ctx, make, "loop.wav", "Export the loop")
 
 
 def export_with_points(ctx: Any, player: Any) -> None:
@@ -182,6 +277,11 @@ def export_with_points(ctx: Any, player: Any) -> None:
     see this module's docstring. The caller disables the control and states the
     same sentence; this is the door holding it as well, for the reason every
     door in this app is held twice.
+
+    **muse-02** (2026-09-05 audit): the refusal stays here, on the frame
+    thread -- it is a field check, not a computation -- but the WAV encode of
+    the whole take moves into ``_save``'s task for the same reason
+    :func:`export_loop`'s does.
     """
     if not _has_region(ctx, player):
         return
@@ -194,8 +294,9 @@ def export_with_points(ctx: Any, player: Any) -> None:
         )
         return
     rate = int(player.rate)
+    pcm = player.pcm
     loop = (int(player.loop_start * rate), int(player.loop_end * rate))
-    _save(ctx, _wav(player.pcm, rate, loop=loop), "track.wav", "Export the track")
+    _save(ctx, lambda: _wav(pcm, rate, loop=loop), "track.wav", "Export the track")
 
 
 def _has_region(ctx: Any, player: Any) -> bool:
@@ -210,12 +311,26 @@ def _has_region(ctx: Any, player: Any) -> bool:
     return True
 
 
-def _save(ctx: Any, data: bytes, default_name: str, title: str) -> None:
+def _save(ctx: Any, make: Any, default_name: str, title: str) -> None:
+    """Ask where to write, then write ``make()``'s bytes there -- both on the
+    task, never on the frame thread.
+
+    The picker runs *inside* the task already, and for its own reason (a
+    modal native dialog on the frame thread is a frozen window). ``make`` is
+    called after the picker returns a path rather than before, so a cancelled
+    export -- the common case for a press that was a change of mind -- costs
+    no encode at all, not merely one hidden from the frame thread. See
+    ``export_loop``/``export_with_points`` for what ``make`` does: the
+    crossfade blend, the whole WAV byte encode, or both.
+    """
     from . import atomic
 
     def run() -> str | None:
         path = dialogs.save_file(title, default_name, dialogs.filters_for(".wav"))
         if path is None:
+            return None
+        data = make()
+        if data is None:
             return None
         # Staged, never written in place: the rule every other writer in this
         # app follows, and it matters most where the user has picked an
@@ -228,11 +343,14 @@ def _save(ctx: Any, data: bytes, default_name: str, title: str) -> None:
 
 
 __all__ = [
+    "CACHE_PREFIX",
     "EXPORT_PREFIX",
     "FIND_PREFIX",
+    "compute_loop_cache",
     "export_loop",
     "export_with_points",
     "find_loops",
+    "loop_cache_key",
     "loop_body",
     "read_track",
 ]

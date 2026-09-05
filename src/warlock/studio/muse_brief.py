@@ -267,11 +267,7 @@ def _generate(
             generate_label(takes),
             (sp(GENERATE_W) if width is None else float(width), sp(TAGS_H)),
             enabled=enabled and not blocked,
-            reason=(
-                "The music model is not downloaded. See the Recipe panel."
-                if blocked
-                else ""
-            ),
+            reason=_generate_reason(blocked),
             tooltip="Ctrl+Enter",
         )
         anchors.mark("muse/generate")
@@ -279,6 +275,21 @@ def _generate(
             pressed = True
     if pressed:
         muse_mode.generate(ctx)
+
+
+def _generate_reason(blocked: bool) -> str:
+    """Why Generate is greyed for missing weights. -> "" once they are on disk.
+
+    **muse-07** (2026-09-05 audit): this sentence used to be a string literal
+    chosen inline in the ternary passed to ``widgets.primary_button``, so
+    nothing could assert it stayed right without an imgui frame -- the
+    2026-09-02 review's T4 defect, in the one mode whose reasons had not been
+    pulled out that way (``plotter_menu._layer_reason``,
+    ``inker_mode._no_document_reason`` and ``overlay.cancel_reason`` all were).
+    """
+    if blocked:
+        return "The music model is not downloaded. See the Recipe panel."
+    return ""
 
 
 def _ring(ctx: Any, field: str) -> bool:

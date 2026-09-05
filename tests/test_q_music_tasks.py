@@ -154,3 +154,39 @@ def test_a_file_this_build_did_not_write_is_refused_rather_than_mangled():
         handle.writeframes(b"\x00" * 100)
     with pytest.raises(RuntimeError, match="16-bit PCM"):
         q._roll_wav(out.getvalue(), 0.5)
+
+
+# --- _stage_rolled_wav ---------------------------------------------------------
+
+
+def test_a_loop_takes_roll_back_is_staged_not_written_in_place(tmp_path, monkeypatch):
+    """The 2026-09-05 audit (muse-04): a loop's roll-back wrote to
+    ``track.wav`` -- the job's served artifact name -- by reading it and
+    writing the rolled bytes straight back in place. A process killed between
+    that read and that write left a truncated or corrupt ``track.wav`` on
+    disk, exactly the failure every other writer onto a served name in this
+    module (``_write_stems_sidecar``, ``separation_worker``'s per-stem
+    ``.tmp``) stages against.
+
+    The fault is injected at the boundary between the read and the on-disk
+    swap -- ``Path.replace`` raises -- so the assertion distinguishes staged
+    from in-place: an in-place write has already clobbered ``track.wav``
+    before ``replace`` is ever called, so ``track.wav`` would come back
+    rolled (silently corrupt-on-crash); a staged write leaves it byte-for-byte
+    the original, because the rolled bytes only ever touched the temp
+    sibling.
+    """
+    frames = np.arange(44100 * 2, dtype="<i2").reshape(-1, 2)
+    original = _wav(frames)
+    output = tmp_path / "track.wav"
+    output.write_bytes(original)
+
+    def _boom(self, target):
+        raise OSError("simulated kill between read and replace")
+
+    monkeypatch.setattr(Path, "replace", _boom)
+
+    with pytest.raises(OSError, match="simulated kill"):
+        q._stage_rolled_wav(output, 0.25)
+
+    assert output.read_bytes() == original

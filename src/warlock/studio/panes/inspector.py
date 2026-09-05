@@ -1406,6 +1406,14 @@ def _derivable(job: Any, files: set[str], name: str) -> bool:
     reference has the cutouts and a tile has the wrapped view, and that split is
     a fact about the artifacts rather than about the disk, so it is read
     straight off ``derivable_2d`` at no cost.
+
+    A music job takes the same shape as the two image stages -- gated on the
+    job being done and its one source file existing -- and a separate branch
+    for the same reason they are not folded into the mesh one: track.wav
+    derives FLAC/MP3/OGG and nothing else, the way input.png derives cutouts
+    and nothing a mesh has. Before this branch existed (the 2026-09-05 audit,
+    finding muse-01) a music job fell through to the ``return`` below, which
+    asks for a ``model.glb`` a music job will never have.
     """
     stage = job.get("stage")
     if stage in ("reference", "tile"):
@@ -1413,6 +1421,12 @@ def _derivable(job: Any, files: set[str], name: str) -> bool:
             job.get("status") == "done"
             and "input.png" in files
             and svc_derive.derivable_2d(name, stage)
+        )
+    if stage == "music":
+        return (
+            job.get("status") == "done"
+            and "track.wav" in files
+            and svc_derive.derivable_audio(name)
         )
     return "model.glb" in files and svc_derive.derivable(name)
 
