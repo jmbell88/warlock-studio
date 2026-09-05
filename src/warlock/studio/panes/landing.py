@@ -256,25 +256,9 @@ def move(ctx: Any, delta: int) -> None:
         ctx.state.home_index = (ctx.state.home_index + delta) % count
 
 
-def ago(when: float | None, now: float | None = None) -> str:
-    """``just now`` / ``4m ago`` / ``yesterday``. Empty for an unstamped row.
-
-    Coarse on purpose, as ``main._ago`` already is: the question is "was that
-    the one from this afternoon", and a figure with more precision than that
-    invites being read as a measurement.
-    """
-    if when is None:
-        return ""
-    delta = max(0.0, (time.time() if now is None else now) - when)
-    if delta < 60:
-        return "just now"
-    if delta < 3600:
-        return f"{int(delta // 60)}m ago"
-    if delta < 86400:
-        return f"{int(delta // 3600)}h ago"
-    if delta < 172800:
-        return "yesterday"
-    return f"{int(delta // 86400)}d ago"
+# Kept as a name here for its callers and tests; the one clock lives in
+# ``widgets`` since 2026-09-05 so the inspector and Home agree on "yesterday".
+ago = widgets.ago
 
 
 # --- the status block -------------------------------------------------------

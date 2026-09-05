@@ -466,6 +466,76 @@ def stage_badge(job: dict[str, Any], *, inline: bool = False) -> None:
     _chip(f"{icon} {label}", theme.rgba(theme.MUTED), 0.10)
 
 
+def ago(when: float | None, now: float | None = None) -> str:
+    """``just now`` / ``4m ago`` / ``yesterday``. Empty for an unstamped row.
+
+    Coarse on purpose: the question is "was that the one from this afternoon",
+    and a figure with more precision than that invites being read as a
+    measurement. Lived in ``panes.landing`` until 2026-09-05, when the
+    inspector was found printing ``1788587399.0856822`` under the same asset
+    Home had just called "just now" -- one clock for every pane, kept here
+    where the rest of the asset vocabulary is.
+    """
+    if when is None:
+        return ""
+    delta = max(0.0, (time.time() if now is None else now) - when)
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h ago"
+    if delta < 172800:
+        return "yesterday"
+    return f"{int(delta // 86400)}d ago"
+
+
+def asset_summary_lines(job: dict[str, Any], now: float | None = None) -> tuple[str, list[str]]:
+    """The pure half of :func:`asset_summary`: the readable when-line, and the
+    technical lines that belong under a foldout.
+
+    The first is what a person reads; the second is what a bug report needs.
+    They were one ``muted`` line -- ``15009c54aa81 - image - model`` over a raw
+    float -- which is the register a database uses, not the one Home and the
+    Library use for the same row.
+    """
+    when = ago(job.get("created_at"), now)
+    details = [f"id: {job.get('id', '')}"]
+    if job.get("kind"):
+        details.append(f"kind: {job['kind']}")
+    if job.get("stage"):
+        details.append(f"stage: {job['stage']}")
+    if job.get("created_at"):
+        import datetime as dt
+
+        stamp = dt.datetime.fromtimestamp(float(job["created_at"]))
+        details.append(f"created: {stamp:%Y-%m-%d %H:%M:%S}")
+    return when, details
+
+
+def asset_summary(job: dict[str, Any], *, now: float | None = None) -> None:
+    """What this asset is and roughly when it was made, then a *Details*
+    foldout with the id and raw metadata and a button to copy them.
+
+    The type badge and the relative date are the same two words a Home tile
+    and a Library card use, so an asset reads the same in the third place it
+    appears. The id is still one click away: it is what a job's ``error.log``
+    and its row are found by, and hiding it entirely would have made "report
+    this" a search.
+    """
+    when, details = asset_summary_lines(job, now)
+    stage_badge(job)
+    if when:
+        imgui.same_line()
+        muted(when)
+    if imgui.tree_node("Details##asset-summary"):
+        for line in details:
+            muted(line)
+        if controls.small_button("Copy"):
+            imgui.set_clipboard_text("\n".join(details))
+        imgui.tree_pop()
+
+
 # ``quality.AUDIT_UNINFORMATIVE``, named here where its readers already look.
 # It moved out of this module on 2026-09-03 because ``review_mode`` needed the
 # threshold and was importing imgui-bearing ``widgets`` for it from inside a

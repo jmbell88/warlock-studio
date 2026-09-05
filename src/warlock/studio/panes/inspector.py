@@ -606,9 +606,9 @@ def _header(ctx: Any, job: Any) -> None:
 
 
 def _meta(ctx: Any, job: Any) -> None:
-    widgets.muted(f"{job['id']} - {job.get('kind')} - {job.get('stage')}")
-    if job.get("created_at"):
-        widgets.muted(str(job["created_at"]))
+    # The same badge-and-"yesterday" a Home tile wears; the id, the internal
+    # kind/stage names and the exact timestamp are one foldout down.
+    widgets.asset_summary(job)
     if ctx.viewer is not None and ctx.viewer.has_model and create_stages.at(ctx.state, "mesh"):
         stats = ctx.viewer.stats()
         if stats:
