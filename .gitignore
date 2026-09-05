@@ -34,7 +34,12 @@ __pycache__/
 dist/
 /build/
 *.egg-info/
-.claude/
+# Claude Code's per-machine state stays out, but the skills are project
+# knowledge (/exercise-mode, /warlock-audit) and travel with the tree. Git
+# cannot re-include a file under an excluded directory, so the parent is
+# matched with a glob and the one subdirectory negated.
+.claude/*
+!.claude/skills/
 # imgui's window layout, rewritten every time the app is closed. Tracking it
 # meant every run produced a diff and every branch produced a conflict, over a
 # file that is per-machine by definition.
