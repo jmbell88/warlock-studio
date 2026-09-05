@@ -319,12 +319,13 @@ def _scale_dialog(ctx: Any, tab: Any, *, opening: bool = False) -> None:
     manual_render.help_button_inline(ctx, "inker-image-size")
     widgets.divider()
 
-    units = widgets.segmented_control(
-        "##scale-units",
-        [("pixels", "Pixels"), ("percent", "Percent")],
-        state.scale_units,
+    # A form choice is ``segmented_choice`` (the pill group every other form
+    # choice in the app is); ``segmented_control``'s sliding track is the
+    # Settings pane's category switch and nothing else (2026-09-05).
+    changed, units = controls.segmented_choice(
+        "scale-units", [("pixels", "Pixels"), ("percent", "Percent")], state.scale_units
     )
-    if units != state.scale_units:
+    if changed:
         state.scale_units = units
 
     if state.scale_units == "percent":

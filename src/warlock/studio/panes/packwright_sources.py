@@ -299,23 +299,36 @@ def _row(ctx: Any, state: Any, tab: Any, source: Any, editable: bool) -> None:
 
     imgui.push_id(str(source.uid))
     selected = state.selected == source.uid
-    if controls.selectable(f"{source.name}##src", selected)[0]:
-        state.selected = None if selected else source.uid
-    if imgui.is_item_hovered():
-        sprite = source.sprite
-        imgui.set_tooltip(f"{sprite.width} x {sprite.height}\n{sprite.key}")
-    if imgui.begin_popup_context_item("src-menu"):
-        widgets.popup_chrome(_imgui=imgui)
-        if controls.menu_item_simple("Remove") and editable:
-            packwright_mode.remove_source(ctx, source.uid, tab)
-        imgui.end_popup()
-    if selected and editable:
+    if state.renaming == source.uid and editable:
+        # **Double-click renames**, which is what Plotter's layers and Clay's
+        # outliner do; this list grew an inline field under the selected row
+        # instead, so the same gesture renamed in two lists and did nothing in
+        # the third (2026-09-05).
+        imgui.set_next_item_width(-1.0)
         name = widgets.input_text("##rename", source.name, max_length=64)
         if name != source.name:
             # Through the mode, not onto the document: the mode is what re-arms
             # the pack, and a name that never reaches the layout is a name the
             # exported sidecar does not carry.
             packwright_mode.rename_source(ctx, tab, source.uid, name)
+        if imgui.is_item_deactivated():
+            state.renaming = None
+    else:
+        if controls.selectable(f"{source.name}##src", selected)[0]:
+            state.selected = None if selected else source.uid
+        if imgui.is_item_hovered():
+            sprite = source.sprite
+            imgui.set_tooltip(f"{sprite.width} x {sprite.height}\n{sprite.key}")
+            if imgui.is_mouse_double_clicked(0) and editable:
+                state.renaming = source.uid
+        if imgui.begin_popup_context_item("src-menu"):
+            widgets.popup_chrome(_imgui=imgui)
+            if controls.menu_item_simple(f"{icons.PENCIL} Rename") and editable:
+                state.renaming = source.uid
+            if controls.menu_item_simple("Remove") and editable:
+                packwright_mode.remove_source(ctx, source.uid, tab)
+            imgui.end_popup()
+    if selected and editable:
         _pivot_row(ctx, tab, source)
         # Remove, not Delete: the source leaves this atlas and the file it
         # came from is untouched. ``MINUS`` is the detach glyph; ``TRASH`` is

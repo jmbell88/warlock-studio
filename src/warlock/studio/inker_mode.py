@@ -35,7 +35,6 @@ from . import (
     inker_playback,
     inker_state,
     journal,
-    recents,
 )
 from . import settings as settings_mod
 from .inker import aseout
@@ -197,27 +196,9 @@ def ensure(ctx: Any) -> InkerState:
     return state
 
 
-def remember_path(ctx: Any, path: Any) -> None:
-    """Put ``path`` at the front of the merged recent list.
-
-    Through :mod:`.recents` rather than onto a field of this mode's own state:
-    the four document modes kept four independent ``recent`` lists, and Home's
-    single Resume list cannot be built from them at all -- four bare path lists
-    carry no ordering *between* them. There is one list now, and this is how
-    inker writes to it.
-    """
-    recents.remember(ctx.settings, "inker", path)
-
-
-def forget_path(ctx: Any, path: Any) -> None:
-    """Drop a path that turned out not to open -- :mod:`.recents`' own rule,
-    named here so a caller does not have to know this mode's kind string."""
-    recents.forget(ctx.settings, "inker", path)
-
-
-def recent_paths(ctx: Any) -> list[str]:
-    """This mode's recent files, newest first. What its own panel draws."""
-    return recents.paths(ctx.settings, "inker")
+# The three recents wrappers every document mode carries, over the one
+# list Home's Resume rows are built from (``docmodes.recents_for``).
+remember_path, forget_path, recent_paths = docmodes.recents_for("inker")
 
 
 def persist(ctx: Any) -> None:
@@ -1048,11 +1029,7 @@ def _done_recover(ctx: Any, state: Any, done: Any) -> None:
             title=result.get("title"),
             file_format="ora",
         )
-        # Dirty from the moment it opens, and it owns the file it came
-        # from: saving or closing it is what clears the crash copy, and
-        # until one of those happens the copy has to stay.
-        tab.saved_head = -1
-        tab.journal_name = Path(result["autosave"]).name
+        docmodes.mark_recovered(tab, result["autosave"])
         set_mode(ctx.state, "inker")
 
 

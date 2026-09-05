@@ -37,7 +37,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import dialogs, docmodes, journal, recents, sirens_audio, sirens_io, sirens_state
+from . import dialogs, docmodes, journal, sirens_audio, sirens_io, sirens_state
 
 # ``ensure`` and ``active`` live in :mod:`.sirens_state` -- they touch nothing
 # but ``ctx.state.sirens`` -- and the file layer lives in :mod:`.sirens_io`.
@@ -79,21 +79,9 @@ from .state import set_mode
 log = logging.getLogger(__name__)
 
 
-def remember_path(ctx: Any, path: Any) -> None:
-    """Put ``path`` at the front of the merged recent list -- :mod:`.recents`,
-    which is the one list Home's Resume rows are built from."""
-    recents.remember(ctx.settings, "sirens", path)
-
-
-def forget_path(ctx: Any, path: Any) -> None:
-    """Drop a path that turned out not to open -- :mod:`.recents`' own rule,
-    named here so a caller does not have to know this mode's kind string."""
-    recents.forget(ctx.settings, "sirens", path)
-
-
-def recent_paths(ctx: Any) -> list[str]:
-    """This mode's recent files, newest first. What its own panel draws."""
-    return recents.paths(ctx.settings, "sirens")
+# The three recents wrappers every document mode carries, over the one
+# list Home's Resume rows are built from (``docmodes.recents_for``).
+remember_path, forget_path, recent_paths = docmodes.recents_for("sirens")
 
 
 def persist(ctx: Any) -> None:
@@ -543,15 +531,7 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
         return False
     title = f"{meta.get('title') or Path(path).stem} (recovered)"
     tab = adopt(ctx, doc, path=None, title=title)
-    # A recovered document must read dirty until the user saves it somewhere:
-    # ``read_wsng`` hands back a document already marked saved, and a clean
-    # recovered tab closes without a confirm -- taking the journal copy, the
-    # only surviving copy of the work, with it. ``SongTab.dirty`` delegates to
-    # the document, so the never-matching head goes on the *document*; the
-    # tab's mirror follows so ``mark_saved`` keeps them in step.
-    doc.saved_head = -1
-    tab.saved_head = -1
-    tab.journal_name = Path(path).name
+    docmodes.mark_recovered(tab, path, doc)
     return True
 
 

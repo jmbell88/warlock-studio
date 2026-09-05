@@ -45,7 +45,9 @@ def draw(ctx: Any) -> None:
     focus.pump(ctx.state, FOCUS_PANE)
     focus.begin(ctx.state, FOCUS_PANE)
 
-    widgets.pane_title("Recipe")
+    # ``section``, the rung every column pane opens with; ``pane_title`` is
+    # the full-window rung (Library, Settings) and this column had borrowed it.
+    widgets.section("Recipe")
     manual_render.help_button(ctx, "muse-recipe")
 
     # Ahead of every control, for ``model_gate``'s reason: Muse has no

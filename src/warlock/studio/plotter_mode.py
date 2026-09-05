@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import docmodes, journal, plotter_state, recents
+from . import docmodes, journal, plotter_state
 from .plotter._map_model import ObjectLayer
 
 # ``ensure`` and ``active`` live in :mod:`.plotter_state` -- they touch nothing
@@ -103,27 +103,9 @@ log = logging.getLogger(__name__)
 DEFAULT_MAP = (32, 32, 32, 32)  # width, height, tile width, tile height
 
 
-def remember_path(ctx: Any, path: Any) -> None:
-    """Put ``path`` at the front of the merged recent list.
-
-    Through :mod:`.recents` rather than onto a field of this mode's own state:
-    the four document modes kept four independent ``recent`` lists, and Home's
-    single Resume list cannot be built from them at all -- four bare path lists
-    carry no ordering *between* them. There is one list now, and this is how
-    plotter writes to it.
-    """
-    recents.remember(ctx.settings, "plotter", path)
-
-
-def forget_path(ctx: Any, path: Any) -> None:
-    """Drop a path that turned out not to open -- :mod:`.recents`' own rule,
-    named here so a caller does not have to know this mode's kind string."""
-    recents.forget(ctx.settings, "plotter", path)
-
-
-def recent_paths(ctx: Any) -> list[str]:
-    """This mode's recent files, newest first. What its own panel draws."""
-    return recents.paths(ctx.settings, "plotter")
+# The three recents wrappers every document mode carries, over the one
+# list Home's Resume rows are built from (``docmodes.recents_for``).
+remember_path, forget_path, recent_paths = docmodes.recents_for("plotter")
 
 
 def persist(ctx: Any) -> None:
@@ -1429,15 +1411,7 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
         return False
     title = f"{meta.get('title') or Path(path).stem} (recovered)"
     tab = adopt(ctx, doc, path=None, title=title, file_format="wmap")
-    # A recovered document must read dirty until the user saves it somewhere:
-    # ``read_wmap`` hands back a document already marked saved, and a clean
-    # recovered tab closes without a confirm -- taking the journal copy, the
-    # only surviving copy of the work, with it. ``PlotterDoc.dirty`` delegates
-    # to the document, so the never-matching head goes on the *document*; the
-    # tab's mirror follows so ``mark_saved`` keeps them in step.
-    doc.saved_head = -1
-    tab.saved_head = -1
-    tab.journal_name = Path(path).name
+    docmodes.mark_recovered(tab, path, doc)
     return True
 
 

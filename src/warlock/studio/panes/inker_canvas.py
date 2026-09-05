@@ -27,6 +27,7 @@ from imgui_bundle import imgui
 from .. import (
     ants,
     controls,
+    docmodes,
     fonts,
     icons,
     imgui_backend,
@@ -506,22 +507,7 @@ def _empty(ctx: Any, state: Any) -> None:
 
 
 def _tab_bar(ctx: Any, state: Any) -> None:
-    flags = imgui.TabBarFlags_.reorderable.value | imgui.TabBarFlags_.auto_select_new_tabs.value
-    if not imgui.begin_tab_bar("inker-tabs", flags):
-        return
-    for tab in list(state.docs):
-        item_flags = 0
-        if tab.dirty:
-            # imgui's own dot, rather than a " *" in the title: the title is
-            # also the tab's identity, and decorating it would move the tab.
-            item_flags |= imgui.TabItemFlags_.unsaved_document.value
-        opened, keep = imgui.begin_tab_item(tab.label, True, item_flags)
-        if opened:
-            state.activate(tab.uid)
-            imgui.end_tab_item()
-        if not keep:
-            inker_mode.request_close(ctx, tab)
-    imgui.end_tab_bar()
+    docmodes.tab_bar(ctx, state, "inker-tabs", lambda tab: inker_mode.request_close(ctx, tab))
 
 
 # --- the canvas -------------------------------------------------------------

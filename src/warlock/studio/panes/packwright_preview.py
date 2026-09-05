@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .. import icons, inker_state, packwright_mode, theme, widgets
+from .. import docmodes, icons, inker_state, packwright_mode, theme, widgets
 from ..tokens import sp
 from . import packwright_textures
 
@@ -118,27 +118,10 @@ def _area_note(tab: Any, size_px: tuple[int, int]) -> str | None:
 
 
 def _tabs(ctx: Any, state: Any) -> None:
-    from imgui_bundle import imgui
 
-    if not state.docs:
-        return
-    # ``auto_select_new_tabs`` for ``inker_canvas``'s reason: without it, a
-    # second opened document lands behind the first and "Open" looks inert.
-    flags = (
-        imgui.TabBarFlags_.reorderable.value
-        | imgui.TabBarFlags_.auto_select_new_tabs.value
+    docmodes.tab_bar(
+        ctx, state, "packwright-tabs", lambda tab: packwright_mode.close_tab(ctx, tab.uid)
     )
-    if imgui.begin_tab_bar("packwright-tabs", flags):
-        for tab in list(state.docs):
-            # imgui's own dot, not a ``"* "`` prefix -- see ``inker_canvas``.
-            item_flags = imgui.TabItemFlags_.unsaved_document.value if tab.dirty else 0
-            opened, keep = imgui.begin_tab_item(tab.label, True, item_flags)
-            if opened:
-                state.activate(tab.uid)
-                imgui.end_tab_item()
-            if not keep:
-                packwright_mode.close_tab(ctx, tab.uid)
-        imgui.end_tab_bar()
 
 
 def _empty(ctx: Any) -> None:

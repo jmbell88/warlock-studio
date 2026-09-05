@@ -174,25 +174,11 @@ class ClayViewport:
         ``unsaved_document`` rather than a ``"* "`` prefix, which is Inker's
         rule and the right one: the title is half of the tab's identity.
         """
-        from imgui_bundle import imgui
+
+        from . import docmodes
 
         state = clay_mode.ensure(ctx)
-        if not state.docs:
-            return
-        # ``auto_select_new_tabs`` for ``inker_canvas``'s reason: without it, a
-        # second opened document lands behind the first and "Open" looks inert.
-        flags = imgui.TabBarFlags_.reorderable.value | imgui.TabBarFlags_.auto_select_new_tabs.value
-        if not imgui.begin_tab_bar("clay-tabs", flags):
-            return
-        for tab in list(state.docs):
-            item_flags = imgui.TabItemFlags_.unsaved_document.value if tab.dirty else 0
-            opened, keep = imgui.begin_tab_item(tab.label, True, item_flags)
-            if opened:
-                state.activate(tab.uid)
-                imgui.end_tab_item()
-            if not keep:
-                clay_mode.close_tab(ctx, tab.uid)
-        imgui.end_tab_bar()
+        docmodes.tab_bar(ctx, state, "clay-tabs", lambda tab: clay_mode.close_tab(ctx, tab.uid))
 
     def _clay_empty(self, ctx: Any, clay_mode: Any) -> None:
         """What Clay shows with nothing open, mirroring the raster editor's.

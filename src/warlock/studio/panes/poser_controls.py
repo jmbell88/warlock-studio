@@ -18,8 +18,7 @@ from ..tokens import sp
 
 def draw(ctx: Any) -> None:
     state = poser_mode.ensure(ctx)
-    if not widgets.header("Pose"):
-        return
+    widgets.section("Pose")
     manual_render.help_button(ctx, "poser-controls")
     if not ctx.rigging_available:
         widgets.muted("Posing needs Blender, which is not installed.")

@@ -210,7 +210,7 @@ class SongTab:
 
     @property
     def label(self) -> str:
-        return f"{self.title}###{self.uid}"
+        return docmodes.tab_label(self)
 
     def mark_at(self, seconds: float, rate: int) -> tuple[int, int, int] | None:
         """Which ``(order index, pattern uid, row)`` is sounding at ``seconds``.

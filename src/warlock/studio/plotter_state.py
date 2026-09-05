@@ -399,9 +399,7 @@ class PlotterDoc:
 
     @property
     def label(self) -> str:
-        """What imgui draws. The id after ### is what it *matches* on, so the
-        visible part is free to change without moving the tab."""
-        return f"{self.title}###{self.uid}"
+        return docmodes.tab_label(self)
 
     def mark_saved(self, head: int | None = None) -> None:
         """Record which history position is now on disk.

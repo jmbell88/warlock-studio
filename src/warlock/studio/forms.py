@@ -9,7 +9,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import controls, fonts, icons, theme, tokens
+from . import controls, fonts, theme, tokens
 from .tokens import sp
 
 FORM_BREAKPOINT = 480.0
@@ -106,20 +106,17 @@ class Form:
         return answer
 
     def _label(self, label: str, help_text: str) -> None:
-        room = imgui.get_content_region_avail().x
-        with fonts.label(imgui):
-            shown = sentence_case(label)
-            label_width = imgui.calc_text_size(shown).x
-            imgui.text(shown)
-        if help_text:
-            needed = (
-                label_width + imgui.get_style().item_spacing.x + imgui.calc_text_size(icons.INFO).x
-            )
-            if needed <= room:
-                imgui.same_line()
-            imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.MUTED)), icons.INFO)
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(help_text)
+        # ``widgets.field_label``'s register -- small caps, muted, the info
+        # glyph beside the name -- and not a second one. Until 2026-09-05 a
+        # ``Form`` field was labelled in the body face in sentence case while
+        # the workspaces' ``labeled_*`` controls used small caps, so
+        # "Steps" in Poser and "STEPS" in Muse were the same kind of thing
+        # drawn as two. What this class owns is the placement (stacked below
+        # the breakpoint, a label column above it) and the validation copy;
+        # the face is the app's one field face.
+        from . import widgets
+
+        widgets.field_label(sentence_case(label), help_text or None)
 
     @contextmanager
     def field(

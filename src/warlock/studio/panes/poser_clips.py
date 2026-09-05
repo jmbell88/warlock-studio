@@ -37,8 +37,9 @@ from ..tokens import sp
 
 def draw(ctx: Any) -> None:
     state = poser_mode.ensure(ctx)
-    if not widgets.header("Clips", persist_key="poser-clips"):
-        return
+    # A section, not a collapsing header: every other workspace's column pane
+    # opens with one, and Poser alone could fold its pane shut (2026-09-05).
+    widgets.section("Clips")
     manual_render.help_button(ctx, "poser-clips")
     if not ctx.rigging_available:
         widgets.muted("Editing clips needs Blender, which is not installed.")

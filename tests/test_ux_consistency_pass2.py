@@ -428,3 +428,87 @@ def test_no_pane_draws_a_raw_separator_or_a_heading_as_body_text():
         for title in ("Map properties", "Go to coordinate", "New canvas", "Resize the map"):
             assert f'imgui.text("{title}"' not in text, (name, title)
     assert callable(widgets.divider) and callable(widgets.popup_title)
+
+
+# --- one implementation (C1-C4, C6) ------------------------------------------
+
+
+def test_a_form_field_is_labelled_in_the_one_field_face():
+    """``forms.Form`` drew sentence case in the body face; the seven
+    workspaces' ``labeled_*`` controls drew small caps."""
+    from warlock.studio import forms
+
+    source = inspect.getsource(forms.Form._label)
+    assert "widgets.field_label(" in source
+    assert "fonts.label" not in source
+
+
+def test_every_column_pane_opens_with_a_section():
+    """Poser folded its panes under collapsing headers; Muse's recipe used
+    the full-window title rung."""
+    sources = _pane_sources()
+    for name in ("poser_clips.py", "poser_controls.py", "poser_library.py"):
+        assert "widgets.header(" not in sources[name], name
+    assert 'widgets.section("Recipe")' in sources["muse_recipe.py"]
+    for name, text in sources.items():
+        # Full-window panes, and the tour's overlay card, keep the louder rung.
+        if name in ("library_full.py", "app_settings.py", "tour.py"):
+            continue
+        assert "widgets.pane_title(" not in text, name
+
+
+def test_the_track_is_the_settings_switch_and_a_form_choice_is_a_pill_group():
+    sources = _pane_sources()
+    users = [name for name, text in sources.items() if "segmented_control(" in text]
+    assert users == ["app_settings.py"], users
+    assert "controls.segmented_choice(" in sources["inker_bridge.py"]
+
+
+def test_rename_is_a_double_click_in_every_list_that_renames():
+    sources = _pane_sources()
+    for name in ("plotter_layers.py", "clay_outliner.py", "packwright_sources.py"):
+        assert "is_mouse_double_clicked(0)" in sources[name], name
+
+
+def test_the_five_modes_share_one_tab_bar_save_label_and_recents():
+    from warlock.studio import (
+        clay_mode,
+        clay_state,
+        clay_viewport,
+        docmodes,
+        inker_mode,
+        inker_state,
+        packwright_io,
+        packwright_mode,
+        packwright_state,
+        plotter_io,
+        plotter_mode,
+        plotter_state,
+        sirens_io,
+        sirens_mode,
+        sirens_state,
+    )
+    from warlock.studio.panes import (
+        inker_canvas,
+        packwright_preview,
+        plotter_canvas,
+        sirens_patterns,
+    )
+
+    tab_bars = (inker_canvas, clay_viewport, plotter_canvas, packwright_preview, sirens_patterns)
+    for module in tab_bars:
+        source = inspect.getsource(module)
+        assert "docmodes.tab_bar(" in source, module.__name__
+        assert "begin_tab_bar" not in source, module.__name__
+    for module in (clay_mode, plotter_io, packwright_io, sirens_io):
+        assert "docmodes.save(" in inspect.getsource(module.save), module.__name__
+    for module in (clay_state, inker_state, plotter_state, packwright_state, sirens_state):
+        assert "docmodes.tab_label(self)" in inspect.getsource(module), module.__name__
+    for module in (inker_mode, clay_mode, plotter_mode, packwright_mode, sirens_mode):
+        source = inspect.getsource(module)
+        assert "docmodes.recents_for(" in source, module.__name__
+        assert "def remember_path" not in source, module.__name__
+        assert "docmodes.mark_recovered(" in source, module.__name__
+        assert callable(module.recent_paths) and callable(module.forget_path)
+    remember, forget, paths = docmodes.recents_for("clay")
+    assert remember.__name__ == "remember_path" and paths.__name__ == "recent_paths"

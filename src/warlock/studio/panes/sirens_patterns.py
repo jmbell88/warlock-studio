@@ -29,6 +29,7 @@ from typing import Any
 from .. import (
     anchors,
     controls,
+    docmodes,
     icons,
     sirens_hints,
     sirens_mode,
@@ -222,25 +223,8 @@ def _channel_popup(ctx: Any, tab: Any, channel: Any, index: int) -> None:
 
 
 def _tabs(ctx: Any, state: Any) -> None:
-    from imgui_bundle import imgui
 
-    if not state.docs:
-        return
-    flags = (
-        imgui.TabBarFlags_.reorderable.value
-        | imgui.TabBarFlags_.auto_select_new_tabs.value
-    )
-    if imgui.begin_tab_bar("sirens-tabs", flags):
-        for tab in list(state.docs):
-            # imgui's own dot, not a ``"* "`` prefix -- see ``inker_canvas``.
-            item_flags = imgui.TabItemFlags_.unsaved_document.value if tab.dirty else 0
-            opened, keep = imgui.begin_tab_item(tab.label, True, item_flags)
-            if opened:
-                state.activate(tab.uid)
-                imgui.end_tab_item()
-            if not keep:
-                sirens_mode.close_tab(ctx, tab.uid)
-        imgui.end_tab_bar()
+    docmodes.tab_bar(ctx, state, "sirens-tabs", lambda tab: sirens_mode.close_tab(ctx, tab.uid))
 
 
 def _empty(ctx: Any) -> None:

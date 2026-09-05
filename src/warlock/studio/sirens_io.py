@@ -262,12 +262,9 @@ def save_to(ctx: Any, tab: SongTab, path: Path) -> None:
 
 def save(ctx: Any, tab: SongTab | None = None) -> None:
     tab = tab or active(ctx)
-    if tab is None or tab.saving:
-        return
-    if tab.path is None:
-        save_as(ctx, tab)
-        return
-    save_to(ctx, tab, tab.path)
+    docmodes.save(
+        tab, save_as=lambda: save_as(ctx, tab), save_to=lambda: save_to(ctx, tab, tab.path)
+    )
 
 
 def save_as(ctx: Any, tab: SongTab | None = None) -> None:

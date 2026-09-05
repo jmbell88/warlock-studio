@@ -157,6 +157,99 @@ def close_tab(ctx: Any, state: Any, uid: str, release: Any) -> None:
     dialogs.ask_close_unsaved(ctx, tab.title, drop)
 
 
+def tab_label(tab: Any) -> str:
+    """What imgui draws on a tab. The id after ``###`` is what it *matches*
+    on, so the visible part is free to change without moving the tab. Five
+    ``label`` properties carried this line, three with this docstring."""
+    return f"{tab.title}###{tab.uid}"
+
+
+def recents_for(mode: str) -> tuple[Any, Any, Any]:
+    """``(remember_path, forget_path, recent_paths)`` for one mode.
+
+    Through :mod:`.recents` rather than onto a field of the mode's own state:
+    the document modes kept independent ``recent`` lists, and Home's single
+    Resume list cannot be built from them at all -- bare path lists carry no
+    ordering *between* them. There is one list, and five modes each wrote the
+    same three wrappers over it, keyed on their own name (2026-09-05). A
+    caller that turned out not to open a path forgets it, :mod:`.recents`' own
+    rule, without having to know the mode's kind string.
+    """
+    from . import recents
+
+    def remember_path(ctx: Any, path: Any) -> None:
+        recents.remember(ctx.settings, mode, path)
+
+    def forget_path(ctx: Any, path: Any) -> None:
+        recents.forget(ctx.settings, mode, path)
+
+    def recent_paths(ctx: Any) -> list[str]:
+        return recents.paths(ctx.settings, mode)
+
+    return remember_path, forget_path, recent_paths
+
+
+def save(tab: Any, *, save_as: Any, save_to: Any) -> None:
+    """Ctrl+S: Save As when the document has never been written anywhere,
+    and nothing at all while a save is already in flight -- the runner
+    refuses a key already running, and the second press would otherwise
+    leave ``saving`` set forever (``start_save``'s rule). Four modes carried
+    this body verbatim; Inker adds a pre-step and then delegates here."""
+    if tab is None or getattr(tab, "saving", False):
+        return
+    if tab.path is None:
+        save_as()
+        return
+    save_to()
+
+
+def tab_bar(ctx: Any, state: Any, bar_id: str, close: Any) -> None:
+    """The document tabs above a workspace's centre pane.
+
+    Five panes drew this byte for byte but for the bar id and the close call.
+    ``reorderable`` and ``auto_select_new_tabs``: without the second, a second
+    opened document lands behind the first and "Open" looks inert. The dirty
+    mark is imgui's own dot (``unsaved_document``) rather than a ``"* "`` in
+    the title, because the title is half of the tab's identity and decorating
+    it would move the tab. ``close`` takes the tab; every mode's close door
+    goes through :func:`close_tab`.
+    """
+    from imgui_bundle import imgui
+
+    if not state.docs:
+        return
+    flags = imgui.TabBarFlags_.reorderable.value | imgui.TabBarFlags_.auto_select_new_tabs.value
+    if not imgui.begin_tab_bar(bar_id, flags):
+        return
+    for tab in list(state.docs):
+        item_flags = imgui.TabItemFlags_.unsaved_document.value if tab.dirty else 0
+        opened, keep = imgui.begin_tab_item(tab.label, True, item_flags)
+        if opened:
+            state.activate(tab.uid)
+            imgui.end_tab_item()
+        if not keep:
+            close(tab)
+    imgui.end_tab_bar()
+
+
+def mark_recovered(tab: Any, path: Any, doc: Any = None) -> None:
+    """A recovered document reads dirty until the user saves it somewhere.
+
+    The reader hands back a document already marked saved, and a clean
+    recovered tab closes without a confirm -- taking the journal copy, the
+    only surviving copy of the work, with it. Where ``dirty`` delegates to
+    the document (Plotter, Packwright, Sirens) the never-matching head goes on
+    the *document* and the tab's mirror follows so ``mark_saved`` keeps them in
+    step; Clay's and Inker's tabs hold the head themselves. The copy's name is
+    recorded so saving or closing the tab is what clears it. Written out five
+    times before 2026-09-05, three of them with this paragraph.
+    """
+    if doc is not None:
+        doc.saved_head = -1
+    tab.saved_head = -1
+    tab.journal_name = Path(path).name
+
+
 def title_for(path: Path | None) -> str:
     """A tab's title from its file. ``clay_state`` keeps its own, on ``stem``:
     a Clay tab is named for the document rather than for the file."""

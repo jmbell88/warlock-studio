@@ -37,6 +37,7 @@ import numpy as np
 
 from .. import (
     controls,
+    docmodes,
     icons,
     inker_state,
     plotter_mode,
@@ -267,29 +268,8 @@ def draw(ctx: Any) -> None:
 
 
 def _tabs(ctx: Any, state: Any) -> None:
-    from imgui_bundle import imgui
 
-    if not state.docs:
-        return
-    # ``auto_select_new_tabs`` for ``inker_canvas``'s reason: without it,
-    # opening a second document adds its tab and leaves the *first* one
-    # focused, so "Open" appears to do nothing until the user notices the new
-    # tab and clicks it.
-    flags = (
-        imgui.TabBarFlags_.reorderable.value
-        | imgui.TabBarFlags_.auto_select_new_tabs.value
-    )
-    if imgui.begin_tab_bar("plotter-tabs", flags):
-        for tab in list(state.docs):
-            # imgui's own dot, not a ``"* "`` prefix -- see ``inker_canvas``.
-            item_flags = imgui.TabItemFlags_.unsaved_document.value if tab.dirty else 0
-            opened, keep = imgui.begin_tab_item(tab.label, True, item_flags)
-            if opened:
-                state.activate(tab.uid)
-                imgui.end_tab_item()
-            if not keep:
-                plotter_mode.close_tab(ctx, tab.uid)
-        imgui.end_tab_bar()
+    docmodes.tab_bar(ctx, state, "plotter-tabs", lambda tab: plotter_mode.close_tab(ctx, tab.uid))
 
 
 GOTO_POPUP = "plotter-goto"

@@ -280,10 +280,9 @@ def derive_popup(ctx: Any) -> None:
     label, note = next(
         ((one[1], one[2]) for one in DERIVE_ITEMS if one[0] == task), (task, "")
     )
-    widgets.pane_title(label)
+    widgets.popup_title(label)
     if note:
         widgets.muted_wrapped(note)
-    widgets.divider()
 
     for name in muse_mode.DERIVE_CONTROLS[task]:
         _derive_field(ctx, derive, name, task)

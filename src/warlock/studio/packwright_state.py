@@ -103,7 +103,7 @@ class PackTab:
 
     @property
     def label(self) -> str:
-        return f"{self.title}###{self.uid}"
+        return docmodes.tab_label(self)
 
     def mark_saved(self, head: int | None = None) -> None:
         self.doc.mark_saved(head)
@@ -145,6 +145,9 @@ class PackwrightState:
     # sources list, the items list and the preview's highlight -- one answer to
     # "which sprite are we talking about" rather than three.
     selected: int | None = None
+    # Which source row is being renamed, by uid -- a double-click opens the
+    # field, Plotter's and Clay's rule; the selected row used to grow one.
+    renaming: int | None = None
 
     # A decoded tile sheet waiting for its cell size: ``(path, display name,
     # pixels)``, set by the decode task and consumed (or dropped, on cancel)
