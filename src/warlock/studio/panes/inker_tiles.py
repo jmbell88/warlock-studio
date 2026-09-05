@@ -33,7 +33,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, icons, inker_mode, plotter_tilesets, theme, widgets
+from .. import controls, icons, inker_mode, plotter_tilesets, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_textures
@@ -74,14 +74,14 @@ def draw(ctx: Any) -> None:
 
     doc = tab.doc
     _verbs(ctx, state, tab)
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
 
     if not doc.tilesets:
         widgets.muted_wrapped(
             "A tilemap layer needs a tileset. Cut one out of the layer you have "
             "with Convert to tilemap, or import a Tiled .tsx."
         )
-        imgui.dummy((0, 4))
+        imgui.dummy((0, sp(tokens.SP_1)))
         _files(ctx, state, tab, None)
         return
 
@@ -95,9 +95,9 @@ def draw(ctx: Any) -> None:
     state.clamp_tile_pick(uid, slot.tileset.tile_count)
     _chooser(ctx, state, tab, uid)
     _picker(ctx, state, tab, slot)
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     _flips(state, slot.tileset)
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _files(ctx, state, tab, uid)
 
 
@@ -203,7 +203,7 @@ def _tile_size_popup(ctx: Any, state: Any, tab: Any) -> None:
         "Cells that hold the same picture share one tile, and an empty cell "
         "costs no tile at all."
     )
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     imgui.begin_disabled(tab.busy)
     if controls.button("Convert", (sp(180), 0)):
         inker_mode.convert_to_tilemap(ctx, tab, max(1, tile_w), max(1, tile_h))

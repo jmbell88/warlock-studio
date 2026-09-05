@@ -24,8 +24,9 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, icons, verbs, widgets
+from .. import clay_mode, icons, tokens, verbs, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 #: What this pane refuses to shrink past, in design pixels: the path line, the
 #: undo pair, the step count and the two ways out.
@@ -55,9 +56,9 @@ def draw(ctx: Any) -> None:
     _files(ctx, tab)
 
     _facts(tab)
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _history(ctx, tab)
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _outputs(ctx, tab)
     _recent(ctx)
 
@@ -121,7 +122,7 @@ def _files(ctx: Any, tab: Any) -> None:
         save=lambda: clay_mode.save(ctx, tab),
         save_as=lambda: clay_mode.save_as(ctx, tab),
     )
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
 
 
 def _outputs(ctx: Any, tab: Any) -> None:

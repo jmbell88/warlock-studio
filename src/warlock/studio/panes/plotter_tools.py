@@ -44,6 +44,7 @@ from .. import (
     plotter_mode,
     plotter_setup,
     plotter_state,
+    tokens,
     toolbar,
     widgets,
 )
@@ -681,7 +682,7 @@ def map_settings_popup(ctx: Any, state: Any, tab: Any) -> None:
             "hexagonal map made here wrote before this field existed."
         )
 
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     widgets.section("Custom properties")
     # The map's own custom properties. They survive a Tiled round trip and
     # always have; this is the first way to set one without a text editor.
@@ -749,16 +750,16 @@ def _resize_form(ctx: Any, tab: Any) -> None:
             f"Infinite. {tab.doc.width} x {tab.doc.height} tiles painted so far, "
             f"growing as you paint past the edge."
         )
-        imgui.dummy((0, 8))
+        imgui.dummy((0, sp(tokens.SP_2)))
         _offset_form(ctx, tab)
-        imgui.dummy((0, 8))
+        imgui.dummy((0, sp(tokens.SP_2)))
         if controls.button("Shrink to content", (-1, 0)):
             if tab.doc.autocrop():
                 ctx.state.preview.pop(key, None)
                 tab.view.fitted = False
             else:
                 ctx.toast("There is nothing painted to shrink to.", "warn")
-        imgui.dummy((0, 8))
+        imgui.dummy((0, sp(tokens.SP_2)))
         _infinite_form(ctx, tab)
         imgui.dummy((0, 10))
         _tile_size_form(ctx, tab)
@@ -779,7 +780,7 @@ def _resize_form(ctx: Any, tab: Any) -> None:
     _, form["h"] = widgets.labeled_slider_int("Height", int(form["h"]), 1, 512)
     _, form["dx"] = widgets.labeled_slider_int("Offset X", int(form["dx"]), -64, 64)
     _, form["dy"] = widgets.labeled_slider_int("Offset Y", int(form["dy"]), -64, 64)
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     # ``##apply`` is load-bearing. The section around this is ``header("Resize")``
     # and imgui hashes an item's id from its label, so a button reading "Resize"
     # inside it claimed the *header's* id -- and imgui routes activation by id,
@@ -799,9 +800,9 @@ def _resize_form(ctx: Any, tab: Any) -> None:
         ctx.state.preview.pop(key, None)
         tab.view.fitted = False
 
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _offset_form(ctx, tab)
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     # Tiled's Map -> Autocrop. Delegated to ``resize`` verbatim inside the
     # document, so objects travel by the rule that already exists.
     if controls.button("Autocrop to content", (-1, 0)):
@@ -811,7 +812,7 @@ def _resize_form(ctx: Any, tab: Any) -> None:
         else:
             ctx.toast("There is nothing painted to crop to.", "warn")
 
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _infinite_form(ctx, tab)
 
     imgui.dummy((0, 10))

@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import troupe_mode, verbs, widgets
+from .. import tokens, troupe_mode, verbs, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -34,7 +35,7 @@ def draw(ctx: Any) -> None:
         "from.",
     ):
         troupe_mode.open_in_inker(ctx)
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     if widgets.disabled_button(
         verbs.add_to("packwright"),
         ready,
@@ -45,7 +46,7 @@ def draw(ctx: Any) -> None:
     ):
         troupe_mode.add_to_packwright(ctx)
 
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     widgets.muted_wrapped(
         "The sheet and its sidecar are already on disk beside the mesh. The "
         "Library's export list is where the files themselves are."

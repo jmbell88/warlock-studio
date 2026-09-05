@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, plotter_mode, widgets
+from .. import controls, icons, plotter_mode, tokens, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 #: The undo-history popover's name, which imgui also takes as its id. Opened and
 #: begun in this pane, which is what an imgui popup requires.
@@ -74,7 +75,7 @@ def draw(ctx: Any) -> None:
             "at least one before it can be exported."
         )
 
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _history(ctx, tab)
     _recent(ctx)
 

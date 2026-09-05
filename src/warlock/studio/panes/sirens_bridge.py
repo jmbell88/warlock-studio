@@ -18,8 +18,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import anchors, icons, sirens_mode, widgets
+from .. import anchors, icons, sirens_mode, tokens, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -49,9 +50,9 @@ def draw(ctx: Any) -> None:
         save_as=lambda: sirens_mode.save_as(ctx, tab),
     )
 
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _history(ctx, tab)
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _export(ctx, tab)
     _recent(ctx)
 
@@ -105,7 +106,7 @@ def _export(ctx: Any, tab: Any) -> None:
     counts = [f"{len(doc.channels)} stem(s)"]
     if doc.oneshots:
         counts.append(f"{len(doc.oneshots)} effect(s)")
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     widgets.muted_wrapped(
         f"Into a folder you pick: {sirens_mode.SONG_NAME}, then"
         f" {sirens_mode.STEM_DIR}/ and {sirens_mode.SFX_DIR}/ -- "

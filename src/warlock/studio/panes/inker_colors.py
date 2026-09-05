@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import anchors, controls, inker_mode, theme, widgets
+from .. import anchors, controls, inker_mode, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_bridge
@@ -77,12 +77,12 @@ def draw(ctx: Any) -> None:
         state.add_swatch(state.fg)
         inker_mode.persist(ctx)
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     _swatches(ctx, state)
     _harmonies(ctx, state)
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     _palette_files(ctx, state)
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _indexed(ctx, state)
     # Unconditionally, and at *this* level rather than inside ``_indexed``: a
     # popup is matched by an id computed off the id stack that opened it, which
@@ -570,7 +570,7 @@ def _harmonies(ctx: Any, state: Any) -> None:
     """
     from ..inker import indexed as ix
 
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     if not widgets.header("Shades", default_open=False, persist_key="inker/shades"):
         return
     side = sp(SWATCH)

@@ -26,9 +26,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import anchors, controls, icons, sirens_mode, widgets
+from .. import anchors, controls, icons, sirens_mode, tokens, widgets
 from ..manual import render as manual_render
 from ..sirens import instruments as inst
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -69,7 +70,7 @@ def draw(ctx: Any) -> None:
         )
         return
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     for instrument in list(doc.instruments):
         label = instrument.name or f"Instrument {instrument.uid:02X}"
         if controls.selectable(
@@ -81,7 +82,7 @@ def draw(ctx: Any) -> None:
     selected = None if state.instrument is None else doc.instrument(state.instrument)
     if selected is None:
         return
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     imgui.set_next_item_width(-1)
     name = widgets.input_text(
         "Name", selected.name, max_length=inst.MAX_NAME_LEN, commit=True

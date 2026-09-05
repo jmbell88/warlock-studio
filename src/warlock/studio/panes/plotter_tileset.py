@@ -23,7 +23,7 @@ from typing import Any
 
 import numpy as np
 
-from .. import controls, icons, plotter_mode, widgets
+from .. import controls, icons, plotter_mode, tokens, widgets
 from ..manual import render as manual_render
 from ..tilegrid import gid as gidlib
 from ..tokens import sp
@@ -85,7 +85,7 @@ def _sheet_popup(ctx: Any, state: Any, tab: Any) -> None:
             "Import reorders them into the canonical blob layout and turns on "
             "terrain painting for this tileset."
         )
-        imgui.dummy((0, 4))
+        imgui.dummy((0, sp(tokens.SP_1)))
         if controls.button("Import as terrain set", (sp(170), 0)) and (
             plotter_mode.import_sheet_terrain(ctx)
         ):
@@ -118,7 +118,7 @@ def _sheet_popup(ctx: Any, state: Any, tab: Any) -> None:
             "with what the tiles were drawn as. Starting a new "
             f"{grid.view} map is the other way round it."
         )
-        imgui.dummy((0, 4))
+        imgui.dummy((0, sp(tokens.SP_1)))
         if controls.button("Add anyway", (sp(120), 0)) and (
             plotter_mode.import_sheet_blind(ctx)
         ):
@@ -152,7 +152,7 @@ def _sheet_popup(ctx: Any, state: Any, tab: Any) -> None:
             f"Import strips the separator lines and redraws each cell at "
             f"{doc.tile_w} x {doc.tile_h}, so the tiles line up with the map."
         )
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     if controls.button("Import", (sp(90), 0)) and plotter_mode.import_detected_sheet(ctx):
         imgui.close_current_popup()
     imgui.same_line()
@@ -207,7 +207,7 @@ def draw(ctx: Any) -> None:
         # nothing to pick and nothing to polish, so the way of getting one is
         # what the pane is for and it leads.
         add_button()
-        imgui.dummy((0, 4))
+        imgui.dummy((0, sp(tokens.SP_1)))
         widgets.muted_wrapped(
             "A map needs a tileset before anything can be painted. Add a PNG and it "
             f"is sliced at {doc.tile_w} x {doc.tile_h}, add a Tiled .tsx, or make a "
@@ -220,7 +220,7 @@ def draw(ctx: Any) -> None:
     index = max(0, min(state.tileset_index, len(doc.tilesets) - 1))
     state.tileset_index = index
     ref = doc.tilesets[index]
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     _tileset_bar(ctx, state, tab, ref, index)
     _picker(ctx, state, tab, ref, index, tab.uid, doc.tileset_epoch)
     _tile_form(ctx, state, tab, ref, index)
@@ -327,7 +327,7 @@ def _tile_form(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
     local = _picked_local(state, ref)
     if local is None:
         return
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     if not widgets.header("Tile", default_open=False, persist_key="plotter/tilemeta"):
         return
     meta = ref.tileset.meta_of(local)
@@ -348,7 +348,7 @@ def _tile_form(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
             "Never chosen by a random brush, and always placeable by hand."
         )
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     widgets.muted(
         f"{len(meta.animation)} animation frame(s), "
         f"{len(meta.collision)} collision shape(s)"
@@ -371,7 +371,7 @@ def _tile_form(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
     if meta.collision and controls.button("Clear collision", (-1, 0)):
         tab.doc.set_tile_meta(index, local, _replaced(meta, collision=()))
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     widgets.muted("Properties")
     plotter_layers.property_editor(
         ctx,

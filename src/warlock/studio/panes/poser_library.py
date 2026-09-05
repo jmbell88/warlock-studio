@@ -12,8 +12,9 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ... import rigging
-from .. import controls, icons, poser_mode, theme, widgets
+from .. import controls, icons, poser_mode, theme, tokens, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -38,7 +39,7 @@ def draw(ctx: Any) -> None:
     if chosen and chosen != state.template:
         poser_mode.set_template(ctx, chosen)
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     if controls.button("New pose", (-1, 0)):
         poser_mode.new_pose(ctx)
 

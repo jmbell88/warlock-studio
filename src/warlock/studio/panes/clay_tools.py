@@ -24,7 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, clay_ops, controls, icons, widgets
+from .. import clay_mode, clay_ops, controls, icons, tokens, widgets
 from ..clay import document as bd
 from ..clay import ops
 from ..clay import primitives as bp
@@ -106,7 +106,7 @@ def _body(ctx: Any) -> None:
 
     imgui.begin_disabled(tab.saving)
     _add(ctx, state, tab.doc)
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _actions(ctx, state, tab.doc)
     imgui.end_disabled()
     # *Outside* the disabled block: the popup greys its own Apply against

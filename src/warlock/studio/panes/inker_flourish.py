@@ -27,7 +27,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, inker_flourish, inker_mode, inker_ops, widgets
+from .. import controls, inker_flourish, inker_mode, inker_ops, tokens, widgets
 from ..inker.flourish import curves as flourish_curves
 from ..inker.flourish import engines, presets, prims
 from ..inker.flourish import recipe as flourish_recipe
@@ -76,7 +76,7 @@ def popup(ctx: Any, tab: Any) -> None:
         "phase. Every parameter can be changed afterwards from the inspector "
         "under the timeline."
     )
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     busy = tab is None or tab.busy or ctx.busy(inker_flourish.insert_key(tab))
     if controls.button("Insert", (sp(90), 0), enabled=not busy, reason=inker_flourish.BUSY):
         inker_mode.flourish_insert(

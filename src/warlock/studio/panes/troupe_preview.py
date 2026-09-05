@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, probe, theme, toolbar, troupe_mode, widgets
+from .. import controls, icons, probe, theme, tokens, toolbar, troupe_mode, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from ..troupe import qa
@@ -61,7 +61,7 @@ def draw(ctx: Any) -> None:
     troupe_mode.advance(ctx, imgui.get_io().delta_time)
 
     _transport(ctx, state)
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
 
     texture = troupe_mode.atlas_texture(ctx)
     record = troupe_mode.active_sheet(ctx)

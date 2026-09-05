@@ -30,10 +30,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import anchors, controls, icons, sirens_audio, sirens_mode, widgets
+from .. import anchors, controls, icons, sirens_audio, sirens_mode, tokens, widgets
 from ..manual import render as manual_render
 from ..sirens import document as D
 from ..sirens import instruments as inst
+from ..tokens import sp
 
 #: How many rows a new effect's pattern gets. ``document.add_oneshot``'s own
 #: default, named here because this pane draws the sentence that explains it: at
@@ -78,13 +79,13 @@ def draw(ctx: Any) -> None:
         )
         return
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     _rows(ctx, state, tab, editable)
 
     selected = None if state.oneshot is None else doc.oneshot(state.oneshot)
     if selected is None:
         return
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _fields(state, tab, selected, editable)
 
 

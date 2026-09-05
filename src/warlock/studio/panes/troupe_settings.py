@@ -15,8 +15,9 @@ from typing import Any
 
 from ... import rigging
 from ...service import troupe as svc_troupe
-from .. import forms, troupe_mode, verbs, widgets
+from .. import forms, tokens, troupe_mode, verbs, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -65,9 +66,9 @@ def draw(ctx: Any) -> None:
         _layout(form, form_ui, options)
         _size(form, form_ui, options)
         _palette(ctx, form, form_ui, options)
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     _submit(ctx, form)
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _existing_mesh(ctx, form)
 
 
@@ -120,7 +121,7 @@ def _existing_mesh(ctx: Any, form: dict[str, Any]) -> None:
         "A mesh that is not rigged is rigged first, as a humanoid. Then the "
         f"{cell_count(form)} cells above are rendered."
     )
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
 
 
 def _mesh_label(mesh: dict[str, Any]) -> str:

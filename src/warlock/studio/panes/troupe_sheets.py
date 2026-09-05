@@ -12,8 +12,9 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from .. import controls, troupe_mode, widgets
+from .. import controls, tokens, troupe_mode, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -45,7 +46,7 @@ def draw(ctx: Any) -> None:
             # hold, which is a reason to try a bigger sprite or a wider palette.
             widgets.muted(f"{report['orphans']} stray pixels cleaned")
 
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _rebuild(ctx, state)
     _rerender(ctx, state)
 

@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, packwright_mode, widgets
+from .. import controls, icons, packwright_mode, tokens, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -53,7 +54,7 @@ def draw(ctx: Any) -> None:
 
     _from_inker(ctx, tab, editable)
 
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     sources = tab.doc.sources
     if not sources:
         widgets.muted_wrapped(
@@ -205,7 +206,7 @@ def _tileset_popup(ctx: Any, state: Any) -> None:
     else:
         widgets.muted(f"{columns} x {rows} cells - {kept} tile(s), {dropped} empty dropped")
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     imgui.begin_disabled(bool(problem))
     if controls.button("Import", (sp(90), 0)) and packwright_mode.import_tileset(ctx):
         imgui.close_current_popup()
@@ -231,7 +232,7 @@ def _from_inker(ctx: Any, tab: Any, editable: bool) -> None:
     inker = ctx.state.inker
     if inker is None or not inker.docs:
         return
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     widgets.muted("From Inker")
     for doc in inker.docs:
         frames = len(doc.doc.anim.frames) if doc.doc.anim is not None else len(doc.doc.stack)

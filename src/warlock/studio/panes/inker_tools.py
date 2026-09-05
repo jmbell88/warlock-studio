@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import anchors, controls, icons, inker, inker_mode, inker_state, theme, widgets
+from .. import anchors, controls, icons, inker, inker_mode, inker_state, theme, tokens, widgets
 from ..inker_state import (
     PAINT_TOOLS,
     PATTERN_TOOLS,
@@ -532,7 +532,7 @@ def _tile_behavior(state: Any, doc: Any) -> None:
     """
     if doc is None or doc.active_tilemap_uid() is None:
         return
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     widgets.section("Tiles")
     current = str(doc.tile_behavior)
     # ``segmented_choice``, not three hand-rolled buttons with a pushed style
@@ -771,7 +771,7 @@ def _image_brush(ctx: Any, state: Any, tab: Any) -> None:
     where you started -- and because the useful values are the four quarter
     turns and the two mirrors, which is six clicks and no numbers.
     """
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     # Folded by default: an image brush is a property of the brush rather than
     # a step in using one, and eight rows of tip variants sat between the nib
     # and the opacity for every session that never captured a tip.
@@ -854,7 +854,7 @@ def _presets(ctx: Any, state: Any) -> None:
     tool. Clicking one selects its tool as well as its settings, because a
     preset called "inking pen" that arrived on the eraser would be half applied.
     """
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     if not widgets.header("Presets", default_open=False, persist_key="inker/presets"):
         return
     imgui.set_next_item_width(-sp(56))

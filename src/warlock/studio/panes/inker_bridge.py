@@ -24,7 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, icons, inker_mode, theme, widgets
+from .. import controls, icons, inker_mode, theme, tokens, widgets
 from ..inker import transform
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -614,7 +614,7 @@ def _inpaint_popup(ctx: Any, tab: Any) -> None:
     widgets.help_marker(
         "How far from the current pixels the model may go inside the selection."
     )
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     problems = []
     if not state.inpaint_prompt.strip():
         problems.append("Describe what should be there.")
@@ -939,7 +939,7 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
     # filter's pixels under the new filter's controls.
     tab.doc.preview_filter(state.filter_name, **_filter_values(state, state.filter_name))
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     imgui.begin_disabled(tab.busy)
     if controls.button("Apply", (sp(90), 0)):
         tab.doc.commit_filter()
@@ -1055,7 +1055,7 @@ def _sheet_import_popup(ctx: Any, state: Any) -> None:
     else:
         widgets.muted(f"{len(rects)} frames")
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     imgui.begin_disabled(not rects)
     if controls.button("Import", (sp(90), 0)) and inker_mode.import_sheet(ctx):
         imgui.close_current_popup()
@@ -1221,7 +1221,7 @@ def convert_popup(ctx: Any, tab: Any) -> None:
     # method's pixels under the new method's controls.
     tab.doc.preview_convert(state.convert_table, state.convert_method)
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     imgui.begin_disabled(tab.busy)
     if controls.button("Apply##convert", (sp(90), 0)):
         apply_convert(ctx, tab)

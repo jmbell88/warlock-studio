@@ -17,9 +17,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import anchors, controls, icons, sirens_audio, sirens_mode, widgets
+from .. import anchors, controls, icons, sirens_audio, sirens_mode, tokens, widgets
 from ..manual import render as manual_render
 from ..sirens import document as D
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -123,7 +124,7 @@ def draw(ctx: Any) -> None:
         seconds = tab.pcm.shape[0] / float(sirens_audio.RATE)
         widgets.muted(f"{seconds:0.1f}s rendered")
 
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     doc = tab.doc
     editable = not tab.busy
     imgui.set_next_item_width(-1)

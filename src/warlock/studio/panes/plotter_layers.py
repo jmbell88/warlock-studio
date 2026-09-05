@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 
-from .. import controls, icons, plotter_mode, widgets
+from .. import controls, icons, plotter_mode, tokens, widgets
 from ..manual import render as manual_render
 from ..plotter.props import CONTAINER_TYPES, PROPERTY_TYPES, Prop
 from ..plotter.tilemap import (
@@ -743,7 +743,7 @@ def map_rows(ctx: Any, doc: Any, editable: bool) -> None:
         imgui.align_text_to_frame_padding()
         widgets.muted(doc.class_name or "-")
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     widgets.section("Custom properties")
     imgui.begin_disabled(not editable)
     property_editor(
@@ -1017,7 +1017,7 @@ def _group_summary(ctx: Any, doc: Any, state: Any) -> None:
         "Drag any of them to move the whole set, or press Delete to remove "
         "them. Click one object on its own to edit its properties."
     )
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     layer = doc.layer(doc.active_layer) if doc.active_layer is not None else None
     locked = bool(getattr(layer, "locked", False))
     if locked:
@@ -1146,11 +1146,11 @@ def _object_fields(ctx: Any, doc: Any, state: Any, layer: Any, obj: MapObject) -
 
         _shape_fields(doc, layer, obj)
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     widgets.section("Properties")
     _properties(ctx, doc, layer, obj)
 
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     if widgets.destructive_button(f"{icons.TRASH} Delete object", (-1, 0)):
         doc.remove_object(layer.uid, obj.uid)
         state.select_object(None)

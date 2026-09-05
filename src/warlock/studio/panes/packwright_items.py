@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, packwright_mode, theme, widgets
+from .. import controls, icons, packwright_mode, theme, tokens, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -35,7 +36,7 @@ def draw(ctx: Any) -> None:
 
     if tab.pack_error:
         widgets.text_colored(theme.ERR, f"{icons.TRIANGLE_ALERT} {tab.pack_error}")
-        imgui.dummy((0, 4))
+        imgui.dummy((0, sp(tokens.SP_1)))
         widgets.muted_wrapped(
             "Raise the max size, turn trimming on, or split this into two atlases."
         )
@@ -62,7 +63,7 @@ def draw(ctx: Any) -> None:
     if tab.packing:
         widgets.muted("Repacking...")
 
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     by_key = {source.key: source for source in tab.doc.sources}
     # Clipped for ``packwright_sources``' reason: a packed atlas has one row per
     # sprite and a thousand-sprite atlas is ordinary, while the pane shows

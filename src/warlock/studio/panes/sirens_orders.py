@@ -23,8 +23,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import anchors, controls, icons, sirens_mode, widgets
+from .. import anchors, controls, icons, sirens_mode, tokens, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 _BUSY_WHY = "This song is being written; the buttons come back when it lands."
 _ROW_WHY = "This entry is already at the end it would move to."
@@ -75,9 +76,9 @@ def draw(ctx: Any) -> None:
         if doc.set_order(list(doc.order) + [current]):
             sirens_mode.request_rerender(ctx, tab)
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     _order(ctx, state, tab, editable)
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     widgets.section("Patterns")
     _patterns(ctx, state, tab, editable)
 

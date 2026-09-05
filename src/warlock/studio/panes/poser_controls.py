@@ -11,8 +11,9 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, forms, poser_mode, theme, widgets
+from .. import controls, forms, poser_mode, theme, tokens, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -131,7 +132,7 @@ def _root(viewer: Any) -> None:
 
 
 def _save(ctx: Any, viewer: Any) -> None:
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     busy = ctx.busy(poser_mode.SAVE_KEY)
     editing = viewer.editor.current is not None
     if editing and widgets.disabled_button(

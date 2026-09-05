@@ -16,9 +16,10 @@ from __future__ import annotations
 from typing import Any
 
 from ...pipelines.sheet import MAX_ATLAS_PX
-from .. import controls, icons, packwright_mode, widgets
+from .. import controls, icons, packwright_mode, tokens, widgets
 from ..manual import render as manual_render
 from ..packwright.layout import MODES
+from ..tokens import sp
 
 SIZES = (256, 512, 1024, 2048, 4096, 8192)
 
@@ -84,7 +85,7 @@ def draw(ctx: Any) -> None:
     widgets.muted_wrapped(_MODE_NOTES.get(settings.mode, ""))
 
     if settings.mode == "grid":
-        imgui.dummy((0, 6))
+        imgui.dummy((0, sp(tokens.SP_2)))
         changed, columns = widgets.labeled_drag_int(
             "Columns", settings.columns or 0, 0, MAX_COLUMNS, speed=0.1
         )
@@ -101,7 +102,7 @@ def draw(ctx: Any) -> None:
             "column, and a .tsx export refuses rather than misread it."
         )
 
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     changed, trim = widgets.toggle("Trim transparent edges", settings.trim)
     if changed and editable:
         packwright_mode.set_settings(ctx, tab, trim=trim)
@@ -121,7 +122,7 @@ def draw(ctx: Any) -> None:
     if changed and editable:
         packwright_mode.set_settings(ctx, tab, power_of_two=pot)
 
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     changed, padding = widgets.labeled_slider_int("Padding", settings.padding, 0, 16)
     # One gesture, one step -- see the Columns drag above.
     controls.fold_undo(tab.doc.history)
@@ -138,13 +139,13 @@ def draw(ctx: Any) -> None:
             "cannot sample the sprite next door."
         )
 
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     sizes = [(str(s), f"{s} px") for s in SIZES if s <= MAX_ATLAS_PX]
     picked = widgets.labeled_combo("Max size", str(settings.max_size), sizes)
     if editable and picked != str(settings.max_size):
         packwright_mode.set_settings(ctx, tab, max_size=int(picked))
 
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     schema = widgets.labeled_combo("Sidecar schema", settings.json_schema, _SCHEMA_OPTIONS)
     if editable and schema != settings.json_schema:
         packwright_mode.set_settings(ctx, tab, json_schema=schema)
@@ -159,7 +160,7 @@ def draw(ctx: Any) -> None:
     # existed. So: the button exists, it names its key, and it lives in the
     # pane that owns ``PackSettings`` rather than on a bridge, because asking
     # for a repack is what you want after changing one of these.
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     sources = bool(tab.doc.sources)
     if widgets.disabled_button(
         f"{icons.REFRESH} Repack (R)",
@@ -176,5 +177,5 @@ def draw(ctx: Any) -> None:
     # Outside the disabled block: it is the *explanation* of why everything
     # above is greyed, and a greyed explanation reads as one more dead control.
     if not editable:
-        imgui.dummy((0, 6))
+        imgui.dummy((0, sp(tokens.SP_2)))
         widgets.muted("Saving...")

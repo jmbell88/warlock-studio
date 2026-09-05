@@ -221,14 +221,30 @@ def _edit_actions(ctx: Any, job: Any) -> None:
     those two modes own, called verbatim, so the confirm Clay puts in front of
     a 200k-triangle import still fires here.
     """
-    from .. import clay_mode, icons, inker_mode
+    from .. import clay_mode, icons, inker_mode, troupe_mode
 
     params = (
         job.get("params")
         if isinstance(job, dict) and isinstance(job.get("params"), dict)
         else {}
     )
-    if params.get("asset_intent") == "tileset" and "input.png" in (job.get("files") or []):
+    is_tileset = params.get("asset_intent") == "tileset" and "input.png" in (
+        job.get("files") or []
+    )
+    exits = (
+        is_tileset,
+        offers_inker(ctx, job),
+        can_edit_in_clay(job),
+        troupe_mode.can_send_to_troupe(ctx, job),
+    )
+    if not any(exits):
+        return
+    # The one heading every mode's exits are under -- Clay, Packwright and
+    # Troupe's bridges say it over the same verbs, and this pane said nothing,
+    # so the same four buttons were a titled group in three places and a loose
+    # run of buttons in the fourth (2026-09-05).
+    widgets.section("Take it somewhere")
+    if is_tileset:
         from .. import packwright_mode, plotter_mode
 
         if controls.button(verbs.add_to("plotter")):
@@ -249,9 +265,7 @@ def _edit_actions(ctx: Any, job: Any) -> None:
             clay_mode.edit_asset_in_clay(ctx, job)
         widgets.hint_text("Opens the authored document when there is one, else the mesh.")
 
-    from .. import troupe_mode
-
-    if troupe_mode.can_send_to_troupe(ctx, job):
+    if exits[3]:
         if controls.button(f"{icons.PERSON_STANDING} {verbs.send_to('troupe')}"):
             troupe_mode.send_to_troupe(ctx, job)
         # The library's menu item has carried this since it existed and the

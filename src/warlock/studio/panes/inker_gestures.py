@@ -27,6 +27,7 @@ from .. import (
     inker_mode,
     inker_state,
     theme,
+    tokens,
     widgets,
 )
 from ..inker import textstamp
@@ -326,7 +327,7 @@ def _text_popup(ctx: Any, state: Any, tab: Any) -> None:
     imgui.same_line()
     widgets.muted("the foreground colour")
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     if controls.button("OK##inkertext", (sp(90), 0), _imgui=imgui):
         # The tool becomes Move on success (``stamp_text``), so the popup must
         # close either way: a refusal has already toasted why.

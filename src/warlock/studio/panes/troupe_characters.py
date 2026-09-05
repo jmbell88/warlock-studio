@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, troupe_mode, widgets
+from .. import controls, tokens, troupe_mode, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -63,7 +64,7 @@ def draw(ctx: Any) -> None:
         # One sheet needs no chooser, and drawing a list of one is a control
         # that says "there is a choice here" when there is not.
         return
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     widgets.section("Sheets")
     for record in records:
         size = int(record.get("frame_size") or 0)
@@ -125,7 +126,7 @@ def _pending(ctx: Any, pending: list[dict[str, Any]]) -> None:
 
     if not pending:
         return
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     widgets.section("In progress")
     for item in pending:
         widgets.muted_wrapped(str(item.get("prompt") or item["id"]))
@@ -141,4 +142,4 @@ def _pending(ctx: Any, pending: list[dict[str, Any]]) -> None:
 
             set_mode(ctx.state, "create")
             create_stages.go(ctx, "reference", select=item["id"])
-        imgui.dummy((0, 4))
+        imgui.dummy((0, sp(tokens.SP_1)))

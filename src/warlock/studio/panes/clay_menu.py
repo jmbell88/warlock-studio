@@ -23,7 +23,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, clay_ops, controls, theme, widgets
+from .. import clay_mode, clay_ops, controls, theme, tokens, widgets
 from ..tokens import sp
 
 POPUP = "clay-context"
@@ -126,7 +126,7 @@ def params_popup(ctx: Any, state: Any, tab: Any) -> None:
         imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + sp(HINT_WRAP))
         widgets.text_colored(theme.MUTED, op.hint)
         imgui.pop_text_wrap_pos()
-        imgui.dummy((0, 4))
+        imgui.dummy((0, sp(tokens.SP_1)))
     for param in op.params:
         label = f"{param.label}##{op.name}-{param.name}"
         if param.integer:

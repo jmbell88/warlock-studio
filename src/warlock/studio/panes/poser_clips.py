@@ -30,8 +30,9 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, forms, poser_mode, theme, widgets
+from .. import controls, forms, poser_mode, theme, tokens, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -111,7 +112,7 @@ def _keys(ctx: Any, state: Any) -> None:
     if changed:
         poser_mode.set_onion(ctx, onion)
 
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
     if widgets.disabled_button(
         "Up",
         state.key_index > 0,
@@ -295,7 +296,7 @@ def _scrubber(ctx: Any, state: Any) -> None:
 
 
 def _save(ctx: Any, state: Any) -> None:
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     busy = ctx.busy(poser_mode.CLIPS_SAVE_KEY)
     if state.clips_unsaved:
         widgets.text_colored(theme.ACCENT, "unsaved clip changes")

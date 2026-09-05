@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import icons, packwright_mode, verbs, widgets
+from .. import icons, packwright_mode, tokens, verbs, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -61,10 +62,10 @@ def draw(ctx: Any) -> None:
         "Nothing is packed yet. Add images -- packing runs by itself."
     )
 
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _history(ctx, tab)
 
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     widgets.section("Export")
     if widgets.disabled_button(
         f"{icons.DOWNLOAD} Atlas + JSON (Ctrl+Shift+E)",
@@ -86,7 +87,7 @@ def draw(ctx: Any) -> None:
             f"TexturePacker's JSON ({label}) schema, which most engines read."
         )
 
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(tokens.SP_2)))
     # The one heading every mode's exits are under -- see ``inker_bridge``'s
     # ``_pipeline``. The Export block above stays named for what it writes: it
     # produces files for another application, not a move inside the app.

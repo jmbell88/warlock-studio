@@ -25,9 +25,10 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, controls, icons, widgets
+from .. import clay_mode, controls, icons, tokens, widgets
 from ..clay import primitives as bp
 from ..manual import render as manual_render
+from ..tokens import sp
 
 log = logging.getLogger(__name__)
 
@@ -68,13 +69,13 @@ def _body(ctx: Any) -> None:
 
     imgui.begin_disabled(tab.saving)
     _identity(doc, obj)
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _transform(doc, obj)
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _generator(doc, obj)
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _diagnostics(state, doc, obj)
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _material(doc, obj)
     imgui.end_disabled()
 
@@ -99,7 +100,7 @@ def _element_summary(doc: Any) -> None:
     else:
         across = "1 object" if objects == 1 else f"{objects} objects"
         widgets.muted(f"{doc.element_mode} mode -- {total} {noun} across {across}")
-    imgui.dummy((0, 4))
+    imgui.dummy((0, sp(tokens.SP_1)))
 
 
 def _selected(doc: Any) -> Any:
