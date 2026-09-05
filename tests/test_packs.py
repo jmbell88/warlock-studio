@@ -217,7 +217,7 @@ def _shared() -> packs.Manifest:
 
 def test_ticking_both_torch_packs_downloads_torch_once():
     """The registry's own four-SDXL-recipes case. ``text2image`` and ``music``
-    share 42 distributions; a pack-keyed sum would tell the user to expect
+    share 27 distributions; a pack-keyed sum would tell the user to expect
     nearly twice the download and a pack-keyed install would write torch
     twice."""
     plan = packs.plan(_shared(), ["text2image", "music"])

@@ -20,7 +20,7 @@ Three rules this file exists to own, each of which is a way the same figure
 goes silently wrong:
 
 * **Dedupe is on wheel filename, never on pack.** ``text2image`` and ``music``
-  share 42 distributions, torch among them. A pack-keyed sum tells a user who
+  share 27 distributions, torch among them. A pack-keyed sum tells a user who
   ticks both that they are about to download torch twice, and a pack-keyed
   *install* would fetch it twice. This is exactly ``fetch.plan``'s
   four-SDXL-recipes-over-one-directory rule wearing different clothes.
@@ -381,7 +381,7 @@ def plan(manifest: Manifest, chosen: Sequence[str] | Sequence[Pack]) -> list[Whe
     """The wheels this selection actually has to install, each one once.
 
     Deduped on filename in manifest order. Ticking ``text2image`` and ``music``
-    together is one torch, not two -- the 42 distributions they share are the
+    together is one torch, not two -- the 27 distributions they share are the
     difference between an honest figure and one nearly double it, and between
     an install that runs once and one that writes the same 3 GB twice.
 
