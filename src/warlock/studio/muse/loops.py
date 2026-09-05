@@ -327,23 +327,44 @@ def find(pcm: np.ndarray, rate: int) -> list[Candidate]:
 
 
 def crossfade(pcm: np.ndarray, start: int, end: int, fade: int) -> np.ndarray:
-    """The loop body, with ``fade`` samples of equal-power join. -> same dtype.
+    """The loop body, with its own repeat seam made continuous. -> same dtype,
+    same length as ``end - start``.
+
+    **Wrap-aware, and that is the fix (M07 review, finding M08).** A repeated
+    loop's audible seam is the *tail* of one repetition meeting the *head* of
+    the next -- and the head is the body's own first samples, unconditionally,
+    however the body was built. An earlier version of this function blended
+    material from *before* ``start`` into the head instead: that changes what
+    the loop's first instant sounds like, but does nothing about the join a
+    repeat actually plays across, since the tail was never touched. Measured on
+    a loop that was already seamless (a constant plateau, so the untreated
+    wrap has a zero-sample jump): that version introduced a click where there
+    had been none, because the pre-``start`` material need not resemble the
+    body's own end at all.
+
+    So what is blended is the last ``fade`` samples of the body -- fading them
+    out -- against the first ``fade`` samples of the body -- fading them in --
+    replacing the tail in place. The head is left untouched, which is what
+    keeps the body's declared start ("the loop begins here") a real fact about
+    the file rather than a fact about whatever came before it.
 
     **Equal power, cos/sin, not linear.** Two decorrelated signals crossfaded
     linearly sum to about 0.71 of their level at the midpoint -- a ~3 dB dip,
     which is an audible hole once per repeat. ``cos``/``sin`` sum to 1 in
     *power*, which is what two unrelated signals actually add as.
 
-    The tail that is faded in comes from *before* ``start``: the point of the
-    join is that the material arriving at the loop start already exists in the
-    take, and using it is what makes the seam continuous rather than merely
-    quiet.
+    **Duration policy.** ``fade`` is clamped to at most half the body's own
+    length, so the fading tail and the head it fades toward can never overlap
+    each other within one body -- a loop shorter than twice the requested fade
+    gets the longest fade that still keeps the two regions disjoint, rather
+    than a fade that reads samples out of order or twice.
     """
     data = np.asarray(pcm)
     dtype = data.dtype
-    body = data[start:end].astype(np.float32)
-    fade = int(min(fade, start, len(body)))
-    if fade <= 0:
+    body = data[start:end].astype(np.float32).copy()
+    n = body.shape[0]
+    fade = int(max(0, min(fade, n // 2)))
+    if fade <= 0 or n == 0:
         return body.astype(dtype)
 
     angle = np.linspace(0.0, np.pi / 2.0, fade, dtype=np.float32)
@@ -351,8 +372,9 @@ def crossfade(pcm: np.ndarray, start: int, end: int, fade: int) -> np.ndarray:
     if body.ndim == 2:
         rising, falling = rising[:, None], falling[:, None]
 
-    incoming = data[start - fade : start].astype(np.float32)
-    body[:fade] = body[:fade] * rising + incoming * falling
+    tail = body[n - fade : n].copy()
+    head = body[:fade]
+    body[n - fade : n] = tail * falling + head * rising
     if np.issubdtype(dtype, np.integer):
         info = np.iinfo(dtype)
         body = np.clip(body, info.min, info.max)

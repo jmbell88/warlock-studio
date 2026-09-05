@@ -127,6 +127,29 @@ class Player:
     #: The crossfade at the seam, in milliseconds. See :data:`DEFAULT_XFADE_MS`.
     xfade_ms: float = DEFAULT_XFADE_MS
 
+    #: Where the buffer *currently on the channel* begins, in take-seconds,
+    #: when that buffer is the rotated loop body rather than a plain remainder
+    #: -- ``None`` otherwise. M10: seeking to a point inside the marked region
+    #: no longer shrinks what loops to "seek point to loop end"; it rotates the
+    #: whole region so playback starts exactly at the seek point and wraps
+    #: through the rest of the region before repeating. ``position()`` needs
+    #: this anchor to unwind that rotation -- without it, the mixer's own
+    #: modulo-buffer-length clock describes a position in the *rotated*
+    #: buffer, not in the take.
+    loop_anchor: float | None = None
+
+    #: The crossfaded loop body -- ``muse.loops.crossfade`` over
+    #: ``(loop_start, loop_end, xfade_ms)`` -- cached here so pressing Play the
+    #: loop twice does not redo an O(n) blend, and so the audition and
+    #: ``muse_io.export_loop`` build from the exact same call rather than two
+    #: that merely agree by construction (M09: before this, the strip
+    #: auditioned a raw slice of ``pcm`` while the export crossfaded on write,
+    #: so the crossfade control could not be judged through the button
+    #: advertised for judging it). ``muse_io.loop_body`` owns the cache
+    #: invalidation; see its docstring for the key.
+    loop_cache: Any = None
+    loop_cache_key: tuple[int, int, int] | None = None
+
     #: What ``muse.loops.find`` last offered, best first, and whether a search
     #: is in flight. A list rather than one answer because the finder is a
     #: heuristic over material nobody composed to loop -- see that module.
@@ -155,6 +178,15 @@ class MuseState:
     #: The take the tray has selected, or "". Space auditions this one, which
     #: is why it is state rather than a hover.
     selected_job: str = ""
+
+    #: The job id of the most recent audition *request* -- set by ``play()``,
+    #: cleared by ``stop()``. M11: a take's decode is a task, several can be in
+    #: flight for different jobs at once, and they can land out of order.
+    #: ``on_task_done`` adopts a completed decode only when it still matches
+    #: this field, which is what stops an older, slower decode from landing on
+    #: top of a newer one already sounding -- and stops one from starting
+    #: playback at all after the user has pressed Stop.
+    audition_job: str = ""
 
     #: The decoded take under the player strip, or ``None``. Built on the first
     #: audition and replaced whenever a different take is played.

@@ -216,7 +216,10 @@ def _transport(ctx: Any, one: Any) -> None:
         if playing:
             muse_mode.stop(ctx)
         else:
-            muse_mode.seek(ctx, muse_mode.position(ctx))
+            # ``play`` itself resumes an already-decoded take from wherever
+            # ``stop`` left the playhead (M07) -- the ``seek`` this used to do
+            # first was papering over ``play`` always rebuilding the player
+            # from a fresh disk read, which is the bug, not this button.
             muse_mode.play(ctx, one.job)
     imgui.same_line()
     widgets.secondary(f"{muse_mode.position(ctx):.1f} / {one.duration:.1f}s")

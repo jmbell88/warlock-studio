@@ -59,7 +59,11 @@ PACK_TIMEOUT = 4 * 60 * 60.0
 
 _STDERR_KEEP_LINES = 40
 
-Progress = Callable[[float, str], None]
+# ``percent, label, phase``. ``phase`` is the worker's own word for which
+# side of the "can this still be cancelled" line it is on (H02) -- see
+# ``pack_worker.PHASE_DOWNLOAD`` / ``PHASE_COMMIT`` -- rather than something
+# a caller infers from the percent it happens to be looking at when it asks.
+Progress = Callable[[float, str, str], None]
 
 
 def worker_argv() -> list[str]:
@@ -102,6 +106,63 @@ def cache_dir(svc: WarlockService) -> Path:
     reinstalled after an app upgrade re-downloads nothing whose digest still
     matches."""
     return svc.config.home / "packs"
+
+
+def _selection_path(svc: WarlockService) -> Path:
+    """Where the user's chosen packs are recorded, outside the runtime (M02).
+
+    ``installer/warlock.iss`` deletes ``python\\Lib\\site-packages`` wholesale
+    on an upgrade -- correctly, since a pack built against the old lock is not
+    guaranteed to import under the new one -- which used to take the record of
+    what had been installed with it: an upgrade left Create or Muse silently
+    off with no saved selection to restore from and no sign anything had
+    changed. This sits beside the wheel cache, under the user's Warlock home,
+    which the installer never touches.
+    """
+    return cache_dir(svc) / "selected.json"
+
+
+def selected_packs(svc: WarlockService) -> list[str]:
+    """The pack keys this install has ever successfully installed. -> keys.
+
+    Read by the pane to offer "Restore packs" after an upgrade removed them
+    (M02): a key can be here and not ``installed_versions()`` at the same time
+    only when something outside this process's control -- an upgrade's
+    site-packages wipe -- took it away.
+    """
+    try:
+        raw = json.loads(_selection_path(svc).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [str(key) for key in raw.get("packs") or [] if packs_mod.find(str(key))]
+
+
+def _record_selected(svc: WarlockService, keys: Sequence[str]) -> None:
+    """Add ``keys`` to the persisted selection. Best-effort: a write failure
+    here must not fail an install that otherwise succeeded."""
+    path = _selection_path(svc)
+    have = set(selected_packs(svc))
+    have.update(keys)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"packs": sorted(have)}), encoding="utf-8")
+    except OSError:
+        log.warning("could not record %r as installed packs", sorted(keys))
+
+
+def packs_to_restore(svc: WarlockService) -> list[str]:
+    """Previously-installed packs an upgrade has since removed. -> keys.
+
+    Empty on an ordinary machine, including one that has never installed a
+    pack at all -- this is only non-empty right after an upgrade wiped
+    ``site-packages`` out from under a configured install (M02).
+    """
+    missing = []
+    for key in selected_packs(svc):
+        pack = packs_mod.find(key)
+        if pack is not None and not packs_mod.installed(pack):
+            missing.append(key)
+    return missing
 
 
 def load() -> packs_mod.Manifest:
@@ -254,10 +315,26 @@ def install(
     if said:
         raise Invalid(said)
     pending = packs_mod.to_install(plan, have)
+    probe = sorted({name for pack in chosen for name in pack.probe})
     if not pending and not collect_only:
-        # Everything the pack carries is already at the pack's own version.
-        # Not an error and not a spawn: an install with nothing to install is
-        # what running it twice looks like, and it must be cheap.
+        # Everything the pack carries is already at the pack's own version --
+        # by distribution metadata alone. That is not proof it is usable
+        # (M01, reproduced: matching metadata alone yields zero repair
+        # candidates for a damaged install), so this path is probed exactly as
+        # a fresh install is, in the same disposable child, rather than waved
+        # through because nothing looked pending.
+        _run_worker(
+            {
+                "pack_dir": str(cache_dir(svc)),
+                "bundled_dir": str(bundled_dir()),
+                "wheels": [],
+                "probe": probe,
+                "probe_only": True,
+            },
+            on_progress=on_progress or (lambda _p, _l, _ph: None),
+            timeout=timeout,
+        )
+        invalidate_caches()
         return {"ok": True, "collected": [], "installed": [], "already": True}
     spec: dict[str, Any] = {
         "pack_dir": str(cache_dir(svc)),
@@ -268,20 +345,13 @@ def install(
         # belongs to the build -- an upgrade replaces it and must not have to
         # find it under a home directory it does not own.
         "bundled_dir": str(bundled_dir()),
-        "wheels": [
-            {
-                "filename": w.filename,
-                "url": w.url,
-                "bundled": w.bundled,
-                "sha256": w.sha256,
-                "size_bytes": w.size_bytes,
-            }
-            for w in pending
-        ],
-        "probe": sorted({name for pack in chosen for name in pack.probe}),
+        "wheels": _wheel_payload(pending),
+        "probe": probe,
         "collect_only": collect_only,
     }
-    result = _run_worker(spec, on_progress=on_progress or (lambda _p, _l: None), timeout=timeout)
+    result = _run_worker(
+        spec, on_progress=on_progress or (lambda _p, _l, _ph: None), timeout=timeout
+    )
     # This process has already asked ``find_spec`` about every module in the
     # pack and been told, truthfully at the time, that it was absent -- and the
     # answer is cached in ``sys.path_importer_cache`` against a site-packages
@@ -289,7 +359,65 @@ def install(
     # pane would redraw the row it just installed as still missing, and the
     # only remedy on offer would be a restart the install does not need.
     invalidate_caches()
+    if not collect_only:
+        # Outside the runtime, so it survives the upgrade that would otherwise
+        # erase every trace that this pack was ever chosen (M02).
+        _record_selected(svc, [pack.key for pack in chosen])
     return result
+
+
+def repair(
+    svc: WarlockService,
+    keys: Sequence[str],
+    *,
+    on_progress: Progress | None = None,
+    timeout: float = PACK_TIMEOUT,
+) -> dict[str, Any]:
+    """Reinstall these packs' pinned wheels even though nothing looks pending.
+
+    ``install`` treats a distribution whose metadata matches the pin as done;
+    that is the fast path for the common case and exactly wrong for a
+    distribution the probe has just shown is not actually importable (M01) --
+    a prior pip run killed mid-unpack, a Windows update that broke a vendored
+    DLL, leave a ``dist-info`` that looks finished. Repair skips ``to_install``
+    and hands the worker the pack's whole wheel list with
+    ``--force-reinstall``, so pip overwrites what is there instead of skipping
+    it a second time for the same reason it was skipped the first.
+    """
+    chosen = packs_mod.chosen_packs(keys)
+    plan = plan_for([pack.key for pack in chosen])
+    said = refusal(svc, [pack.key for pack in chosen])
+    if said:
+        raise Invalid(said)
+    spec: dict[str, Any] = {
+        "pack_dir": str(cache_dir(svc)),
+        "bundled_dir": str(bundled_dir()),
+        "wheels": _wheel_payload(plan),
+        "probe": sorted({name for pack in chosen for name in pack.probe}),
+        "collect_only": False,
+        "force_reinstall": True,
+    }
+    result = _run_worker(
+        spec, on_progress=on_progress or (lambda _p, _l, _ph: None), timeout=timeout
+    )
+    invalidate_caches()
+    _record_selected(svc, [pack.key for pack in chosen])
+    return result
+
+
+def _wheel_payload(wheels: Sequence[packs_mod.Wheel]) -> list[dict[str, Any]]:
+    """The worker's own shape for a wheel list -- shared by ``install`` and
+    ``repair`` so the two cannot describe the same wheel two different ways."""
+    return [
+        {
+            "filename": w.filename,
+            "url": w.url,
+            "bundled": w.bundled,
+            "sha256": w.sha256,
+            "size_bytes": w.size_bytes,
+        }
+        for w in wheels
+    ]
 
 
 def _kill_and_reap(proc: subprocess.Popen[str]) -> None:
@@ -400,7 +528,11 @@ def _run_worker(
                     percent = float(payload.get("percent") or 0.0)
                 except (TypeError, ValueError):
                     continue
-                on_progress(percent, str(payload.get("label") or ""))
+                on_progress(
+                    percent,
+                    str(payload.get("label") or ""),
+                    str(payload.get("phase") or ""),
+                )
             code = proc.wait(timeout=max(deadline - time.monotonic(), 1.0))
             winjob.untrack(proc.pid)
         except subprocess.TimeoutExpired:

@@ -42,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import re
 import shutil
 import sys
 import time
@@ -56,6 +57,24 @@ CHUNK = 1 << 20
 # Wall-clock ceiling for the install phase alone. pip unpacking 3 GB of torch
 # onto a slow disk is genuinely minutes; a pip parked forever is not.
 INSTALL_TIMEOUT = 60 * 60.0
+
+# Wall-clock ceiling for one smoke import (see ``smoke_import``). A cold
+# ``import torch`` on a spinning disk is seconds, not minutes; a child that
+# has not returned by then is stuck loading a DLL, not merely slow.
+SMOKE_TIMEOUT = 120.0
+
+# The two phases a pane needs to tell apart (H02): while this is still true, a
+# ``.part`` file is the only thing on disk with this install's name on it, and
+# killing the child costs nothing. Once the worker says "commit", pip is
+# about to unpack into the application's own ``site-packages`` and stopping
+# the child from here on leaves that half-written -- which is the state the
+# whole child-process arrangement exists to keep out of. Named phases rather
+# than a percent threshold sampled by the pane: a threshold is a guess about
+# when collect() ends and install() begins, and the gap between an
+# under-threshold sample and the child actually calling pip is exactly where
+# a quit used to slip through with no warning at all (H02, reproduced).
+PHASE_DOWNLOAD = "download"
+PHASE_COMMIT = "commit"
 
 
 def _emit(**payload: Any) -> None:
@@ -122,6 +141,10 @@ def collect(spec: dict[str, Any]) -> list[str]:
     done = 0
     have: list[str] = []
     started = time.monotonic()
+    # Said once, up front, so a pane reading progress before the first chunk
+    # lands still knows Cancel is safe -- rather than defaulting to "unknown"
+    # and having to guess.
+    _emit(percent=0.0, label="", phase=PHASE_DOWNLOAD)
     for wheel in wheels:
         name = str(wheel["filename"])
         target = pack_dir / name
@@ -193,6 +216,7 @@ def collect(spec: dict[str, Any]) -> list[str]:
                         f"~{total / float(1024**3):.1f} GB"
                         + _pace(rate, total - done - got)
                     ),
+                    phase=PHASE_DOWNLOAD,
                 )
         if running.hexdigest() != digest:
             staging.unlink(missing_ok=True)
@@ -244,9 +268,17 @@ def install(spec: dict[str, Any], names: list[str]) -> dict[str, Any]:
         "--no-deps",
         "--find-links",
         str(pack_dir),
-        *[str(pack_dir / name) for name in names],
     ]
-    _emit(percent=92.0, label=f"installing {len(names)} packages")
+    if spec.get("force_reinstall"):
+        # Repair (M01): ``to_install`` already treats a matching distribution
+        # as done, which is right for "nothing pending" and wrong for "the
+        # dist-info matches and the wheel never finished unpacking" -- the two
+        # look identical to pip's own resolver, since a half-written package
+        # still leaves a RECORD behind. Forcing past that is the whole point
+        # of a Repair action: overwrite it rather than skip it a second time.
+        argv.append("--force-reinstall")
+    argv.extend(str(pack_dir / name) for name in names)
+    _emit(percent=92.0, label=f"installing {len(names)} packages", phase=PHASE_COMMIT)
     # ``winjob.run`` rather than ``subprocess.run``: this worker is itself in
     # the kill-on-close job, and while Windows does put a job'd process's
     # children in the same job, the guarantee here is stated rather than
@@ -291,16 +323,84 @@ def verify(spec: dict[str, Any]) -> list[str]:
     return missing
 
 
+_MODULE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def smoke_import(names: list[str]) -> list[str]:
+    """Which of these modules raise the moment they are actually imported.
+
+    ``verify`` (``find_spec``) only *locates* a module -- it is what a stub
+    package, a half-unpacked wheel, or one built for the wrong ABI passes
+    without complaint, because all three still leave a real ``.dist-info`` and
+    a real (if broken) package directory behind (M01, reproduced: a module
+    whose import raises ImportError is accepted as "installed" today). This
+    runs the import for real.
+
+    One disposable child per module rather than one for the batch: a combined
+    script that fails says only that something in it is broken, and the
+    failure a user meets is a named culprit -- what Repair reinstalls -- not
+    "one of these seven things".
+    """
+    broken: list[str] = []
+    for name in names:
+        if not _MODULE_NAME.fullmatch(name):
+            # Not a real top-level module name (the manifest is generated,
+            # not typed by hand, but a probe list is still untrusted input to
+            # this function) -- cannot be imported, so it cannot be vouched
+            # for either.
+            broken.append(name)
+            continue
+        done = winjob.run(
+            [sys.executable, "-c", f"import {name}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=SMOKE_TIMEOUT,
+        )
+        if done.returncode != 0:
+            broken.append(name)
+    return broken
+
+
+def _probe(spec: dict[str, Any]) -> list[str]:
+    """Every probe module still unusable, by both questions worth asking.
+
+    ``verify`` catches "not installed at all" cheaply; whatever it *does* find
+    is then actually imported in a fresh child (M01) -- the false positive
+    ``verify`` alone cannot see. Modules ``verify`` already flagged missing are
+    not re-imported: they would only fail the same way, in a subprocess spawn
+    this function does not need to pay for.
+    """
+    missing = verify(spec)
+    locatable = [str(name) for name in (spec.get("probe") or []) if str(name) not in missing]
+    broken = smoke_import(locatable) if locatable else []
+    return sorted(set(missing) | set(broken))
+
+
 def run(spec: dict[str, Any]) -> dict[str, Any]:
+    if spec.get("probe_only"):
+        # The "already installed" path (M01): matching distribution metadata
+        # is not proof the wheel unpacked cleanly last time, and until now
+        # this path skipped the question entirely because there was nothing
+        # ``to_install`` thought was pending.
+        problems = _probe(spec)
+        if problems:
+            raise ValueError(
+                "already installed but "
+                + ", ".join(problems)
+                + " cannot be imported; use Repair to reinstall the pinned wheels"
+            )
+        return {"ok": True, "collected": [], "installed": []}
     names = collect(spec)
     if spec.get("collect_only"):
         return {"ok": True, "collected": names, "installed": []}
     result = install(spec, names)
-    missing = verify(spec)
-    if missing:
+    problems = _probe(spec)
+    if problems:
         raise ValueError(
             "the pack installed but "
-            + ", ".join(missing)
+            + ", ".join(problems)
             + " still cannot be imported; the application may need restarting"
         )
     return {"ok": True, "collected": names, **result}

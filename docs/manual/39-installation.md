@@ -32,6 +32,7 @@ different capability:
 | `studio` | moderngl, pygame-ce, imgui-bundle | The window itself. Without it only `warlock doctor` and `warlock sweep` run. |
 | `text2image` | torch cu128, torchvision, diffusers, transformers, accelerate, peft, sentencepiece, protobuf, and BiRefNet's own einops/kornia/timm | Text-to-3D. Image-to-3D from an upload still works. |
 | `rig` | bpy | Rigging, posing and sprite sheets. |
+| `music` | torch cu128, diffusers, transformers, accelerate, peft (ACE-Step's own stack, pinned separately from `text2image`) | Muse's text-to-music generation and its Hybrid Demucs stem separation. |
 
 `text2image`'s tail is longer than it looks because two of the things it pulls in are not declared
 by anything else. BiRefNet — the learned matting model — is loaded with `trust_remote_code`, so the

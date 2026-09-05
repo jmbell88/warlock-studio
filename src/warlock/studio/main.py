@@ -467,6 +467,13 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         self.app_ctx = None
         self.eta = None
         self._running = False
+        # H02: set while a quit was asked for during a pack install's commit
+        # phase and withheld rather than shown as a confirm dialog -- see
+        # ``_ask_quit`` and ``_resume_deferred_quit``. A dialog the user
+        # confirms is a promise this code can act on immediately; the commit
+        # phase is the one moment that promise cannot be kept, so the ask
+        # itself is deferred rather than the answer.
+        self._quit_deferred = False
         self._min_size = MIN_SIZE
         self._last_frame = time.perf_counter()
         self._started_at = self._last_frame
@@ -937,6 +944,11 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         except Exception:
             log.exception("could not list the dependency packs")
             ctx.pack_rows = []
+        try:
+            ctx.packs_to_restore = svc_packs.packs_to_restore(self.svc)
+        except Exception:
+            log.exception("could not check for packs an upgrade removed")
+            ctx.packs_to_restore = []
 
     # -- the loop ----------------------------------------------------------
 
@@ -1635,11 +1647,16 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
 
             ctx.submit(VERIFY_KEY, svc_system.current_checks, self.svc, force=True)
             ctx.tasks.set_progress(VERIFY_KEY, 0.0, "Verifying installation...")
-            pack = key.partition(":")[2]
+            # Comma-joined for Restore packs (M02, ``app_settings._restore_packs``),
+            # which installs several packs under one task key so the pane's
+            # one-install-at-a-time rule still holds; a single key here is the
+            # same list of one.
+            keys = [name for name in key.partition(":")[2].split(",") if name]
+            pack = ", ".join(keys)
             try:
-                stubborn = svc_packs.unresolved([pack])
+                stubborn = svc_packs.unresolved(keys)
             except Exception:  # noqa: BLE001 -- a toast must not end the frame
-                log.exception("could not re-probe the %r pack", pack)
+                log.exception("could not re-probe the %r pack(s)", pack)
                 stubborn = []
             if stubborn:
                 ctx.toast(
@@ -1649,6 +1666,7 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
                 )
             else:
                 ctx.toast(f"The {pack} pack is installed.", "success")
+            self._resume_deferred_quit()
             return
         if key.startswith(("download:", "remove:")):
             # Re-probe wholesale, exactly as the "health" task above replaces
@@ -3104,6 +3122,12 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             lines.append("A model download is in progress and will be stopped.")
         if any(k.startswith(("export", "save:", "bake:")) for k in busy):
             lines.append("An export is still being written.")
+        # H02: named alongside downloads and exports rather than omitted. The
+        # commit phase (pip writing into ``site-packages``) is not offered
+        # here at all -- see ``_ask_quit``, which blocks the ask outright
+        # rather than warning about a quit it would then let through.
+        if any(k.startswith("pack:") for k in busy):
+            lines.append("A dependency pack is downloading and will be stopped.")
         return "\n".join(lines)
 
     def _ask_quit(self) -> None:
@@ -3119,6 +3143,29 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         """
         from . import dialogs
 
+        # H02: the one thing a quit is not allowed to interrupt, checked
+        # before anything else asks a question it cannot honour. Every normal
+        # quit route reaches this method -- the window's X and Alt+F4 (through
+        # the ``pygame.QUIT`` handlers), the command palette's Quit command,
+        # and the splash screen's own guard all go through ``ctx.ask_quit`` or
+        # this method directly -- so this is the one place the guard has to
+        # live, not one summary line among several.
+        #
+        # A dialog offers a promise ("Quit" means quit); the commit phase is
+        # the one moment this process cannot keep that promise, because
+        # honouring it either kills pip mid-write into the runtime's own
+        # ``site-packages`` (immediately) or leaves the app sitting on a
+        # confirmed quit for however long pip takes (soon after) -- neither of
+        # which is what clicking "Quit" said would happen. So the ask itself
+        # is withheld, not answered, until the commit phase clears.
+        if self.app_ctx.tasks.commit_busy("pack:"):
+            self._quit_deferred = True
+            self.app_ctx.toast(
+                "A dependency pack is being installed and cannot be "
+                "interrupted safely. Quitting once it finishes.",
+                "warn",
+            )
+            return
         summary = self._quit_summary()
         if not summary:
             self._request_quit()
@@ -3132,6 +3179,20 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
                 on_confirm=self._request_quit,
             )
         )
+
+    def _resume_deferred_quit(self) -> None:
+        """Finish a quit that ``_ask_quit`` withheld for a pack's commit phase.
+
+        Called after every ``pack:`` task completes, which is the only source
+        of a state change this could be waiting on. Re-asks rather than
+        quitting outright: a second pack could have started installing, or
+        another reason to ask (an unsaved document) could exist by now, and
+        ``_ask_quit`` already knows how to weigh both.
+        """
+        if not getattr(self, "_quit_deferred", False):
+            return
+        self._quit_deferred = False
+        self._ask_quit()
 
     def _request_quit(self) -> None:
         """One chain, in order: painted pixels, then built geometry, then a pose.

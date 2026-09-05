@@ -726,3 +726,121 @@ def test_an_oversized_texture_costs_the_texture_and_not_the_model(monkeypatch, c
     assert model.meshes[0][0].material.base_color is None
     assert model.skipped_textures == 1
     assert "ceiling" in caplog.text
+
+
+# --- H01: a document-wide budget, on top of the per-accessor ceiling ---------
+#
+# MAX_ACCESSOR_BYTES bounds one array; nothing bounded the *sum* of them, so a
+# small file with many primitives -- or one accessor replayed by many
+# primitives -- allocated without limit as long as each individual array
+# stayed under the per-accessor cap. Measured: a 4,036-byte bufferless GLB
+# with 128 primitives produced 6,144,000 bytes of geometry across 128
+# separate arrays, with nothing to stop scaling the primitive count further.
+#
+# Every test below lowers ``MAX_TOTAL_BYTES`` before building anything, so the
+# suite itself never approaches the real 768 MiB default -- proving the
+# refusal without paying for the memory it exists to refuse.
+
+
+def _bufferless_positions_doc(n: int, count: int) -> dict:
+    """``n`` primitives, each its own zero-filled POSITION accessor with no
+    bufferView -- the branch H01 was written for: nothing here reads a
+    buffer, so nothing about any one primitive's cost is bounded by how small
+    the file declaring it is."""
+    return {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "accessors": [
+            {"componentType": 5126, "count": count, "type": "VEC3"} for _ in range(n)
+        ],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": i}} for i in range(n)]}],
+    }
+
+
+def test_the_aggregate_budget_refuses_many_primitives_each_under_the_per_accessor_cap(
+    monkeypatch,
+):
+    """Each primitive here is tiny -- MAX_ACCESSOR_BYTES never fires -- and
+    that is the point: only the *document-wide* ceiling can catch a file that
+    scales the primitive count instead of any one accessor's size."""
+    monkeypatch.setattr(gltf, "MAX_TOTAL_BYTES", 20_000)
+    small = _bufferless_positions_doc(4, 100)
+    model = gltf.load(_glb(small, b""))
+    assert len(model.meshes[0]) == 4
+
+    huge = _bufferless_positions_doc(200, 100)
+    with pytest.raises(ValueError, match="byte budget"):
+        gltf.load(_glb(huge, b""))
+
+
+def test_a_repeated_accessor_reference_is_decoded_and_charged_once(monkeypatch):
+    """An instanced mesh's shared POSITION stream: fifty primitives naming
+    *one* accessor must cost what one primitive costs, not fifty -- which is
+    exactly what a document-wide budget cannot tell apart from fifty distinct
+    accessors unless repeated references are actually deduplicated rather
+    than merely bounded."""
+    monkeypatch.setattr(gltf, "MAX_TOTAL_BYTES", 5_000)
+    doc = {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "accessors": [{"componentType": 5126, "count": 100, "type": "VEC3"}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}} for _ in range(50)]}],
+    }
+    model = gltf.load(_glb(doc, b""))
+    assert len(model.meshes[0]) == 50
+    # Every primitive's positions really are the *same* array, not fifty
+    # equal-looking copies -- the property that makes the charge above land
+    # once rather than fifty times.
+    first = model.meshes[0][0].positions
+    assert all(p.positions is first for p in model.meshes[0])
+
+
+def test_repeated_textures_over_the_document_budget_are_refused(monkeypatch):
+    """Five distinct textures, each comfortably under MAX_TEXTURE_PIXELS on
+    its own -- the per-texture ceiling never fires -- but together over a
+    lowered document-wide budget. Texture bytes were not charged into the same
+    ledger geometry was, so nothing but MAX_TEXTURE_PIXELS ever stood between
+    a document and however many such textures it declared."""
+    import base64
+    import io as _io
+
+    from PIL import Image
+
+    monkeypatch.setattr(gltf, "MAX_TOTAL_BYTES", 10_000)
+    binary = np.zeros((3, 3), dtype="<f4").tobytes()
+
+    def _uri(colour):
+        buf = _io.BytesIO()
+        Image.new("RGBA", (32, 32), colour).save(buf, "PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    n = 5
+    images = [{"uri": _uri((i, i, i, 255))} for i in range(n)]
+    textures = [{"source": i} for i in range(n)]
+    materials = [
+        {"pbrMetallicRoughness": {"baseColorTexture": {"index": i}}} for i in range(n)
+    ]
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
+        binary,
+        images=images,
+        textures=textures,
+        materials=materials,
+        meshes=[
+            {
+                "primitives": [
+                    {"attributes": {"POSITION": 0}, "material": i} for i in range(n)
+                ]
+            }
+        ],
+    )
+    # 32x32 RGBA is 4,096 bytes each -- comfortably under MAX_TEXTURE_PIXELS,
+    # so that ceiling never fires -- and five of them is 20,480 bytes, well
+    # past the 10,000-byte document budget this test lowers.
+    with pytest.raises(ValueError, match="byte budget"):
+        gltf.load(data)

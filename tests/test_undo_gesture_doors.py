@@ -36,7 +36,9 @@ from warlock.studio.panes import (
     inker_colors,
     inker_picker,
     inker_timeline,
+    packwright_settings,
     plotter_layers,
+    plotter_tileset_editor,
     sirens_effects,
     sirens_instruments,
     sirens_orders,
@@ -137,20 +139,34 @@ def test_an_orphaned_gesture_is_closed_by_the_next_activation(monkeypatch):
 # --- 2. the Sirens doors, drawn -----------------------------------------------
 
 
-def _scripted_slider(monkeypatch: pytest.MonkeyPatch, item: _Item, label: str, values: list):
-    """The real slider, with its answer overridden for one label while the
-    scripted drag is on -- there is no pointer in a headless frame."""
-    real = controls.slider_int
+def _scripted_field(
+    monkeypatch: pytest.MonkeyPatch, item: _Item, attr: str, label: str, values: list
+):
+    """The real field, with its answer overridden for one label while the
+    scripted drag is on -- there is no pointer in a headless frame.
+
+    ``attr`` is the name on ``controls`` (``"slider_int"``, ``"slider_float"``,
+    ``"drag_int"``, ``"color_edit4"``, ``"input_float"``...): every one of
+    them is called ``(label, value, ...)`` and answers ``(changed, value)``,
+    so one wrapper covers them all.
+    """
+    real = getattr(controls, attr)
     item.label = label
 
-    def slider_int(*args: Any, **kwargs: Any) -> Any:
+    def scripted(*args: Any, **kwargs: Any) -> Any:
         result = real(*args, **kwargs)
         item.last = args[0]
         if args[0] == label and item.dragging():
             return True, values[item.frame - item.begin]
         return result
 
-    monkeypatch.setattr(controls, "slider_int", slider_int)
+    monkeypatch.setattr(controls, attr, scripted)
+
+
+def _scripted_slider(monkeypatch: pytest.MonkeyPatch, item: _Item, label: str, values: list):
+    """The real slider, with its answer overridden for one label while the
+    scripted drag is on -- there is no pointer in a headless frame."""
+    _scripted_field(monkeypatch, item, "slider_int", label, values)
 
 
 def _drag(draw_frame: Any, draw: Any, item: _Item) -> None:
@@ -285,6 +301,11 @@ def test_a_picker_drag_over_a_free_colour_opens_no_gesture(monkeypatch, frames):
         (plotter_layers._layer_table, '"##layer-tint"', "doc.set_layer_props("),
         (plotter_layers._object_fields, '"##obj-opacity"', "doc.set_object("),
         (sirens_patterns._channel_popup, 'f"Pan##{tag}"', "update_channel("),
+        # The 2026-09-05 audit's M06 row: the Terrain tab's colour swatch and
+        # its probability field, neither folded, each pushing through
+        # ``set_wang_colour`` -> ``_write_wangsets`` per report.
+        (plotter_tileset_editor._wang_colours, '"##swatch"', "set_wang_colour("),
+        (plotter_tileset_editor._wang_colours, '"Probability"', "set_wang_colour("),
     ],
     ids=[
         "group-opacity",
@@ -297,6 +318,8 @@ def test_a_picker_drag_over_a_free_colour_opens_no_gesture(monkeypatch, frames):
         "layer-tint",
         "object-opacity",
         "channel-pan",
+        "wang-colour",
+        "wang-probability",
     ],
 )
 def test_the_popup_doors_fold_between_the_field_and_the_write(func, field, write):
@@ -328,3 +351,113 @@ def test_the_sirens_name_fields_commit_on_release(pane):
     source = inspect.getsource(pane)
     field = source.split('widgets.input_text(\n        "Name"', 1)[1].split(")", 1)[0]
     assert "commit=True" in field
+
+
+# --- 6. the 2026-09-05 audit's own doors ---------------------------------------
+
+
+def test_an_interrupted_opacity_drag_still_leaves_one_undo_step(monkeypatch, frames):
+    """M05: ``inker_menu.header_controls`` used to set ``layer.opacity``
+    directly for the live preview and stash the pre-drag value in a bare
+    module-level dict keyed by layer uid, pushing the real undo step only on
+    ``is_item_deactivated_after_edit``. A control that vanishes first --
+    a mode switch, a panel collapse, the document closing -- never renders
+    that release frame: the step was never pushed, the dict entry stuck
+    around forever, and a later gesture that reused the same uid started
+    from that stale value instead of the layer's real one.
+
+    Routed through ``fold_undo`` and a push on every changed frame instead,
+    the interruption is survived by the mechanism every other door in this
+    file already relies on: whatever gesture is open closes the moment any
+    other item activates, wherever that happens to be.
+    """
+    import numpy as np
+
+    from warlock.studio import inker
+    from warlock.studio.panes import inker_menu
+
+    doc = inker.Document.from_pixels(np.full((4, 4, 4), 255, dtype=np.uint8))
+    before = len(doc.history)
+    # Opacity is drawn as a percentage (``labeled_slider_float`` infers
+    # ``percent`` for a 0..1 range), so the raw ``controls.slider_float``
+    # call this scripts sits in 0..100 space; ``header_controls`` divides
+    # back down before it ever reaches the layer.
+    values_pct = [80, 60, 40]
+    item = _Item(monkeypatch, begin=1, end=1 + len(values_pct))
+    _scripted_field(monkeypatch, item, "slider_float", "##Opacity", values_pct)
+    # The drag runs, but its own release frame (``item.end``) never comes --
+    # the panel is torn down mid-gesture.
+    for frame in range(1, item.end):
+        item.frame = frame
+        frames(lambda: inker_menu.header_controls(None, doc))
+    assert doc.stack.active.opacity == pytest.approx(values_pct[-1] / 100.0)
+    # Each changed frame already pushed its own step (unlike the old direct
+    # assignment, which pushed nothing until release) -- the gesture is still
+    # open, so nothing has folded yet, but the edit already exists.
+    assert len(doc.history) == before + len(values_pct), "every frame's push landed"
+    # Nothing above will ever report the deactivation. What closes a stray
+    # gesture is the next activation anywhere -- ``test_an_orphaned_gesture_
+    # is_closed_by_the_next_activation`` pins the mechanism itself; this
+    # reuses it exactly the way a mode switch followed by any other drag
+    # would, on a completely unrelated stack standing in for "the user went
+    # on and did something else".
+    elsewhere = undo.UndoStack()
+    item.frame = item.begin
+    controls.fold_undo(elsewhere)
+    assert len(doc.history) == before + 1, "the interrupted drag folded to one step"
+    assert doc.history.undo(doc)
+    assert doc.stack.active.opacity == 1.0, "one Ctrl+Z takes the whole drag back"
+
+
+def test_the_plotter_layer_list_opacity_row_drag_is_one_step(monkeypatch, frames):
+    """M06: ``_opacity_row`` -- the Opacity slider drawn over the layer list
+    itself, distinct from ``_layer_table``'s own copy in Properties -- called
+    ``doc.set_layer_props`` on every changed frame with no fold at all."""
+    from test_plotter_mode import FakeCtx as PlotterFakeCtx
+    from test_plotter_mode import _tab as _plotter_tab
+
+    from warlock.studio.panes import plotter_layers
+
+    ctx = PlotterFakeCtx()
+    tab = _plotter_tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    before = len(tab.doc.history)
+    # Percent-scaled, same as the inker opacity door above.
+    values_pct = [80, 60, 40, 20]
+    item = _Item(monkeypatch, begin=1, end=1 + len(values_pct))
+    _scripted_field(monkeypatch, item, "slider_float", "##Opacity", values_pct)
+    _drag(frames, lambda: plotter_layers._opacity_row(tab.doc, layer, True), item)
+    assert layer.opacity == pytest.approx(values_pct[-1] / 100.0)
+    assert len(tab.doc.history) == before + 1
+    assert tab.doc.history.undo(tab.doc)
+
+
+@pytest.mark.parametrize(
+    "field,write",
+    [
+        ('"Columns"', "packwright_mode.set_settings("),
+        ('"Padding"', "packwright_mode.set_settings("),
+        ('"Extrude"', "packwright_mode.set_settings("),
+    ],
+    ids=["columns", "padding", "extrude"],
+)
+def test_packwright_settings_drags_fold_between_the_field_and_the_write(field, write):
+    """M06: Columns (a drag_int) and Padding/Extrude (sliders) each called
+    ``packwright_mode.set_settings`` on every changed frame, which reaches
+    the unconditional history push in ``PackDoc.set_settings``
+    (``document.py:410``) once per report -- the audit's reminder that
+    Columns is not exempt just because it drags rather than slides.
+
+    By source rather than a drawn frame: all three fields live in the same
+    ``draw`` and each folds independently, so a scripted single-item drag
+    cannot tell one field's activation from another's the way the real imgui
+    item stack does -- ``fold_undo``'s own positional contract (draw, fold,
+    act) is what a headless frame cannot exercise here without lying about
+    which field the pointer is on, and is exactly what a source check proves
+    instead. This is the same reason ``clay_props``'s three material fields
+    are pinned this way rather than driven live.
+    """
+    source = inspect.getsource(packwright_settings.draw)
+    after_field = source.split(field, 1)[1]
+    fold = after_field.index("controls.fold_undo(")
+    assert fold < after_field.index(write), f"{write} runs before the fold"

@@ -42,6 +42,7 @@ from typing import Any
 
 import numpy as np
 
+from ... import glbio
 from ..viewer import gltf
 from ..viewer import math3d as m3
 from . import topo
@@ -91,6 +92,54 @@ def _instanced_budget(model: gltf.Model) -> tuple[int, int]:
     return tris, objects
 
 
+def _declared_budget(data: bytes) -> tuple[int, int]:
+    """Triangles and objects this GLB's JSON *claims*, with no accessor decoded.
+
+    H01: the real count below (``_instanced_budget``) is trustworthy but only
+    answers after ``gltf.load`` has already decoded every primitive it names
+    -- which is exactly the allocation this ceiling exists to refuse *before*.
+    A triangle count is a declared number, not a computed one: an index
+    accessor names its own ``count``, and an unindexed primitive's triangle
+    count is its POSITION accessor's ``count`` -- both readable out of the
+    JSON chunk alone, for the price of a JSON parse rather than a buffer
+    decode. A malformed or unparsable GLB reads as ``(0, 0)`` here and is left
+    to ``gltf.load``'s own, more specific refusal.
+    """
+    try:
+        _header, doc, _rest = glbio.split_glb(data)
+    except ValueError:
+        return 0, 0
+    accessors = doc.get("accessors") or []
+    meshes = doc.get("meshes") or []
+
+    def _count(index: Any) -> int:
+        if not isinstance(index, int) or not 0 <= index < len(accessors):
+            return 0
+        try:
+            return max(0, int(accessors[index].get("count", 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    tris = 0
+    objects = 0
+    for node in doc.get("nodes") or []:
+        mesh_index = node.get("mesh") if isinstance(node, dict) else None
+        if not isinstance(mesh_index, int) or not 0 <= mesh_index < len(meshes):
+            continue
+        for prim in meshes[mesh_index].get("primitives") or []:
+            if not isinstance(prim, dict):
+                continue
+            attrs = prim.get("attributes") or {}
+            declared = (
+                _count(prim["indices"])
+                if "indices" in prim
+                else _count(attrs.get("POSITION"))
+            )
+            tris += declared // 3
+            objects += 1
+    return tris, objects
+
+
 def glb_to_claydoc(data: bytes, name: str = "Imported") -> ClayDoc:
     """Parse GLB bytes into a fresh :class:`~.document.ClayDoc`.
 
@@ -99,6 +148,25 @@ def glb_to_claydoc(data: bytes, name: str = "Imported") -> ClayDoc:
     construction rather than through ``add_object``, which would push a step
     apiece.
     """
+    # Checked from the file's own declared numbers before a single accessor is
+    # decoded (H01): the budget below re-checks the *real* counts after
+    # ``gltf.load`` runs, but by then the load has already paid for whatever
+    # it is about to refuse. A GLB that declares more than Clay will ever hold
+    # gets the same verdict for a JSON parse instead of a full decode.
+    declared_tris, declared_objects = _declared_budget(data)
+    if declared_tris > MAX_TRIANGLES:
+        raise OpError(
+            f"This mesh declares {declared_tris:,} triangles, past the "
+            f"{MAX_TRIANGLES:,} Clay can edit. Retarget its triangle budget in "
+            "the library first."
+        )
+    if declared_objects > MAX_OBJECTS:
+        raise OpError(
+            f"This GLB declares placing {declared_objects:,} objects, past the "
+            f"{MAX_OBJECTS:,} Clay holds. It is a scene rather than a model -- "
+            "import the part you mean to edit."
+        )
+
     try:
         model = gltf.load(data)
     except Exception as exc:  # noqa: BLE001 - the loader raises several types

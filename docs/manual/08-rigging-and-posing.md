@@ -44,7 +44,7 @@ The symptom is "the arms are welded to the body". The fix is to stop using the t
 
 - **Measured joints** fits the arm and leg lines to your mesh's own vertex cloud instead of assuming
   proportions. This is the right answer most of the time.
-- **Adjust Joints** lets you move joints by hand. Hand-corrected joints always win over both of the
+- **Adjust joints** lets you move joints by hand. Hand-corrected joints always win over both of the
   above.
 
 With the ViTPose weights installed, humanoid joints can also be measured from the reference image's

@@ -355,13 +355,31 @@ def job_dir_file(svc: Any, job_id: str, name: str) -> Path:
     """One named file inside a job's directory, with the id checked.
 
     ``name`` is a *fixed* string chosen by the caller, never user input -- the
-    two callers ask for ``input.png`` -- so this validates the half that can
-    come from outside and leaves the half that cannot. Existence is the
-    caller's problem: every one of them is about to read the file and would
-    rather have the OSError than a second question.
+    three call sites ask for ``input.png`` or ``sheet.json`` -- so this
+    validates the half that can come from outside (``job_id``) and, since L03,
+    the half that used to be trusted outright too: ``name`` was joined onto
+    the job directory with no check at all. No caller passes anything but a
+    literal today, so there is no exploit here yet -- but "every caller
+    happens to be well-behaved" is not a property this function could ever
+    verify about the *next* one, and a bare-leaf requirement costs every
+    current caller nothing. Existence is still the caller's problem: every one
+    of them is about to read the file and would rather have the OSError than a
+    second question.
     """
     check_job_id(job_id)
-    return svc.job_dir(job_id) / name
+    # A bare leaf: no separator (of either flavour, since a caller on Windows
+    # could hand this a backslash), no ``..``, and the resolved join must stay
+    # inside the job directory. Belt and suspenders rather than either alone --
+    # the name check catches the readable cases in the error message, and the
+    # containment check is what actually holds if a future caller's name
+    # string turns out not to be as fixed as today's two are.
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        raise Invalid(f"{name!r} is not a bare file name", field="name")
+    job_dir = svc.job_dir(job_id)
+    path = job_dir / name
+    if path.resolve().parent != job_dir.resolve():
+        raise Invalid(f"{name!r} does not name a file directly in the job directory", field="name")
+    return path
 
 
 def plotter_source_path(svc: Any, job_id: str) -> Path:

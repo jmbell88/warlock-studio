@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import secrets
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,23 @@ from typing import Any
 _FORMATS = {".png": "PNG", ".gif": "GIF"}
 
 
+def _tmp_name(name: str) -> str:
+    """A dotfile temp name unique to this call (M03).
+
+    ``f".{name}.tmp"`` used to be the whole name -- fixed, and shared by every
+    concurrent writer of the same destination. Packwright and Plotter both key
+    an export task by *tab*, not by destination, so two tabs exporting under
+    one basename staged into the same file at once: the later writer's
+    ``os.replace`` could land on top of the earlier one's rename, and the
+    earlier writer's own cleanup (``tmp.unlink`` in the ``finally``) could then
+    delete the *later* writer's still-live staging file out from under it --
+    the ``FileNotFoundError`` this was reported as. A token per call is
+    ``service/files.py``'s ``_staged_write`` fix, ported here for the same
+    reason it was needed there.
+    """
+    return f".{name}.{secrets.token_hex(4)}.tmp"
+
+
 @contextlib.contextmanager
 def staged(path: Path) -> Iterator[Path]:
     """Yield a staging path beside *path*, renamed onto it on a clean exit.
@@ -57,7 +75,7 @@ def staged(path: Path) -> Iterator[Path]:
     inside the block propagates with the destination untouched.
     """
     path = Path(path)
-    tmp = path.with_name(f".{path.name}.tmp")
+    tmp = path.with_name(_tmp_name(path.name))
     try:
         yield tmp
         os.replace(tmp, path)
@@ -86,7 +104,7 @@ def staged_set(files: Mapping[Path, bytes]) -> None:
         for target, blob in files.items():
             target = Path(target)
             target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_name(f".{target.name}.tmp")
+            tmp = target.with_name(_tmp_name(target.name))
             tmp.write_bytes(blob)
             staged.append((tmp, target))
         for tmp, target in staged:

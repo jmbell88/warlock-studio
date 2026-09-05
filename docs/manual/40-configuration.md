@@ -41,6 +41,7 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_T2I_ROOT` | `~/.warlock/models` | Where every image model lives, with style LoRAs under its `loras/` subdirectory. |
 | `WARLOCK_T2I_DIR` | unset | Redirects the built-in `turbo` entry (by name; not the default model) at an arbitrary local diffusers directory. It changes *where* that entry loads from and nothing else. |
 | `WARLOCK_T2I_MODEL` | `sdxl_cfg` | The base model key used when a job does not name one. |
+| `WARLOCK_T2I_IN_PROCESS` | `0` | Loads the image model inside the app process instead of the usual child. Not a speed switch and not recommended: the child costs one spawn per unload cycle and buys back what the in-process loader cannot give, since the allocator's arenas outlive every reference (klein charged +21.1 GiB of host commit on 2026-08-22 and `unload()` returned 0.1 GiB of it). Setting this restores that leak. |
 | `WARLOCK_PALETTE_DIR` | `~/.warlock/palettes` | Where palette files live (`.hex` from Lospec, `.gpl` from GIMP, `.pal` from Paint Shop Pro, `.txt` from Paint.NET). Ships empty; a missing directory simply means the palette control offers nothing. |
 | `WARLOCK_VRAM_EXCLUSIVE` | auto | Restores the sequential VRAM handoff for text jobs. Unset, the mode is chosen from the card's size; set, it is honoured verbatim. See [VRAM modes](#vram-modes). |
 | `WARLOCK_VRAM_BUDGET` | unset | Overrides the measured VRAM budget (GiB) that admission control checks jobs against. For a card whose free figure reports low, or for pinning tests. |

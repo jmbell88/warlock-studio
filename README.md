@@ -78,14 +78,18 @@ are looking at.
    library assets in; a deterministic atlas out (Grid or MaxRects, with
    trim/padding/extrude/power-of-two), as PNG plus TexturePacker JSON, and a
    `.tsx` for grid packs. Re-export of an unchanged document is byte-identical.
-10. **Sirens** — a chiptune tracker: the synthesis engine, a five-column pattern
+10. **Muse** — generated music: comma-separated style tags and an optional lyric
+    block become a finished track from **ACE-Step v1** (3.5B, text-to-music,
+    local and offline), one job row per take, auditioned in the mode and
+    openable in Sirens as a sample instrument.
+11. **Sirens** — a chiptune tracker: the synthesis engine, a five-column pattern
    grid, an envelope editor, sample import and sound effects, with WAV, stems
    and sfx export.
 
 **The footer** carries no caption, and holds the two destinations where you are
 not making something — entered rarely and left again:
 
-11. **Review** — judging finished meshes with graded verdicts (−5..+5 plus
+12. **Review** — judging finished meshes with graded verdicts (−5..+5 plus
     tags), parameter sweeps over arbitrary setting axes, an advisory DINOv2-probe
     quality judge taught by in-app labelling, and the "What works" findings the
     verdicts add up to — which surface as hints beside the generate controls.
@@ -94,7 +98,7 @@ not making something — entered rarely and left again:
     prop meshes usable on a representative corpus and 10 of 20 on a second
     (`docs/measurements/2026-09-02-trellis-060-props.md` and
     `docs/measurements/2026-09-02-fantasy-v1.md`). Single-view humanoids grade poorly on both.
-12. **Settings** — the app's own preferences: theme, UI scale, layout, and the
+13. **Settings** — the app's own preferences: theme, UI scale, layout, and the
     model list, from which a missing one can be downloaded.
 
 Two things are deliberately *not* modes, and both are overlays. The
@@ -126,6 +130,12 @@ Everything but the primary artifacts is derived lazily on first request and cach
 
 ## Setup
 
+This is the source-checkout route: the extras below are installed by `uv`, so
+the dependency packs the packaged installer uses do not apply here and the disk
+figures above are the whole story. **If you want the packaged Windows
+installer instead, [INSTALL.md](INSTALL.md) is that guide** — it ships a slim
+base runtime and fills in the heavy dependencies from Settings → Packs.
+
 Two steps in a terminal, then the app fetches its own weights.
 
 ```powershell
@@ -149,7 +159,7 @@ add or remove individual models; a removal tells you what it would actually
 free before you confirm, which matters because four of the registered recipes
 share one 7 GB checkpoint.
 
-Nothing above is required to *run* Warlock. The eight editing workspaces --
+Nothing above is required to *run* Warlock. Seven of the eight workspaces --
 Inker, Clay, Poser, Troupe, Plotter, Packwright and the Sirens tracker -- open
 and work with an empty model directory, and `warlock doctor` exits 0 on a
 machine that has downloaded none of it, reporting the absent rows as `[SETUP]`
@@ -168,7 +178,10 @@ The Download button spawns a separate `python -m warlock.pipelines.fetch_worker`
 process which sets `HF_HUB_OFFLINE=0` *in its own environment*, fetches one
 repository into a staging directory beside the destination, verifies the hub's
 recorded digests, moves the files in only if it succeeded, and exits. The app
-process keeps `HF_HUB_OFFLINE=1` for its entire life. Free disk is checked
+process keeps `HF_HUB_OFFLINE=1` for its entire life. The packaged installer's
+**Settings → Packs** works the same way through a second such subprocess,
+`pack_worker` — those two are the only code in the project that reaches the
+network, and neither of them is the app process. Free disk is checked
 against the whole plan before anything is spawned, and a killed download leaves
 a partial directory that `present()` treats as absent rather than as installed.
 
@@ -196,8 +209,9 @@ default), Hyper-SD, LCM and Lightning are the same weights run four ways, so the
 three faster ones cost only a small LoRA each. SDXL-Turbo is a separate 7 GB
 checkpoint and is optional; its command is in [docs/MODELS.md](docs/MODELS.md).
 
-These downloads are the only network use there is. The generation pipeline is
-fully offline — the app process never downloads anything (`HF_HUB_OFFLINE=1` is
+These downloads are the only network use a source checkout has — the packaged
+installer adds one more, the dependency-pack worker described above. The
+generation pipeline is fully offline — the app process never downloads anything (`HF_HUB_OFFLINE=1` is
 set at import, all model loads are `local_files_only`), and a missing weight
 produces a clear error and a `doctor` warning naming the exact command rather
 than a silent fetch.

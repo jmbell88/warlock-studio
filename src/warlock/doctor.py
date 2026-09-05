@@ -391,7 +391,7 @@ def trellis_gguf_hint(config: Config) -> str:
     return fetch.download_text(config, "engine", models.ENGINE_MODELS["trellis_gguf"])
 
 
-def _registry_row(kind: str, label: str, ok: bool, detail: str) -> Check:
+def _registry_row(config: Config, kind: str, spec: Any, ok: bool, detail: str) -> Check:
     """One downloadable registry row.
 
     Never fatal, and ``pending_install`` whenever it is absent: every row this
@@ -399,17 +399,49 @@ def _registry_row(kind: str, label: str, ok: bool, detail: str) -> Check:
     downloaded" is a setup step rather than a fault. Written once because the
     nine call sites were nine copies of the same four arguments, and the
     ``fatal=False`` in each was the only thing saying so.
+
+    **Downgraded uniformly when the files are damaged (M04).** ``fetch.present``
+    only ever answered "is it here" -- a zero-byte weight file, the ordinary
+    shape of a killed download, passes every ``Path.exists()`` in it and then
+    fails minutes later with the checkpoint already resident in VRAM. That
+    downgrade used to be hand-rolled once, in the base-model loop alone
+    (``fetch.suspect_files`` called at exactly that one site): reproduced
+    against a host with all ten engine probe files emptied, Doctor still
+    returned OK, because the GGUF, LoRA, adapter, control, metric, music,
+    separation, pose and matting rows never asked the question. Asked here
+    instead, so every registry row gets the same answer for the price of one
+    ``stat`` per candidate file rather than nine call sites remembering to
+    repeat it (or not).
     """
-    return Check(fetch.check_name(kind, label), ok, detail, fatal=False, pending_install=not ok)
+    if ok:
+        bad = fetch.suspect_files(config, kind, spec)
+        if bad:
+            ok = False
+            detail = (
+                f"{detail} -- but {len(bad)} file(s) are empty and will not "
+                f"load; remove and reinstall this model. First: {bad[0]}"
+            )
+    return Check(
+        fetch.check_name(kind, spec.label), ok, detail, fatal=False, pending_install=not ok
+    )
 
 
 def _exe_check(config: Config) -> Check:
-    ok = config.trellis_server_exe.exists()
-    detail = (
-        str(config.trellis_server_exe)
-        if ok
-        else f"not found at {config.trellis_server_exe} -- {TRELLIS_EXE_HINT}"
-    )
+    path = config.trellis_server_exe
+    # L01: ``.exists()`` is true of a directory as well as a file, so a
+    # broken unpack that left a *folder* named ``trellis-server.exe`` (an
+    # archive extracted one level too shallow, or a leftover from a previous
+    # attempt) passed this check and then failed to launch with no row
+    # naming why. ``.is_file()`` plus a distinct message for the directory
+    # case turns that into a damaged-install diagnostic instead of a second
+    # "not found".
+    ok = path.is_file()
+    if ok:
+        detail = str(path)
+    elif path.exists():
+        detail = f"{path} exists but is not a file -- {TRELLIS_EXE_HINT}"
+    else:
+        detail = f"not found at {path} -- {TRELLIS_EXE_HINT}"
     return Check("trellis-server.exe", ok, detail, fatal=True)
 
 
@@ -417,13 +449,29 @@ def _gguf_check(config: Config) -> Check:
     spec = models.ENGINE_MODELS["trellis_gguf"]
     ok = fetch.present(config, "engine", spec)
     missing = [name for name in spec.probe if not (config.trellis_models_dir / name).is_file()]
-    detail = (
-        str(config.trellis_models_dir)
-        if ok
-        else f"{len(missing)} required GGUF file(s) missing from "
-        f"{config.trellis_models_dir} ({', '.join(missing[:3])}) -- download with:\n"
-        f"  {trellis_gguf_hint(config)}"
-    )
+    # M04: this row called ``fetch.present`` alone, so a killed download that
+    # left every probed GGUF at zero bytes still passed every ``is_file()`` in
+    # it and reported OK -- reproduced with all ten engine probe files emptied
+    # and Doctor still green. ``_registry_row`` gained the same check for the
+    # other nine rows; this one is built by hand (its message names *missing*
+    # files, which the registry helper does not), so the check is repeated
+    # here rather than routed through it.
+    bad = fetch.suspect_files(config, "engine", spec) if ok else []
+    if bad:
+        ok = False
+    if bad:
+        detail = (
+            f"{len(bad)} required GGUF file(s) are empty and will not load; "
+            f"remove and reinstall. First: {bad[0]}"
+        )
+    elif ok:
+        detail = str(config.trellis_models_dir)
+    else:
+        detail = (
+            f"{len(missing)} required GGUF file(s) missing from "
+            f"{config.trellis_models_dir} ({', '.join(missing[:3])}) -- download with:\n"
+            f"  {trellis_gguf_hint(config)}"
+        )
     # **Not fatal, unlike the exe beside it, and the difference is the whole
     # point.** ``trellis-server.exe`` is staged by the installer, so its
     # absence is a broken install and nothing in the app can fix it. These
@@ -465,12 +513,16 @@ def _birefnet_check(config: Config) -> Check:
 
 
 def _gltfpack_check(config: Config) -> Check:
-    ok = config.gltfpack_exe.exists()
-    detail = (
-        str(config.gltfpack_exe)
-        if ok
-        else f"not found at {config.gltfpack_exe} -- meshes ship at full reconstruction density"
-    )
+    # L01, ``_exe_check``'s fix: a directory named like the binary passed
+    # ``.exists()`` and read as "not found" either way.
+    path = config.gltfpack_exe
+    ok = path.is_file()
+    if ok:
+        detail = str(path)
+    elif path.exists():
+        detail = f"{path} exists but is not a file -- meshes ship at full reconstruction density"
+    else:
+        detail = f"not found at {path} -- meshes ship at full reconstruction density"
     return Check("gltfpack (mesh optimizer)", ok, detail, fatal=False)
 
 
@@ -725,29 +777,18 @@ def _t2i_checks(config: Config) -> list[Check]:
         ok, missing_lora = fetch.base_model_state(config, spec)
         if ok:
             detail = str(path)
-            # "Files found" and "the files are usable" are two questions, and
-            # the presence probe only ever answered the first: a zero-length
-            # weight file passes every ``Path.exists()`` in it and fails
-            # minutes later with the checkpoint already resident (MDL-08). The
-            # row stays green -- the download *is* there -- and says what is
-            # wrong with it, plus which revision produced it when a fetch
-            # recorded one.
-            bad = fetch.suspect_files(config, "base", spec)
-            if bad:
-                ok = False
-                detail = (
-                    f"{path} -- but {len(bad)} file(s) are empty and will not "
-                    f"load; remove and reinstall this model. First: {bad[0]}"
-                )
-            else:
-                recorded = fetch.read_manifest(path) or {}
-                pins = {
-                    r.get("revision")
-                    for r in (recorded.get("repos") or {}).values()
-                    if r.get("revision")
-                }
-                if pins:
-                    detail += f" (revision {', '.join(sorted(pins))})"
+            # The revision pin, when a fetch recorded one. Whether the files
+            # are *usable* rather than merely present -- MDL-08's question --
+            # is answered uniformly for every registry row inside
+            # ``_registry_row`` now (M04), rather than here alone.
+            recorded = fetch.read_manifest(path) or {}
+            pins = {
+                r.get("revision")
+                for r in (recorded.get("repos") or {}).values()
+                if r.get("revision")
+            }
+            if pins:
+                detail += f" (revision {', '.join(sorted(pins))})"
         elif missing_lora is not None:
             detail = (
                 f"weights present, but {spec.base_lora} is missing at "
@@ -759,7 +800,7 @@ def _t2i_checks(config: Config) -> list[Check]:
                 f"not found at {path} -- unavailable; download with:\n"
                 f"  {fetch.download_text(config, 'base', spec)}"
             )
-        checks.append(_registry_row("base", spec.label, ok, detail))
+        checks.append(_registry_row(config, "base", spec, ok, detail))
     for lora in models.STYLE_LORAS.values():
         path = config.t2i_model_root / "loras" / lora.filename
         ok = fetch.present(config, "lora", lora)
@@ -771,7 +812,7 @@ def _t2i_checks(config: Config) -> list[Check]:
                 f"  {fetch.download_text(config, 'lora', lora)}"
             )
         )
-        checks.append(_registry_row("lora", lora.label, ok, detail))
+        checks.append(_registry_row(config, "lora", lora, ok, detail))
     for adapter in models.IP_ADAPTERS.values():
         root = config.t2i_model_root / adapter.dir_name
         weights = root / adapter.subfolder / adapter.weight_name
@@ -787,7 +828,7 @@ def _t2i_checks(config: Config) -> list[Check]:
                 f"{missing} not found under {root} -- conditioning unavailable; "
                 f"download with:\n  {fetch.download_text(config, 'adapter', adapter)}"
             )
-        checks.append(_registry_row("adapter", adapter.label, ok, detail))
+        checks.append(_registry_row(config, "adapter", adapter, ok, detail))
     for cn in models.CONTROLNETS.values():
         path = config.t2i_model_root / cn.dir_name
         ok = fetch.present(config, "control", cn)
@@ -799,7 +840,7 @@ def _t2i_checks(config: Config) -> list[Check]:
                 f"  {fetch.download_text(config, 'control', cn)}"
             )
         )
-        checks.append(_registry_row("control", cn.label, ok, detail))
+        checks.append(_registry_row(config, "control", cn, ok, detail))
     checks.extend(_metric_checks(config))
     return checks
 
@@ -835,7 +876,7 @@ def _metric_checks(config: Config) -> list[Check]:
             else f"not found at {path} -- benchmark metric unavailable; download with:\n"
             f"  {fetch.download_text(config, 'metric', spec)}"
         )
-        checks.append(_registry_row("metric", spec.label, ok, detail))
+        checks.append(_registry_row(config, "metric", spec, ok, detail))
     return checks
 
 
@@ -871,7 +912,7 @@ def _music_checks(config: Config) -> list[Check]:
                 f"  {fetch.download_text(config, 'music', spec)}"
             )
         checks.append(
-            _registry_row("music", spec.label, ok, detail)
+            _registry_row(config, "music", spec, ok, detail)
         )
     return checks
 
@@ -960,7 +1001,7 @@ def _separation_checks(config: Config) -> list[Check]:
                 f"  {fetch.download_text(config, 'separation', spec)}"
             )
         checks.append(
-            _registry_row("separation", spec.label, ok, detail)
+            _registry_row(config, "separation", spec, ok, detail)
         )
     return checks
 
@@ -999,7 +1040,7 @@ def _pose_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
                 f"bbox-proportional fit; download with:\n"
                 f"  {fetch.download_text(config, 'pose', spec)}"
             )
-        checks.append(_registry_row("pose", spec.label, ok, detail))
+        checks.append(_registry_row(config, "pose", spec, ok, detail))
     return checks
 
 
@@ -1163,7 +1204,7 @@ def _matting_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         # different BiRefNets -- one GGUF inside trellis-server, this one on
         # the host for 2D exports -- and a user with rough edges has to be able
         # to tell which download the row is asking for.
-        checks.append(_registry_row("matting", spec.label, ok, detail))
+        checks.append(_registry_row(config, "matting", spec, ok, detail))
     return checks
 
 

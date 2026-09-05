@@ -195,6 +195,10 @@ class Ctx:
     # ``model_rows``, because an install changes what this interpreter can
     # import and every pack answer in the ctx is derived from that.
     pack_rows: list[dict[str, Any]] = field(default_factory=list)
+    # Pack keys an upgrade's site-packages wipe removed since they were last
+    # chosen -- see ``service.packs.packs_to_restore`` (M02). Refreshed
+    # alongside ``pack_rows`` for the same reason.
+    packs_to_restore: list[str] = field(default_factory=list)
     # Which rows the app-Settings pane has ticked. Frame-thread state and
     # deliberately not persisted: it is a selection for one action, and a
     # remembered one would offer to re-download something already on disk.

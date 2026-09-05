@@ -1631,16 +1631,9 @@ def pack_blocked(row: dict[str, Any]) -> str:
     )
 
 
-#: The percentage at and above which the child has stopped downloading and
-#: started writing into ``site-packages``. ``pack_worker`` caps the download
-#: bar at 89 and emits 92 as pip begins, so the two phases are distinguishable
-#: from the bar alone -- which is what lets Cancel be offered for one and not
-#: the other.
-PACK_INSTALL_PERCENT = 90.0
-
-
-def pack_cancellable(percent: float) -> bool:
-    """Whether stopping now is safe. True while it is still downloading.
+def pack_cancellable(phase: str) -> bool:
+    """Whether stopping now is safe. True until the worker says it has begun
+    the commit phase (``pack_worker.PHASE_COMMIT``).
 
     **Cancel is deliberately withdrawn once pip starts.** Killing the child
     mid-download costs a resumable ``.part`` file and nothing else -- a wheel
@@ -1649,8 +1642,17 @@ def pack_cancellable(percent: float) -> bool:
     state this whole mechanism exists to keep out of: a child does the writing
     precisely so the app is never editing the library it is running out of, and
     a Cancel that could interrupt the writing would hand that failure back.
+
+    Read off the worker's own ``phase`` word rather than a percent threshold
+    (H02): a threshold is a guess, sampled once a frame, about exactly when
+    ``collect()`` ends and ``install()`` begins -- and the gap between an
+    under-threshold sample and the child actually calling pip is where a quit
+    used to slip through with no warning at all. The worker knows which
+    syscall it is about to make; asking it beats guessing from a number.
     """
-    return percent < PACK_INSTALL_PERCENT
+    from ...pipelines import pack_worker
+
+    return phase != pack_worker.PHASE_COMMIT
 
 
 def _packs(ctx: Any) -> None:
@@ -1664,6 +1666,23 @@ def _packs(ctx: Any) -> None:
     # them, and two children unpacking torch into one site-packages at once is
     # the worst concurrency this app could have.
     busy = ctx.tasks.any_busy("pack:")
+    restore = list(getattr(ctx, "packs_to_restore", None) or [])
+    if restore:
+        # M02: an upgrade's site-packages wipe took these with it. The
+        # selection survived it (recorded outside the runtime), so this is a
+        # named, one-click remedy rather than the user discovering a silently
+        # grey mode and re-deriving which pack it needed on their own.
+        labels = ", ".join(
+            str(next((r["label"] for r in rows if r["key"] == key), key)) for key in restore
+        )
+        widgets.text_colored(theme.WARN, f"{icons.CIRCLE} Removed by the last upgrade: {labels}")
+        if widgets.disabled_button(
+            f"{icons.DOWNLOAD} Restore packs##pack-restore",
+            not busy,
+            reason="Another pack is being installed.",
+        ):
+            _restore_packs(ctx, restore)
+        imgui.dummy((0, sp(tokens.SP_2)))
     for row in rows:
         _pack_row(ctx, row, busy)
         imgui.dummy((0, sp(tokens.SP_2)))
@@ -1688,11 +1707,28 @@ def _pack_row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
     if unlocks:
         widgets.muted(unlocks)
     if present:
-        # Nothing to offer and nothing to warn about. A pack is deliberately
-        # not removable from here: uninstalling torch out from under a running
-        # app is not the same act as deleting a weights directory, and the
-        # remedy for "I want the disk back" is reinstalling the base app.
+        # A pack is deliberately not removable from here: uninstalling torch
+        # out from under a running app is not the same act as deleting a
+        # weights directory, and the remedy for "I want the disk back" is
+        # reinstalling the base app. Repair is offered instead of nothing
+        # (M01): matching distribution metadata is not proof this pack is
+        # usable, and until now the only remedy for a damaged one was a full
+        # reinstall of Warlock itself.
+        task_key = app_ctx.pack_key(key)
+        if ctx.tasks.is_busy(task_key):
+            found = ctx.progress(task_key)
+            percent = float(found.get("percent") or 0.0) if found else 0.0
+            widgets.progress_bar(percent)
+            if found and found.get("label"):
+                widgets.muted(str(found["label"]))
+            return
         widgets.muted("Installed.")
+        if widgets.disabled_button(
+            f"{icons.WRENCH} Repair##pack-repair-{key}",
+            not busy,
+            reason="Another pack is being installed.",
+        ):
+            _repair_pack(ctx, key)
         return
     blocked = pack_blocked(row)
     if blocked:
@@ -1706,10 +1742,11 @@ def _pack_row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
     if ctx.tasks.is_busy(task_key):
         found = ctx.progress(task_key)
         percent = float(found.get("percent") or 0.0) if found else 0.0
+        phase = str(found.get("phase") or "") if found else ""
         widgets.progress_bar(percent)
         if found and found.get("label"):
             widgets.muted(str(found["label"]))
-        if pack_cancellable(percent):
+        if pack_cancellable(phase):
             _cancel_pack(ctx)
         else:
             widgets.muted("Installing -- this cannot be interrupted safely.")
@@ -1753,8 +1790,59 @@ def _start_pack(ctx: Any, key: str) -> None:
         return svc_packs.install(
             ctx.svc,
             [key],
-            on_progress=lambda percent, label: ctx.tasks.set_progress(task_key, percent, label),
+            on_progress=lambda percent, label, phase: ctx.tasks.set_progress(
+                task_key, percent, label, phase
+            ),
         )
 
     if ctx.submit(task_key, run):
         ctx.toast("Installing...")
+
+
+def _repair_pack(ctx: Any, key: str) -> None:
+    """Reinstall this pack's pinned wheels even though it reads as present.
+
+    ``_start_pack``'s shape, ``svc_packs.repair`` instead of ``install``: the
+    row already says "Installed", so this is the remedy for the case that
+    claim turns out to be wrong (M01) rather than a fresh install.
+    """
+    from ...service import packs as svc_packs
+
+    task_key = app_ctx.pack_key(key)
+
+    def run() -> Any:
+        return svc_packs.repair(
+            ctx.svc,
+            [key],
+            on_progress=lambda percent, label, phase: ctx.tasks.set_progress(
+                task_key, percent, label, phase
+            ),
+        )
+
+    if ctx.submit(task_key, run):
+        ctx.toast("Repairing...")
+
+
+def _restore_packs(ctx: Any, keys: list[str]) -> None:
+    """Reinstall every pack an upgrade's site-packages wipe removed (M02).
+
+    One task, one key, covering the whole list: they were chosen together and
+    the pane already serialises pack installs to one at a time, so offering
+    them as separate buttons would only let the second one collide with the
+    first's own refusal ("another pack is being installed").
+    """
+    from ...service import packs as svc_packs
+
+    task_key = app_ctx.pack_key(",".join(keys))
+
+    def run() -> Any:
+        return svc_packs.install(
+            ctx.svc,
+            keys,
+            on_progress=lambda percent, label, phase: ctx.tasks.set_progress(
+                task_key, percent, label, phase
+            ),
+        )
+
+    if ctx.submit(task_key, run):
+        ctx.toast("Restoring packs...")

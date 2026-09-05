@@ -139,17 +139,129 @@ def test_a_plan_that_does_not_fit_is_refused(manifest_at, svc, monkeypatch):
     assert said is not None and "Not enough disk space" in said
 
 
-def test_an_already_installed_pack_is_not_a_spawn(manifest_at, svc, monkeypatch):
-    """Everything the pack carries is already at the pack's own version. Not an
-    error and not a child: running an install twice must be cheap."""
+def test_an_already_installed_pack_is_still_probed_for_real(
+    manifest_at, svc, monkeypatch, tmp_path
+):
+    """M01, reproduced: matching distribution metadata alone used to be waved
+    through with no spawn at all, which is exactly how a distribution that
+    unpacked badly last time (a killed pip, a DLL a later Windows update
+    broke) kept reading as "installed" forever -- ``to_install`` finds nothing
+    pending for it either. Nothing pending must still be cheap, not free of
+    the question: a disposable child is asked for real, same as a fresh
+    install, and only the *download* is skipped.
+    """
     manifest_at(wheel("bpy-5.2.0-cp313-cp313-win_amd64.whl", 10))
     monkeypatch.setattr(svc_packs, "installed_versions", lambda: {"bpy": "5.2.0"})
+    seen = tmp_path / "seen.json"
+    _stub(
+        monkeypatch,
+        f"""
+        import json, sys
+        spec = json.loads(sys.stdin.read())
+        open({str(seen)!r}, "w").write(json.dumps(spec))
+        open(spec["result_path"], "w").write(json.dumps({{"ok": True}}))
+        """,
+    )
+    result = svc_packs.install(svc, ["rig"])
+    assert result["already"] is True
+    spec = json.loads(seen.read_text(encoding="utf-8"))
+    assert spec["probe_only"] is True
+    assert spec["wheels"] == []  # nothing pending means nothing to download
 
-    def _never() -> list[str]:
-        raise AssertionError("a pack with nothing to do must not spawn a child")
 
-    monkeypatch.setattr(svc_packs, "worker_argv", _never)
-    assert svc_packs.install(svc, ["rig"])["already"] is True
+def test_an_already_installed_pack_that_fails_its_probe_is_not_waved_through(
+    manifest_at, svc, monkeypatch
+):
+    """The other half of the same defect: a probe failure on this path must
+    reach the caller as a refusal, not be swallowed because ``to_install``
+    found nothing to do."""
+    manifest_at(wheel("bpy-5.2.0-cp313-cp313-win_amd64.whl", 10))
+    monkeypatch.setattr(svc_packs, "installed_versions", lambda: {"bpy": "5.2.0"})
+    _stub(
+        monkeypatch,
+        """
+        import json, sys
+        spec = json.loads(sys.stdin.read())
+        open(spec["result_path"], "w").write(
+            json.dumps({"ok": False, "error": "ImportError: bpy: DLL load failed"})
+        )
+        """,
+    )
+    with pytest.raises(Invalid) as caught:
+        svc_packs.install(svc, ["rig"])
+    assert "DLL load failed" in str(caught.value)
+
+
+def test_repair_reinstalls_the_pinned_wheels_even_though_nothing_is_pending(
+    manifest_at, svc, monkeypatch, tmp_path
+):
+    """Repair (M01) is the remedy ``install`` cannot offer: it must not defer
+    to ``to_install`` at all, or a damaged distribution that matches the pin
+    on paper would be skipped for the same reason it was skipped the first
+    time."""
+    manifest_at(wheel("bpy-5.2.0-cp313-cp313-win_amd64.whl", 10))
+    monkeypatch.setattr(svc_packs, "installed_versions", lambda: {"bpy": "5.2.0"})
+    seen = tmp_path / "seen.json"
+    _stub(
+        monkeypatch,
+        f"""
+        import json, sys
+        spec = json.loads(sys.stdin.read())
+        open({str(seen)!r}, "w").write(json.dumps(spec))
+        open(spec["result_path"], "w").write(
+            json.dumps({{"ok": True, "collected": [], "installed": ["bpy"]}})
+        )
+        """,
+    )
+    result = svc_packs.repair(svc, ["rig"])
+    assert result["installed"] == ["bpy"]
+    spec = json.loads(seen.read_text(encoding="utf-8"))
+    assert spec["force_reinstall"] is True
+    assert [w["filename"] for w in spec["wheels"]] == ["bpy-5.2.0-cp313-cp313-win_amd64.whl"]
+
+
+# --- surviving an upgrade (M02) -----------------------------------------------
+
+
+def test_a_successful_install_is_recorded_outside_the_runtime(
+    manifest_at, svc, monkeypatch, tmp_path
+):
+    """The record an upgrade's ``site-packages`` wipe must not be able to
+    take with it -- it lives beside the wheel cache, under the user's Warlock
+    home, which the installer never touches."""
+    manifest_at(wheel("bpy-5.2.0-cp313-cp313-win_amd64.whl", 10))
+    monkeypatch.setattr(svc_packs, "installed_versions", dict)
+    _stub(
+        monkeypatch,
+        """
+        import json, sys
+        spec = json.loads(sys.stdin.read())
+        open(spec["result_path"], "w").write(
+            json.dumps({"ok": True, "collected": ["bpy"], "installed": ["bpy"]})
+        )
+        """,
+    )
+    svc_packs.install(svc, ["rig"])
+    assert svc_packs.selected_packs(svc) == ["rig"]
+    assert svc_packs._selection_path(svc).is_relative_to(svc_packs.cache_dir(svc))
+
+
+def test_packs_to_restore_names_a_pack_an_upgrade_removed(manifest_at, svc, monkeypatch):
+    """An upgrade's ``[InstallDelete]`` wipe leaves the recorded selection
+    intact and the interpreter's own imports missing -- the one state this
+    exists to catch and name, so Settings can offer to put it back rather
+    than the user meeting a silently grey Poser."""
+    manifest_at(wheel("bpy-5.2.0-cp313-cp313-win_amd64.whl", 10))
+    svc_packs._record_selected(svc, ["rig"])
+    monkeypatch.setattr(svc_packs, "installed_versions", dict)
+    monkeypatch.setattr(packs, "missing_modules", lambda names: list(names))
+    assert svc_packs.packs_to_restore(svc) == ["rig"]
+
+
+def test_packs_to_restore_is_empty_when_nothing_was_ever_installed(svc):
+    """The common case: a fresh machine, never having installed a pack, must
+    not be told an upgrade took something from it."""
+    assert svc_packs.packs_to_restore(svc) == []
 
 
 def test_only_what_is_missing_is_planned(manifest_at, svc, monkeypatch):
@@ -199,12 +311,12 @@ def test_the_spec_carries_what_the_child_needs_and_the_result_comes_back(
         )
         """,
     )
-    seen_progress: list[tuple[float, str]] = []
+    seen_progress: list[tuple[float, str, str]] = []
     result = svc_packs.install(
-        svc, ["rig"], on_progress=lambda p, label: seen_progress.append((p, label))
+        svc, ["rig"], on_progress=lambda p, label, phase: seen_progress.append((p, label, phase))
     )
     assert result["installed"] == ["bpy"]
-    assert seen_progress == [(50.0, "half")]
+    assert seen_progress == [(50.0, "half", "")]
 
     spec = json.loads(seen.read_text(encoding="utf-8"))
     assert [w["filename"] for w in spec["wheels"]] == [
@@ -218,6 +330,27 @@ def test_the_spec_carries_what_the_child_needs_and_the_result_comes_back(
     # downloaded were staged with the application by the installer.
     assert spec["bundled_dir"] == str(svc_packs.bundled_dir())
     assert spec["bundled_dir"] != spec["pack_dir"]
+
+
+def test_the_workers_phase_reaches_the_progress_callback(manifest_at, svc, monkeypatch):
+    """H02's guard reads the phase off the *pane's* progress dict, which reads
+    it off ``on_progress`` -- so the worker's own word has to survive the trip
+    through ``_run_worker`` unmangled, not get dropped on the way like the
+    percent-and-label pair used to be everything there was."""
+    manifest_at(wheel("bpy-5.2.0-cp313-cp313-win_amd64.whl", 10))
+    monkeypatch.setattr(svc_packs, "installed_versions", dict)
+    _stub(
+        monkeypatch,
+        """
+        import json, sys
+        spec = json.loads(sys.stdin.read())
+        print(json.dumps({"percent": 92.0, "label": "installing", "phase": "commit"}), flush=True)
+        open(spec["result_path"], "w").write(json.dumps({"ok": True, "installed": ["bpy"]}))
+        """,
+    )
+    seen_phases: list[str] = []
+    svc_packs.install(svc, ["rig"], on_progress=lambda _p, _l, phase: seen_phases.append(phase))
+    assert seen_phases == ["commit"]
 
 
 def test_a_child_that_fails_is_reported_in_its_own_words(manifest_at, svc, monkeypatch):

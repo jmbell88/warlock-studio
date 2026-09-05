@@ -532,7 +532,7 @@ deselect here, unlike Tiled, because every other editor in this app deselects on
 copy and cut act on the object last clicked when several are selected; move and delete are the two
 verbs that take a whole set.
 
-An **image layer** created here starts empty, and **Choose image…** on its row attaches a picture.
+An **image layer** created here starts empty, and **Choose…** on its row attaches a picture.
 `.wmap` already stores an image layer's pixels, so the file needs nothing new to hold it.
 
 Right-click a layer for **Duplicate** and **Merge down** beside Delete. A duplicate copies the whole

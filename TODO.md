@@ -79,6 +79,19 @@ the list: the base install must reach the window with no torch and no `bpy`
 pack must be installed from Settings on that machine — `rig` is the cheap one
 at 0.32 GiB — after which Poser opens without a restart.
 
+**And again on 2026-09-05** (the beta audit's H02/M01/M02): three recovery
+paths were built that have only ever run against fakes, and this is the machine
+that decides whether they are real. Quit the app *during* a pack install and
+watch which half you are in — a download must cancel on the worker's own
+acknowledgement, and a commit must hold the quit until pip is done rather than
+confirm one it cannot honour. Then press **Repair** on a pack that installed
+cleanly (it should reinstall the pinned wheels and come back green) and on one
+you have damaged by hand, by emptying a `.dist-info` or a top-level module of
+an installed pack. Finally upgrade over a version with packs installed and take
+the **Restore packs** button the banner offers: the selection is recorded beside
+the wheel cache under `WARLOCK_HOME`, so it is supposed to survive the
+installer wiping `site-packages` — which nothing but this run can prove.
+
 **Expected outcome:** a first **non-developer** install that generated an
 asset. Until a machine without `uv`, Python or a CUDA toolkit has installed
 this and made something, the project has no shippable artifact, whatever the
@@ -612,6 +625,29 @@ left needs a person:
 three packs a user chooses, and a figure for each of the two that have never
 been collected.
 
+## P27. Build the release candidate and measure it into INSTALL.md
+
+**Why it is yours:** hardware and a real build, same as P1 — this is the
+narrower half of it. `INSTALL.md` was rewritten 2026-09-05 around the base
+installer + Settings → Packs → Models flow (L04–L07/M16 of the 2026-09-04
+audit), but every size and hash in it is a placeholder
+(`[TBD — measure from release-candidate build]`) because no one has built the
+slim-base release candidate yet.
+
+**Do:**
+- Build the release candidate with `installer/build.ps1` (the P26 shape:
+  `--extra studio` staged, the three heavy extras pruned to packs).
+- Record the installer's SHA-256, its download size, and the installed base
+  runtime's on-disk size, the same way P1's now-stale 2.91 GB / 6.61 GB
+  figures were originally measured.
+- Replace every `[TBD — measure from release-candidate build]` placeholder in
+  `INSTALL.md` (the What you'll need list, and Step 1) with the measured
+  numbers.
+
+**Expected outcome:** `INSTALL.md` states real numbers instead of
+placeholders, and a beta tester reading it knows what they are actually about
+to download.
+
 ## Also owed, smaller
 
 - **Tutorial sample assets** (art): a 32×32 `.ora` sprite with a few layers
@@ -624,77 +660,6 @@ been collected.
 - **Delete the pre-purge mirror** at `D:/Projects/_archive/warlock-pre-purge.git`
   once you have worked in the rewritten repository long enough to be
   satisfied. Keeping it indefinitely means keeping the problem indefinitely.
-
----
-
-## Audit 2026-09-04 — open findings
-
-The third kind of entry. A ten-slice static audit on 2026-09-04 (after the two
-sweeps that landed as `b19a9d47` and `cb019390`) found these and did not fix
-them. Each is buildable; strike it out the day it lands, with the regression
-test the audit rule requires for Medium and above. Delete the section when it
-is empty. No Critical was found.
-
-**High**
-
-- **Muse: Play after Stop discards the loop region, crossfade and position.**
-  `panes/muse_player.py` `_transport` calls `seek` (a no-op when nothing is
-  sounding) then `muse_mode.play`, which always re-submits the decode and
-  replaces the whole `Player` with defaults. Resume in place with `_play_from`
-  when the loaded player already holds this job's PCM. Test in
-  `tests/test_muse_player.py`: loop + xfade survive a stop/play cycle.
-- **Doctor: the fatal TRELLIS GGUF row is green on a zero-byte file.**
-  `doctor._gguf_check` uses `fetch.present`, which is `is_file()`; only the
-  base-model branch calls `fetch.suspect_files`. Fold the engine kind in,
-  mirroring the base branch.
-- **Three undo doors push a step per drag frame** — the class `cb019390`
-  fixed in seven siblings: Plotter's layer-stack Opacity (`plotter_layers.py`
-  `_opacity_row`), Packwright's Padding and Extrude
-  (`panes/packwright_settings.py`), and the tileset Terrain tab's Wang-colour
-  swatch and probability (`panes/plotter_tileset_editor.py` →
-  `MapDoc.replace_tileset`, which pushes unconditionally). Add
-  `controls.fold_undo` between field and write; add each door to
-  `tests/test_undo_gesture_doors.py`. The swatch is a popup picker, whose
-  sliders fold per component — verify that case rather than assume it.
-
-**Medium**
-
-- **Doctor: every other model row has the same zero-byte blind spot** (LoRA,
-  IP-Adapter, ControlNet, music, separation, pose, matting loops). One shared
-  helper, one zero-byte test per kind.
-- **Doctor: `_exe_check` and `_gltfpack_check` accept a directory.** `exists()`
-  → `is_file()`. A directory named `trellis-server.exe` must fail the fatal row.
-- **Inker: the layer-opacity drag can orphan its undo step.** `inker_menu.py`
-  seeds the "before" value with `setdefault` and pops only on deactivation; an
-  interrupted drag leaves the change unrecorded and poisons the next drag's
-  "before". Refresh on `is_item_activated()`, or use `fold_undo`.
-- **Troupe QA: a blank frame can lose its "worst" ranking.** `qa.score_sheet`'s
-  blank branch never raises `worst_ratio`, so a later marginal warn overwrites
-  it. Give blank a ratio above any metric.
-
-**Low**
-
-- **Clay: `ObjectPropsEdit`, `MaterialEdit`, `MaterialListEdit` carry no
-  `cost`**, so they weigh zero to eviction.
-- **`service.files.job_dir_file` trusts its `name` argument by docstring
-  alone.** Reject separators and `..`, or check against `MEDIA`.
-
-**Docs** (each a one-line edit unless noted)
-
-- `README.md` lists twelve modes and omits Muse.
-- `docs/manual/20-overview.md` lists Sirens twice and out of rail order.
-- `THIRD-PARTY-NOTICES.md` omits Hybrid Demucs and claims every checkpoint
-  comes from Hugging Face.
-- `CONTRIBUTING.md` says "three extras" under a four-extra command, and
-  "~12,000 tests" where the suite is 16,000+.
-- `CHANGELOG.md` 0.0.32 never announces Muse as a mode.
-- `docs/manual/39-installation.md`'s extras table omits `music`.
-- `docs/manual/40-configuration.md` does not list `WARLOCK_T2I_IN_PROCESS`.
-- `docs/MODELS.md` has an unclosed code fence swallowing the rigging heading.
-- `SECURITY.md`'s untrusted-file list omits `.wsng`.
-- `docs/manual/31-plotter.md` says "Choose image…" for a button that reads
-  "Choose..."; `docs/manual/08-rigging-and-posing.md` capitalises "Adjust
-  Joints".
 
 ---
 

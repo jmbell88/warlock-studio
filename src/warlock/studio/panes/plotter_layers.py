@@ -213,6 +213,12 @@ def _opacity_row(doc: Any, layer: Any, editable: bool) -> None:
         1.0,
         help_text="How strongly this layer draws over the ones below it.",
     )
+    # One gesture, one step: a drag reports on every frame the pointer
+    # moves, and ``set_layer_props`` pushes a step per report without this.
+    # This row duplicates ``_layer_table``'s own Opacity field (Tiled's
+    # placement, over the stack rather than in Properties) and had its own
+    # unfolded push until the 2026-09-05 audit.
+    controls.fold_undo(doc.history)
     if changed and editable:
         doc.set_layer_props(layer.uid, opacity=float(opacity))
 

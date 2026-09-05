@@ -803,7 +803,11 @@ def test_progress_is_only_recorded_while_the_key_is_in_flight():
     try:
         assert runner.submit("download:x", lambda: 1)
         runner.set_progress("download:x", 40.0, "half")
-        assert runner.progress("download:x") == {"percent": 40.0, "label": "half"}
+        assert runner.progress("download:x") == {
+            "percent": 40.0,
+            "label": "half",
+            "phase": "",
+        }
         while not runner.poll():
             pass
         assert runner.progress("download:x") is None

@@ -41,6 +41,22 @@ def test_exe_check_passes_when_exe_exists(tmp_path):
     assert checks["trellis-server.exe"].ok is True
 
 
+def test_exe_check_reports_a_directory_distinctly_from_a_missing_file(tmp_path):
+    """L01. ``Path.exists()`` is true of a directory as well as a file, so a
+    broken unpack that left a *folder* named ``trellis-server.exe`` used to
+    read exactly like the exe was never staged at all -- same row, same
+    sentence, no way to tell "download it" from "your install is damaged"
+    apart."""
+    exe = tmp_path / "trellis-server.exe"
+    exe.mkdir()
+    checks = {c.name: c for c in run_checks(_config(tmp_path, trellis_server_exe=exe))}
+    row = checks["trellis-server.exe"]
+    assert row.ok is False
+    assert row.fatal is True
+    assert "exists but is not a file" in row.detail
+    assert "not found at" not in row.detail
+
+
 def test_gguf_check_finds_weight_files(tmp_path):
     models = tmp_path / "models"
     models.mkdir(parents=True)
@@ -240,7 +256,9 @@ def test_style_lora_check_passes_when_file_present(tmp_path):
     root = tmp_path / "m"
     lora = model_registry.STYLE_LORAS["render3d"]
     (root / "loras").mkdir(parents=True)
-    (root / "loras" / lora.filename).write_bytes(b"")
+    # Non-empty: a zero-byte file is exactly what M04's suspect-files check
+    # now catches, and this test is about a genuinely present file passing.
+    (root / "loras" / lora.filename).write_bytes(b"x")
     checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
     assert checks[f"style LoRA: {lora.label}"].ok is True
 
@@ -292,6 +310,22 @@ def test_gltfpack_check_is_non_fatal_when_missing(tmp_path, monkeypatch):
     check = doctor._gltfpack_check(Config())
     assert check.ok is False
     assert check.fatal is False
+
+
+def test_gltfpack_check_reports_a_directory_distinctly_from_a_missing_file(
+    tmp_path, monkeypatch
+):
+    """L01, ``gltfpack``'s half."""
+    from warlock import doctor
+    from warlock.config import Config
+
+    directory = tmp_path / "gltfpack.exe"
+    directory.mkdir()
+    monkeypatch.setenv("WARLOCK_GLTFPACK", str(directory))
+    monkeypatch.setenv("WARLOCK_DATA_DIR", str(tmp_path))
+    check = doctor._gltfpack_check(Config())
+    assert check.ok is False
+    assert "exists but is not a file" in check.detail
 
 
 def test_ip_adapter_row_checks_the_vision_encoder_too(tmp_path):
@@ -813,3 +847,153 @@ def test_the_vram_row_is_still_fatal_when_there_really_is_no_card(tmp_path, monk
     row = doctor._vram_check(_config(tmp_path), probe=True)
     assert row.fatal is True
     assert "no CUDA device" in row.detail
+
+
+# --- M04: fetch.present is presence-only, and every registry row now runs the
+# same suspect_files check present alone cannot make. Reproduced per kind
+# rather than asserted once: ``_registry_row`` is the shared choke point, but
+# before this fix each of these called ``fetch.present`` directly and skipped
+# it, so a per-kind test is what proves the fix reaches every one of them
+# rather than only the base-model row it was first written for.
+
+
+def test_engine_row_treats_zero_byte_gguf_files_as_missing_not_healthy(tmp_path):
+    """The reproduction named in the finding: all ten engine probe files
+    present and empty, Doctor green regardless. ``_gguf_check`` calls
+    ``fetch.present`` (an ``is_file()`` sweep, blind to size) and used to stop
+    there."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir(parents=True)
+    for name in model_registry.TRELLIS_GGUF_FILES:
+        (models_dir / name).touch()  # exists, and is zero bytes
+    checks = {c.name: c for c in run_checks(_config(tmp_path, trellis_models_dir=models_dir))}
+    row = checks["TRELLIS GGUF weights"]
+    assert row.ok is False
+    assert "empty" in row.detail
+
+
+def test_style_lora_row_treats_a_zero_byte_file_as_missing_not_healthy(tmp_path):
+    root = tmp_path / "m"
+    lora = model_registry.STYLE_LORAS["render3d"]
+    (root / "loras").mkdir(parents=True)
+    (root / "loras" / lora.filename).touch()
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    row = checks[f"style LoRA: {lora.label}"]
+    assert row.ok is False
+    assert "empty" in row.detail
+
+
+def test_ip_adapter_row_treats_a_zero_byte_weight_as_missing_not_healthy(tmp_path):
+    config = _config(tmp_path, t2i_model_root=tmp_path / "t2i")
+    adapter = model_registry.IP_ADAPTERS["plus"]
+    root = config.t2i_model_root / adapter.dir_name
+    weights = root / adapter.subfolder / adapter.weight_name
+    weights.parent.mkdir(parents=True, exist_ok=True)
+    weights.touch()
+    (root / adapter.image_encoder_dir).mkdir(parents=True, exist_ok=True)
+    (root / adapter.image_encoder_dir / "config.json").write_text("{}")
+
+    checks = {c.name: c for c in run_checks(config)}
+    row = checks[f"IP-Adapter: {adapter.label}"]
+    assert row.ok is False
+    assert "empty" in row.detail
+
+
+def test_controlnet_row_treats_a_zero_byte_weight_as_missing_not_healthy(tmp_path):
+    config = _config(tmp_path, t2i_model_root=tmp_path / "t2i")
+    cn = next(iter(model_registry.CONTROLNETS.values()))
+    base = config.t2i_model_root / cn.dir_name
+    base.mkdir(parents=True)
+    (base / "config.json").write_text("{}")
+    variant = f".{cn.variant}" if cn.variant else ""
+    (base / f"diffusion_pytorch_model{variant}.safetensors").touch()
+
+    checks = {c.name: c for c in run_checks(config)}
+    row = checks[f"ControlNet: {cn.label}"]
+    assert row.ok is False
+    assert "empty" in row.detail
+
+
+def test_metric_row_treats_a_zero_byte_checkpoint_as_missing_not_healthy(tmp_path):
+    spec = next(iter(model_registry.METRIC_MODELS.values()))
+    root = tmp_path / "t2i"
+    directory = root / spec.dir_name
+    directory.mkdir(parents=True)
+    (directory / "config.json").write_text("{}")
+    (directory / "model.safetensors").touch()
+
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    row = checks[f"metric model: {spec.label}"]
+    assert row.ok is False
+    assert "empty" in row.detail
+
+
+def test_music_row_treats_a_zero_byte_weight_as_missing_not_healthy(tmp_path):
+    """``present`` reads ACE-Step off its ``config.json`` probe list, but the
+    row's usability check is the same ``rglob``-for-weights sweep every
+    non-engine kind shares -- so the file that has to be zero-length to prove
+    it is one of the real weights beside a probed config, not the config
+    itself."""
+    spec = model_registry.MUSIC_MODELS[model_registry.DEFAULT_MUSIC_MODEL]
+    root = tmp_path / "t2i"
+    base = root / spec.dir_name
+    for name in spec.probe:
+        path = base / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+    (base / "ace_step_transformer" / "diffusion_pytorch_model.safetensors").touch()
+
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    row = checks[f"music model: {spec.label}"]
+    assert row.ok is False
+    assert "empty" in row.detail
+
+
+def test_separation_row_treats_a_zero_byte_checkpoint_as_missing_not_healthy(tmp_path):
+    spec = model_registry.SEPARATION_MODELS[model_registry.DEFAULT_SEPARATION]
+    root = tmp_path / "t2i"
+    for name in spec.probe:
+        path = root / spec.dir_name / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    row = checks[f"stem separation: {spec.label}"]
+    assert row.ok is False
+    assert "empty" in row.detail
+
+
+def test_pose_row_treats_a_zero_byte_checkpoint_as_missing_not_healthy(tmp_path):
+    spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
+    directory = tmp_path / "t2i" / spec.dir_name
+    directory.mkdir(parents=True)
+    (directory / "config.json").write_text("{}", encoding="utf-8")
+    (directory / "model.safetensors").touch()
+
+    checks = {
+        c.name: c
+        for c in run_checks(
+            _config(tmp_path, t2i_model_root=tmp_path / "t2i"), probe_slow=False
+        )
+    }
+    row = checks[f"pose model: {spec.label}"]
+    assert row.ok is False
+    assert "empty" in row.detail
+
+
+def test_matting_row_treats_a_zero_byte_checkpoint_as_missing_not_healthy(tmp_path):
+    spec = next(iter(model_registry.MATTING_MODELS.values()))
+    directory = tmp_path / "t2i" / spec.dir_name
+    directory.mkdir(parents=True)
+    (directory / "config.json").write_text("{}", encoding="utf-8")
+    (directory / "model.safetensors").touch()
+
+    checks = {
+        c.name: c
+        for c in run_checks(
+            _config(tmp_path, t2i_model_root=tmp_path / "t2i"), probe_slow=False
+        )
+    }
+    row = checks[f"host matting: {spec.label}"]
+    assert row.ok is False
+    assert "empty" in row.detail

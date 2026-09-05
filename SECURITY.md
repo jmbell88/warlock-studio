@@ -17,18 +17,25 @@ system and no network listener beyond `127.0.0.1`, so the realistic threat is
 **a malicious file**, not a malicious peer. In scope:
 
 - **Any file the app opens.** `.ora`, `.aseprite`, `.tmx`/`.tsx`, `.wmap`,
-  `.wblk`, `.wpack`, `.glb`, and every image format Pillow handles. These are
-  files people download from asset sites, so a crafted one reaching code
-  execution, a decompression bomb, or a write outside the chosen directory is a
-  real finding. So is a hang or an unbounded allocation.
+  `.wblk`, `.wpack`, `.wsng`, `.glb`, and every image format Pillow handles.
+  These are files people download from asset sites, so a crafted one reaching
+  code execution, a decompression bomb, or a write outside the chosen directory
+  is a real finding. So is a hang or an unbounded allocation.
 - **Path traversal** through any archive member, external tileset reference or
   export template.
 - **Anything that makes the app reach the network.** The offline guarantee
   (`HF_HUB_OFFLINE=1`, set before any import) is a security property here, not
-  only a convenience. The single exception is the user-initiated
-  `fetch_worker` subprocess.
-- **Subprocess handling** -- `trellis-server.exe`, the Blender worker, the
-  matting worker, the fetch worker.
+  only a convenience. There are two user-initiated exceptions, each its own
+  subprocess: the `fetch_worker` (model weights, from Hugging Face) and the
+  `pack_worker` (`src/warlock/pipelines/pack_worker.py`, spawned by
+  `src/warlock/service/packs.py`, downloading and installing optional
+  dependency packs — Create/Muse/rigging extras — from Settings -> Packs).
+- **Subprocess handling.** Heavy or privileged work is never done inline in the
+  main process: reconstruction (`trellis-server.exe`), the Blender worker,
+  the matting worker, the music and stem-separation workers, LoRA training,
+  `doctor`'s load probe, the fetch worker and the pack worker all run as a
+  child process inside the `winjob` kill-on-close job, so a crash or a forced
+  close of the main window cannot leave one running orphaned.
 
 ## What is not in scope
 

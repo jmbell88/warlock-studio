@@ -17,7 +17,7 @@ from warlock.studio.clay import elements as el
 from warlock.studio.clay import mesh as bm
 from warlock.studio.clay import ops_topo
 from warlock.studio.clay import primitives as bp
-from warlock.studio.clay.edits import MeshEdit, TransformEdit, mesh_bytes
+from warlock.studio.clay.edits import MeshEdit, TransformEdit, _texture_bytes, mesh_bytes
 from warlock.studio.undo import CompoundEdit
 
 
@@ -401,6 +401,61 @@ def test_an_undone_add_still_costs_the_mesh_it_keeps_alive() -> None:
     doc.undo()
     assert doc.history._undone[-1].cost == expected
     assert doc.history.bytes >= expected
+
+
+def test_a_property_edit_costs_its_retained_dict() -> None:
+    """L02: ``ObjectPropsEdit`` inherited ``Edit.cost = 0``, so a generator's
+    ``params`` -- the one field on it big enough to matter, round-tripped
+    wholesale by the properties panel rather than diffed -- was retained on
+    the stack for free as far as the byte budget could tell."""
+    doc = bd.ClayDoc()
+    a = doc.add_object(_obj("A", generator="cylinder", params={"radius": 0.5}))
+    doc.set_props(a.uid, params={"radius": 0.5, "height": 2.0, "segments": 32})
+    edit = doc.history._done[-1]
+    assert edit.cost > 0
+
+
+def test_a_material_property_edit_costs_its_textures() -> None:
+    """L02: ``MaterialEdit`` inherited ``Edit.cost = 0`` too, so a palette
+    entry's texture maps -- easily megabytes, on an imported material -- rode
+    the undo stack invisibly to the eviction that exists to bound exactly
+    this."""
+    doc = bd.ClayDoc()
+    doc.add_object(_obj("A"))
+    before = bd.gltf.Material(name="textured", base_color=(2, 2, bytes(16)))
+    doc.materials[0] = before
+    changed = bd.gltf.Material(
+        name="textured", base_color=(2, 2, bytes(16)), metallic_factor=0.2
+    )
+    assert doc.set_material(0, changed) is True
+    edit = doc.history._done[-1]
+    assert edit.cost >= 16
+
+
+def test_a_shared_texture_buffer_is_not_billed_twice() -> None:
+    """The same audit's other half: a property-only change keeps every
+    texture slot as the identical ``bytes`` object, and a ``MaterialEdit``
+    holds that object as both its ``before`` and its ``after`` -- counting
+    each slot's size once per edit, not once per reference to it, is what
+    keeps a palette full of untouched normal maps from doubling its own
+    reported cost on every metallic-slider nudge."""
+    texture = bytes(1024)
+    before = bd.gltf.Material(name="m", base_color=(4, 4, texture))
+    after = bd.gltf.Material(name="m", base_color=(4, 4, texture), roughness_factor=0.3)
+    assert before.base_color[2] is after.base_color[2] is texture
+    seen: set[int] = set()
+    assert _texture_bytes(before, seen) + _texture_bytes(after, seen) == len(texture)
+
+
+def test_a_palette_addition_costs_its_material() -> None:
+    """L02: ``MaterialListEdit`` -- add or remove a whole palette entry --
+    inherited the same zero cost."""
+    doc = bd.ClayDoc()
+    doc.add_object(_obj("A"))
+    textured = bd.gltf.Material(name="m", base_color=(3, 3, bytes(27)))
+    doc.add_material(textured)
+    edit = doc.history._done[-1]
+    assert edit.cost >= 27
 
 
 def test_the_generator_field_survives_a_regenerate() -> None:

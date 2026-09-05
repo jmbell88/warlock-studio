@@ -38,7 +38,9 @@ class _Device:
     RATE = RATE
 
     def play(self, pcm, rate=RATE, *, tag="", loops=0) -> bool:
-        self.calls.append({"frames": len(pcm), "rate": rate, "tag": tag, "loops": loops})
+        self.calls.append(
+            {"frames": len(pcm), "rate": rate, "tag": tag, "loops": loops, "pcm": np.array(pcm)}
+        )
         self.tag_value = tag
         self.busy = True
         return True
@@ -178,6 +180,169 @@ def test_playing_outside_a_region_does_not_repeat(ctx, device):
     assert device.calls[-1]["loops"] == 0
 
 
+def test_seeking_inside_the_region_loops_the_whole_region_not_just_the_tail(ctx, device):
+    """M10 repro: seeking to 5s inside a 2-8s region used to slice
+    ``pcm[start:loop_end]`` and loop *that* -- a buffer of only three seconds,
+    not the marked six-second region. Fails against the unfixed code, whose
+    buffer length there is ``loop_end - seek`` rather than
+    ``loop_end - loop_start``.
+    """
+    _loaded(ctx, seconds=10.0)
+    muse_mode.set_region(ctx, 2.0, 8.0)
+    muse_mode.play_region(ctx)  # start the loop, as "Play the loop" does
+    muse_mode.seek(ctx, 5.0)
+    call = device.calls[-1]
+    assert call["loops"] == -1
+    assert call["frames"] == pytest.approx(6 * RATE, rel=0.01)
+
+
+def test_seeking_before_the_region_does_not_force_a_loop(ctx, device):
+    """A region existing at all used to loop *any* seek, even one that lands
+    outside it -- ``repeat`` depended only on whether a region was set, never
+    on whether the seek landed inside it. Fails against the unfixed code,
+    which reports ``loops == -1`` here.
+    """
+    _loaded(ctx, seconds=10.0)
+    muse_mode.set_region(ctx, 2.0, 8.0)
+    device.busy, device.tag_value = True, "a"
+    muse_mode.seek(ctx, 0.5)
+    assert device.calls[-1]["loops"] == 0
+
+
+def test_seeking_after_the_region_does_not_force_a_loop(ctx, device):
+    """The mirror of the above, and a worse instance of the same bug: seeking
+    past the region's end used to loop the unbounded remainder to the end of
+    the take, forever. Fails against the unfixed code (``loops == -1`` and a
+    one-second buffer standing in for the whole remainder).
+    """
+    _loaded(ctx, seconds=10.0)
+    muse_mode.set_region(ctx, 2.0, 8.0)
+    device.busy, device.tag_value = True, "a"
+    muse_mode.seek(ctx, 9.0)
+    assert device.calls[-1]["loops"] == 0
+    assert device.calls[-1]["frames"] == pytest.approx(1 * RATE, rel=0.01)
+
+
+def test_shrinking_the_region_while_sounding_is_picked_up_on_the_next_seek(ctx, device):
+    """Changing the markers mid-loop must be reflected the next time the take
+    is actually replayed. Fails against the unfixed code, whose loop buffer is
+    always "seek point to loop end" (1s here) rather than the full, narrowed
+    region (2s).
+    """
+    _loaded(ctx, seconds=10.0)
+    muse_mode.set_region(ctx, 2.0, 8.0)
+    muse_mode.play_region(ctx)
+    muse_mode.set_region(ctx, 3.0, 5.0)  # narrowed while sounding
+    device.busy, device.tag_value = True, "a"
+    muse_mode.seek(ctx, 4.0)
+    assert device.calls[-1]["frames"] == pytest.approx(2 * RATE, rel=0.01)
+
+
+def test_the_position_wraps_within_the_region_after_a_seek_inside_it(ctx, device):
+    """Old code's ``play_offset`` was the seek point and its buffer began
+    there too, so adding the mixer's raw clock straight to it was correct by
+    accident, for a buffer that was the wrong length. With the loop rotated to
+    start at the seek point, the wrap has to be computed against the
+    *region's* length and re-based at ``loop_start`` -- this pins that
+    arithmetic. Fails against the unfixed code, which returns 8.5 here
+    (``play_offset`` 5.0 plus the raw clock 3.5, with no wrap at all).
+    """
+    _loaded(ctx, seconds=10.0)
+    muse_mode.set_region(ctx, 2.0, 8.0)
+    device.busy, device.tag_value = True, "a"
+    muse_mode.seek(ctx, 5.0)
+    device.pos = 3.5
+    assert muse_mode.position(ctx) == pytest.approx(2.5)
+
+
+# --- resuming a loaded take (M07) --------------------------------------------
+
+
+def test_stop_captures_the_playhead_rather_than_losing_it(ctx, device):
+    """M07: the playhead the mixer was actually at must survive Stop. Fails
+    against the unfixed code, which never reads ``position(ctx)`` before
+    stopping and leaves ``play_offset`` wherever the last ``_play_from`` call
+    had started -- 3.0 here, not the 4.0 the take had actually reached.
+    """
+    one = _loaded(ctx, seconds=10.0)
+    one.play_offset = 3.0
+    device.busy, device.tag_value, device.pos = True, "a", 1.0
+    muse_mode.stop(ctx)
+    assert one.play_offset == pytest.approx(4.0)
+
+
+def test_stop_then_play_resumes_the_same_take_without_losing_its_state(
+    ctx, device, monkeypatch
+):
+    """M07: pressing Play on an already-loaded take must not rebuild the
+    ``Player``. The old code always resubmitted the decode -- so a 2-8s
+    region, a 200ms crossfade and a mid-take offset all reverted to nothing on
+    the very next Play, since ``on_task_done`` builds a brand-new
+    ``MusePlayer`` for every successful load. Fails against the unfixed code,
+    which submits a fresh decode (``ctx.submitted`` is non-empty) for a take
+    already sitting in memory with nothing to re-read.
+    """
+    from test_muse_mode import _finished
+
+    _finished(ctx, "a")
+    monkeypatch.setattr(muse_mode, "_read_track", lambda path: {"pcm": [], "rate": RATE})
+    one = _loaded(ctx, seconds=10.0, job="a")
+    muse_mode.set_region(ctx, 2.0, 8.0)
+    one.xfade_ms = 200.0
+    device.busy, device.tag_value, device.pos = True, "a", 1.0
+    one.play_offset = 3.0
+    muse_mode.stop(ctx)
+    assert one.play_offset == pytest.approx(4.0)
+
+    muse_mode.play(ctx, "a")
+    assert ctx.submitted == [], "an already-decoded take must be resumed, not re-read"
+    resumed = muse_mode.player(ctx)
+    assert resumed is one, "the same Player, not a fresh one built by on_task_done"
+    assert (resumed.loop_start, resumed.loop_end) == (2.0, 8.0)
+    assert resumed.xfade_ms == pytest.approx(200.0)
+    call = device.calls[-1]
+    assert call["loops"] == -1  # 4.0 is inside the (2, 8) region
+    assert call["frames"] == pytest.approx(6 * RATE, rel=0.01)
+
+
+# --- one buffer for the audition and the export (M09) ------------------------
+
+
+def test_playing_the_loop_hands_the_mixer_the_export_buffer_not_a_raw_slice(
+    ctx, device, monkeypatch, tmp_path
+):
+    """M09: before this, ``play_region``/seeking inside the region handed the
+    mixer a raw, uncrossfaded slice of ``pcm`` while ``export_loop``
+    crossfaded independently on write -- so the crossfade slider could be
+    dragged to any value with no audible difference through the advertised
+    audition. Fails against the unfixed code, whose buffer here is the plain
+    slice and does not match ``muse.loops.crossfade``'s output at all once the
+    fade is non-zero.
+    """
+    from warlock.studio.muse import loops as loops_mod
+
+    one = _loaded(ctx, seconds=10.0)
+    rng = np.random.default_rng(0)
+    one.pcm = (rng.standard_normal((10 * RATE, 2)) * 5000).astype(np.int16)
+    muse_mode.set_region(ctx, 2.0, 8.0)
+    one.xfade_ms = 200.0
+    rate = one.rate
+    expected = loops_mod.crossfade(
+        one.pcm, int(2.0 * rate), int(8.0 * rate), int(200.0 * rate / 1000.0)
+    )
+
+    muse_mode.play_region(ctx)  # phase 0: starts at the region's own start
+    assert np.array_equal(device.calls[-1]["pcm"], expected)
+
+    out = tmp_path / "loop.wav"
+    monkeypatch.setattr(muse_io.dialogs, "save_file", lambda *a, **k: out)
+    muse_io.export_loop(ctx, one)
+    with wave.open(str(out)) as handle:
+        raw = handle.readframes(handle.getnframes())
+    exported = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2)
+    assert np.array_equal(exported, expected), "the export must write the same buffer"
+
+
 # --- the region --------------------------------------------------------------
 
 
@@ -264,6 +429,7 @@ def test_no_candidates_says_so_rather_than_leaving_a_spinner(ctx, device):
 def test_a_decoded_take_becomes_the_player(ctx, device):
     from warlock.studio.muse import waveform
 
+    muse_mode.ensure(ctx).audition_job = "a"
     pcm = np.zeros((RATE, 2), dtype=np.int16)
     done = type("_Done", (), {
         "key": f"{muse_mode.LOAD_PREFIX}a",

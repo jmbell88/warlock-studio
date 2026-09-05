@@ -129,12 +129,17 @@ class TaskRunner:
             self._pending[key] = _Pending(future=future, tag=tag)
         return True
 
-    def set_progress(self, key: str, percent: float, label: str = "") -> None:
+    def set_progress(self, key: str, percent: float, label: str = "", phase: str = "") -> None:
         """Report how far ``key`` has got. Safe from any thread.
 
         Only recorded while the key is actually in flight: a task thread that
         reports one last time as it finishes must not resurrect an entry the
         frame loop has already collected and stopped drawing.
+
+        ``phase`` is an opaque, task-defined word rather than a percent range a
+        reader has to guess the boundaries of -- see ``pack_worker``'s
+        ``download``/``commit`` and :meth:`uncancellable`, which is what a
+        quit guard asks instead of sampling a threshold (H02).
         """
         with self._lock:
             if key not in self._pending:
@@ -142,11 +147,13 @@ class TaskRunner:
             self._progress[key] = {
                 "percent": max(0.0, min(100.0, float(percent))),
                 "label": str(label),
+                "phase": str(phase),
             }
 
     def progress(self, key: str) -> dict[str, Any] | None:
-        """``{"percent": float, "label": str}`` or None -- the shape
-        ``Runtime.progress`` returns, so a pane draws either the same way."""
+        """``{"percent": float, "label": str, "phase": str}`` or None -- the
+        shape ``Runtime.progress`` returns, so a pane draws either the same
+        way. ``phase`` is "" for every task that never names one."""
         with self._lock:
             found = self._progress.get(key)
             return dict(found) if found is not None else None
@@ -158,6 +165,29 @@ class TaskRunner:
     def any_busy(self, prefix: str) -> bool:
         with self._lock:
             return any(k.startswith(prefix) for k in self._pending)
+
+    def commit_busy(self, prefix: str) -> bool:
+        """True while some ``prefix``-keyed task has reported the phase that
+        must not be interrupted (H02).
+
+        A quit used to be guarded by naming task-key *prefixes* worth warning
+        about (``download:``, ``export``...) with ``pack:`` missing from the
+        list -- so a running pack install produced an empty quit summary and
+        a normal quit walked straight through it, reaching
+        ``TaskRunner.shutdown``'s grace-period timeout and
+        ``winjob.terminate_tracked`` with no warning ever shown (H02,
+        reproduced). This is the stronger question a quit guard asks instead
+        of one more named prefix: not "is something running" but "would
+        stopping it now leave something half-written" -- ``pack_worker``'s own
+        word for which phase it is in, via :meth:`set_progress`'s ``phase``,
+        rather than a percentage a caller would have to know the boundaries
+        of.
+        """
+        with self._lock:
+            return any(
+                k.startswith(prefix) and v.get("phase") == "commit"
+                for k, v in self._progress.items()
+            )
 
     @property
     def busy_keys(self) -> set[str]:

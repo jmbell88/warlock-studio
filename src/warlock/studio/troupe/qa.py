@@ -298,7 +298,16 @@ def score_sheet(
 
     cells_out: list[CellScore] = []
     worst: tuple[str, float, int] | None = None
-    worst_ratio = 0.0
+    # ``(severity, ratio)``, compared as a tuple: severity first, magnitude
+    # only to break a tie within the same severity. A lone ``worst_ratio``
+    # let a blank -- set only when nothing had claimed ``worst`` yet, and
+    # never itself raising the ratio a later metric was compared against --
+    # lose to whatever mild warn-level metric came after it in cell order.
+    # Reproduced (2026-09-05, M13): a blank first cell outranked by a later
+    # centroid jitter of 0.0625, itself under its own 0.15 bad threshold.
+    # A blank is ranked at ``LEVEL_BAD`` by construction: nothing a sheet can
+    # show is worse than a movement missing a frame outright.
+    worst_key: tuple[int, float] = (LEVEL_OK - 1, 0.0)
     flagged = 0
     for index in sorted(scores):
         animation, direction, offset, metrics, flags = scores[index]
@@ -306,12 +315,17 @@ def score_sheet(
             warn, bad = THRESHOLDS[name]
             if value >= warn:
                 flags.add(_FLAG_OF[name])
-            ratio = value / bad if bad > 0 else 0.0
-            if value >= warn and ratio > worst_ratio:
-                worst_ratio = ratio
-                worst = (name, float(value), index)
-        if "blank" in flags and worst is None:
-            worst = ("blank", 1.0, index)
+                severity = LEVEL_BAD if value >= bad else LEVEL_WARN
+                ratio = value / bad if bad > 0 else 0.0
+                key = (severity, ratio)
+                if key > worst_key:
+                    worst_key = key
+                    worst = (name, float(value), index)
+        if "blank" in flags:
+            key = (LEVEL_BAD, 1.0)
+            if key > worst_key:
+                worst_key = key
+                worst = ("blank", 1.0, index)
         ordered = tuple(flag for flag in FLAGS if flag in flags)
         if ordered:
             flagged += 1

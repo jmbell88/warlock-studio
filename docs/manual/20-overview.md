@@ -89,9 +89,6 @@ Then the eight workspaces:
 - **Plotter.** A tile-map editor: a grid, a layer stack, one or more tilesets, and the objects an
   engine reads as spawn points and trigger volumes — where a sheet of tiles becomes a level. It
   speaks Tiled's formats in both directions. Covered in [Plotter](31-plotter.md).
-- **Sirens.** A chiptune tracker: a pattern grid over five NES-shaped voices, envelopes,
-  sample import and sound effects, with WAV, stems and effect exports. Covered in
-  [Sirens](34-sirens.md).
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
   where everything landed. Covered in [Packwright](32-packwright.md).
 - **Muse.** Generated music: a comma-separated style-tag string and an optional lyric block become a

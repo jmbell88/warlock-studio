@@ -101,13 +101,17 @@ def test_cancel_is_offered_while_downloading_and_withdrawn_once_pip_starts():
     half written, which is the state the child exists to prevent -- so the
     button is withdrawn rather than left to mean two different things.
 
-    The two numbers are ``pack_worker``'s: it caps the download bar at 89 and
-    emits 92 as pip begins.
+    Read off ``pack_worker``'s own phase word (H02), not a percent threshold:
+    a threshold is a guess about when ``collect()`` ends and ``install()``
+    begins, sampled once a frame, and the gap between an under-threshold
+    sample and the child actually calling pip is where a quit used to slip
+    through with no warning at all.
     """
-    assert app_settings.pack_cancellable(0.0)
-    assert app_settings.pack_cancellable(89.0)
-    assert not app_settings.pack_cancellable(92.0)
-    assert not app_settings.pack_cancellable(100.0)
+    from warlock.pipelines import pack_worker
+
+    assert app_settings.pack_cancellable("")
+    assert app_settings.pack_cancellable(pack_worker.PHASE_DOWNLOAD)
+    assert not app_settings.pack_cancellable(pack_worker.PHASE_COMMIT)
 
 
 # --- what a finished install means -------------------------------------------
@@ -172,3 +176,65 @@ def test_a_re_probe_that_raises_is_not_a_silent_install(monkeypatch):
     app, _submitted = _app()
     app._on_task_done(_done("pack:music"))
     assert app.app_ctx.toast == [("The music pack is installed.", "success")]
+
+
+def test_restore_packs_reprobes_every_key_the_comma_joined_task_named(monkeypatch):
+    """``app_settings._restore_packs`` (M02) installs several packs under one
+    task key so the pane's one-install-at-a-time rule still applies; the
+    ``pack:`` branch has to split that key back apart rather than handing the
+    literal string "rig,music" to ``unresolved`` as if it were one pack."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(svc_packs, "unresolved", lambda keys: seen.append(list(keys)) or [])
+    app, _submitted = _app()
+    app._on_task_done(_done("pack:rig,music"))
+    assert seen == [["rig", "music"]]
+    assert app.app_ctx.toast == [("The rig, music pack is installed.", "success")]
+
+
+# --- H02: a running install's commit phase cannot be quit through -----------
+
+
+def test_a_quit_is_withheld_not_confirmed_during_a_packs_commit_phase():
+    """Reproduces H02: before the fix, ``_quit_summary`` named no ``pack:``
+    prefix at all, so a quit asked during a running install's commit phase
+    produced an empty summary and went straight to ``_request_quit`` -- no
+    dialog, no warning, nothing standing between the click and
+    ``TaskRunner.shutdown`` eventually killing the child mid-write. The fixed
+    guard must withhold the ask itself rather than show a confirm dialog that
+    quitting would then honour by killing pip."""
+    app, _ = _app()
+    app.app_ctx.tasks = SimpleNamespace(
+        commit_busy=lambda prefix: prefix == "pack:",
+        set_progress=lambda *_a: None,
+    )
+    app.app_ctx.confirms = SimpleNamespace(
+        ask=lambda *_a, **_k: pytest.fail("a confirm dialog must not be raised mid-commit")
+    )
+    app._running = True
+    app._ask_quit()
+    assert app._quit_deferred is True
+    assert app._running is True  # not quit outright either
+    message, kind = app.app_ctx.toast[-1]
+    assert "cannot be interrupted" in message and kind == "warn"
+
+
+def test_a_deferred_quit_resumes_once_the_commit_phase_clears(monkeypatch):
+    """The other half: once nothing is left in the commit phase, the withheld
+    ask has to actually happen rather than being forgotten (H02's "defer
+    shutdown until the commit phase completes")."""
+    monkeypatch.setattr(svc_packs, "unresolved", lambda _keys: [])
+    app, _ = _app()
+    app.runtime = SimpleNamespace(current_job_id=None)
+    app.app_ctx.cache = SimpleNamespace(active=None)
+    app.app_ctx.tasks = SimpleNamespace(
+        commit_busy=lambda _prefix: False,
+        busy_keys=set(),
+        set_progress=lambda *_a: None,
+    )
+    app.app_ctx.confirms = SimpleNamespace(ask=lambda *_a, **_k: None)
+    app._quit_deferred = True
+    requested: list[bool] = []
+    app._request_quit = lambda: requested.append(True)
+    app._on_task_done(_done("pack:rig"))
+    assert app._quit_deferred is False
+    assert requested == [True]  # nothing else was busy, so _ask_quit quit outright

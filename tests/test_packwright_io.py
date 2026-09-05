@@ -9,6 +9,7 @@ wrapper here would be a second object where all of them reach for one.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -181,6 +182,74 @@ def test_a_tsx_mismatch_still_exports_the_png_and_json(tmp_path, monkeypatch):
     assert any("No .tsx written" in text for text in warnings)
 
 
+def test_a_grid_export_then_a_maxrects_export_refuses_to_leave_the_old_tsx(
+    tmp_path, monkeypatch
+):
+    """M12. A grid export writes ``out.tsx`` beside ``out.png``; switching to
+    MaxRects under the same basename never asks Tiled anything, so nothing
+    would ever touch that file again -- and it would keep describing the grid
+    that used to be there, over a PNG that no longer is one. The export must
+    refuse rather than publish a PNG+JSON pair with a stale tileset beside
+    them."""
+    from warlock.service.errors import Invalid
+    from warlock.studio import dialogs
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, sources=3)
+    packwright_mode.set_settings(ctx, tab, mode="grid")
+    _pack(ctx, tab)
+    monkeypatch.setattr(dialogs, "save_file", lambda *a, **k: tmp_path / "out.png")
+    packwright_mode.export_files(ctx, tab)
+    assert (tmp_path / "out.tsx").exists(), "the grid export wrote a .tsx to begin with"
+    original_tsx = (tmp_path / "out.tsx").read_bytes()
+    # Clears ``tab.saving``, which the export set and only ``on_task_done``
+    # unsets -- otherwise the next ``set_settings`` is a no-op against a tab
+    # that still reads as busy.
+    packwright_mode.on_task_done(ctx, _Done(f"packwright-export:{tab.uid}", ctx.result))
+
+    packwright_mode.set_settings(ctx, tab, mode="maxrects")
+    _pack(ctx, tab)
+    with pytest.raises(Invalid, match=r"out\.tsx.*already exists"):
+        packwright_mode.export_files(ctx, tab)
+
+    # Refused before anything was staged: the previous PNG/JSON/TSX triple is
+    # untouched, not half-replaced by a MaxRects PNG beside a grid .tsx.
+    assert (tmp_path / "out.tsx").read_bytes() == original_tsx
+    assert _temps(tmp_path) == []
+
+
+def test_a_grid_export_then_a_refused_columns_re_export_refuses_to_leave_the_old_tsx(
+    tmp_path, monkeypatch
+):
+    """M12's other half: still a grid pack, but the *second* export's explicit
+    columns count is the one ``tsxout.grid_tileset`` refuses (see
+    ``test_a_tsx_mismatch_still_exports_the_png_and_json``). The ordinary
+    behaviour there -- drop the ``.tsx``, still publish the PNG and JSON -- is
+    only safe when there was no ``.tsx`` to begin with; here one already
+    describes the *first* export's geometry, and publishing a new PNG beside
+    it without touching it would leave that description wrong."""
+    from warlock.service.errors import Invalid
+    from warlock.studio import dialogs
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, sources=3)
+    packwright_mode.set_settings(ctx, tab, mode="grid")
+    _pack(ctx, tab)
+    monkeypatch.setattr(dialogs, "save_file", lambda *a, **k: tmp_path / "out.png")
+    packwright_mode.export_files(ctx, tab)
+    assert (tmp_path / "out.tsx").exists()
+    original_tsx = (tmp_path / "out.tsx").read_bytes()
+    packwright_mode.on_task_done(ctx, _Done(f"packwright-export:{tab.uid}", ctx.result))
+
+    packwright_mode.set_settings(ctx, tab, columns=2, power_of_two=True)
+    _pack(ctx, tab)
+    with pytest.raises(Invalid, match=r"out\.tsx.*already exists"):
+        packwright_mode.export_files(ctx, tab)
+
+    assert (tmp_path / "out.tsx").read_bytes() == original_tsx
+    assert _temps(tmp_path) == []
+
+
 def test_a_whole_set_lands_together(tmp_path):
     written = {
         tmp_path / "a.png": b"one",
@@ -203,7 +272,11 @@ def test_a_staged_write_uses_a_dotfile(tmp_path, monkeypatch):
 
     monkeypatch.setattr(packwright_io.atomic.os, "replace", note)
     packwright_io._write({tmp_path / "atlas.wpack": b"x"})
-    assert seen == [".atlas.wpack.tmp"]
+    # A token per call (M03), not a fixed name: two overlapping exports of one
+    # destination must not stage into the same file. See
+    # ``tests/test_atomic_writes.py``.
+    assert len(seen) == 1
+    assert re.fullmatch(r"\.atlas\.wpack\.[0-9a-f]{8}\.tmp", seen[0])
 
 
 # --- opening ------------------------------------------------------------------

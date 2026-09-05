@@ -220,11 +220,29 @@ def play(ctx: Any, job_id: str) -> None:
 
     The read is on a task rather than the frame thread: four minutes of 44.1 kHz
     stereo is ~40 MB off disk, which is a visible stall in a 60 Hz loop.
+
+    **Resume, when the take is already the one loaded.** M07: this used to
+    resubmit the decode unconditionally, and ``on_task_done`` builds a brand
+    new :class:`MusePlayer` for every successful load -- so pressing Play on a
+    take already sitting in memory (Stop, then Play again, being the ordinary
+    case) silently reset its loop region, its crossfade and its playhead.
+    There is nothing to re-read here: the samples are already decoded, so this
+    just puts them back on the channel from wherever they were left.
     """
+    state = ensure(ctx)
+    one = state.player
+    if one is not None and one.job == job_id and one.pcm is not None:
+        state.audition_job = job_id
+        _play_from(ctx, one, one.play_offset)
+        return
     path = track_path(ctx, job_id)
     if not path.exists():
         ctx.toast("that take has no audio on disk", "warn")
         return
+    # The user's latest request. ``on_task_done`` checks this before adopting
+    # a completed decode, which is what stops a slower decode for a take the
+    # user has since moved on from landing on top of a newer one (M11).
+    state.audition_job = job_id
     if not ctx.submit(f"{LOAD_PREFIX}{job_id}", _read_track, path):
         ctx.toast("still loading that take")
 
@@ -249,6 +267,14 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
     job_id = key[len(LOAD_PREFIX) :]
     state = ensure(ctx)
+    if job_id != state.audition_job:
+        # Stale (M11): a later ``play()`` moved the user on to a different
+        # take, or ``stop()`` withdrew the request outright, before this
+        # decode finished. Adopting every successful load unconditionally let
+        # an older, slower decode override a newer take already sounding, and
+        # let a take the user had stopped waiting for start playing anyway the
+        # moment its read finally landed.
+        return
     # **One take at a time.** ~42 MB for four minutes, so replaced rather than
     # cached per job -- see ``MuseState.player``.
     state.player = MusePlayer(
@@ -268,11 +294,29 @@ def on_task_done(ctx: Any, done: Any) -> None:
 
 
 def stop(ctx: Any) -> None:
-    """Stop whatever is auditioning. Safe when nothing is."""
-    sirens_audio.stop()
+    """Stop whatever is auditioning. Safe when nothing is.
+
+    **Captures the playhead before the device forgets it (M07).** Without
+    this, the next Play resumed from wherever the *last* ``_play_from`` call
+    had started -- not from where the user actually stopped listening, which
+    for anything but a fresh seek is a different number. ``position(ctx)`` has
+    to run while the mixer still thinks it is playing, which is why this reads
+    it before ``sirens_audio.stop()`` rather than after.
+
+    **Withdraws the audition request (M11).** A decode already in flight for
+    the take that was playing (or one requested and not yet decoded) has
+    nothing left to land on: clearing ``audition_job`` is what ``on_task_done``
+    checks to refuse it, rather than starting playback back up the moment the
+    read finishes.
+    """
     state = active(ctx)
     if state is not None:
+        one = state.player
+        if one is not None and is_playing(ctx, one.job):
+            one.play_offset = position(ctx)
         state.playing_job = ""
+        state.audition_job = ""
+    sirens_audio.stop()
 
 
 def is_playing(ctx: Any, job_id: str) -> bool:
@@ -351,11 +395,28 @@ def position(ctx: Any) -> float:
     two the same number. That offset lives on :class:`Player`, not in
     ``sirens_audio``: the mixer does not own the caller's buffer, and a second
     module tracking the same figure is how the two come to disagree.
+
+    **Inside a looping region, the buffer is rotated (M10)**: it starts at
+    ``loop_anchor`` rather than at ``loop_start``, so the mixer's own
+    modulo-buffer-length wrap has to be unwound against the *region's* length
+    before it is a position in the take -- adding the raw figure straight to
+    ``play_offset``, the way this used to, is only correct for a buffer that
+    starts where it plays from, which a rotated loop does not.
     """
     one = player(ctx)
     if one is None or not is_playing(ctx, one.job):
         return one.play_offset if one is not None else 0.0
-    return min(one.play_offset + sirens_audio.position(), one.duration)
+    raw = sirens_audio.position()
+    if (
+        one.loop_anchor is not None
+        and one.loop_start is not None
+        and one.loop_end is not None
+        and one.loop_end > one.loop_start
+    ):
+        length = one.loop_end - one.loop_start
+        phase = one.loop_anchor - one.loop_start
+        return one.loop_start + (phase + raw) % length
+    return min(one.play_offset + raw, one.duration)
 
 
 def seek(ctx: Any, seconds: float) -> None:
@@ -383,17 +444,53 @@ def seek(ctx: Any, seconds: float) -> None:
 
 
 def _play_from(ctx: Any, one: Any, seconds: float) -> None:
-    """Put the remainder of the take on the channel, from ``seconds``."""
-    start = int(seconds * one.rate)
-    end = int(one.loop_end * one.rate) if one.loop_end is not None else None
-    tail = one.pcm[start:end] if end and end > start else one.pcm[start:]
+    """Put the take on the channel from ``seconds``, honouring the region.
+
+    **Inside the marked region, the loop -- not a slice of it (M10).** This
+    used to slice ``pcm[start:loop_end]`` and repeat *that* whenever a region
+    existed at all, so seeking to a point inside a 2-8s region shrank what
+    actually looped to "seek point to loop end" -- a seek to 5s left only
+    three seconds repeating, not the six-second region the markers claim, and
+    a seek past the region's own end still looped (the unbounded remainder to
+    the end of the take, forever). The fix rotates the *whole* region's loop
+    body -- :func:`muse_io.loop_body`, the crossfaded one ``export_loop``
+    writes (M09) -- so it starts sounding exactly at ``seconds`` and wraps
+    through the rest of the region before repeating: one lap in, it is
+    indistinguishable from having started the loop at ``seconds`` and let it
+    run.
+    ``position()`` reads ``loop_anchor`` back to undo the rotation.
+
+    Outside the region -- before its start, or at/after its end -- this is an
+    ordinary play-through to the end of the take, never a loop: a region
+    existing at all is a different question from whether *this* seek landed
+    inside it, which the old unconditional ``repeat`` flag never asked.
+    """
+    import numpy as np
+
+    rate = one.rate
+    has_region = one.loop_start is not None and one.loop_end is not None
+    if has_region and one.loop_start <= seconds < one.loop_end:
+        body = muse_io.loop_body(one)
+        length = one.loop_end - one.loop_start
+        if body is None or len(body) == 0 or length <= 0:
+            return
+        phase = (seconds - one.loop_start) % length
+        cut = min(max(int(round(phase * rate)), 0), len(body))
+        buffer = np.concatenate([body[cut:], body[:cut]]) if cut else body
+        if len(buffer) == 0:
+            return
+        if sirens_audio.play(buffer, rate, tag=one.job, loops=-1):
+            one.play_offset = seconds
+            one.loop_anchor = seconds
+            ensure(ctx).playing_job = one.job
+        return
+
+    one.loop_anchor = None
+    start = int(seconds * rate)
+    tail = one.pcm[start:]
     if len(tail) == 0:
         return
-    # ``loops=-1`` inside a region: ``sirens_audio.position`` already wraps
-    # modulo the buffer length when loops is non-zero, so a region's playhead
-    # falls out with no arithmetic here at all.
-    repeat = -1 if one.loop_start is not None and one.loop_end is not None else 0
-    if sirens_audio.play(tail, one.rate, tag=one.job, loops=repeat):
+    if sirens_audio.play(tail, rate, tag=one.job, loops=0):
         one.play_offset = seconds
         ensure(ctx).playing_job = one.job
 

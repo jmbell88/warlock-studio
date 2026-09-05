@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...pipelines.sheet import MAX_ATLAS_PX
-from .. import icons, packwright_mode, widgets
+from .. import controls, icons, packwright_mode, widgets
 from ..manual import render as manual_render
 from ..packwright.layout import MODES
 
@@ -88,6 +88,10 @@ def draw(ctx: Any) -> None:
         changed, columns = widgets.labeled_drag_int(
             "Columns", settings.columns or 0, 0, MAX_COLUMNS, speed=0.1
         )
+        # One gesture, one step: a drag reports on every frame the pointer
+        # moves, and ``set_settings``'s unconditional push (document.py:410)
+        # turns one drag into dozens without this (2026-09-05 audit).
+        controls.fold_undo(tab.doc.history)
         if changed and editable:
             packwright_mode.set_settings(ctx, tab, columns=int(columns) or None)
         widgets.muted_wrapped(
@@ -119,10 +123,13 @@ def draw(ctx: Any) -> None:
 
     imgui.dummy((0, 6))
     changed, padding = widgets.labeled_slider_int("Padding", settings.padding, 0, 16)
+    # One gesture, one step -- see the Columns drag above.
+    controls.fold_undo(tab.doc.history)
     if changed and editable:
         packwright_mode.set_settings(ctx, tab, padding=int(padding))
 
     changed, extrude = widgets.labeled_slider_int("Extrude", settings.extrude, 0, 8)
+    controls.fold_undo(tab.doc.history)
     if changed and editable:
         packwright_mode.set_settings(ctx, tab, extrude=int(extrude))
     if settings.extrude:

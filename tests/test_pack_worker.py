@@ -229,6 +229,82 @@ def test_the_probe_answers_about_the_filesystem_not_this_process(tmp_path):
     ]
 
 
+def test_verify_alone_accepts_a_module_whose_import_immediately_raises(tmp_path, monkeypatch):
+    """M01, reproduced: ``find_spec`` only *locates* a module -- a package
+    whose ``__init__.py`` raises the moment it runs (a half-unpacked wheel, a
+    build for the wrong ABI) is on disk under the right name and therefore
+    "found", and ``verify`` alone reports it as fine."""
+    pkg = tmp_path / "broken_pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("raise ImportError('wrong ABI')\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    assert pack_worker.verify({"probe": ["broken_pkg"]}) == []
+
+
+def test_smoke_import_catches_what_verify_alone_cannot(tmp_path, monkeypatch):
+    """The real import ``_probe`` adds on top of ``verify`` (M01): the same
+    package ``find_spec`` waved through is caught the moment something
+    actually imports it, in a disposable child rather than this process."""
+    pkg = tmp_path / "broken_pkg2"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("raise ImportError('wrong ABI')\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    assert pack_worker.smoke_import(["broken_pkg2"]) == ["broken_pkg2"]
+    assert pack_worker.smoke_import(["json", "hashlib"]) == []
+
+
+def test_probe_runs_the_smoke_import_only_on_what_verify_located(tmp_path, monkeypatch):
+    """A module ``verify`` already knows is absent must not also pay for a
+    subprocess spawn that could only fail the same way for the same reason."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        pack_worker,
+        "smoke_import",
+        lambda names: calls.append(list(names)) or [],
+    )
+    problems = pack_worker._probe({"probe": ["json", "not_a_real_module_xyz"]})
+    assert problems == ["not_a_real_module_xyz"]
+    assert calls == [["json"]]
+
+
+def test_the_already_installed_path_is_probed_before_being_trusted(tmp_path):
+    """M01: the "nothing pending" branch must ask the same real question a
+    fresh install does, not skip it because there was nothing to download."""
+    with pytest.raises(ValueError) as caught:
+        pack_worker.run({"probe_only": True, "probe": ["a_module_that_is_not_installed_anywhere"]})
+    assert "cannot be imported" in str(caught.value)
+    assert pack_worker.run({"probe_only": True, "probe": ["json", "hashlib"]}) == {
+        "ok": True,
+        "collected": [],
+        "installed": [],
+    }
+
+
+def test_the_download_phase_is_named_for_a_quit_guard_to_read(tmp_path, capsys):
+    """H02: a pane deciding whether Cancel is safe reads the worker's own
+    word for which phase it is in, not a percent it would have to know the
+    boundaries of. ``collect`` must say so before it does anything else."""
+    pack_worker.collect(spec(tmp_path))
+    lines = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert lines[0]["phase"] == pack_worker.PHASE_DOWNLOAD
+
+
+def test_the_commit_phase_is_named_before_pip_is_ever_run(tmp_path, monkeypatch, has_pip, capsys):
+    """H02: this is the one line a quit guard depends on -- it must be emitted
+    before ``winjob.run`` is reached, not after, or a quit could still slip
+    through the gap between "about to call pip" and "said so"."""
+
+    class Done:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(pack_worker.winjob, "run", lambda *a, **k: Done())
+    pack_worker.install(spec(tmp_path), ["thing-1.0-py3-none-any.whl"])
+    lines = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert lines[-1]["phase"] == pack_worker.PHASE_COMMIT
+
+
 def test_progress_lines_are_one_json_object_each(tmp_path, capsys):
     pack_worker._emit(percent=12.5, label="hello")
     out = capsys.readouterr().out.strip()

@@ -16,8 +16,126 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
+## 0.0.33 — 2026-09-05
+
+Everything here comes out of a static audit run against 0.0.32 on 2026-09-04
+(`docs/beta-audit-2026-09-04.md`), which found 26 things and fixed none of
+them. Twenty-two were code or documentation and are closed below. The other
+four need a machine this project does not have — a clean Windows box, a real
+card, real Aseprite and real Tiled — and are recorded in `TODO.md` as P1, P5,
+P6, P7, P14, P15, P23, P24 and P27 rather than quietly counted as done. **A
+passing suite is not an installed beta**, and that distinction is the reason
+this release is not the one that ships.
+
+- **A 4 KB GLB could exhaust host memory before anything refused it.** The
+  viewer's loader capped a *single* accessor at 256 MiB and nothing at all in
+  aggregate, so a file declaring many small primitives — or referencing one
+  accessor repeatedly, which is what instancing looks like — allocated without
+  a ceiling; a bufferless accessor reads as zeros by the spec, so the bytes did
+  not even have to be in the file. A 4,036-byte GLB produced 6,144,000 bytes
+  across 128 arrays, and the arithmetic scales. `viewer/gltf.py` now charges
+  every allocation against a document-wide `MAX_TOTAL_BYTES` before returning
+  it — the zeros path, buffer reads, interleaved gathers, every `.astype`
+  conversion, synthesized index arrays and decoded texture RGBA — and caches
+  accessors so a repeated reference decodes once (`WEIGHTS_0` is excluded
+  deliberately: it is renormalized in place, and a shared array would corrupt).
+  Clay refused *after* loading, which is the wrong end; it now preflights the
+  declared budget off the JSON chunk alone and never reaches the decoder.
+- **Quitting during a pack install was not protected.** Settings withdraws
+  Cancel while a pack installs, on the argument that a half-written runtime is
+  not a thing to interrupt — but the quit guard named `download:`, `export:`,
+  `save:` and `bake:` tasks and had never been told about `pack:`, so a normal
+  Quit produced an empty "this is what you would interrupt" summary and the
+  shutdown grace period then terminated pip mid-write. The install now reports
+  an explicit `phase` (`download` / `commit`) from the worker itself rather
+  than leaving a reader to guess boundaries from a percentage, and `_ask_quit`
+  — the one choke point every quit route already funnelled through — withholds
+  the question entirely during a commit and re-asks when it clears.
+- **"Installed" did not mean "usable", and Retry could not repair.**
+  Verification used `find_spec`, which finds a module without importing it, so
+  a distribution whose import raises passed; repair skipped anything whose
+  metadata matched, which is exactly the damaged case. Packs are now smoke
+  *imported* in a disposable child, the already-installed path is probed rather
+  than trusted, and **Repair** reinstalls the pinned wheels.
+- **Upgrading deleted every pack the user had installed.** The installer wipes
+  the runtime's `site-packages` and the build stages only the base, so an
+  upgrade silently removed Create, Muse and rigging with nothing recording that
+  they had ever been chosen. The selection is now written beside the wheel
+  cache under `WARLOCK_HOME`, where the wipe cannot reach it, and Settings
+  offers **Restore packs** against it.
+- **Two documents saved at once could publish each other's bytes.** Every
+  atomic write staged through one fixed `.name.tmp` beside the destination, so
+  two tabs exporting the same path shared a file: the later writer published
+  and the earlier failed with `FileNotFoundError`, and other interleavings
+  published the wrong bytes under the right name. Each staging call now gets
+  its own token.
+- **Doctor called zero-byte weights healthy.** The cheap `suspect_files` probe
+  existed and was wired to exactly one row. Every other kind — engine, LoRA,
+  adapter, control, metric, music, separation, pose, matting — asked only
+  whether the file existed, so an interrupted or truncated download reported
+  green and failed at load time instead. All ten rows now share one check.
+  Relatedly, a *directory* named `trellis-server.exe` passed the fatal engine
+  row: `exists()` where `is_file()` was meant.
+- **Muse: five defects in playback, and one in what the loop export writes.**
+  The crossfade blended the wrong boundary entirely — it mixed the audio
+  *before* the loop into the loop's head, which does nothing about the seam
+  where the end meets the beginning; measured on a constant signal it turned a
+  perfectly seamless loop into a 40,000-unit click, so the control actively
+  made things worse. It is now wrap-aware, and one buffer feeds both audition
+  and export, which previously disagreed: auditioning played the untreated
+  slice, so the crossfade could not be judged by listening to it. Seeking
+  inside a loop repeated only the tail from the seek point rather than the
+  marked region. Play after Stop rebuilt the player from disk and discarded the
+  loop points, the crossfade and the position. And a slow decode landing after
+  a newer one replaced the take the user had actually asked for.
+- **Troupe: a blank frame could lose the worst-frame ranking to a mild
+  warning.** Blank was recorded only when nothing else had been flagged, and
+  never raised the running score, so a centroid jitter of 0.0625 — below its
+  own 0.15 threshold — outranked an entirely empty cell. Severity is now ranked
+  before magnitude.
+- **Undo: five continuous edits pushed one step per frame, and one could lose
+  its step altogether.** Inker's layer opacity kept its pre-drag value in a
+  module-level dictionary and recorded the step only on the release frame, so a
+  drag interrupted before that frame — a mode switch, a closing panel — left
+  the change on screen with no undo step and poisoned the next drag's starting
+  value. Plotter's layer opacity, Packwright's Columns, Padding and Extrude,
+  and the Wang colour and probability fields each pushed a step per changed
+  frame, so one gesture cost many Undo presses. All six now fold.
+- **Packwright could leave a stale `.tsx` beside a replaced atlas.** Exporting
+  a grid and then an incompatible layout under one basename left the old
+  tileset describing the new PNG. The export refuses rather than deleting a
+  sidecar it cannot prove it owns.
+- Clay's property and material undo steps weighed zero against the memory
+  budget; `service.files.job_dir_file` trusted its `name` by docstring alone,
+  and now requires a leaf name and checks containment.
+- **Documentation.** `INSTALL.md` still described the old all-in-one installer
+  — a beta tester following it could download weights and have no code able to
+  load them — and is rewritten around the base runtime and Settings → Packs,
+  with the sizes and hash left as marked placeholders because only a
+  release-candidate build can measure them (P27). `SECURITY.md` claimed one
+  network exception where there are now two, and omitted `.wsng` from the files
+  the app parses. `README.md` and the manual overview had gained a mode without
+  saying so; `THIRD-PARTY-NOTICES.md` omitted Hybrid Demucs and overstated
+  where checkpoints come from (**a licence reviewer should still confirm that
+  table** — this audit made no legal determination); `CONTRIBUTING.md` said
+  three extras under a four-extra command; `docs/MODELS.md` had an unclosed
+  fence swallowing a heading; `40-configuration.md` never listed
+  `WARLOCK_T2I_IN_PROCESS`; and two chapters named buttons the app does not
+  have.
+
 ## 0.0.32 — 2026-09-04
 
+- **Muse is a mode: a described piece of music becomes a finished take, offline.** The thirteenth
+  entry in the rail and the second thing in this app that makes a sound. A comma-separated style-tag
+  string and an optional lyric block go to **ACE-Step v1** (3.5B, text-to-music) in the
+  `music_worker` child, and a take comes back at 44.1 kHz stereo 16-bit, up to four minutes. It sits
+  in Workspaces beside Sirens because those two are a pair, but it is *not* a workspace in the sense
+  the other seven are: it owns no document type and no undo stack, and what it produces is a job row
+  — which is why it greys out with Create, rather than opening empty, until the `music` extra and its
+  weights are present. A take is auditioned in the mode with loop-point finding and a crossfade,
+  split into stems by Hybrid Demucs where those weights are present, and opens in Sirens as a sample
+  instrument. This was built across the three commits ending `10c73d47` and went unannounced here
+  until the 2026-09-04 audit noticed the release notes had gained a mode without saying so.
 - **The installer no longer carries torch, bpy and the music stack; Settings installs them.** The
   build stages `--extra studio` alone and the three heavy extras travel as *packs*
   (`warlock.packs`, `scripts/make_packs.py`, `pipelines/pack_worker.py`, `service/packs.py`, all

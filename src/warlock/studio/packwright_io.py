@@ -214,6 +214,20 @@ def export_files(ctx: Any, tab: PackTab | None = None) -> None:
     over a file that was never going to be trustworthy would throw away two
     files that are; instead the ``.tsx`` is skipped and the result carries
     why, for :func:`~.packwright_mode.on_task_done` to toast.
+
+    **A ``.tsx`` this export is not about to (re)write is a refusal, not a
+    silent leftover (M12).** Grid, then MaxRects, under one basename leaves
+    the grid export's ``.tsx`` on disk pointing at the *new* PNG with the old
+    geometry -- Tiled would slice frames that no longer line up with what the
+    atlas holds. Re-exporting a grid whose columns rounding is refused above
+    has the identical shape: the PNG and JSON move on, an old ``.tsx`` from a
+    columns count that *did* fit stays behind describing them. Deleting it on
+    the exporter's own say-so was considered and rejected -- nothing here can
+    tell a ``.tsx`` this exporter wrote from one the user already had at that
+    path (a Tiled project of their own), and destroying the wrong one is worse
+    than an export that asks for a different name. So the whole export is
+    refused up front instead, before the PNG or JSON are touched, naming the
+    stale file and what to do about it.
     """
     from .packwright import compose as composelib
     from .packwright import texturepacker, tsxout
@@ -238,10 +252,13 @@ def export_files(ctx: Any, tab: PackTab | None = None) -> None:
     stem = Path(tab.title).stem or "atlas"
 
     def run() -> dict[str, Any] | None:
+        from ..service.errors import Invalid, invalid_from
+
         path = dialogs.save_file("Export the atlas", f"{stem}.png", PNG_FILTER)
         if path is None:
             return None
         path = path.with_suffix(".png")
+        tsx_path = path.with_suffix(".tsx")
         try:
             sidecar = texturepacker.tp_bytes(
                 layout, image_name=path.name, schema=schema
@@ -253,8 +270,6 @@ def export_files(ctx: Any, tab: PackTab | None = None) -> None:
             # thrown away is the actionable one ("the hash schema keys frames
             # by filename, and 'barrel.png' names more than one sprite in this
             # pack -- rename one, or export the array schema instead").
-            from ..service.errors import invalid_from
-
             raise invalid_from(exc, "That atlas was not exported") from exc
         files = {
             path: composelib.png_bytes(atlas),
@@ -263,11 +278,23 @@ def export_files(ctx: Any, tab: PackTab | None = None) -> None:
         tsx_skipped = None
         if layout.is_grid:
             try:
-                files[path.with_suffix(".tsx")] = tsxout.grid_tsx(
+                files[tsx_path] = tsxout.grid_tsx(
                     layout, atlas, name=stem, image_name=path.name
                 )
             except ValueError as exc:
                 tsx_skipped = str(exc)
+        if tsx_path not in files and tsx_path.exists():
+            # M12: this export is not going to (re)write ``tsx_path``, and one
+            # is already there -- from an earlier grid export under this same
+            # basename, describing geometry the PNG about to be written no
+            # longer has. See the module docstring for why it is refused
+            # rather than deleted.
+            raise Invalid(
+                f"{tsx_path.name} already exists here and describes a different "
+                "tileset than this export -- remove it, or export under a "
+                "different name",
+                field="path",
+            )
         _write(files)
         result: dict[str, Any] = {"exported": str(path), "files": len(files)}
         if tsx_skipped is not None:

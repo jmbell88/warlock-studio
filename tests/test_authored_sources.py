@@ -197,9 +197,23 @@ def test_a_saved_source_lands_where_the_path_helper_says_it_will(svc):
 
 
 def test_job_dir_file_validates_the_id_it_is_given(svc):
-    """The half that can come from outside is checked; the *name* is a fixed
-    string every caller chooses, so it is not."""
+    """The half that can come from outside is checked."""
     job_id = _exported(svc, "plotter")
     assert svc_files.job_dir_file(svc, job_id, "input.png").exists()
     with pytest.raises(NotFound):
         svc_files.job_dir_file(svc, "../../etc", "input.png")
+
+
+def test_job_dir_file_refuses_a_name_that_is_not_a_bare_leaf(svc):
+    """L03. Every caller today passes a literal (``input.png``,
+    ``sheet.json``), so there is no exploit against the current source -- but
+    ``name`` used to be joined onto the job directory with no check at all,
+    trusting that shape to hold forever. Hardened so a future caller handing
+    this a path fragment gets a refusal instead of a join that walks out of
+    the job directory."""
+    job_id = _exported(svc, "plotter")
+    from warlock.service.errors import Invalid
+
+    for bad in ("../secrets.txt", "..\\secrets.txt", "sub/inner.png", "..", "."):
+        with pytest.raises(Invalid):
+            svc_files.job_dir_file(svc, job_id, bad)

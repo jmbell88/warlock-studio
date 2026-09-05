@@ -71,6 +71,57 @@ def _own(value: Any) -> Any:
     return np.array(value, dtype="f8", copy=True)
 
 
+#: Every texture slot a :class:`~..viewer.gltf.Material` can carry. Clay
+#: itself never fills one in (the document module's own docstring says so),
+#: but ``MaterialEdit``/``MaterialListEdit`` are the general replace door and
+#: an imported mesh's material can arrive through it fully textured.
+_TEXTURE_SLOTS = ("base_color", "metallic_roughness", "normal", "emissive", "occlusion")
+
+
+def _texture_bytes(material: Any, seen: set[int]) -> int:
+    """A material's retained texture data, in bytes, each distinct buffer once.
+
+    ``seen`` is the ``id()`` of every buffer already counted, so a slot
+    ``dataclasses.replace`` left untouched -- the normal map still the very
+    same ``bytes`` object -- is not paid for twice just because one
+    :class:`MaterialEdit` holds it as both its ``before`` and its ``after``
+    (2026-09-05 audit, L02: a palette edit reported zero cost at all, which
+    hid this along with everything else).
+    """
+    total = 0
+    for slot in _TEXTURE_SLOTS:
+        texture = getattr(material, slot, None)
+        if texture is None:
+            continue
+        data = texture[2]
+        if id(data) in seen:
+            continue
+        seen.add(id(data))
+        total += len(data)
+    return total
+
+
+def _props_bytes(props: dict[str, Any]) -> int:
+    """A retained ``ObjectPropsEdit`` side, in bytes.
+
+    Shallow and approximate on purpose -- name, visibility, a material index
+    and a generator's name cost nothing worth measuring -- but honest about
+    the one field that can actually grow: ``params``, a generator's numbers,
+    which a properties panel round-trips wholesale rather than diffing.
+    """
+    import sys
+
+    total = 0
+    for value in props.values():
+        if isinstance(value, np.ndarray):
+            total += value.nbytes
+        elif isinstance(value, dict):
+            total += _props_bytes(value)
+        else:
+            total += sys.getsizeof(value)
+    return total
+
+
 @dataclass
 class MeshEdit(Edit):
     """One object's geometry, before and after.
@@ -220,6 +271,9 @@ class ObjectPropsEdit(Edit):
     before: dict[str, Any]
     after: dict[str, Any]
 
+    def __post_init__(self) -> None:
+        self.cost = _props_bytes(self.before) + _props_bytes(self.after)
+
     def _apply(self, doc: Any, props: dict[str, Any]) -> None:
         obj = doc.by_uid(self.obj_uid)
         for key, value in props.items():
@@ -249,6 +303,10 @@ class MaterialEdit(Edit):
     before: Any
     after: Any
 
+    def __post_init__(self) -> None:
+        seen: set[int] = set()
+        self.cost = _texture_bytes(self.before, seen) + _texture_bytes(self.after, seen)
+
     def _put(self, doc: Any, material: Any) -> None:
         doc.materials[self.index] = material
         doc.touch()
@@ -277,6 +335,9 @@ class MaterialListEdit(Edit):
     index: int
     material: Any
     added: bool
+
+    def __post_init__(self) -> None:
+        self.cost = _texture_bytes(self.material, set())
 
     def _insert(self, doc: Any) -> None:
         doc.materials.insert(self.index, self.material)

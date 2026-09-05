@@ -58,6 +58,19 @@ MAX_TEXTURE_PIXELS = 16_000_000
 #: of what the field can express.
 MAX_ACCESSOR_BYTES = 1 << 28
 
+#: What one *document* may decode to, across every accessor and texture
+#: combined. MAX_ACCESSOR_BYTES bounds a single array; nothing bounded the
+#: *sum* of them, so a file with many primitives -- or one primitive's
+#: accessor replayed by many nodes -- allocated without limit as long as each
+#: individual array stayed under the per-accessor ceiling (H01). Measured: a
+#: 4,036-byte bufferless GLB with 128 primitives produced 6,144,000 bytes of
+#: geometry across 128 separate arrays, and nothing stopped scaling the
+#: primitive count further. 768 MiB is comfortably above the largest asset
+#: this pipeline produces (MAX_ACCESSOR_BYTES's own docstring: a 2 M-triangle
+#: index stream is 24 MB; five fully populated 16-megapixel texture slots are
+#: another ~320 MB) while still refusing a file that keeps asking for more.
+MAX_TOTAL_BYTES = 768 * (1 << 20)
+
 
 @dataclass
 class Material:
@@ -368,10 +381,51 @@ class _Reader:
         # one unreadable atlas shared by six primitives is one loss, and
         # counting references would report six.
         self.skipped = 0
+        # Decoded accessor arrays, by accessor index (H01). Two or more
+        # primitives naming the same accessor -- an instanced mesh's shared
+        # POSITION stream is the ordinary case -- used to decode it once per
+        # reference; caching makes a repeated reference free instead of a
+        # repeated allocation, the same way ``_images`` already does for
+        # textures.
+        self._accessors: dict[int, np.ndarray] = {}
+        # The dtype-converted form of an accessor -- ``positions.astype("f4")``
+        # and friends -- shared the same way, and for the same reason (H01):
+        # see ``_typed``.
+        self._typed_cache: dict[Any, np.ndarray] = {}
+        # Running total this document has allocated, against MAX_TOTAL_BYTES.
+        self._spent = 0
 
     # -- accessors ---------------------------------------------------------
 
+    def _charge(self, nbytes: int) -> None:
+        """Add ``nbytes`` to this document's running total, refusing once the
+        shared ceiling (H01) is crossed.
+
+        Called *before* the allocation it describes is handed back, not after
+        it lands in a caller's hands -- the whole point of a document-wide
+        budget is that the refusal happens instead of the bytes, not
+        alongside them.
+        """
+        self._spent += nbytes
+        if self._spent > MAX_TOTAL_BYTES:
+            raise ValueError(
+                f"this GLB's decoded geometry and textures pass the "
+                f"{MAX_TOTAL_BYTES:,} byte budget this viewer holds open at once"
+            )
+
     def accessor(self, index: int) -> np.ndarray:
+        cached = self._accessors.get(index)
+        if cached is not None:
+            # Already charged and decoded once; a second primitive naming the
+            # same accessor gets the same array rather than a second
+            # allocation (H01). Safe to share: nothing downstream mutates an
+            # accessor's array in place, only reads or copies it.
+            return cached
+        out = self._decode_accessor(index)
+        self._accessors[index] = out
+        return out
+
+    def _decode_accessor(self, index: int) -> np.ndarray:
         acc = self.gltf["accessors"][index]
         if "sparse" in acc:
             # Nothing in this pipeline emits one, and silently dropping the
@@ -393,7 +447,11 @@ class _Reader:
                 " will allocate for one"
             )
         if "bufferView" not in acc:
-            # Legal glTF: an accessor with no view reads as zeros.
+            # Legal glTF: an accessor with no view reads as zeros -- and the
+            # branch H01 was written for: nothing here reads the buffer, so
+            # nothing about *this* accessor's cost is bounded by how small the
+            # file is. Charged like every other allocation below.
+            self._charge(count * ncomp * np.dtype(dtype).itemsize)
             return np.zeros((count, ncomp), dtype=dtype)
         view = self.gltf["bufferViews"][acc["bufferView"]]
         self._check_buffer(view)
@@ -402,6 +460,7 @@ class _Reader:
         stride = view.get("byteStride") or item
         if stride == item:
             self._check_span(start, count * item)
+            self._charge(count * item)
             flat = np.frombuffer(self.buffer, dtype=dtype, count=count * ncomp, offset=start)
             return flat.reshape(count, ncomp)
         # Interleaved: take the raw bytes and gather the rows out. Nothing this
@@ -414,6 +473,11 @@ class _Reader:
         # model simply failed to load.
         span = stride * (count - 1) + item if count else 0
         self._check_span(start, span)
+        # Two real copies land here -- the fancy-indexed ``rows`` and the
+        # ``ascontiguousarray`` beneath it -- on top of the raw span this reads
+        # out of the buffer, which is exactly the doubling H01's budget exists
+        # to account for rather than charge for the final array alone.
+        self._charge(span + 2 * count * item)
         raw = np.frombuffer(self.buffer, dtype=np.uint8, count=span, offset=start)
         rows = raw[np.arange(count)[:, None] * stride + np.arange(item)[None, :]]
         return np.ascontiguousarray(rows).view(dtype).reshape(count, ncomp)
@@ -454,6 +518,42 @@ class _Reader:
         if start < 0 or start + span > len(self.buffer):
             raise ValueError("an accessor reads past the end of the binary chunk")
 
+    def _astype(self, arr: np.ndarray, dtype: str) -> np.ndarray:
+        """``arr.astype(dtype)``, charged against the document budget.
+
+        ``astype`` copies even when the requested dtype already matches, so
+        every conversion below -- positions to ``f4``, indices to ``u4``, the
+        weight/joint promotions -- is a *second* array on top of whatever
+        ``accessor``/``decoded`` already charged for the first one (H01).
+        Charging only the final accessor size, as the per-accessor ceiling
+        does, undercounted exactly this doubling.
+        """
+        out = arr.astype(dtype)
+        self._charge(out.nbytes)
+        return out
+
+    def _typed(self, key: Any, raw: np.ndarray, dtype: str) -> np.ndarray:
+        """A converted array, shared by every primitive asking for the same
+        ``key`` (H01).
+
+        Caching ``accessor()``'s *raw* output already stops a repeated
+        reference from decoding twice; this closes the gap one layer up.
+        Every attribute here still runs its own ``.astype`` per primitive
+        even once the raw accessor is cached, because each call built a fresh
+        copy of the *converted* array too -- an instanced mesh with a
+        thousand nodes sharing one glTF mesh definition paid for a thousand
+        ``positions.astype("f4")`` copies of an identical result. Safe to
+        share: nothing downstream mutates a primitive's positions, indices,
+        normals, uvs or joints in place (unlike weights, renormalised right
+        below -- deliberately left out of this cache).
+        """
+        cached = self._typed_cache.get(key)
+        if cached is not None:
+            return cached
+        out = self._astype(raw, dtype)
+        self._typed_cache[key] = out
+        return out
+
     # -- pieces ------------------------------------------------------------
 
     def primitive(self, prim: dict, materials: list[Material]) -> Primitive:
@@ -462,31 +562,55 @@ class _Reader:
             raise ValueError("a primitive with no POSITION is not renderable")
         if prim.get("mode", 4) != 4:
             raise ValueError(f"unsupported primitive mode {prim.get('mode')}")
-        positions = self.decoded(attrs["POSITION"]).astype("f4")
+        positions = self._typed(
+            ("POSITION", attrs["POSITION"]), self.decoded(attrs["POSITION"]), "f4"
+        )
         if "indices" in prim:
             # Indices are never normalized -- they are indices -- so they take
             # the raw path deliberately.
-            indices = self.accessor(prim["indices"]).reshape(-1).astype("u4")
+            indices = self._typed(
+                ("indices", prim["indices"]),
+                self.accessor(prim["indices"]).reshape(-1),
+                "u4",
+            )
         else:
-            indices = np.arange(len(positions), dtype="u4")
+            # Synthesised rather than read off the buffer, but no less real an
+            # allocation -- and the one H01 names explicitly: a primitive with
+            # no ``indices`` used to get this array for free regardless of how
+            # large ``positions`` was. Cached on the length rather than an
+            # accessor index -- there is no accessor to key on -- which still
+            # dedupes the ordinary case of several instances of one unindexed
+            # mesh.
+            key = ("arange", len(positions))
+            indices = self._typed_cache.get(key)
+            if indices is None:
+                indices = np.arange(len(positions), dtype="u4")
+                self._charge(indices.nbytes)
+                self._typed_cache[key] = indices
         out = Primitive(positions=positions, indices=indices)
         if "NORMAL" in attrs:
-            out.normals = self.decoded(attrs["NORMAL"]).astype("f4")
+            out.normals = self._typed(
+                ("NORMAL", attrs["NORMAL"]), self.decoded(attrs["NORMAL"]), "f4"
+            )
         if "TEXCOORD_0" in attrs:
-            out.uvs = self.decoded(attrs["TEXCOORD_0"]).astype("f4")
+            out.uvs = self._typed(
+                ("TEXCOORD_0", attrs["TEXCOORD_0"]), self.decoded(attrs["TEXCOORD_0"]), "f4"
+            )
         if "JOINTS_0" in attrs:
-            out.joints = self.accessor(attrs["JOINTS_0"]).astype("i4")
+            out.joints = self._typed(
+                ("JOINTS_0", attrs["JOINTS_0"]), self.accessor(attrs["JOINTS_0"]), "i4"
+            )
         if "WEIGHTS_0" in attrs:
             raw = self.accessor(attrs["WEIGHTS_0"])
             # glTF allows weights as normalized ubyte/ushort as well as float.
             # Reading the integer forms as-is would give every vertex a weight
             # of 65535, which renders as an explosion rather than as a mesh.
             if raw.dtype == np.uint8:
-                weights = raw.astype("f4") / 255.0
+                weights = self._astype(raw, "f4") / 255.0
             elif raw.dtype == np.uint16:
-                weights = raw.astype("f4") / 65535.0
+                weights = self._astype(raw, "f4") / 65535.0
             else:
-                weights = raw.astype("f4")
+                weights = self._astype(raw, "f4")
             # **Renormalised, and a zero-sum vertex pinned to its first joint.**
             # The shader sums ``u_joints[j] * w`` over the four influences with
             # no division, so the spec's "the weights of a vertex sum to 1" is
@@ -598,8 +722,17 @@ class _Reader:
                     self.skipped += 1
                     self._images[source] = None
                     return None
+                # Charged into the *document-wide* budget (H01) before the
+                # decode it describes, and deliberately outside the
+                # cosmetic-loss ``except`` below: an over-budget document is a
+                # refusal, unlike one corrupt map, because this is bounding
+                # the sum of every texture the file carries rather than
+                # judging any one of them.
+                self._charge(im.width * im.height * 4)
                 rgba = im.convert("RGBA")
                 decoded = rgba.width, rgba.height, rgba.tobytes()
+        except ValueError:
+            raise
         except Exception:
             # The stated policy for images, applied to the decode as well as to
             # the lookup: a texture that cannot be read is a cosmetic loss, and
@@ -617,7 +750,7 @@ class _Reader:
             # glTF stores each matrix column-major; ours are M @ v with the
             # translation in the last column, so every one is transposed here
             # and nowhere else.
-            raw = self.accessor(skin["inverseBindMatrices"]).astype("f8")
+            raw = self._astype(self.accessor(skin["inverseBindMatrices"]), "f8")
             ibm = raw.reshape(-1, 4, 4).transpose(0, 2, 1)
         else:
             ibm = np.tile(np.eye(4), (len(joints), 1, 1))

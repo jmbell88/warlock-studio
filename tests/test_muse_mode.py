@@ -247,6 +247,9 @@ def test_a_decoded_take_is_handed_to_the_mixer_tagged_with_its_job_id(
     from warlock.studio import sirens_audio
 
     monkeypatch.setattr(sirens_audio, "play", _play)
+    # M11: a completed decode is only adopted while it still matches the
+    # user's latest request.
+    muse_mode.ensure(ctx).audition_job = "abc123"
 
     class _Done:
         key = "muse-load:abc123"
@@ -263,6 +266,7 @@ def test_a_device_that_refuses_leaves_nothing_claiming_to_play(ctx, monkeypatch)
 
     monkeypatch.setattr(sirens_audio, "play", lambda *a, **k: False)
     monkeypatch.setattr(sirens_audio, "unavailable_reason", lambda: "no device")
+    muse_mode.ensure(ctx).audition_job = "abc123"
 
     class _Done:
         key = "muse-load:abc123"
@@ -279,6 +283,63 @@ def test_a_take_that_ran_to_its_end_stops_being_the_playing_one(ctx, monkeypatch
     muse_mode.ensure(ctx).playing_job = "abc123"
     monkeypatch.setattr(sirens_audio, "playing", lambda: False)
     muse_mode.sync(ctx)
+    assert muse_mode.ensure(ctx).playing_job == ""
+
+
+def test_an_older_decode_that_lands_after_a_newer_one_does_not_override_it(
+    ctx, monkeypatch
+):
+    """M11 repro: B is requested after A, B's decode finishes first and is
+    adopted, then A's slower decode finally lands and used to overwrite it
+    unconditionally -- there was no generation counter of any kind. Fails
+    against the unfixed code, which adopts every successful ``LOAD_PREFIX``
+    result with no check against what the user asked for most recently.
+    """
+    from warlock.studio import sirens_audio
+
+    _finished(ctx, "a")
+    _finished(ctx, "b")
+    monkeypatch.setattr(sirens_audio, "play", lambda *a, **k: True)
+    monkeypatch.setattr(muse_mode, "_read_track", lambda path: {"pcm": [], "rate": 44100})
+
+    muse_mode.play(ctx, "a")  # the user's first choice
+    muse_mode.play(ctx, "b")  # then changes their mind before A has decoded
+
+    done_b = type("_Done", (), {
+        "key": f"{muse_mode.LOAD_PREFIX}b", "result": {"pcm": [1], "rate": 44100},
+    })()
+    muse_mode.on_task_done(ctx, done_b)
+    assert muse_mode.player(ctx).job == "b"
+
+    done_a = type("_Done", (), {
+        "key": f"{muse_mode.LOAD_PREFIX}a", "result": {"pcm": [2], "rate": 44100},
+    })()
+    muse_mode.on_task_done(ctx, done_a)
+    assert muse_mode.player(ctx).job == "b", (
+        "A's stale decode must not override B, the user's latest choice"
+    )
+
+
+def test_stop_before_a_decode_completes_cancels_it_rather_than_starting_playback(
+    ctx, monkeypatch
+):
+    """M11's other half: Stop did not invalidate an outstanding decode, so a
+    take requested and then abandoned before it finished loading would start
+    playing anyway the moment the disk read landed. Fails against the unfixed
+    code, which has nothing that ``stop`` could invalidate --
+    ``on_task_done`` adopts any completed ``LOAD_PREFIX`` result
+    unconditionally.
+    """
+    _finished(ctx, "a")
+    monkeypatch.setattr(muse_mode, "_read_track", lambda path: {"pcm": [], "rate": 44100})
+    muse_mode.play(ctx, "a")
+    muse_mode.stop(ctx)
+
+    done = type("_Done", (), {
+        "key": f"{muse_mode.LOAD_PREFIX}a", "result": {"pcm": [1], "rate": 44100},
+    })()
+    muse_mode.on_task_done(ctx, done)
+    assert muse_mode.player(ctx) is None
     assert muse_mode.ensure(ctx).playing_job == ""
 
 

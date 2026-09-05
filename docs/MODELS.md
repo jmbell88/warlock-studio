@@ -209,6 +209,7 @@ uvx hf download yuvalkirstain/PickScore_v1 --revision a4e4367c6dfa7288a00c550414
   --local-dir $HOME/.warlock/models/pickscore-v1
 uvx hf download yuvalkirstain/PickScore_v1 --revision a4e4367c6dfa7288a00c550414478f865b875800 `
   --include "*.json" --include "*.txt" --local-dir $HOME/.warlock/models/pickscore-v1
+```
 
 ## Landmark-informed joint placement (rigging)
 

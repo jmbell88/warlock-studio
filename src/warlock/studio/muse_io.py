@@ -115,6 +115,45 @@ def _wav(pcm: Any, rate: int, loop: tuple[int, int] | None = None) -> bytes:
     return wavout.wav_bytes(data.astype(np.float32) / 32767.0, rate, loop=loop)
 
 
+def loop_body(player: Any) -> Any:
+    """The crossfaded loop -- the *one* buffer both the audition and
+    :func:`export_loop` play. -> ``None`` with no usable region.
+
+    **M09.** Before this, ``muse_mode``'s ``_play_from`` handed the mixer a raw
+    slice of ``pcm`` while this function crossfaded independently on export, so
+    the crossfade slider could be dragged to any value with no audible
+    difference through the button the strip advertises for judging it -- an
+    audition reported byte-identical to the untreated take. Building the one
+    buffer here and having both callers reach for it is what makes "what you
+    hear" and "what gets written" the same claim rather than two
+    implementations that happen to agree.
+
+    **Cached by ``(start, end, fade)`` in samples**, on the player itself,
+    because those three numbers are exactly what decides the seam -- a region
+    or a crossfade the user has not touched since the last call is a repeated
+    ``O(n)`` blend for nothing, which matters once the crossfade slider is
+    something a drag calls every frame. The cache is not invalidated eagerly
+    when a control changes; it simply no longer matches on the *next* call,
+    which is the "refresh deliberately" half of M09 -- dragging the slider
+    while a loop sounds does not itself restart the buffer on the channel
+    (``muse_player``'s "re-played on release only" rule), but the next Play or
+    seek picks up the new blend.
+    """
+    if player.loop_start is None or player.loop_end is None:
+        return None
+    rate = int(player.rate)
+    start = int(player.loop_start * rate)
+    end = int(player.loop_end * rate)
+    if end <= start:
+        return None
+    fade = int(player.xfade_ms * rate / 1000.0)
+    key = (start, end, fade)
+    if player.loop_cache_key != key:
+        player.loop_cache = loops_mod.crossfade(player.pcm, start, end, fade)
+        player.loop_cache_key = key
+    return player.loop_cache
+
+
 def export_loop(ctx: Any, player: Any) -> None:
     """The crossfaded loop body, as its own file.
 
@@ -127,10 +166,9 @@ def export_loop(ctx: Any, player: Any) -> None:
     if not _has_region(ctx, player):
         return
     rate = int(player.rate)
-    start = int(player.loop_start * rate)
-    end = int(player.loop_end * rate)
-    fade = int(player.xfade_ms * rate / 1000.0)
-    body = loops_mod.crossfade(player.pcm, start, end, fade)
+    body = loop_body(player)
+    if body is None:
+        return
     # ``loop=(0, len)``: the whole file *is* the loop, which is the difference
     # between this product and the other one.
     data = _wav(body, rate, loop=(0, int(body.shape[0])))
@@ -195,5 +233,6 @@ __all__ = [
     "export_loop",
     "export_with_points",
     "find_loops",
+    "loop_body",
     "read_track",
 ]

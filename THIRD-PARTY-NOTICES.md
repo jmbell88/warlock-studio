@@ -86,22 +86,23 @@ are worth calling out:
 
 ## Model weights
 
-**Not bundled.** Every checkpoint is downloaded by the user, on request, from
-Hugging Face — the installer ships none of them and this project redistributes
-none of them. They are licensed by their publishers, and two of them restrict
-commercial use of what you generate.
+**Not bundled.** Every checkpoint is downloaded by the user, on request — the
+installer ships none of them and this project redistributes none of them. Most
+come from Hugging Face; the one exception is noted below. They are licensed by
+their publishers, and two of them restrict commercial use of what you generate.
 
-| Model | Publisher | Licence | Commercial use of output |
-|---|---|---|---|
-| SDXL 1.0 | Stability AI | OpenRAIL++-M | Permitted, subject to the use restrictions |
-| SDXL-Turbo | Stability AI | Stability AI Non-Commercial Research Community License | **No** — commercial use requires a paid Stability membership |
-| Playground v2.5 | Playground | Playground v2.5 Community License | Permitted below 1M monthly active users; requires shipping the licence and its attribution string |
-| Juggernaut XL v9 | RunDiffusion | OpenRAIL-M | Permitted, subject to the use restrictions |
-| DreamShaper XL | Lykon | OpenRAIL++-M | Permitted, subject to the use restrictions |
-| FLUX.2 klein / klein-base 4B | Black Forest Labs | Apache-2.0 | Permitted |
-| TRELLIS.2-4B | Microsoft | MIT | Permitted |
-| BiRefNet weights | ZhengPeng7 | MIT | Permitted |
-| ACE-Step v1 3.5B | ACE-Step | Apache-2.0 | Permitted |
+| Model | Publisher | Source | Licence | Commercial use of output |
+|---|---|---|---|---|
+| SDXL 1.0 | Stability AI | Hugging Face | OpenRAIL++-M | Permitted, subject to the use restrictions |
+| SDXL-Turbo | Stability AI | Hugging Face | Stability AI Non-Commercial Research Community License | **No** — commercial use requires a paid Stability membership |
+| Playground v2.5 | Playground | Hugging Face | Playground v2.5 Community License | Permitted below 1M monthly active users; requires shipping the licence and its attribution string |
+| Juggernaut XL v9 | RunDiffusion | Hugging Face | OpenRAIL-M | Permitted, subject to the use restrictions |
+| DreamShaper XL | Lykon | Hugging Face | OpenRAIL++-M | Permitted, subject to the use restrictions |
+| FLUX.2 klein / klein-base 4B | Black Forest Labs | Hugging Face | Apache-2.0 | Permitted |
+| TRELLIS.2-4B | Microsoft | Hugging Face | MIT | Permitted |
+| BiRefNet weights | ZhengPeng7 | Hugging Face | MIT | Permitted |
+| ACE-Step v1 3.5B | ACE-Step | Hugging Face | Apache-2.0 | Permitted |
+| Hybrid Demucs (`hdemucs_high_trained.pt`) | Meta / torchaudio | `download.pytorch.org`, **not** Hugging Face | MIT code, **CC BY-NC-SA 4.0 weights** | **No** — Meta states the trained weights are for scientific purposes only; see [`docs/MODELS.md`](docs/MODELS.md) |
 
 The application surfaces this per model: `warlock.models` carries a `license`
 field on every entry, the model picker and the download confirmation show it,

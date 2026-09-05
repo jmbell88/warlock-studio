@@ -48,6 +48,12 @@ OUTWARD_IMPORTS = {
     ("document.py", "warlock.studio.viewer"),
     ("edits.py", "warlock.studio.undo"),
     ("glbimport.py", "warlock.studio.viewer"),
+    # H01: the declared-count preflight reads a GLB's JSON chunk before
+    # ``gltf.load`` decodes anything, and ``glbio.split_glb`` is the one
+    # container-level parser this project has -- the same one ``viewer.gltf``
+    # itself is built on. A second, private JSON-chunk parser here would be a
+    # second place for the container format to be read slightly differently.
+    ("glbimport.py", "warlock.glbio"),
     ("ops.py", "warlock.studio.viewer"),
     ("serialize.py", "warlock.studio.viewer"),
 }

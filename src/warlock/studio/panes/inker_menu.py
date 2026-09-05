@@ -30,9 +30,6 @@ from imgui_bundle import imgui
 from .. import controls, icons, inker, inker_mode, inker_ops, inker_state, widgets
 from ..tokens import sp
 
-#: Opacity mid-drag, per layer uid. See :func:`header_controls`.
-_opacity_drag: dict[int, float] = {}
-
 PARAM_POPUP = "inker-op-params"
 PROPERTIES_POPUP = "inker-layer-properties"
 HISTORY_POPUP = "inker-undo-history"
@@ -375,19 +372,22 @@ def header_controls(ctx: Any, doc: Any) -> None:
             "undo step when you let go."
         ),
     )
+    # One gesture, one step, through the shared door rather than a bespoke
+    # module-level "value before this drag" dict: that dict was keyed by
+    # layer uid but held only one slot, and a control that vanished mid-drag
+    # (mode switch, panel collapse, document close) before its own
+    # deactivated-after-edit frame ever rendered left the entry stashed
+    # forever -- no undo step for the drag that was in flight, no dirty/
+    # recovery transition for it either, and a stale starting value ready to
+    # contaminate whichever layer next reused that uid (2026-09-05 audit,
+    # M05). ``fold_undo`` owns interruption already: it closes whatever
+    # gesture is open the moment *any* other item activates, wherever that
+    # is, so pushing a real step on every changed frame and folding them
+    # after the fact survives a vanished control instead of depending on it
+    # rendering one more frame.
+    controls.fold_undo(doc.history)
     if changed:
-        # Live while dragging, but only one undo step: set the value directly
-        # for the preview and record the step when the drag is released. The
-        # value it started from has to be remembered here -- by release the
-        # layer already holds the new one, and asking the document to diff it
-        # against itself records nothing at all.
-        _opacity_drag.setdefault(layer.uid, layer.opacity)
-        layer.opacity = value
-        doc.invalidate_all()
-    if imgui.is_item_deactivated_after_edit():
-        was = _opacity_drag.pop(layer.uid, None)
-        if was is not None:
-            doc.set_layer_props(opacity=layer.opacity, was={"opacity": was})
+        doc.set_layer_props(opacity=value)
 
     widgets.muted("Lock:")
     imgui.same_line()

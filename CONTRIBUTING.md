@@ -10,11 +10,11 @@ uv run pytest
 uv run ruff check .
 ```
 
-**Pass all three extras.** A bare `uv sync` *prunes* them and breaks about ten
-test files at collection. `rig` needs a Python 3.13 environment or it silently
+**Pass all four extras** (`studio`, `text2image`, `rig`, `music`). A bare `uv sync` *prunes* them
+and breaks about ten test files at collection. `rig` needs a Python 3.13 environment or it silently
 installs nothing.
 
-The suite is ~12,000 tests in about a minute, parallel by default. Three lanes
+The suite is 16,392 tests in about two minutes, parallel by default. Three lanes
 are excluded from the default run and each is opt-in:
 
 | Lane | Command | When |

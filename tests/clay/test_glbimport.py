@@ -318,3 +318,46 @@ def test_an_ordinary_instanced_glb_still_imports() -> None:
     """Instancing is legal; the budget must count it, not forbid it."""
     out = glbimport.glb_to_claydoc(_instanced(3))
     assert len(out.objects) == 3
+
+
+# --- H01: the budget is checked before a single accessor is decoded ----------
+
+
+def test_the_triangle_budget_refuses_before_gltf_load_ever_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clay's own ceiling used to be checked only *after* ``gltf.load`` had
+    already decoded every primitive a file names (H01) -- so a file that
+    declares more triangles than Clay will ever hold still paid for the full
+    decode before being refused. Proven by making ``gltf.load`` itself raise
+    if it is ever reached: the declared-count preflight must refuse first, off
+    the JSON chunk alone.
+    """
+
+    def _boom(*_a: object, **_kw: object) -> None:
+        raise AssertionError("gltf.load ran before the declared-count preflight refused")
+
+    monkeypatch.setattr(glbimport.gltf, "load", _boom)
+    monkeypatch.setattr(glbimport, "MAX_TRIANGLES", 6)
+    with pytest.raises(OpError, match="declares .* triangles, past the"):
+        glbimport.glb_to_claydoc(_instanced(8))
+
+
+def test_the_object_budget_refuses_before_gltf_load_ever_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a: object, **_kw: object) -> None:
+        raise AssertionError("gltf.load ran before the declared-count preflight refused")
+
+    monkeypatch.setattr(glbimport.gltf, "load", _boom)
+    monkeypatch.setattr(glbimport, "MAX_OBJECTS", 3)
+    with pytest.raises(OpError, match="declares placing .* objects, past the"):
+        glbimport.glb_to_claydoc(_instanced(8))
+
+
+def test_a_malformed_glb_still_reaches_the_loaders_own_refusal() -> None:
+    """The preflight is a fast path, not a second gate a bad file must also
+    clear: a GLB the JSON parser cannot even split reads as ``(0, 0)`` and
+    falls through to ``gltf.load``'s own, more specific message."""
+    with pytest.raises(OpError, match="could not be read"):
+        glbimport.glb_to_claydoc(b"not a glb at all")

@@ -18,6 +18,7 @@ of the archive object rather than a rule 18 call sites must remember").
 from __future__ import annotations
 
 import ast
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -181,3 +182,95 @@ def test_the_scan_accepts_the_atomic_helpers() -> None:
         "            write_gif(tmp)\n"
     )
     assert _offences(ast.parse(source)) == []
+
+
+# --- M03: concurrent writers to one destination must not share a temp name ---
+#
+# Export task keys can differ per tab (``packwright_io.py``'s save/export/
+# library keys are all ``f"packwright-...:{tab.uid}"``), so two tabs exporting
+# under one basename are two genuinely concurrent stagings of one destination
+# -- not two nested calls with a well-defined finish order. ``staged`` and
+# ``staged_set`` both used to build the temp name from *only* the
+# destination's own name, so two such stagings picked the same file.
+
+
+def test_overlapping_stagings_of_one_destination_get_different_temp_names(tmp_path) -> None:
+    """The collision, reproduced directly rather than inferred.
+
+    Two staging contexts are opened over one destination without nesting them
+    -- two tabs racing an export, not two ``with`` blocks whose exit order is
+    fixed by Python's stack discipline. Under the old fixed name
+    (``f".{name}.tmp"``) ``tmp_a`` and ``tmp_b`` were the same path, so writing
+    through one silently overwrote the other's bytes; finishing the second one
+    first (the ordinary case -- whichever tab's encode happens to land first)
+    published *its* content under the name, and then the first writer's own
+    ``os.replace`` raised ``FileNotFoundError`` against a temp file the other
+    side had already renamed away.
+    """
+    from warlock.studio import atomic
+
+    dest = tmp_path / "shared.bin"
+    cm_a = atomic.staged(dest)
+    cm_b = atomic.staged(dest)
+    tmp_a = cm_a.__enter__()
+    tmp_b = cm_b.__enter__()
+    try:
+        assert tmp_a != tmp_b, "two overlapping stagings of one destination shared a temp name"
+        assert tmp_a.parent == tmp_b.parent == dest.parent, "still a sibling of the destination"
+        tmp_a.write_bytes(b"first writer")
+        tmp_b.write_bytes(b"second writer")
+        # B finishes first: its replace and cleanup must not touch A's
+        # still-open staging file.
+        cm_b.__exit__(None, None, None)
+        assert dest.read_bytes() == b"second writer"
+        assert tmp_a.exists(), "A's own staging file was consumed by B's cleanup"
+        cm_a.__exit__(None, None, None)
+        assert dest.read_bytes() == b"first writer"
+    finally:
+        # Only reached if an assertion above failed before both contexts
+        # closed; a clean run has already exited both.
+        with contextlib.suppress(Exception):
+            cm_a.__exit__(None, None, None)
+        with contextlib.suppress(Exception):
+            cm_b.__exit__(None, None, None)
+
+
+def test_staged_set_gives_every_call_its_own_temp_name(tmp_path, monkeypatch) -> None:
+    """``staged_set``'s own construction, held to the same rule as ``staged``.
+
+    ``packwright_io.export_files`` and ``export_library`` can each build a
+    ``staged_set`` around one PNG basename from a different task key, so two
+    concurrent calls over the same destination is not a hypothetical shape.
+    Reproduced by stalling the first call mid-write (past its own
+    ``tmp.write_bytes``, before its ``os.replace``) and running a second call
+    over the same destination while it waits: under the old fixed name, the
+    second call's ``write_bytes`` clobbers the first call's still-unpublished
+    staging file, and the first call then publishes the *second* call's bytes
+    under its own name.
+    """
+    from warlock.studio import atomic
+
+    dest = tmp_path / "atlas.png"
+    real_write_bytes = Path.write_bytes
+    released = False
+
+    def _stalling_write(self: Path, data: bytes):
+        real_write_bytes(self, data)
+        nonlocal released
+        if not released and self.name.startswith(f".{dest.name}."):
+            # Hand control to a concurrent second call the instant the first
+            # call's own temp file has bytes in it -- the exact window a
+            # shared name made unsafe.
+            released = True
+            atomic.staged_set({dest: b"second writer"})
+
+    monkeypatch.setattr(Path, "write_bytes", _stalling_write)
+    atomic.staged_set({dest: b"first writer"})
+
+    # The second, nested call finished first (it has no writer of its own to
+    # wait on) and published its bytes; the outer call then published its own
+    # -- each into a temp file the other could not see, because the names
+    # differed. Under the old shared name the outer call's own write would
+    # have overwritten the inner call's temp file (or vice versa), and the
+    # final content would not be traceable to either call cleanly.
+    assert dest.read_bytes() == b"first writer"

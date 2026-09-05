@@ -1033,9 +1033,14 @@ def _wang_colours(
             | imgui.ColorEditFlags_.display_hex.value
             | imgui.ColorEditFlags_.picker_hue_bar.value,
         )
+        # One gesture, one step: the hue-bar drag and the probability field
+        # both report on every frame, and ``set_wang_colour`` pushes a step
+        # per report without this (2026-09-05 audit).
+        controls.fold_undo(tab.doc.history)
         weighed, probability = controls.input_float(
             "Probability", float(colour.probability)
         )
+        controls.fold_undo(tab.doc.history)
         if name != colour.name or moved or weighed:
             set_wang_colour(
                 state,
