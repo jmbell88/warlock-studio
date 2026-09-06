@@ -92,12 +92,41 @@ TROUPE_TEMPLATE = "humanoid"
 TROUPE_BASE_MODEL = "sdxl_cfg"
 
 
+def has_clips(template: str) -> bool:
+    """Whether a skeleton has a clip library to animate a sheet from.
+
+    ``create_charsheet``'s question, asked as a function so the *door* offering
+    the choice and the door refusing it read the same fact. An unknown or
+    unrecorded template is False rather than an error, for the reason the
+    refusal gives: from the user's side it is the same fact.
+    """
+    try:
+        return bool(rigging.clip_library(str(template or "")).get("clips"))
+    except ValueError:
+        return False
+
+
+def clip_templates() -> list[dict[str, str]]:
+    """The skeletons a character sheet can actually be animated on.
+
+    ``rigging.catalog()`` filtered by :func:`has_clips`, in the catalog's own
+    order, so the Skeleton picker offers exactly the set the door accepts.
+    """
+    return [row for row in rigging.catalog() if has_clips(row["key"])]
+
+
 def troupe_options(svc: WarlockService) -> dict[str, Any]:
     """What a Troupe request may ask for. One source for the form."""
     from . import palettes
 
     return {
         "variants": list(TROUPE_VARIANTS),
+        # Derived, never a second hand-written list: what a character sheet
+        # needs is a template with clips authored for it, and
+        # ``rigging.clip_library`` is the one answer to that question. A
+        # second list here would be one edit away from offering a skeleton
+        # ``create_charsheet`` then refuses.
+        "clip_templates": clip_templates(),
         "poses": list(TROUPE_POSES),
         "logical_sizes": list(TROUPE_LOGICAL_SIZES),
         "colors": list(TROUPE_COLOR_CHOICES),
@@ -136,6 +165,7 @@ def troupe_options(svc: WarlockService) -> dict[str, Any]:
             "outline": DEFAULT_TROUPE_OUTLINE,
             "reduce_mode": TROUPE_REDUCE_MODES[0],
             "camera": charsheet.DEFAULT_CAMERA_PRESET,
+            "template": TROUPE_TEMPLATE,
             "layout": charsheet.resolve_layout().as_dict(),
         },
     }
@@ -278,15 +308,11 @@ def create_charsheet(
     # ``rigging.clip_library`` answers with an empty library rather than
     # failing, so the question is asked here: without it the mismatch lands in
     # the worker as a frame-count error, an hour and 256 EEVEE frames later.
-    try:
-        clips_authored = bool(rigging.clip_library(template).get("clips"))
-    except ValueError:
-        # An unrecorded or unknown template. Not a separate refusal: from the
-        # user's side it is the same fact -- there are no clips to animate this
-        # rig from -- and a second sentence for it would be a second wording of
-        # one problem.
-        clips_authored = False
-    if not clips_authored:
+    # An unrecorded or unknown template answers False rather than raising --
+    # from the user's side it is the same fact, there are no clips to animate
+    # this rig from, and a second sentence for it would be a second wording of
+    # one problem. See ``has_clips``.
+    if not has_clips(template):
         raise Invalid(
             "a character sheet is animated from a clip library, and nothing is "
             f"authored for the {template or 'unknown'} rig"
@@ -670,6 +696,23 @@ def _charsheet_spec(
         },
     )
     sheet_template = str(template or TROUPE_TEMPLATE)
+    # **Refused here, with a field, rather than as a missing key.** The
+    # expansion below already fails for a clipless skeleton, but it fails as
+    # ``KeyError`` turned into "the <x> clip library is missing 'walk'" -- a
+    # message about a dictionary, with no ``field`` for the Skeleton control
+    # that now asks the question. ``get_template`` answers an unknown key,
+    # and the sentence is ``create_charsheet``'s own so one fact has one
+    # wording.
+    try:
+        rigging.get_template(sheet_template)
+    except ValueError as exc:
+        raise Invalid(str(exc), field="template") from exc
+    if not has_clips(sheet_template):
+        raise Invalid(
+            "a character sheet is animated from a clip library, and nothing is "
+            f"authored for the {sheet_template} rig",
+            field="template",
+        )
     try:
         resolved_layout = charsheet.resolve_layout(layout)
         records = expand_clips(sheet_template, resolved_layout)

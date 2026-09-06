@@ -1189,6 +1189,11 @@ class AppState:
     # ``clay``/``review`` are, and never persisted: a stored cutout would be a
     # claim about a file that has had a whole session to change.
     matte: Any = None
+    # The open "Send to Troupe" question, built by ``panes.troupe_send.ask``
+    # and drawn at top level -- the library's door is inside a context popup,
+    # where ``imgui.open_popup`` cannot be called. One slot, because at most
+    # one send is in flight; untyped and None here for ``matte``'s reason.
+    troupe_send: Any = None
     manual: ManualState = field(default_factory=ManualState)
     tour: TourState = field(default_factory=TourState)
     # The selected asset's parsed manifest.json, held as ((job id, mtime), data)

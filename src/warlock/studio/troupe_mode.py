@@ -542,6 +542,11 @@ def send_to_troupe(ctx: Any, job: Any, form: dict[str, Any] | None = None) -> bo
             lighting=request.get("lighting"),
             name=str(request.get("name") or ""),
             layout=settings or None,
+            # Only meaningful for an unrigged mesh -- a rigged one is animated
+            # on the skeleton its ``rig.json`` records, and the service reads
+            # that rather than this. Empty means the service's own default, so
+            # a caller that passes no form mints the row it always did.
+            template=request.get("template") or None,
         )
 
     return bool(ctx.submit(f"troupe-send:{job_id}", run))
@@ -1185,6 +1190,12 @@ def form(ctx: Any) -> dict[str, Any]:
             # and the whole point of ``charsheet.CAMERA_PRESETS`` is that there
             # is one. An empty string simply shows the door's first choice.
             "camera": str(defaults.get("camera") or ""),
+            # Which skeleton an *unrigged* mesh is rigged on before its sheet
+            # is rendered. On the form and not per-door, so the choice made at
+            # the library's door is the one the inspector's door opens on --
+            # the same argument ``_existing_mesh`` makes about sharing the form
+            # rather than repeating it.
+            "template": str(defaults.get("template") or ""),
             "dither": False,
             "palette": "",
             "name": "",
@@ -1193,6 +1204,10 @@ def form(ctx: Any) -> dict[str, Any]:
     elif "layout" not in state.form:
         # Session-state migration for a form created by a pre-v2 build.
         state.form["layout"] = _default_layout(ctx)
+    if "template" not in state.form:
+        # Session-state migration, ``camera``'s: a form the user left open
+        # across the build that added the Skeleton control has no key for it.
+        state.form["template"] = str(defaults.get("template") or "")
     if "camera" not in state.form:
         # Session-state migration, ``layout``'s above: a form the user left
         # open across a build that predates the Camera control has no key for

@@ -586,7 +586,7 @@ def modal_open(ctx: Any) -> bool:
     Ctrl+Enter submitted the form the modal was a *question about*; a mode key
     left the app somewhere else with the modal still up. Ownership is a
     property of "a modal is up", not of which queue happens to hold it, so the
-    predicate asks all four.
+    predicate asks all five.
 
     A module function with ``App._modal_open`` delegating to it, because the
     guided tour needs the same question and is deliberately *not* one of the
@@ -599,11 +599,12 @@ def modal_open(ctx: Any) -> bool:
     on the shell. This module already owns two of the four answers.
     """
     from . import matte_preview
-    from .panes import first_run
+    from .panes import first_run, troupe_send
 
     return (
         ctx.confirms.pending is not None
         or ctx.prompts.pending is not None
         or matte_preview.is_open(ctx)
         or first_run.is_open(ctx)
+        or troupe_send.is_open(ctx)
     )

@@ -266,8 +266,10 @@ def _edit_actions(ctx: Any, job: Any) -> None:
         widgets.hint_text("Opens the authored document when there is one, else the mesh.")
 
     if exits[3]:
-        if controls.button(f"{icons.PERSON_STANDING} {verbs.send_to('troupe')}"):
-            troupe_mode.send_to_troupe(ctx, job)
+        from . import troupe_send
+
+        if controls.button(f"{icons.PERSON_STANDING} {verbs.send_to('troupe')}..."):
+            troupe_send.ask(ctx, job)
         # The library's menu item has carried this since it existed and the
         # button beside the mesh had nothing at all -- so the one surface where
         # the user is *looking at the mesh* was the one that did not say a
@@ -275,17 +277,17 @@ def _edit_actions(ctx: Any, job: Any) -> None:
         # CPU behind a button not called "Rig".
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                "Render a character sheet from this mesh. Needs a humanoid rig"
-                " -- Troupe's clip library has no clips for the other six"
-                " skeletons -- and rigs it first if it is not rigged yet."
+                "Render a character sheet from this mesh, rigging it first if"
+                " it is not rigged yet. Asks for the sprite size -- and, for an"
+                " unrigged mesh, the skeleton -- before anything is queued."
             )
         # The hint has to say the rig happens: for an unrigged mesh this is
         # minutes of CPU behind a button that is not called "Rig", and a user
         # who is not told will read the quiet as a hang.
         widgets.hint_text(
-            "Render a character sheet -- rigging the mesh first if it is not rigged."
+            "Render a character sheet at a size you choose."
             if "rig.glb" in (job.get("files") or [])
-            else "Rigs the mesh as a humanoid, then renders a character sheet."
+            else "Rigs the mesh on a skeleton you choose, then renders a sheet."
         )
 
 

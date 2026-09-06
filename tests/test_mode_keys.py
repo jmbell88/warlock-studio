@@ -405,6 +405,20 @@ def test_modal_open_sees_both_queues():
     ctx.prompts.ask(dialogs.Prompt(title="A", label="name"))
     assert main.App._modal_open(app) is True
 
+    # And the fifth: the Send to Troupe question. It is a real modal with its
+    # own Send and Cancel, and a shortcut leaking through it is UX-08 -- Esc
+    # would cancel the dialog *and* leave the mode behind it. The partial ctx
+    # is the point of ``troupe_send.is_open``'s ``getattr``: this caller has
+    # never built a state object.
+    from types import SimpleNamespace as _NS
+
+    from warlock.studio.panes import troupe_send
+
+    ctx.prompts.dismiss()
+    assert main.App._modal_open(app) is False
+    ctx.state = _NS(troupe_send=troupe_send.TroupeSend(job_id="abc"))
+    assert main.App._modal_open(app) is True
+
 
 def test_the_confirm_modal_binds_enter_and_escape_and_focuses_confirm():
     source = inspect.getsource(dialogs.ConfirmQueue.draw)

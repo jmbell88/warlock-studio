@@ -100,20 +100,29 @@ the [library](36-library-and-jobs.md), on the inspector under the asset, and ins
 under **Or use a mesh you already have**, below the form, which is collapsed until you open it.
 
 There is no reference and no gate on this route: the mesh already exists, so the only decision left
-is what the sheet should look like — and the settings in the form above are the ones it uses, which
-is why the picker sits under them rather than repeating them.
+is what the sheet should look like. The two doors outside Troupe — the library's menu and the
+inspector's button — **ask before they spend anything**: **Send to Troupe…** opens a dialog with the
+skeleton, the sprite size, the camera, the outline and the colours on it. That is why the labels
+carry an ellipsis. The picker inside Troupe has no dialog, because the form it sits under *is* the
+question, which is why it sits under it rather than repeating it.
 
-If the mesh is not rigged, it is rigged first, as a humanoid, with the joints measured off the mesh
-rather than fitted to its bounding box. That is a real cost: rigging is minutes of CPU before a
-single cell is rendered, which is why the button says so. You get two rows in the queue — the rig,
-then the sheet — and either can be cancelled on its own; cancelling the rig simply means no sheet.
+Whatever you choose in that dialog is remembered: it is the same form the pane draws, so a size
+chosen from the library is the size the inspector's button opens on next time, and the size Troupe's
+own pane shows.
 
-A mesh already rigged on a skeleton that has no clips authored for it is refused, immediately and
-before anything is queued: a sheet is animated from a clip library, and a walk cycle means nothing to
-a skeleton nobody wrote one for. Four of the eight templates ship with clips — `humanoid`,
-`quadruped`, `bird` and `blob` — and each carries all five movements. `fish`, `insect`, `serpent` and
-`biped_tail` have none, so a mesh rigged on one of those means re-rigging it on one of the four from
-[Create's Rig stage](25-rigging-and-posing.md) and sending it again.
+If the mesh is not rigged, it is rigged first, with the joints measured off the mesh rather than
+fitted to its bounding box — and the dialog's **Skeleton** picker is where you say which rig. It
+offers only the skeletons with clips authored for them, because a sheet is animated from a clip
+library. Rigging is a real cost: minutes of CPU before a single cell is rendered, which is why the
+dialog says so. You get two rows in the queue — the rig, then the sheet — and either can be
+cancelled on its own; cancelling the rig simply means no sheet.
+
+A mesh **already** rigged is animated on the skeleton it already carries, so the dialog does not ask
+— and one rigged on a skeleton that has no clips is refused immediately, before anything is queued:
+a walk cycle means nothing to a skeleton nobody wrote one for. Four of the eight templates ship with
+clips — `humanoid`, `quadruped`, `bird` and `blob` — and each carries all five movements. `fish`,
+`insect`, `serpent` and `biped_tail` have none, so a mesh rigged on one of those means re-rigging it
+on one of the four from [Create's Rig stage](25-rigging-and-posing.md) and sending it again.
 
 While either row is running the character appears in the cast under **In progress**, saying which
 step it is on. Nothing on this route ever waits for you.
@@ -125,6 +134,7 @@ step it is on. Nothing on this route ever waits for you.
 | Build | Which guide conditions the reference: male or female. They differ in shoulder width, arm length and stance. |
 | Reference pose | A-pose or T-pose. A-pose matches the rig template and is the default; T-pose separates the limbs further. Both draw the same figure — only the arms move. |
 | Camera | One of four **presets**, and the helper under the picker states the chosen one's elevation in degrees. **3/4 top-down** (35°) is the default and the angle most 2D games with depth are drawn at; **Isometric** (30°) matches what tilesets call isometric; **Side** (0°) is straight on; **Top-down** (60°) is as far over as a humanoid still reads — a true overhead figure is a pair of shoulders and a hat brim. The degrees are in the helper rather than left to the name because the number is the thing that transfers: if you are matching these sprites to a Plotter map you already know what elevation that map is drawn at, and "isometric" does not answer that while 30° does. The same four presets are on Create's Character column, and a sheet records which one it was rendered at in its sidecar. |
+| Skeleton | Which rig an **unrigged** mesh is built on, and therefore which clip library its sheet is animated from. Only on the **Send to Troupe…** dialog, and only for a mesh that is not rigged yet: a rigged one is animated on the skeleton its own rig records. Only the four templates with clips are offered. |
 | Sprite size | How many pixels tall one cell is. 16, 24, 32, 48, 64, 96 or 128. |
 | Outline | `outer` grows the silhouette by a dark pixel, `inner` recolours the sprite's own edge, `none` leaves it alone. |
 | Palette | A palette file if you have installed one, or a palette derived from the render by median cut. |

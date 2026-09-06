@@ -955,6 +955,7 @@ def _send_to_troupe_item(ctx: Any, job: dict[str, Any]) -> None:
     unrigged mesh that is minutes of CPU behind a button not called "Rig".
     """
     from .. import troupe_mode
+    from . import troupe_send
 
     if not troupe_mode.can_send_to_troupe(ctx, job):
         return
@@ -966,13 +967,17 @@ def _send_to_troupe_item(ctx: Any, job: dict[str, Any]) -> None:
     # refusal is real, immediate and well worded, but a user who has to press
     # the button to discover the rule has been told too late.
     hint = (
-        "Render a character sheet from this mesh. Needs a humanoid rig -- "
-        "Troupe's clip library has no clips for the other six skeletons."
+        "Render a character sheet from this mesh, on the skeleton it is "
+        "already rigged on. Asks for the sprite size first."
         if rigged
-        else "Rig this mesh as a humanoid, then render a character sheet from it."
+        else "Asks which skeleton to rig this mesh on and how big the sprites "
+        "are, then rigs it and renders a character sheet."
     )
-    if controls.menu_item(verbs.send_to("troupe"), "", False, tooltip=hint)[0]:
-        troupe_mode.send_to_troupe(ctx, job)
+    # The ellipsis is the convention (``tests/test_label_conventions``): this
+    # door asks before it spends a rig plus up to 512 EEVEE frames, and the
+    # label is read before the click.
+    if controls.menu_item(f"{verbs.send_to('troupe')}...", "", False, tooltip=hint)[0]:
+        troupe_send.ask(ctx, job)
 
 
 def _troupe_item(ctx: Any, job: dict[str, Any]) -> None:

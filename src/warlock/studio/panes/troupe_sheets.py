@@ -274,19 +274,32 @@ def _rerender(ctx: Any, state: Any) -> None:
     )
 
 
+def _form(ctx: Any, state: Any) -> dict[str, Any]:
+    """The settings "Build another sheet" uses. The left pane's, or the mode's.
+
+    The left pane builds the form and draws it every frame the mode is open --
+    but a headless caller (or the first frame after a restore) can reach the
+    button first, and an empty form would submit the door's defaults under the
+    appearance of the user's choices.
+
+    **The fallback used to raise.** It called
+    ``troupe_settings._form(state, troupe_settings._options(ctx))``, and both
+    moved to ``troupe_mode`` on 2026-09-05 -- the tombstone in that module says
+    so -- so the guard fired ``AttributeError`` in exactly the case it exists
+    for. ``troupe_mode.form`` takes ctx alone and stores onto the mode's state,
+    which is why the two-argument shape went away with it. Its own function so
+    the fallback is assertable without an imgui frame.
+    """
+    return state.form or troupe_mode.form(ctx)
+
+
 def _rebuild(ctx: Any, state: Any) -> None:
     """Another sheet of the same character, at the form's current options."""
     from . import troupe_settings
 
     if not state.job_id:
         return
-    form = state.form or {}
-    if not form:
-        # The left pane builds it, and it is drawn every frame the mode is --
-        # but a headless caller (or the first frame after a restore) can reach
-        # this first, and an empty form would submit the door's defaults under
-        # the appearance of the user's choices.
-        form = troupe_settings._form(state, troupe_settings._options(ctx))
+    form = _form(ctx, state)
     key = f"troupe-sheet:{state.job_id}"
     count = troupe_settings.cell_count(form)
     valid = 0 < count <= 512

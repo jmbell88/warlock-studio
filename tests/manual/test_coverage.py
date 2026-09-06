@@ -29,6 +29,12 @@ NO_HELP_BUTTON = {
     "inker_drag",
     "inker_gestures",
     "inker_slices",
+    # The walk-cycle session's half of the canvas -- its command row and its
+    # joint overlay -- split off for the same reason as the three above and
+    # covered by the same rule: the (?) belongs to ``inker_walk``, the panel
+    # with the heading, and a second one on the canvas row would be two buttons
+    # into one section.
+    "inker_walk_canvas",
     "inker_textures",  # a texture cache, drawn by nobody
     "plotter_canvas",  # the map itself; its tools are plotter-tools
     # The pattern grid itself; its controls are sirens-transport and
@@ -98,6 +104,13 @@ NO_HELP_BUTTON = {
     # square of pixels. Home's grid and the library's cards each carry their
     # own, pointing at the chapters that describe them.
     "thumbs",
+    # A modal raised by two doors elsewhere -- the library's menu item and the
+    # inspector's button -- and drawn at top level because the first of those
+    # is inside a context popup. It has no titled section to hang a (?) beside,
+    # and the settings it asks about are the ones ``troupe-settings`` already
+    # documents, so a second target would point at the same chapter under a
+    # different name.
+    "troupe_send",
 }
 
 

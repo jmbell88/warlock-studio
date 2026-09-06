@@ -4357,7 +4357,7 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         which is why this is not inline in either.
         """
         from . import widgets
-        from .panes import first_run, overlay, palette, settings_3d
+        from .panes import first_run, overlay, palette, settings_3d, troupe_send
 
         ctx = self.app_ctx
         # The layout editor, over the workspace that has just recorded its pane
@@ -4424,6 +4424,16 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             on_failure=lambda: tour_pane.stop(ctx),
         )
         over("overlay/palette", palette.draw, ctx, title="The command palette")
+        # The Send to Troupe question, above the confirms for ``matte``'s
+        # reason: it is a modal raised from a context menu, and it must take the
+        # single popup slot before any confirm the same frame raises.
+        over(
+            "overlay/troupe-send",
+            troupe_send.draw,
+            ctx,
+            title="Send to Troupe",
+            on_failure=lambda: troupe_send.close(ctx),
+        )
         # A queue that stops drawing still reports ``modal_open``, so the
         # keyboard would be owned by a modal nobody can see. Dismissing is the
         # queue's own documented way out, and the reason ``pending`` is
