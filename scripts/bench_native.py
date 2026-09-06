@@ -440,6 +440,223 @@ def _case_oklab_palette(entries: int) -> Callable[[], Any]:
 
 
 # --------------------------------------------------------------------------
+# B8 -- packwright/maxrects.pack: _score's linear scan and _prune's O(F^2)
+# --------------------------------------------------------------------------
+
+
+def _pack_items(n: int) -> tuple[list[tuple[str, int, int]], int]:
+    """``docs/measurements/2026-08-31-packwright-max-sprites.md``'s driver.
+
+    Random 8..64 px rectangles under ``random.Random(7)``, run through
+    ``order`` so the search is the real one and not an unsorted worst case, and
+    an atlas side at the next power of two above twice the total area -- which
+    is roughly ``_candidate_sizes``' first try.
+    """
+    import random
+
+    from warlock.studio.packwright import layout, maxrects
+
+    rng = random.Random(7)
+    items = maxrects.order(
+        [(f"s{i}", rng.randint(8, 64), rng.randint(8, 64)) for i in range(n)]
+    )
+    area = sum(w * h for _k, w, h in items)
+    side = layout.next_pot(int((area * 2) ** 0.5) + 1)
+    return items, side
+
+
+def _case_pack(n: int) -> Callable[[], Any]:
+    """One ``pack()``, the unit the 2026-08-31 document timed.
+
+    Gate stated before the number: **>1.0 s at 1024 sprites**. 1024 is
+    ``layout.MAX_SPRITES``, cut from 4096 on that document's 4.7 s figure, and a
+    kernel is on the table only if a single pack at the ceiling is still over a
+    second -- which is where a background "packing..." label starts reading as
+    a hang. The sweep doubles n, so the cost ratio against 2x work tells the
+    O(F^2)-per-placement story on its own.
+    """
+    from warlock.studio.packwright import maxrects
+
+    items, side = _pack_items(n)
+    return lambda: maxrects.pack(items, side, side)
+
+
+def _pack_new_only(items: list[tuple[str, int, int]], width: int, height: int) -> Any:
+    """``maxrects.pack`` with the prune restricted to pairs touching a new piece.
+
+    After every prune no survivor contains another survivor -- that is what the
+    prune *means* -- so on the next placement the only pairs that can fire are
+    the ones involving a piece ``_split`` just made. The pair body, its order
+    and the "of two identical rectangles the earlier is dropped" rule are the
+    shipped ones verbatim; only old-vs-old pairs are skipped, and those cannot
+    fire. Exact by induction, and the case builder asserts it on a small pack.
+    """
+    from bisect import bisect_right
+
+    from warlock.studio.packwright.maxrects import Placement, Rect, _fits, _score, _split
+
+    free = [Rect(0, 0, int(width), int(height))]
+    placed: list[Placement] = []
+    for key, w, h in items:
+        w, h = int(w), int(h)
+        best_score: Any = None
+        best: Rect | None = None
+        for candidate in free:
+            if not _fits(candidate, w, h):
+                continue
+            score = _score(candidate, w, h)
+            if best_score is None or score < best_score:
+                best_score, best = score, candidate
+        if best is None:
+            return None
+        used = Rect(best.x, best.y, w, h)
+        placed.append(Placement(key=key, x=used.x, y=used.y, w=w, h=h))
+        remaining: list[Rect] = []
+        fresh: list[bool] = []
+        for candidate in free:
+            pieces = _split(candidate, used)
+            if pieces is None:
+                remaining.append(candidate)
+                fresh.append(False)
+            else:
+                remaining.extend(pieces)
+                fresh.extend([True] * len(pieces))
+        count = len(remaining)
+        bounds = [(r.x, r.y, r.x + r.w, r.y + r.h) for r in remaining]
+        dead = [False] * count
+        new_idx = [k for k in range(count) if fresh[k]]
+        for i in range(count):
+            if dead[i]:
+                continue
+            ix, iy, ir, ib = bounds[i]
+            js = range(i + 1, count) if fresh[i] else new_idx[bisect_right(new_idx, i):]
+            for j in js:
+                if dead[j]:
+                    continue
+                jx, jy, jr, jb = bounds[j]
+                if jx <= ix and jy <= iy and jr >= ir and jb >= ib:
+                    dead[i] = True
+                    break
+                if ix <= jx and iy <= jy and ir >= jr and ib >= jb:
+                    dead[j] = True
+        free = [rect for rect, gone in zip(remaining, dead, strict=True) if not gone]
+    return placed
+
+
+def _case_pack_new_only(n: int) -> Callable[[], Any]:
+    from warlock.studio.packwright import maxrects
+
+    small, small_side = _pack_items(256)
+    assert _pack_new_only(small, small_side, small_side) == maxrects.pack(
+        small, small_side, small_side
+    ), "the restricted prune must reproduce the shipped pack exactly"
+    items, side = _pack_items(n)
+    return lambda: _pack_new_only(items, side, side)
+
+
+# --------------------------------------------------------------------------
+# B9 -- plotter/terrain.paint_wang_cells: the sequential per-cell re-fit
+# --------------------------------------------------------------------------
+
+
+def _wang_fixture(side: int) -> tuple[Any, Any, Any, list[tuple[int, int]]]:
+    """A ``side`` x ``side`` layer of two blob terrains, and one diagonal drag.
+
+    The layer is pre-filled with the two colours' interiors in random 8-cell
+    blocks, so every cell has neighbours with an opinion -- an empty layer gives
+    ``constraints_from`` nothing and the loop returns early, which is not the
+    case anyone waits on. The gesture is a diagonal stroke corner to corner:
+    the box around it is the whole layer and almost none of it is *asserted*,
+    so every cell in the box is re-fit. A solid fill is the cheap shape here
+    (its interior is asserted and skipped); the drag is the expensive one.
+    """
+    from warlock.studio.tilegrid import blob, gid
+    from warlock.studio.tilegrid.tileset import Tileset, TilesetRef
+    from warlock.studio.tilegrid.wang import blob_wangset
+
+    wangset = blob_wangset(["grass", "sand"], ["#00ff00", "#ffff00"])
+    interior = {
+        1: next(i for i, w in wangset.tiles.items() if all(c == 1 for c in w)),
+        2: next(i for i, w in wangset.tiles.items() if all(c == 2 for c in w)),
+    }
+    rng = np.random.default_rng(0x3A6)
+    blocks = rng.integers(1, 3, size=(side // 8 + 1, side // 8 + 1))
+    colours = np.repeat(np.repeat(blocks, 8, axis=0), 8, axis=1)[:side, :side]
+    data = np.where(colours == 1, 1 + interior[1], 1 + interior[2]).astype(gid.DTYPE)
+    pixels = np.zeros((16, 16 * (2 * blob.TILE_COUNT), 4), dtype=np.uint8)
+    ref = TilesetRef(
+        firstgid=1,
+        tileset=Tileset(name="w", pixels=pixels, tile_w=16, tile_h=16, wangsets=(wangset,)),
+    )
+    cells = [(i, i) for i in range(side)]
+    return data, ref, wangset, cells
+
+
+def _case_wang_drag(side: int) -> Callable[[], Any]:
+    """Gate stated before the number: **>100 ms for a 128-cell diagonal drag**.
+
+    ``paint_wang_cells`` runs on the frame thread from ``plotter_canvas``, so
+    the budget is a gesture the user is mid-way through, not a task. 128 is a
+    mid-size map's diagonal; the box it opens is 128^2 = 16k cells, each a
+    ``constraints_from`` (eight neighbour reads through a closure) and a memo
+    lookup. The sweep doubles the side, so the work quadruples per step.
+    """
+    from warlock.studio.plotter import terrain
+
+    data, ref, wangset, cells = _wang_fixture(side)
+    return lambda: terrain.paint_wang_cells(data, cells, 1, ref, wangset)
+
+
+def _wang_field_hoisted(data: np.ndarray, ref: Any, wangset: Any) -> Any:
+    """``terrain.wang_field`` with ``ref.holds`` hoisted out of the closure.
+
+    ``holds`` is ``firstgid <= id <= last_gid`` and ``last_gid`` walks
+    ``max_local_id -> tile_count -> columns/rows -> image_w/h`` on every call;
+    at eight neighbour reads per cell that chain is where the profile puts the
+    time. The bounds are facts about the ref that do not change during one
+    gesture, so they are read once. Same answers, by inspection of ``holds``.
+    """
+    from warlock.studio.tilegrid import gid as gidlib
+
+    height, width = data.shape
+    first, last, tiles, mask = ref.firstgid, ref.last_gid, wangset.tiles, gidlib.GID_MASK
+
+    def field_of(x: int, y: int) -> Any:
+        if not (0 <= x < width and 0 <= y < height):
+            return None
+        value = int(data[y, x]) & mask
+        if not value or not (first <= value <= last):
+            return None
+        return tiles.get(value - first)
+
+    return field_of
+
+
+def _case_wang_drag_hoisted(side: int) -> Callable[[], Any]:
+    from warlock.studio.plotter import terrain
+
+    data, ref, wangset, cells = _wang_fixture(side)
+    shipped = terrain.wang_field
+    try:
+        terrain.wang_field = _wang_field_hoisted
+        fast = terrain.paint_wang_cells(data, cells, 1, ref, wangset)
+    finally:
+        terrain.wang_field = shipped
+    slow = terrain.paint_wang_cells(data, cells, 1, ref, wangset)
+    assert slow is not None and fast is not None
+    assert slow[:2] == fast[:2] and np.array_equal(slow[2], fast[2]), "hoisting changed the re-fit"
+
+    def work() -> Any:
+        terrain.wang_field = _wang_field_hoisted
+        try:
+            return terrain.paint_wang_cells(data, cells, 1, ref, wangset)
+        finally:
+            terrain.wang_field = shipped
+
+    return work
+
+
+# --------------------------------------------------------------------------
 # B7 -- clay/ops_bevel.bevel_edges
 # --------------------------------------------------------------------------
 
@@ -674,6 +891,22 @@ CASES: dict[str, Case] = {
         build=_case_oklab_residual,
         sizes=(8, 32, 64),
         variants={"residual": _case_oklab_residual, "palette_only": _case_oklab_palette},
+    ),
+    "packwright_pack": Case(
+        name="packwright_pack",
+        site="packwright/maxrects.py:175 -- pack, and _prune at :130",
+        gate=">1.0 s at 1024 sprites (layout.MAX_SPRITES)",
+        build=_case_pack,
+        sizes=(128, 256, 512, 1024),
+        variants={"shipped": _case_pack, "prune_new_only": _case_pack_new_only},
+    ),
+    "wang_drag": Case(
+        name="wang_drag",
+        site="plotter/terrain.py:424 -- paint_wang_cells' per-cell loop",
+        gate=">100 ms for a 128-cell diagonal drag",
+        build=_case_wang_drag,
+        sizes=(32, 64, 128),
+        variants={"shipped": _case_wang_drag, "holds_hoisted": _case_wang_drag_hoisted},
     ),
     "clay_bevel": Case(
         name="clay_bevel",
