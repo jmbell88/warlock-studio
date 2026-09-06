@@ -178,6 +178,60 @@ def test_component_gallery_builds_every_state(
             imgui.set_current_context(prev_ctx)
 
 
+# The vocabulary INVARIANTS.md says the gallery is the executable catalogue
+# for. A widget added to the shell without a gallery entry is an uncatalogued
+# widget: nine renders of it never happen, and the --components captures stop
+# being the whole regression surface they are sold as.
+GALLERY_VOCABULARY = {
+    "controls": ("button", "input_text", "combo", "switch", "segmented_choice"),
+    "widgets": (
+        "empty_state",
+        "nothing_open",
+        "document_header",
+        "status_pill",
+        "stage_badge",
+    ),
+    "toolbar": ("toolbar",),
+    "forms": ("Form",),
+    "fonts": ("display", "heading", "title", "label", "small"),
+}
+
+
+def test_the_gallery_catalogues_every_named_shell_vocabulary():
+    """INVARIANTS.md calls the gallery "the executable catalogue for both
+    palettes and every supported scale". It had four blocks and imported
+    neither ``toolbar`` nor ``forms``, so most of the shell's vocabulary was
+    rendered nowhere: this fails for the next widget that lands without one."""
+    source = Path(inspect.getfile(component_gallery)).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    used: dict[str, set[str]] = {}
+    # Attributes, not calls. ``fonts.display`` and friends reach the gallery as
+    # bare references in the ramp table -- a table of roles is the right shape
+    # for them -- and a scan that only saw ``x.y(...)`` would demand they be
+    # spelled as calls to count. A call's own ``func`` is an Attribute node, so
+    # this sees ``widgets.empty_state(...)`` too.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            used.setdefault(node.value.id, set()).add(node.attr)
+    missing = [
+        f"{module}.{name}"
+        for module, names in GALLERY_VOCABULARY.items()
+        for name in names
+        if name not in used.get(module, set())
+    ]
+    assert not missing, missing
+
+
+def test_the_gallery_shows_the_toolbar_at_three_widths_and_forms_on_both_sides():
+    """The two blocks whose *point* is the breakpoint they straddle -- one
+    width each would catalogue the widget and not the behaviour."""
+    assert len(component_gallery._BAR_WIDTHS) == 3
+    widths = [width for width, _tier in component_gallery._BAR_WIDTHS]
+    assert widths == sorted(widths, reverse=True)
+    source = Path(inspect.getfile(component_gallery)).read_text(encoding="utf-8")
+    assert "forms.FORM_BREAKPOINT + " in source and "forms.FORM_BREAKPOINT - " in source
+
+
 def test_major_panes_have_roles_and_no_production_pane_child_calls():
     assert layout.PaneRole.SIDEBAR.value == "sidebar"
     assert layout.PaneRole.INSPECTOR.value == "inspector"

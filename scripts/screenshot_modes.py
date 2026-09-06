@@ -545,7 +545,15 @@ def main() -> int:
 
                 app.app_ctx.state.mode = "settings"
                 component_gallery.request()
-                _capture(app, args.out / f"{name}-components.png")
+                # Three passes down the scroller, not one. The gallery is a
+                # popup with a scrolling child and a capture photographs one
+                # frame, so a single shot showed only the blocks above the
+                # fold -- four of the ten the catalogue grew to on 2026-09-05.
+                # A catalogue whose pictures omit most of it is not one.
+                for index, fraction in enumerate((0.0, 0.5, 1.0)):
+                    component_gallery.scroll_to(fraction)
+                    suffix = "" if index == 0 else f"-{index + 1}"
+                    _capture(app, args.out / f"{name}-components{suffix}.png")
                 imgui.internal.close_popups_except_modals()
             if args.popups:
                 _capture_popups(app, args.out, name)
