@@ -758,12 +758,41 @@ class DragOps:
             )
 
     def _commit_drag(self: ClayView, doc: Any) -> None:
-        """One history step per object, recorded against where the drag began."""
+        """**One drag, one Ctrl+Z**, recorded against where the drag began.
+
+        This reverses the earlier "one history step per object". That reading
+        was defensible while a selection was something the user had assembled
+        by hand, object by object; it is not once a whole multi-object figure
+        arrives in Clay in one click, because scaling a placed humanoid then
+        costs sixteen presses to undo a gesture made once -- and the states in
+        between are worse than the extra presses: some limbs moved and some
+        not, a document the user never made. That is exactly the failure
+        ``test_one_ctrl_z_puts_all_three_objects_back`` exists to prevent, and
+        ``clay_ops.run`` already answers it for ops with ``mark()`` /
+        ``collapse_since()``. A drag is the same gesture and gets the same
+        shape, labelled after the tool that made it.
+
+        ``collapse_since`` refuses a run of fewer than two, so a one-object
+        drag keeps its own ``transform`` step and a drag that moved nothing
+        pushes nothing -- no empty compound either way.
+        """
+        history = getattr(doc, "history", None)
+        head = None if history is None else history.head
+        mark = 0 if history is None else history.mark()
         for uid, was in self._drag_start.items():
             try:
                 doc.set_transform(uid, was=was)
             except KeyError:
                 continue  # deleted mid-drag
+        if history is not None:
+            history.collapse_since(mark)
+            top = history.top
+            # Only when the drag actually pushed: a press-and-release that moved
+            # nothing must not relabel whatever step happens to be underneath.
+            if top is not None and history.head != head:
+                kind = self._key_kind or str(getattr(self.state, "tool", ""))
+                if kind in ("move", "rotate", "scale"):
+                    top.label = kind.capitalize()
         self._drag_uids = []
         self._drag_start = {}
 

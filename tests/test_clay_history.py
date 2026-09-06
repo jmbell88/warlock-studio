@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from warlock.studio import clay_ops, undo
@@ -109,6 +110,88 @@ def test_a_single_object_op_is_named_too():
     clay_ops.run(_Ctx(), doc, clay_ops.get("extrude"))
 
     assert doc.history.history()[-1][0] == "Extrude"
+
+
+def _drag(doc: bd.ClayDoc, uids: list[int], *, tool: str = "move") -> None:
+    """Move every selected object, then commit the drag the way a release does.
+
+    A stub rather than a ``ClayView``: ``_commit_drag`` is a ``DragOps`` method
+    and reads exactly these four attributes, so the real GL view (and its
+    context) is not part of the claim under test.
+    """
+    from warlock.studio._view_drag import DragOps
+
+    start = {
+        uid: tuple(np.array(v, copy=True) for v in doc.by_uid(uid).trs())
+        for uid in uids
+    }
+    for uid in uids:
+        doc.by_uid(uid).translation = np.array([1.0, 0.0, 0.0])
+    view = SimpleNamespace(
+        _drag_start=start,
+        _drag_uids=list(uids),
+        _key_kind="",
+        state=SimpleNamespace(tool=tool),
+    )
+    DragOps._commit_drag(view, doc)
+
+
+def test_a_gizmo_drag_across_three_objects_is_a_single_undo_step():
+    """The reversal of "one history step per object". A later item drops a
+    whole multi-object figure into Clay in one click, so scaling a placed
+    humanoid cost sixteen Ctrl+Z -- and the states in between showed some limbs
+    moved and some not, which is the failure the fold exists to prevent."""
+    doc, uids = _doc(3)
+    depth = len(doc.history)
+
+    _drag(doc, uids)
+
+    assert len(doc.history) == depth + 1, "three set_transform pushes, one drag"
+
+
+def test_one_ctrl_z_puts_all_three_dragged_objects_back():
+    doc, uids = _doc(3)
+    before = [np.array(doc.by_uid(uid).translation, copy=True) for uid in uids]
+
+    _drag(doc, uids)
+    assert [list(doc.by_uid(uid).translation) for uid in uids] != [
+        list(v) for v in before
+    ]
+
+    doc.undo()
+
+    for uid, was in zip(uids, before, strict=True):
+        assert list(doc.by_uid(uid).translation) == list(was)
+
+
+def test_a_drag_step_is_labelled_with_the_tool_that_made_it():
+    doc, uids = _doc(3)
+
+    _drag(doc, uids, tool="scale")
+
+    assert doc.history.history()[-1][0] == "Scale"
+
+
+def test_a_drag_that_moved_nothing_pushes_no_step_and_relabels_none():
+    """``collapse_since`` on an empty run must not leave a compound behind, and
+    the label must not land on whatever step happens to be underneath."""
+    doc, uids = _doc(3)
+    before = doc.history.history()
+
+    from warlock.studio._view_drag import DragOps
+
+    view = SimpleNamespace(
+        _drag_start={
+            uid: tuple(np.array(v, copy=True) for v in doc.by_uid(uid).trs())
+            for uid in uids
+        },
+        _drag_uids=list(uids),
+        _key_kind="",
+        state=SimpleNamespace(tool="move"),
+    )
+    DragOps._commit_drag(view, doc)
+
+    assert doc.history.history() == before
 
 
 # --- the step says what it was ----------------------------------------------
