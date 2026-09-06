@@ -16,6 +16,39 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
+## 0.0.38 — 2026-09-06
+
+The slow parts got faster without a line of C, and the sprite ceiling came
+back.
+
+- **Packwright packs 4096 sprites again.** 0.0.31 cut the ceiling to 1024
+  because one pack of 4096 took 190 seconds. The cost was the free-rectangle
+  prune re-checking every pair per placement when, after any prune, no
+  survivor contains another -- only pairs touching a piece the last split made
+  can newly fire. Restricting the loop to those pairs is exact (the parity test
+  replays the survivor list at every placement of a seeded pack) and packs
+  4096 in 3.6 seconds, under the same five-second rule that lowered the
+  ceiling. `docs/measurements/2026-09-06-native-batch-7-candidates.md`.
+- **A re-texture's CPU tail is 0.86 s at a TRELLIS atlas, down from 1.5.**
+  Three bit-identical numpy changes to `combine`: the weighted view sum is one
+  `einsum` instead of a product broadcast over the channel axis (numpy's
+  non-SIMD loop, and 56% of the function); the facing floor and the visibility
+  multiply are one masked pass; and `assemble` computes that floor once
+  instead of inside `combine` and again for its own coverage sum. The earlier
+  diagnosis -- the half-gigabyte temporary -- was measured and was not the
+  cost. Batches 8 and 9 under `docs/measurements/`.
+- **Inker's outline filter is 6x faster at large radii**, and converting a
+  layer to a tilemap at 8 px tiles is 3x, and palette mapping's Oklab
+  conversion is 1.5x. Fused in-place dilation, a memo on the eight tile
+  orientations, and a 256-entry sRGB lookup on uint8 input -- each asserted
+  equal to the expression it replaced. `2026-09-06-native-batch-6-landed.md`.
+- **A Wang terrain drag re-fits its ring in half the time.** The per-cell loop
+  the last review filed as the cost was not; the tileset's last gid was being
+  re-derived through a property chain on every one of eight neighbour reads
+  per cell. It is read once per gesture now.
+- Two closed audit reports are gone from `docs/`; their findings live in the
+  regressions that fixed them.
+
 ## 0.0.37 — 2026-09-06
 
 Two doors into Troupe stopped guessing, and the clip library learned how to

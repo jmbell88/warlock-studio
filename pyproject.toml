@@ -1,6 +1,6 @@
 [project]
 name = "warlock"
-version = "0.0.37"
+version = "0.0.38"
 description = "Local AI 3D asset generator (Meshy-style) for game development"
 readme = "README.md"
 license = "GPL-3.0-or-later"
