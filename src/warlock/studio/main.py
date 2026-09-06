@@ -39,6 +39,7 @@ from typing import Any
 
 from .. import memlog, winjob
 from . import anchors, create_brief, filetypes, guard, probe, resources, tokens, viewer_embed
+from . import app_ctx as app_ctx_mod
 from . import fps as fps_mod
 
 # The Ctrl+/ sheet's contents and its filter, in a file of their own since
@@ -852,6 +853,9 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         # job directory, and nothing on the first frame needs the number --
         # the library's storage line simply appears when the task lands.
         self._request_storage()
+        # Opt-in, and off by default: an app that phones home on every launch
+        # without being asked is not the offline app this one claims to be.
+        self._request_update_check()
         # Which tours have already been finished. Read here rather than
         # defaulted empty, so Home stops offering one the reader has done.
         from .panes import tour as tour_pane
@@ -1432,6 +1436,16 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         ctx = self.app_ctx
         for done in ctx.tasks.poll():
             if not done.ok:
+                from .app_ctx import UPDATE_CHECK_KEY
+
+                if done.key == UPDATE_CHECK_KEY and done.tag == "auto":
+                    # The one task in the app the user did not ask for that can
+                    # fail for a reason that is none of their business. A
+                    # background check on a flaky connection has nothing to
+                    # report and nothing to retry, so it says nothing; the
+                    # Settings button submits the same call with tag "manual"
+                    # and its failure is toasted like every other refusal.
+                    continue
                 # The refusal's *address*, where it has one (UX.md Phase 3).
                 # ``ServiceError.field`` has been carried since the class was
                 # written and read by nothing, so a refusal about the seed and
@@ -1620,6 +1634,31 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         if key == "model-storage":
             if isinstance(done.result, dict):
                 ctx.model_storage = done.result
+            return
+        if key == app_ctx_mod.UPDATE_CHECK_KEY:
+            if isinstance(done.result, dict):
+                # Onto the state rather than left in the task's progress: the
+                # opt-in startup check lands while Settings is almost certainly
+                # closed, and the pane has to be able to draw the answer
+                # whenever it is next opened.
+                ctx.state.update_check = done.result
+                if done.tag == "auto" and done.result.get("available"):
+                    ctx.toast(
+                        f"Warlock {done.result['latest']} is available -- "
+                        f"see Settings -> Updates."
+                    )
+            return
+        if key == app_ctx_mod.UPDATE_DOWNLOAD_KEY:
+            # Claimed rather than left to the unclaimed-key log, because the
+            # pane below it draws from ``staged_installer`` -- a question about
+            # the filesystem -- and the toast is the only thing that says the
+            # long download is over to a user who has since navigated away.
+            if isinstance(done.result, dict) and done.result.get("path"):
+                ctx.toast(
+                    "The update installer has been downloaded and verified. "
+                    "Settings -> Updates has the button that runs it.",
+                    "success",
+                )
             return
         if key == "library-verify":
             self._report_library_check(done.result)
@@ -2148,6 +2187,23 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             self._fatal_reported = True
             ctx.state.note_error("The GPU worker is not running. Restart Warlock.")
             ctx.toast("The GPU worker is not running.", "error")
+
+    def _request_update_check(self) -> None:
+        """Ask whether there is a newer Warlock, if the user asked us to ask.
+
+        Off the frame thread for ``_request_storage``'s reason: nothing on the
+        first frame needs the answer, and it simply appears in Settings ->
+        Updates (or as one toast) once the task lands. Silent when the setting
+        is off, which is the default -- this is the only thing in the app that
+        would ever reach the network without a click, so it does not.
+        """
+        if not self.app_ctx.settings.get("auto_check_updates", False):
+            return
+        from ..service import updates as svc_updates
+
+        self.app_ctx.submit(
+            app_ctx_mod.UPDATE_CHECK_KEY, svc_updates.check, self.svc, tag="auto"
+        )
 
     def _request_storage(self, job_id: str | None = None) -> None:
         """Re-measure the data directory off the frame thread.

@@ -107,6 +107,18 @@ def pack_key(key: str) -> str:
     return f"pack:{key}"
 
 
+#: The task keys for the two halves of the in-app update check.
+#:
+#: Plain constants rather than the per-row functions above, because there is
+#: exactly one of each in flight ever: the app has one version and one release
+#: feed, so there is nothing to key them on. They still get their own
+#: namespaces for ``download_key``'s reason -- the Settings pane greys one
+#: while the other is running, and ``main._on_task_done`` claims the result by
+#: name.
+UPDATE_CHECK_KEY = "updates:check"
+UPDATE_DOWNLOAD_KEY = "updates:download"
+
+
 @dataclass
 class Ctx:
     svc: Any

@@ -76,6 +76,7 @@ CATEGORIES = [
     ("appearance", f"{icons.PALETTE} Appearance"),
     ("models", f"{icons.BOX} Models"),
     ("packs", f"{icons.LAYERS} Packs"),
+    ("updates", f"{icons.REFRESH} Updates"),
     ("storage", f"{icons.FOLDER_OPEN} Storage"),
     ("health", f"{icons.ACTIVITY} Health"),
     ("advanced", f"{icons.SETTINGS} Advanced"),
@@ -182,6 +183,8 @@ def _category_body(ctx: Any, category: str) -> None:
         _models(ctx)
     elif category == "packs":
         _packs(ctx)
+    elif category == "updates":
+        _updates(ctx)
     elif category == "storage":
         _storage(ctx)
     elif category == "health":
@@ -1846,3 +1849,202 @@ def _restore_packs(ctx: Any, keys: list[str]) -> None:
 
     if ctx.submit(task_key, run):
         ctx.toast("Restoring packs...")
+
+
+# --- updates ------------------------------------------------------------------
+
+
+#: The last verified staging answer, keyed on what would make it wrong: the
+#: file's path, its size and its mtime, and the digest it was checked against.
+#: ``svc_updates.staged_installer`` hashes hundreds of megabytes, and this
+#: category is drawn every frame it is open -- so the question is asked once
+#: per file rather than sixty times a second, and re-asked the moment the file
+#: changes underneath it.
+_STAGED: dict[tuple[str, int, float, str], bool] = {}
+
+
+def update_size_note(info: dict[str, Any]) -> str:
+    """"418 MB", or nothing when the release did not say. Pure, for the tests."""
+    size = float(info.get("size_bytes") or 0.0)
+    if size <= 0:
+        return ""
+    return f"{size / float(1024**2):.0f} MB"
+
+
+def _staged(ctx: Any, info: dict[str, Any]) -> Path | None:
+    """The verified installer for ``info``, cached against its own stat.
+
+    The service answers this by hashing the file, which is right and is not
+    something to do on the frame thread sixty times a second. A stat is; so the
+    digest is computed once per (path, size, mtime, expected digest), and the
+    cache is invalidated by the file changing rather than by a timer.
+    """
+    from ...service import updates as svc_updates
+
+    name = str(info.get("installer_name") or "")
+    digest = str(info.get("sha256") or "").lower()
+    if not name or not digest:
+        return None
+    path = svc_updates.staging_dir(ctx.svc) / name
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    slot = (str(path), stat.st_size, stat.st_mtime, digest)
+    if slot not in _STAGED:
+        # Cleared wholesale rather than aged: an entry whose file has changed
+        # is already unreachable by its own key, and this session sees one
+        # release.
+        _STAGED.clear()
+        _STAGED[slot] = svc_updates.staged_installer(ctx.svc, info) is not None
+    return path if _STAGED[slot] else None
+
+
+def _updates(ctx: Any) -> None:
+    # No heading: the lit segment says "Updates". See ``_interface``.
+    from ... import installed_version
+
+    check_busy = ctx.tasks.is_busy(app_ctx.UPDATE_CHECK_KEY)
+    download_busy = ctx.tasks.is_busy(app_ctx.UPDATE_DOWNLOAD_KEY)
+    widgets.muted(f"You are running Warlock {installed_version()}.")
+    if check_busy:
+        # A two-request check, so a bar with a percent on it would jump from
+        # nothing to everything and tell the reader less than the word does.
+        widgets.muted(f"{icons.REFRESH} Checking...")
+    elif widgets.disabled_button(
+        f"{icons.REFRESH} Check for Updates##update-check",
+        not download_busy,
+        reason="An update is being downloaded.",
+    ):
+        _start_update_check(ctx)
+    imgui.dummy((0, sp(tokens.SP_2)))
+    _update_result(ctx, download_busy)
+    imgui.dummy((0, sp(tokens.SP_2)))
+    changed, value = controls.switch(
+        "Check for updates on startup",
+        bool(ctx.settings.get("auto_check_updates", False)),
+        control_id="auto-check-updates",
+    )
+    if changed:
+        ctx.settings.set("auto_check_updates", value)
+    widgets.muted_wrapped(
+        "An update is downloaded by a separate process; this one stays "
+        "offline, and nothing is checked unless you ask. The installer is "
+        "verified against the digest the release publishes and then left for "
+        "you to run -- Warlock never runs it for you."
+    )
+
+
+def _update_result(ctx: Any, download_busy: bool) -> None:
+    """What the last check found, and what can be done about it."""
+    info = ctx.state.update_check
+    if not isinstance(info, dict):
+        return
+    if not info.get("available"):
+        widgets.text_colored(theme.MUTED, f"{icons.CIRCLE_CHECK} You're up to date.")
+        return
+    widgets.text_colored(
+        theme.WARN, f"{icons.CIRCLE} Warlock {info.get('latest')} is available."
+    )
+    release_url = str(info.get("release_url") or "")
+    if release_url and controls.small_button("Release notes##update-notes"):
+        # A URL handed to the shell, which opens it in whatever the user's
+        # browser is -- an unrelated process, exactly as if they had typed it.
+        # Nothing in *this* process becomes able to reach the network.
+        ctx.submit("open-log", _open, release_url)
+    ready = _staged(ctx, info)
+    if ready is not None:
+        widgets.muted(f"Update ready -- {ready.name}")
+        if controls.small_button(f"{icons.DOWNLOAD} Run Installer##update-run"):
+            ctx.submit("open-log", _open, str(ready))
+            ctx.toast("The installer is opening. Close Warlock before it asks you to.")
+        imgui.same_line()
+        if controls.small_button("Show in Folder##update-show"):
+            ctx.submit("open-log", _reveal, str(ready))
+        return
+    if download_busy:
+        found = ctx.progress(app_ctx.UPDATE_DOWNLOAD_KEY)
+        percent = float(found.get("percent") or 0.0) if found else 0.0
+        widgets.progress_bar(percent)
+        if found and found.get("label"):
+            widgets.muted(str(found["label"]))
+        _cancel_update(ctx)
+        return
+    size = update_size_note(info)
+    label = f"{icons.DOWNLOAD} Download Update"
+    if size:
+        label += f" ({size})"
+    if widgets.disabled_button(f"{label}##update-download", not download_busy):
+        _start_update_download(ctx, info)
+
+
+def _open(target: str) -> None:
+    """Hand a path or a URL to the shell. Off the frame thread, by ``submit``."""
+    import os
+
+    os.startfile(target)  # noqa: S606 -- a verified installer, or a release URL
+
+
+def _reveal(path: str) -> None:
+    """Open Explorer with this file selected.
+
+    The comma is part of the switch (``/select,``) rather than a separator, so
+    the two are one argument -- Explorer ignores ``/select`` spelled any other
+    way and simply opens the drive root.
+
+    ``winjob.run`` rather than ``subprocess.run`` because every spawn in this
+    tree is in the kill-on-close job and the rule is stated rather than
+    reasoned about per call site (``tests/test_vram.py``'s spawn scan). It
+    costs nothing here: the process hands the request to the running Explorer
+    and exits immediately, so the window it opens is not its own.
+    """
+    from ... import winjob
+
+    winjob.run(["explorer", "/select,", path], check=False)  # noqa: S603, S607
+
+
+def _cancel_update(ctx: Any) -> None:
+    """Stop the download, by the reason the child was tracked under.
+
+    ``_cancel_pack``'s mechanism with a different prefix, and the prefix is
+    what keeps it narrow: killing every tracked child here would take a live
+    Blender bake or the persistent matting worker with it. Unlike a pack's,
+    this is safe at every point -- nothing exists but a ``.part``.
+    """
+    imgui.same_line()
+    from ... import winjob
+    from ...service import updates as svc_updates
+
+    if controls.small_button("Cancel##cancel-update"):
+        stopped = winjob.terminate_tracked(svc_updates.TRACK_REASON)
+        ctx.toast("Stopping the download..." if stopped else "Nothing left to stop.")
+
+
+def _start_update_check(ctx: Any) -> None:
+    """Submit the check. ``tag="manual"`` is what makes its failure speak.
+
+    ``main._collect_tasks`` swallows a failed *background* check, which is the
+    right answer for something the user did not ask for and the wrong one for
+    a button they have just pressed.
+    """
+    from ...service import updates as svc_updates
+
+    if ctx.submit(app_ctx.UPDATE_CHECK_KEY, svc_updates.check, ctx.svc, tag="manual"):
+        ctx.toast("Checking for updates...")
+
+
+def _start_update_download(ctx: Any, info: dict[str, Any]) -> None:
+    """Submit the download. ``_start_pack``'s shape, one file instead of a plan."""
+    from ...service import updates as svc_updates
+
+    def run() -> Any:
+        return svc_updates.download(
+            ctx.svc,
+            info,
+            on_progress=lambda percent, label: ctx.tasks.set_progress(
+                app_ctx.UPDATE_DOWNLOAD_KEY, percent, label
+            ),
+        )
+
+    if ctx.submit(app_ctx.UPDATE_DOWNLOAD_KEY, run, tag=str(info.get("latest") or "")):
+        ctx.toast("Downloading the update...")

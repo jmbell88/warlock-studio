@@ -746,6 +746,33 @@ in-process, Blender on the CPU for the rig and the render, and numpy for the
 reduction — which is what makes "run it again at both slider bounds" a
 reasonable instruction rather than an afternoon of GPU time.
 
+## P29. Prove the update path against a real release
+
+**Why it is yours:** it needs a release published under your account and an
+older build to offer it to, and neither is something this repository can do to
+itself. Everything up to that point is built and tested: `service.updates`,
+`pipelines/update_worker.py`, Settings -> Updates, and
+`scripts/make_update_manifest.py`. The real check runs today against the public
+`jmbell88/warlock-studio` and correctly reports "up to date", because that
+repository has published no releases at all -- which is exactly why the
+interesting half is unproven.
+
+**Do**, once:
+
+1. Build the installer (`pwsh scripts\rebuild.ps1`), then
+   `uv run python scripts/make_update_manifest.py`.
+2. Publish a GitHub Release carrying **both** `dist\WarlockSetup-v<version>.exe`
+   and `dist\update-manifest.json`.
+3. On a machine (or a build) whose `__version__` is lower, open Settings ->
+   Updates and go Check -> Download -> Run Installer.
+
+**What would fail:** an asset name that does not match what the manifest pins
+(the check refuses, correctly, and says which); a release published without the
+manifest (the app says "up to date" and offers nothing, which is the designed
+behaviour and needs to be seen once so it is not mistaken for a bug); and the
+installer refusing to upgrade an install it is running beside, which is the one
+thing no test in this repository can reach.
+
 ## Also owed, smaller
 
 - **Tutorial sample assets** (art): a 32×32 `.ora` sprite with a few layers

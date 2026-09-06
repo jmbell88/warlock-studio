@@ -32,7 +32,7 @@ from typing import Any
 
 from .. import __version__
 
-USER_AGENT = f"Warlock-Studio/{__version__} (+https://github.com/jmbell88/warlock)"
+USER_AGENT = f"Warlock-Studio/{__version__} (+https://github.com/jmbell88/warlock-studio)"
 
 
 def request(url: str) -> urllib.request.Request:
@@ -113,7 +113,18 @@ def _socket_code(exc: BaseException) -> tuple[int | None, int | None]:
     return (None, None)
 
 
-def describe_failure(exc: BaseException) -> str:
+#: What a transport failure's remedy adds about the bytes already transferred.
+#: A fetch resumes into its staging tree, so this is true of a model download
+#: and of a pack's ``.part``. It is *not* true of everything that uses this
+#: module -- an update installer that failed is started over -- which is why
+#: :func:`describe_failure` takes it as an argument rather than asserting it.
+RESUME_NOTE = (
+    "What was already downloaded has been kept, so pressing Install again "
+    "continues from where it stopped."
+)
+
+
+def describe_failure(exc: BaseException, *, resume_note: str = RESUME_NOTE) -> str:
     """One sentence a non-developer can act on, for a fetch that failed.
 
     **The message is the product, and for a transport error it never was**
@@ -146,10 +157,7 @@ def describe_failure(exc: BaseException) -> str:
         # log, which is the honest answer and is what was missing before.
         return f"{type(exc).__name__}: {exc} See warlock.log for the details."
     code = f" (WinError {win})" if win else ""
-    return (
-        f"{remedy}{code} What was already downloaded has been kept, so "
-        f"pressing Install again continues from where it stopped."
-    )
+    return f"{remedy}{code} {resume_note}".strip()
 
 
 def _looks_like_a_network_error(exc: BaseException) -> bool:

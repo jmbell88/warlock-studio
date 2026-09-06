@@ -32,6 +32,7 @@ from warlock.pipelines import download
 PERFORMERS = (
     Path("src/warlock/pipelines/pack_worker.py"),
     Path("src/warlock/pipelines/fetch_worker.py"),
+    Path("src/warlock/pipelines/update_worker.py"),
     Path("scripts/make_packs.py"),
 )
 

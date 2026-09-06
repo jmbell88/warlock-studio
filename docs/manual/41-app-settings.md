@@ -4,8 +4,8 @@
 job's. They are stored in `studio_settings.json` beside everything else the app remembers, and none
 of them need a variable set before launch.
 
-The pane is one centred column with six categories across the top — **Appearance**, **Models**,
-**Packs**, **Storage**, **Health** and **Advanced**. The column keeps its width however wide the
+The pane is one centred column with seven categories across the top — **Appearance**, **Models**,
+**Packs**, **Updates**, **Storage**, **Health** and **Advanced**. The column keeps its width however wide the
 window is: everything here is a short labelled row, and a form stretched across a 5K display leaves
 the label and the control it belongs to at opposite ends of the desk. Which category you last had
 open is not remembered between launches — it is where you were, not something you chose.
@@ -177,6 +177,37 @@ tooltip names the pack by its own size; once it is installed, clicking the mode 
 On a source checkout there is nothing to install: no build ever generated a pack manifest, and each
 row prints the `uv sync --extra ...` line that does the same job. See
 [Installation](39-installation.md#if-you-installed-rather-than-cloned).
+
+## Updates
+
+Warlock does not check for a new version unless you ask it to. **Check for Updates** is the only
+always-on trigger, and the switch below it — **Check for updates on startup**, off until you turn it
+on — is the only way anything happens without a click. Everything else on this page stays dark on a
+machine that never presses either.
+
+The check itself happens in a separate process, exactly as a model download and a pack install do:
+this one asks GitHub what the latest release is, reads the small manifest that release publishes,
+and dies. Nothing in the running app becomes able to reach the network, and nothing about how your
+work is generated changes.
+
+If there is a newer version, the page names it and offers three things: **Release notes**, which
+opens the release page in your browser; **Download Update**, with the installer's size on the
+button; and, once that has finished, **Run Installer** and **Show in Folder**. The download goes
+into `updates` under your Warlock home — beside the [pack cache](#packs), and it survives closing
+the app, so an installer you downloaded last night is still there this morning. **Cancel** is safe
+at any point during it: nothing exists until the whole file has arrived and been checked.
+
+**Warlock never runs the installer for you, and that is deliberate.** What it does instead is prove
+the file: the release publishes the installer's SHA-256, and the download is checked against it
+before it is given a name you can double-click. A file that does not match is deleted rather than
+offered. The page will not say "Update ready" about a file it has not just re-checked, so an
+installer left over from a different release cannot be run by mistake. Running it is your click, in
+your file manager, with Windows' own prompt in front of it.
+
+If a release was published without that manifest — every release older than this feature was — the
+page says you are up to date and offers nothing, because there is nothing it can verify. The same
+answer comes back when a background check fails: an automatic check you did not ask for stays quiet,
+while one you pressed the button for tells you what went wrong.
 
 ## Storage
 

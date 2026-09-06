@@ -1055,6 +1055,12 @@ class AppState:
     # cleared" notices. Named ``preview`` from when it held the composed-prompt
     # preview, which went with the prompt expander.
     preview: dict[str, Any] = field(default_factory=dict)
+    # The last "is there a newer Warlock" answer, as ``service.updates.check``
+    # returned it, or None. Here rather than in ``TaskRunner.progress`` because
+    # the opt-in startup check finishes while Settings is very probably not
+    # open, and a result with nowhere to live would be one the pane could never
+    # show: a task's progress is gone the moment the task is.
+    update_check: dict[str, Any] | None = None
     # The frame-rate overlay (F10). Persisted, because someone watching for a
     # stall wants it to survive the restart they are about to do. It is the
     # *detailed* view -- mean and worst frame -- and the always-on strip beside
