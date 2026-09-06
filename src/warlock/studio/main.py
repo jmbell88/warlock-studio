@@ -4032,7 +4032,8 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         arranged the way Tiled arranges its own:
 
             [ plotter-properties ]  the toolbar  [ plotter-layers  ]
-            [ plotter-bridge     ]  the map      [ plotter-tileset ]
+            [ plotter-stamps     ]  the map      [ plotter-tileset ]
+                                                 [ plotter-bridge  ]
 
         Both sidebars are ``skeletons.plotter``, which is where the argument
         for that arrangement is written down. The toolbar is not a slot: it is

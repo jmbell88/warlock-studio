@@ -506,6 +506,62 @@ def test_a_saved_wave4_plotter_layout_reconciles_into_the_tiled_default():
     assert again.share("plotter", "plotter-tools") == 0.4
 
 
+def test_a_saved_layout_follows_the_map_file_panel_to_the_right_column():
+    """Plotter's file block joined Clay's and Sirens' on the right, 2026-09-05.
+
+    ``plotter-bridge`` was the fill at the bottom of the *left* column; it is
+    now the fill at the bottom of the right one, which is where ``clay-bridge``
+    and ``sirens-bridge`` already sat. Anybody who has ever dragged a Plotter
+    pane has the old two lists in their settings file.
+
+    No ``VERSION`` bump and no migration, for the reason the neighbouring test
+    states: ``reconcile`` runs per column against ``set(builtin)``, so the
+    moved id is unknown on its old side and dropped there, and unlisted on its
+    new side and inserted after its last already-placed predecessor -- which,
+    for the last slot of the built-in column, is the bottom. The assertion that
+    matters as much as the placement is the last one: nothing is orphaned.
+    """
+
+    from warlock.studio import skeletons
+
+    built = skeletons.plotter(None)
+    builtin = {name: [slot.id for slot in col.slots] for name, col in built.items()}
+    assert "plotter-bridge" in builtin["right"], "the skeleton moved the file block"
+
+    settings = _Settings()
+    library = layouts.Library(settings)
+    # Exactly what a v2 file written before the move holds: the file block at
+    # the bottom of the left column, the palette at the bottom of the right.
+    library.record(
+        "plotter",
+        {
+            "left": ["plotter-properties", "plotter-stamps", "plotter-bridge"],
+            "right": ["plotter-layers", "plotter-objects", "plotter-tileset"],
+        },
+        set(),
+        shares={"plotter-properties": 0.45},
+    )
+    again = layouts.Library(settings)
+
+    left = again.order("plotter", "left", builtin["left"])
+    right = again.order("plotter", "right", builtin["right"])
+
+    assert left == ["plotter-properties", "plotter-stamps"]
+    # It arrives under the palette rather than displacing the layer stack.
+    assert right == [
+        "plotter-layers",
+        "plotter-objects",
+        "plotter-tileset",
+        "plotter-bridge",
+    ]
+    # Nothing is orphaned: every built-in slot is placed exactly once, and no
+    # column holds a slot that is not its own.
+    assert sorted(left + right) == sorted(builtin["left"] + builtin["right"])
+    assert (left + right).count("plotter-bridge") == 1
+    # And reading it wrote nothing.
+    assert settings.writes == 1
+
+
 def test_a_plotter_layout_that_hid_a_moved_pane_still_hides_it():
     """A hidden entry names a slot, not a column, so it survives the move.
 

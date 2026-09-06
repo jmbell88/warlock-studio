@@ -328,21 +328,26 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         "inker-timeline",
         "packwright-sources",
         "packwright-items",
-        # Two handles, one per column, since Plotter took Tiled's arrangement:
-        # Properties over the map file on the left, the layer stack over the
-        # tileset palette on the right. ``plotter-tools`` left this set with
-        # the pane -- the tools are a strip inside the centre column now, and a
-        # strip is not a slot. An orphaned share under the old key in a user's
-        # settings file is inert; see ``skeletons.plotter``.
+        # Plotter took Tiled's arrangement for the left column -- the selected
+        # thing over the tile stamps -- and puts its file block at the bottom
+        # of the right, where Clay's and Sirens' already are. So the right
+        # column stacks the layer list, the objects dock and the tileset
+        # palette over the map file, and carries the handles those splits
+        # need. ``plotter-tools`` left this set with the pane -- the tools are
+        # a strip inside the centre column now, and a strip is not a slot. An
+        # orphaned share under ``plotter-tools`` or ``plotter-stamps`` in a
+        # user's settings file is inert; see ``skeletons.plotter``.
         "plotter-layers",
         # The Objects dock, between the stack and the palette and present only
         # on a map that has an object layer. A ``when`` slot still carries a
         # handle: the column it shares with is the column it is drawn in.
         "plotter-objects",
         "plotter-properties",
-        # The numbered stamps, under Properties on the left and present only
-        # while a tile layer is selected -- a stamp is a block of tiles.
-        "plotter-stamps",
+        # The tileset palette, over the map file at the bottom of the right
+        # column. The numbered stamps left this set on 2026-09-05: the map file
+        # went to the right column, so the stamps became the left column's
+        # fill and a fill carries no handle of its own.
+        "plotter-tileset",
         "review-runs",
         "sirens-transport",
         # The right column stacks the instrument list over the envelope editor

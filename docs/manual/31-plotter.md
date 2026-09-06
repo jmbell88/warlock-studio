@@ -14,15 +14,16 @@ reconstruction started before you switched keeps running with its progress card 
 canvas. Only quitting the app and closing a tab can lose unsaved work, and both ask first.
 
 The layout follows Tiled's: the tools are a strip across the top of the map, the selected layer's
-properties and the map file are on the left, and the layer stack, the objects and the tileset palette
-are on the right. Several maps stay open at once, and **View ▸ Rearrange panes** (`Shift`+`W`) moves
+properties and the tile stamps are on the left, and the layer stack, the objects, the tileset palette
+and the map file are on the right. The map file panel sits at the bottom of the right column, which
+is where Clay keeps **Document** and Sirens keeps **Song file**. Several maps stay open at once, and **View ▸ Rearrange panes** (`Shift`+`W`) moves
 any of the panes.
 
 ## Starting a map
 
 With nothing open, the middle column offers **New map...** and **Open a file...**, and lists the maps
 you had open recently — clicking one reopens it, and hovering it shows the full path. The map panel
-on the left offers the same two buttons. Once a map is open, `Ctrl+N` and `Ctrl+O` do the same two
+at the bottom of the right column offers the same two buttons. Once a map is open, `Ctrl+N` and `Ctrl+O` do the same two
 things from the keyboard.
 
 **New map** asks what the map is before making it. Five presets start you off — 16 px tiles, 32 px

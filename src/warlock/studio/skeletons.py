@@ -179,6 +179,19 @@ def plotter(ctx: Any) -> dict[str, Column]:
     their old side and are dropped there, and unlisted on their new side and
     are appended there. An orphaned ``shares["plotter-tools"]`` and any hidden
     entry naming a moved slot are inert rather than wrong.
+
+    The same argument covers the second move, on 2026-09-05: ``plotter-bridge``
+    leaves the bottom of the left column for the bottom of the right, joining
+    ``clay-bridge`` and ``sirens-bridge`` on the side those two already use. A
+    layout saved with ``left=[properties, stamps, bridge]`` meets a left column
+    that no longer knows ``plotter-bridge`` and drops it, and a right column
+    that does not list it and appends it -- last, because it is last in the
+    built-in right column and ``reconcile`` inserts after the newcomer's last
+    already-placed predecessor. Nothing is orphaned and no ``VERSION`` bump is
+    owed. ``plotter-tileset`` becomes a share to make room for it, so
+    ``shares["plotter-tileset"]`` is a key that starts being read rather than a
+    key that stops: an absent entry is the even division, which is what the
+    column drew anyway.
     """
 
     from .panes import (
@@ -192,7 +205,7 @@ def plotter(ctx: Any) -> dict[str, Column]:
     left = Column(
         "left",
         (
-            # **The selected thing, then the file.** These fields used to be
+            # **The selected thing, at the top.** These fields used to be
             # drawn *inside* the layer list, between two sibling rows, so
             # choosing a layer pushed its neighbours a hundred and fifty lines
             # apart and there was no column of names left to read down. They
@@ -208,29 +221,22 @@ def plotter(ctx: Any) -> dict[str, Column]:
                 share_key="plotter-properties",
                 floor=plotter_layers.PROPERTIES_FLOOR,
             ),
-            # Under the selected thing and over the file, and only on a tile
-            # layer: a stamp is a block of tiles, so the pane belongs where the
-            # tileset palette belongs. On an object layer it would be nine
-            # controls that cannot act.
+            # Under the selected thing, and only on a tile layer: a stamp is a
+            # block of tiles, so the pane belongs where the tileset palette
+            # belongs. On an object layer it would be nine controls that cannot
+            # act. It is the left column's **fill** now that the file block has
+            # gone to the right, because a fill is the last slot drawn and this
+            # is the last slot: a column whose fill sat above another pane would
+            # take the whole column and push its neighbour out of the window.
             Slot(
                 "plotter-stamps",
                 "Tile stamps",
                 plotter_stamps.draw,
                 role=_role("inspector"),
                 edge=_edge("right"),
-                sizing=SHARE,
-                share_key="plotter-stamps",
+                sizing=FILL,
                 floor=plotter_stamps.STAMPS_FLOOR,
                 when=plotter_stamps.on_tile_layer,
-            ),
-            Slot(
-                "plotter-bridge",
-                "Map file",
-                plotter_bridge.draw,
-                role=_role("inspector"),
-                edge=_edge("right"),
-                sizing=FILL,
-                floor=plotter_bridge.BRIDGE_FLOOR,
             ),
         ),
     )
@@ -269,8 +275,24 @@ def plotter(ctx: Any) -> dict[str, Column]:
                 plotter_tileset.draw,
                 role=_role("sidebar"),
                 edge=_edge("left"),
-                sizing=FILL,
+                sizing=SHARE,
+                share_key="plotter-tileset",
                 floor=plotter_tileset.TILESET_FLOOR,
+            ),
+            # **The file block, at the bottom of the right column**, which is
+            # where Clay's ``clay-bridge`` and Sirens' ``sirens-bridge`` already
+            # sit. It was the left column's fill, and the one thing an editor's
+            # three sidebars should agree about is where Save lives: a user
+            # moving between Plotter, Clay and Sirens was reaching to the other
+            # side of the window for the same block of controls.
+            Slot(
+                "plotter-bridge",
+                "Map file",
+                plotter_bridge.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=FILL,
+                floor=plotter_bridge.BRIDGE_FLOOR,
             ),
         ),
     )
