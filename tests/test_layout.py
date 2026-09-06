@@ -325,6 +325,10 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         # rather than fixed so its height is a drag that persists.
         "inker-tools",
         "inker-tiles",
+        # The walk-cycle setup panel, present only while a session is open --
+        # ``plotter-objects``' case, and its answer: a ``when`` slot carries a
+        # handle, because the column it shares with is the column it is drawn in.
+        "inker-walk",
         "inker-timeline",
         "packwright-sources",
         "packwright-items",

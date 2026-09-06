@@ -62,12 +62,22 @@ def inker(ctx: Any) -> dict[str, Column]:
         inker_preview,
         inker_tiles,
         inker_tools,
+        inker_walk,
     )
 
     def animated(context: Any) -> bool:
+        """Whether the Preview slot has anything to show.
+
+        An animation, or a walk cycle being set up -- which is a clip that does
+        not exist as a document yet and is the one thing a user watches
+        continuously while dragging a joint. One Preview pane either way, rather
+        than a second one that appears beside it and shows the other kind.
+        """
         state = getattr(context.state, "inker", None)
         tab = None if state is None else state.active
-        return tab is not None and tab.doc.anim is not None
+        if tab is None:
+            return False
+        return tab.doc.anim is not None or inker_walk.active(context)
 
     def tiled(context: Any) -> bool:
         state = getattr(context.state, "inker", None)
@@ -112,6 +122,27 @@ def inker(ctx: Any) -> dict[str, Column]:
                 height=inker_preview.PREVIEW_H,
                 when=animated,
             ),
+            # Above the toolbox and below the preview: while a walk is being
+            # set up it is the only thing being done, so it sits where the eye
+            # already is. Conditional the way ``inker-preview`` and
+            # ``inker-tiles`` are -- ``walk`` on the state is the session, so
+            # its presence is the whole predicate.
+            Slot(
+                "inker-walk",
+                "Walk cycle",
+                inker_walk.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=SHARE,
+                share_key="inker-walk",
+                floor=inker_walk.WALK_FLOOR,
+                when=inker_walk.active,
+            ),
+            # **Absent while a walk cycle is being set up.** Not a tidying: the
+            # session owns the canvas the way a free transform does, so every
+            # tool in this box is inert until it is baked or cancelled -- and it
+            # is the pane whose room the setup panel needs. It comes straight
+            # back on either exit.
             Slot(
                 "inker-tools",
                 "Tools",
@@ -121,6 +152,7 @@ def inker(ctx: Any) -> dict[str, Column]:
                 sizing=SHARE,
                 share_key="inker-tools",
                 floor=inker_tools.TOOLS_FLOOR,
+                when=lambda context: not inker_walk.active(context),
             ),
             Slot(
                 "inker-tiles",
@@ -133,6 +165,15 @@ def inker(ctx: Any) -> dict[str, Column]:
                 floor=inker_tiles.PANEL_FLOOR,
                 when=tiled,
             ),
+            # **Absent while a walk cycle is being set up**, like the toolbox
+            # above it, and for a reason of arithmetic as well as of attention.
+            # Everything in here -- New, Open, Save, the export doors -- is a
+            # second spelling of a File or Sheet menu row, and none of it is the
+            # job in hand: the drawing is not being edited during a session, it
+            # is being measured. It is also the pane holding this column's
+            # largest floor, and with it and the toolbox standing down the setup
+            # panel gets the column instead of a third of it -- which is the
+            # difference between four walk sliders on screen and one.
             Slot(
                 "inker-generate",
                 "Generation",
@@ -141,6 +182,7 @@ def inker(ctx: Any) -> dict[str, Column]:
                 edge=_edge("left"),
                 sizing=FILL,
                 floor=inker_generate.GENERATE_FLOOR,
+                when=lambda context: not inker_walk.active(context),
             ),
         ),
         width=COLUMN_W,

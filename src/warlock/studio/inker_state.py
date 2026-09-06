@@ -326,6 +326,18 @@ def flyout_hit(
 #: last and always true, so there is no such thing as no context.
 KEY_CONTEXTS: tuple[tuple[str, Any], ...] = (
     ("Transformation", lambda state, tab: state.transforming),
+    # A walk-cycle session is modal in exactly the transform's sense -- it owns
+    # the canvas until it is baked or cancelled -- so it is a context and not a
+    # fourth branch at the top of the key handler. Above ``Float`` and
+    # ``Selection`` deliberately: a user lifts a body part out of a selection
+    # while setting one up, and Escape then has to mean "close the setup", not
+    # "drop the marquee I made two seconds ago".
+    (
+        "WalkCycle",
+        lambda state, tab: tab is not None
+        and getattr(state, "walk", None) is not None
+        and state.walk.tab_uid == getattr(tab, "uid", ""),
+    ),
     ("Float", lambda state, tab: tab is not None and tab.doc.floating is not None),
     ("Gesture", lambda state, tab: bool(state.gesture_pts)),
     (
@@ -2370,6 +2382,16 @@ class InkerState:
     #: 0 means "as many as the grid holds", so a user who never touches the
     #: field gets the whole sheet rather than one frame.
     sheet_count: int = 0
+
+    # -- the walk-cycle session (``inker_walk``) -----------------------------
+    #
+    # One object whose non-``None``-ness *is* "the tool is open" -- the rule
+    # ``MatteState.job_id`` and ``plotter.editing_tileset`` already follow, and
+    # the reason there is no ``walk_open`` bool beside it to disagree with.
+    # It carries its own ``tab_uid`` for ``transform_uid``'s reason: this state
+    # object is shared by every tab, so a session without one would follow a tab
+    # switch and point the overlay at somebody else's drawing.
+    walk: Any = None
 
     # -- the multi-click gesture (C4) ---------------------------------------
     #

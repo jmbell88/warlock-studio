@@ -456,6 +456,44 @@ def tileset_texture(ctx: Any, tab: Any, slot: Any) -> Any:
     return texture
 
 
+def walk_texture(ctx: Any, tab: Any, index: int, pixels: Any) -> Any:
+    """One frame of the walk-cycle preview, uploaded on first ask.
+
+    ``tileset_texture``'s shape, and its staleness rule for the same reason:
+    the stamp is the **pixel array itself**, held and compared by ``is``. A walk
+    is re-rendered wholesale whenever a joint or a slider moves
+    (``inker_walk.frames`` caches on ``rig.rev``), so a changed frame is always
+    a changed array -- and ``id(pixels)`` is the recycled-address bug this repo
+    has been bitten by before.
+
+    Nearest filtering, ``tileset_texture``'s reason again: the preview draws at
+    an integer scale precisely so a pixel-art walk is judged unfiltered.
+
+    Keyed under this tab's ``inker_tex:`` prefix, so ``release_doc``'s sweep
+    frees it on close and ``inker_walk.cancel``'s ``release_prefix`` frees it
+    when the session ends.
+    """
+    if ctx.viewer is None:
+        return None
+    key = _slot(tab.uid, f"walk{int(index)}")
+    held_key = f"{key}:pixels"
+    texture = ctx.state.preview.get(key)
+    size = (int(pixels.shape[1]), int(pixels.shape[0]))
+    if texture is not None and (
+        texture.size != size or ctx.state.preview.get(held_key) is not pixels
+    ):
+        docmodes.forget_texture(texture)
+        ctx.state.preview.pop(key, None)
+        texture = None
+    if texture is None:
+        texture = ctx.viewer.ctx.texture(size, 4, pixels.tobytes())
+        nearest = ctx.viewer.ctx.NEAREST
+        texture.filter = (nearest, nearest)
+        ctx.state.preview[key] = texture
+        ctx.state.preview[held_key] = pixels
+    return texture
+
+
 def checker(ctx: Any) -> Any:
     """A two-square-by-two-square tile, drawn repeated under the canvas."""
     if ctx.viewer is None:

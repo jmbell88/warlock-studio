@@ -60,7 +60,7 @@ from ..inker_state import (
 from ..inker_state import onion_index as _onion_index
 from ..tilegrid import gid
 from ..tokens import sp
-from . import inker_bridge, inker_context, inker_menu, inker_textures
+from . import inker_bridge, inker_context, inker_menu, inker_textures, inker_walk_canvas
 
 #: The zoom range this pane holds its view to, splatted into every
 #: ``inker_state`` view call. Inker's own, narrower than the module globals that
@@ -177,6 +177,10 @@ def draw(ctx: Any) -> None:
         inker_context.draw(ctx, state, tab)
         if state.transforming:
             _transform_row(ctx, state, tab)
+        # The walk-cycle session's row, on the same rule as the transform's: a
+        # state that owns the canvas until it is committed or cancelled puts its
+        # two exits where the eye is, above the thing they are about.
+        inker_walk_canvas.row(ctx, state, tab)
         _canvas(ctx, state, tab)
     new_popup(ctx)
     # The four dialogs the retired bridge panel kept, hosted here for the same
@@ -1004,6 +1008,11 @@ def _input(
         return
     if state.transforming and tab.doc.floating is not None:
         _transform_input(state, tab, origin, point, active=active)
+        return
+    # A walk session takes the canvas the way a transform does -- it is a state,
+    # not a tool -- so a press moves a joint rather than painting one.
+    if inker_walk_canvas.owns_mouse(state, tab):
+        inker_walk_canvas.handle(ctx, state, tab, point, active=active)
         return
     pressed = 0 if imgui.is_mouse_clicked(0) else 1 if imgui.is_mouse_clicked(1) else -1
     # **A press is refused while a gesture owns the mouse.** Two buttons is
@@ -2081,6 +2090,7 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
         inker_slices._slices(state, tab, draw_list, origin)
     if state.transforming:
         _transform_box(state, tab, draw_list, origin)
+    inker_walk_canvas.overlay(ctx, state, tab, draw_list, origin)
     _preview(state, tab, draw_list, origin)
     # Beside the drag preview rather than inside it: a multi-click gesture holds
     # no ``drag_kind``, which is the first thing ``_preview`` returns on.

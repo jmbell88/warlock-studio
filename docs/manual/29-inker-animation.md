@@ -480,6 +480,87 @@ reference layer opens hidden, which is what exporting from Aseprite would do wit
 The full list of what comes across, what is only a message, and what a save back out to `.aseprite`
 drops in turn, is kept in `docs/COMPAT.md`.
 
+## A walk cycle from a still drawing
+
+**Sprite → Create walk cycle...** turns a side-view drawing into an eight-frame walk. It is a
+*prototype*, and it is narrow on purpose: one figure seen from the side, one walk on the spot, and
+rigid cut-out limbs that turn rather than bend. What it saves you is the eight frames; what it
+cannot do is draw.
+
+Your drawing is **never edited**. Every part is copied out of it, the joints live with the setup,
+and Bake writes a new document — so Cancel throws away the setup and leaves you exactly where you
+started, with nothing to undo.
+
+While a walk is being set up the right sidebar belongs to it: the toolbox and the drawing-file panel
+stand down and the Preview pane shows the walk instead of the document. The paint tools genuinely do
+nothing during a session — the canvas is placing joints, not painting — and everything in the file
+panel is a File or Sheet menu row as well. Both come straight back when you bake or cancel.
+
+### Assigning the parts
+
+The panel on the right lists fourteen parts in five groups: the body, then the near arm and leg —
+the ones on your side of the figure — then the far ones behind it. Each row takes either a layer of
+your drawing, chosen from the list, or the pixels inside the current selection, taken with **Cut**.
+Cut is the one to use on a drawing that is all on one layer: marquee or lasso the thigh, press Cut,
+and it is copied into the rig without a mark on the original.
+
+The body is required and so is one leg. A limb you leave out entirely is fine — a figure in profile
+may genuinely have one arm hidden — but a *half*-assigned limb is refused by name, because a shin
+with no thigh is always a mistake rather than a choice.
+
+**Copy near arm across** and **Copy near leg across** start the far limb from the near one, art and
+joints together, darkened by the **Far-limb shading** slider above them. That shading matters more
+than it sounds: a far arm drawn identically to the near one in front of it reads as one arm. Adjust
+the copy from there — repaint it, or re-cut it from a different selection.
+
+### Placing the joints
+
+The joints go on the **canvas**, over the drawing, at whatever zoom you are reading it at. The row
+above the canvas names the joint a click will place; click the drawing to place it and the row moves
+on to the next one that is missing. Drag any dot to adjust it — adjusting one already placed does
+not move you on, since after the first pass every drag is a correction.
+
+The dashed line across the canvas is the **ground**: where the feet stand. Drag it like a joint. It
+starts under the lower of the two ankles, which is usually right for a figure drawn standing.
+
+The lengths of the limbs are measured **once**, from where you put the joints, and nothing after that
+changes them. A pose the leg cannot reach makes the *step* shorter; it never stretches a thigh.
+
+### The four numbers
+
+**Stride** is how far apart the feet are at a contact. Its slider stops where the leg can no longer
+reach, and that ceiling moves when you drag the hip or the ground line, because it is geometry rather
+than a fixed number.
+
+**Foot lift** is how high the swinging foot clears the ground. **Arm swing** is how far the arms
+swing, in degrees; they swing against the legs on the same side, which is what stops a walk reading
+as a march.
+
+**Body bob** is extra vertical travel. The body already sinks at the contacts without it — a figure
+drawn standing has its hip a full leg above the ground, so it has to come down to reach a step at
+all — and this deepens that sink rather than creating it.
+
+**Frame duration** is milliseconds per frame. Eight frames at 100 ms is about a step and a bit per
+second.
+
+### Preview, and baking
+
+The preview plays underneath at a whole-number zoom, because a pixel-art walk judged through a
+fractional resample is a walk judged through a filter you will never ship it with. Step a frame at a
+time with the arrows to check a pose.
+
+If the cycle runs off the canvas the panel says so, and by how much, **before** you bake — the bake
+crops silently, and a foot lost to the edge looks like a rig error rather than a framing one.
+
+**Bake to new animation** — or Enter — opens the result in a new tab: one layer per part, eight
+frames at your duration, and a looping `walk` tag. Every cel is its own drawing rather than a linked
+one, so you can paint on frame three without touching frame five. It is an ordinary animated
+document from that moment on: retime it, onion-skin it, [export it as a
+sheet](#exporting-part-of-a-clip) or a GIF.
+
+`Esc` cancels. The setup is not saved with anything — reopening the tool starts a fresh rig — so
+finish a figure in one sitting, and keep the baked document rather than the setup that made it.
+
 ## Effects
 
 **Flourish → Insert effect...** puts a procedural effect — a fireball, a shockwave, a heal, a

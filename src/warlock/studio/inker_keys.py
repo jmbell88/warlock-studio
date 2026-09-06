@@ -315,6 +315,18 @@ def _modal(
 
     enter = event.key in (pygame.K_RETURN, pygame.K_KP_ENTER)
     escape = event.key == pygame.K_ESCAPE
+    if context == "WalkCycle":
+        # The same two keys the transform answers, meaning the same two things:
+        # Enter commits (here, bakes into a new document) and Escape closes with
+        # nothing written. Consumed either way, so neither can reach the tool
+        # letters underneath and change the tool out from under a half-placed rig.
+        from . import inker_walk
+
+        if enter:
+            inker_walk.bake(ctx, tab)
+        elif escape:
+            inker_walk.cancel(ctx, tab)
+        return True
     if context == "Transformation":
         if enter:
             inker_mode.end_transform(ctx, commit=True)

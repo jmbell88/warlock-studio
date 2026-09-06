@@ -50,6 +50,11 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # section.
     "inker-tiles": ("28-inker", "tilemap-layers"),
     "inker-preview": ("29-inker-animation", "preview"),
+    # The walk-cycle setup panel, present only while a session is open. Its own
+    # anchor rather than sharing ``inker-timeline``: the questions asked in front
+    # of it -- what a near limb is, why the stride slider stops where it does,
+    # what happens to the drawing it was cut out of -- are all in one section.
+    "inker-walk": ("29-inker-animation", "a-walk-cycle-from-a-still-drawing"),
     # The toolbox. It had no entry for as long as it was a 90 px rail with no
     # room for a heading to hang a (?) beside; it is a sidebar pane now, so it
     # points at the section that lists every tool and its letter.

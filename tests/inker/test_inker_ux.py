@@ -586,7 +586,12 @@ def test_the_inker_workspace_has_drag_handles_of_its_own() -> None:
 
     columns = skeletons.inker(None)
     keys = {slot.share_key for slot in columns["right"].slots if slot.share_key}
-    assert keys == {"inker-tools", "inker-tiles"}
+    # ``inker-walk`` joined them when the walk-cycle setup landed. A ``when``
+    # slot carries a handle like any other -- ``plotter-objects``' rule: the
+    # column it shares with is the column it is drawn in -- and the panel is a
+    # list of fourteen part rows over a preview, which is exactly the shape that
+    # needs a drag rather than a fixed height.
+    assert keys == {"inker-tools", "inker-tiles", "inker-walk"}
     # And the *left* column is a split now too: it was a fixed 90 px rail with
     # one pane in it and nothing to divide (W2.9), and it is the palette over
     # the picker after the columns swapped to Aseprite's default sides.

@@ -56,11 +56,27 @@ SCOPE_LABELS = (("clip", "Whole clip"), ("tag", "Active tag"))
 
 
 def draw(ctx: Any) -> None:
+    from .. import inker_walk as walk_session
+
     state = ctx.state.inker
     tab = None if state is None else state.active
     widgets.section("Preview")
     manual_render.help_button(ctx, "inker-preview")
-    if tab is None or tab.doc.anim is None:
+    if tab is None:
+        return
+    # **A walk cycle borrows this pane, and does not get one of its own.** It is
+    # a clip that has no document yet -- so there is nothing here for the code
+    # below to flatten -- and it is the thing a user watches continuously while
+    # dragging a joint, which is exactly what this pane is for. Its own setup
+    # panel is a fourteen-row list over four sliders, so a preview at the end of
+    # that would be permanently below the fold. See ``inker_walk.draw_preview``.
+    session = walk_session.session(state, tab)
+    if session is not None:
+        from . import inker_walk as walk_pane
+
+        walk_pane.draw_preview(ctx, tab, session)
+        return
+    if tab.doc.anim is None:
         return
     _tick(tab)
     _transport(ctx, tab)

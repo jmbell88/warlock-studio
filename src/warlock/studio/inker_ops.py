@@ -2935,3 +2935,79 @@ register(
         ),
     )
 )
+
+
+# -- Walk cycle ----------------------------------------------------------------------
+
+
+def _wk_run(verb: str) -> Callable[..., Any]:
+    """An op that is one ``inker_walk`` function of ``(ctx, tab)``."""
+
+    def _run(ctx: Any, tab: Any, **_: Any) -> Any:
+        from . import inker_walk
+
+        return getattr(inker_walk, verb)(ctx, tab)
+
+    return _run
+
+
+def _wk_pred(name: str) -> Callable[[Any, Any], bool]:
+    def _enabled(state: Any, tab: Any) -> bool:
+        from . import inker_walk
+
+        return bool(getattr(inker_walk, name)(state, tab))
+
+    return _enabled
+
+
+def _wk_reason(name: str) -> Callable[[Any, Any], str]:
+    def _reason(state: Any, tab: Any) -> str:
+        from . import inker_walk
+
+        return str(getattr(inker_walk, name)(state, tab))
+
+    return _reason
+
+
+register(
+    Op(
+        "walk_open",
+        "Create walk cycle...",
+        _wk_run("open_session"),
+        menu="Sprite",
+        separator_before=True,
+        enabled=_wk_pred("can_open"),
+        reason=_wk_reason("open_reason"),
+        hint=(
+            "Turns a side-view drawing into an eight-frame walk. Assign the "
+            "layers to body parts, drag the joints onto the drawing, and bake "
+            "the result as a new animation. Your drawing is never edited."
+        ),
+    )
+)
+register(
+    Op(
+        "walk_bake",
+        "Bake walk to new animation",
+        _wk_run("bake"),
+        menu="Sprite",
+        enabled=_wk_pred("can_bake"),
+        reason=_wk_reason("bake_reason"),
+        hint=(
+            "Writes the cycle into a new document -- one layer per body part, "
+            "eight independently editable frames, and a looping walk tag. The "
+            "drawing you started from is left exactly as it was."
+        ),
+    )
+)
+register(
+    Op(
+        "walk_cancel",
+        "Cancel walk cycle",
+        _wk_run("cancel"),
+        menu="Sprite",
+        enabled=_wk_pred("is_open"),
+        reason=_wk_reason("cancel_reason"),
+        hint="Closes the setup and throws the rig away. Nothing to undo -- nothing was written.",
+    )
+)

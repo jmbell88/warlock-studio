@@ -437,6 +437,8 @@ def test_the_skeleton_declares_every_inker_pane():
         "inker-preview",
         "inker-tools",
         "inker-tiles",
+        # The walk-cycle setup panel, drawn only while a session is open.
+        "inker-walk",
         "inker-generate",
     }
 

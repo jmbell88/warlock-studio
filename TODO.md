@@ -746,6 +746,61 @@ in-process, Blender on the CPU for the rig and the render, and numpy for the
 reduction — which is what makes "run it again at both slider bounds" a
 reasonable instruction rather than an afternoon of GPU time.
 
+## P30. Judge the 2D walk cycle — an ogre and a humanoid
+
+**Why it is yours:** art. The motion is *correct* and that is all a test can
+say: `tests/inker/walk/` pins that no limb ever changes length, that the stance
+foot is on the ground line on every frame it should be, that the stance foot
+travels backwards and never forwards, that the cycle hands its last frame back
+to its first, and that one rig renders the same bytes twice. None of that is the
+question. The question is whether a drawing cut into fourteen rigid pieces and
+turned about its joints reads as a body walking or as a paper puppet rotating,
+and no assertion this repository can write answers it.
+
+**Why an ogre and a humanoid, and not one of them.** They fail differently. A
+humanoid has thin limbs whose silhouette is mostly outline, so the failure to
+look for is joint gaps and the seam where an upper arm's end leaves its lower
+arm's start. An ogre is mass: thick limbs overlap through most of the cycle, so
+the failure is a limb reading as a flat card sliding over another flat card,
+which is exactly what a rigid cut-out is. A verdict taken on one is a claim
+about that build, not about the feature.
+
+**Do:**
+
+1. **Draw or open one side-view ogre and one side-view humanoid.** Layers per
+   body part if you have them; otherwise one layer and the marquee, which is the
+   path most users will take and therefore the one worth walking.
+2. **Set both up and record how long it takes**, honestly, including the part
+   that is not the tool: repairing artwork that was never drawn to be cut. A
+   torso with an arm painted over it has no torso underneath, and the panel
+   cannot invent one. If the preparation dominates, that is the finding.
+3. **Play each at native size and at 4x**, and judge seven things separately:
+   readable steps; the knee bending forward and not backward; gaps at the
+   joints; limb overlap where two pieces cross; silhouette stability from frame
+   to frame; the loop seam between frame eight and frame one; and whether the
+   arms read as opposing the legs rather than merely moving.
+4. **Bake both, and export a sheet**, to confirm the timing survives the trip
+   and the frames are the ones the preview showed.
+5. **Try the far-limb shading slider at 1.0 and at 0.6.** Whether a copied far
+   limb needs shading to read as behind the body is the one control decision
+   taken here without evidence.
+
+**If it reads as a rotating paper puppet, write that down before anything is
+expanded.** That is the milestone, and a negative answer is a real one: it
+would mean the next move is deformation -- head and torso counter-motion,
+squash on the contact frame -- rather than more directions or more actions, and
+it is much cheaper to learn that from two drawings than from a second workflow
+built on top of the first.
+
+**Deferred on purpose, and not to be built until this closes:** saved rigs,
+regenerating a baked walk from its rig, other directions, other actions,
+automatic segmentation, and any AI reconstruction of occluded parts. Each of
+them multiplies whatever this verdict says, in whichever direction it says it.
+
+**Expected outcome:** one sentence per figure saying whether the walk is
+convincing, a recorded preparation time, and — if the answer is no — the
+specific thing that broke the illusion.
+
 ## P29. Prove the update path against a real release
 
 **Why it is yours:** it needs a release published under your account and an
