@@ -1,5 +1,11 @@
 # Native kernel batch 8 — `retexture.combine` benched at last. No C written.
 
+> **Follow-up 1 landed the same day** (commit after `53cdd663`): `combine`'s
+> weighted sum is the `einsum`, so the bench's `combine` and `combine_einsum`
+> columns now read the same. Re-measured tail: 295 ms at 1024, 1 187 ms at
+> 2048. Parity test: `tests/test_retexture_combine_einsum.py`. Default lane
+> 18 467 passed. The tables below are the before-and-after record.
+
 2026-09-06, at `3b0f12f5`. Machine: Windows 11, numpy 2.x, Python 3.13,
 `vendor/warlockc/warlockc.dll` present (ABI 10); none of the three functions
 has a kernel, so the DLL changes nothing here. Every figure is the **minimum of

@@ -307,7 +307,14 @@ def combine(colours: Any, weights: Any, base: Any, vis: Any | None = None) -> An
     # dividing under a where() rather than after it keeps the zero-weight
     # texels out of the divide entirely instead of relying on errstate.
     safe = np.where(total > 0.0, total, 1.0)
-    mixed = (colours * w[..., None]).sum(axis=0) / safe[..., None]
+    # Not `(colours * w[..., None]).sum(axis=0)`: broadcasting the stride-0
+    # channel axis puts numpy on its non-SIMD inner loop, three elements at a
+    # time, and measured as 56% of this function at a TRELLIS atlas size --
+    # the N-view temporary was not the cost (docs/measurements/2026-09-06-
+    # native-batch-8-retexture.md). Bit-identity holds because einsum
+    # contracts the view axis with the same in-order accumulation per output
+    # element that `.sum(axis=0)` already uses on a C-contiguous stack.
+    mixed = np.einsum("nhwc,nhw->hwc", colours, w) / safe[..., None]
     return np.where((total > 0.0)[..., None], mixed, base).astype(np.float32)
 
 
