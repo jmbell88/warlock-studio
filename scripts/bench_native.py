@@ -657,6 +657,157 @@ def _case_wang_drag_hoisted(side: int) -> Callable[[], Any]:
 
 
 # --------------------------------------------------------------------------
+# B3 -- pipelines/retexture: combine, feather_blend, dilate (the assemble tail)
+# --------------------------------------------------------------------------
+
+
+def _retexture_fixture(px: int) -> dict[str, Any]:
+    """Ten views at ``px`` square: what ``assemble`` stacks after a real bake.
+
+    Weights are a smooth facing field per view with about half the texels above
+    ``MIN_FACING``; visibility is a per-view random mask; ``base`` is noise.
+    Coverage after the facing floor is roughly nine texels in ten, so ``dilate``
+    has an island rim to grow and ``feather_blend`` a frontier to fade -- the
+    shape of a bake, not the all-covered or nothing-covered degenerate ones.
+    """
+    from warlock.pipelines import retexture
+
+    rng = np.random.default_rng(0x8E7)
+    n = len(retexture.VIEWS)
+    colours = rng.random((n, px, px, 3), dtype=np.float32)
+    yy, xx = np.mgrid[0:px, 0:px].astype(np.float32) / px
+    weights = np.stack(
+        [
+            np.clip(0.5 + 0.5 * np.sin(6.0 * xx + k) * np.cos(4.0 * yy - k), 0.0, 1.0)
+            for k in range(n)
+        ]
+    ).astype(np.float32)
+    vis = (rng.random((n, px, px), dtype=np.float32) > 0.3).astype(np.float32)
+    base = rng.random((px, px, 3), dtype=np.float32)
+    return {"colours": colours, "weights": weights, "vis": vis, "base": base}
+
+
+def _case_retexture_tail(px: int) -> Callable[[], Any]:
+    """``assemble``'s CPU tail: combine, the coverage sum, feather, dilate.
+
+    Gate stated before the number: **>1.0 s at TEXTURE_PX (1024) with the ten
+    shipped views**. A re-texture is a background job that has just spent
+    seconds in a GPU bake, so a second of numpy after it is where the tail
+    starts to be a visible share of the job rather than noise. Batch 5 §10
+    named the complaint as working set (the N-view stack times a second N-view
+    temporary), so the sweep is over texture side and the peak RSS is taken
+    beside the time in the measurement document.
+    """
+    from warlock.pipelines import retexture
+
+    f = _retexture_fixture(px)
+
+    def work() -> Any:
+        mixed = retexture.combine(f["colours"], f["weights"], f["base"], vis=f["vis"])
+        floored = np.where(f["weights"] >= retexture.MIN_FACING, f["weights"], 0.0) * f["vis"]
+        total = floored.sum(axis=0)
+        blend = retexture.feather_blend(total)
+        mixed = f["base"] + (mixed - f["base"]) * blend[..., None]
+        return retexture.dilate(mixed, total > 0.0)
+
+    return work
+
+
+def _case_retexture_combine(px: int) -> Callable[[], Any]:
+    from warlock.pipelines import retexture
+
+    f = _retexture_fixture(px)
+    return lambda: retexture.combine(f["colours"], f["weights"], f["base"], vis=f["vis"])
+
+
+def _case_retexture_feather(px: int) -> Callable[[], Any]:
+    from warlock.pipelines import retexture
+
+    f = _retexture_fixture(px)
+    floored = np.where(f["weights"] >= retexture.MIN_FACING, f["weights"], 0.0) * f["vis"]
+    total = floored.sum(axis=0)
+    return lambda: retexture.feather_blend(total)
+
+
+def _case_retexture_dilate(px: int) -> Callable[[], Any]:
+    from warlock.pipelines import retexture
+
+    f = _retexture_fixture(px)
+    floored = np.where(f["weights"] >= retexture.MIN_FACING, f["weights"], 0.0) * f["vis"]
+    total = floored.sum(axis=0)
+    mixed = retexture.combine(f["colours"], f["weights"], f["base"], vis=f["vis"])
+    return lambda: retexture.dilate(mixed, total > 0.0)
+
+
+def _combine_loop(colours: Any, weights: Any, base: Any, vis: Any) -> Any:
+    """``retexture.combine`` without the (n, h, w, 3) product temporary.
+
+    The shipped form materialises ``colours * w[..., None]`` -- ten views of
+    2048 square float32, half a gigabyte -- to reduce it once over axis 0. A
+    reduction over the leading axis of a C-contiguous array is a plain in-order
+    fold over the views, so accumulating ``colours[i] * w[i]`` in place in the
+    same order is the same arithmetic and bit-identical; the case builder
+    asserts it. What it removes is the temporary, not the multiplies.
+    """
+    from warlock.pipelines import retexture
+
+    w = np.where(weights >= retexture.MIN_FACING, weights, 0.0).astype(np.float32)
+    w = w * vis.astype(np.float32)
+    total = w.sum(axis=0)
+    safe = np.where(total > 0.0, total, 1.0)
+    acc = np.zeros(colours.shape[1:], dtype=np.float32)
+    for i in range(colours.shape[0]):
+        acc += colours[i] * w[i][..., None]
+    mixed = acc / safe[..., None]
+    return np.where((total > 0.0)[..., None], mixed, base).astype(np.float32)
+
+
+def _case_retexture_combine_loop(px: int) -> Callable[[], Any]:
+    from warlock.pipelines import retexture
+
+    small = _retexture_fixture(256)
+    assert np.array_equal(
+        _combine_loop(small["colours"], small["weights"], small["base"], small["vis"]),
+        retexture.combine(small["colours"], small["weights"], small["base"], vis=small["vis"]),
+    ), "the per-view fold must reproduce combine bit for bit"
+    f = _retexture_fixture(px)
+    return lambda: _combine_loop(f["colours"], f["weights"], f["base"], f["vis"])
+
+
+def _combine_einsum(colours: Any, weights: Any, base: Any, vis: Any) -> Any:
+    """``retexture.combine`` with the weighted view sum as one ``einsum``.
+
+    The line-level profile puts 56% of ``combine`` in ``colours * w[..., None]``:
+    broadcasting a stride-0 channel axis puts numpy on its non-SIMD inner loop
+    over three elements at a time, and the per-view fold above is exactly as
+    slow for exactly that reason -- the temporary was never the cost. ``einsum``
+    contracts the view axis with an in-order accumulation per output element,
+    which is the same order ``.sum(axis=0)`` folds a C-contiguous stack in, and
+    the case builder asserts bit-identity on a 256-square fixture.
+    """
+    from warlock.pipelines import retexture
+
+    w = np.where(weights >= retexture.MIN_FACING, weights, 0.0).astype(np.float32)
+    w = w * vis.astype(np.float32)
+    total = w.sum(axis=0)
+    safe = np.where(total > 0.0, total, 1.0)
+    mixed = np.einsum("nhwc,nhw->hwc", colours, w) / safe[..., None]
+    return np.where((total > 0.0)[..., None], mixed, base).astype(np.float32)
+
+
+def _case_retexture_combine_einsum(px: int) -> Callable[[], Any]:
+    from warlock.pipelines import retexture
+
+    small = _retexture_fixture(256)
+    assert np.array_equal(
+        _combine_einsum(small["colours"], small["weights"], small["base"], small["vis"]),
+        retexture.combine(small["colours"], small["weights"], small["base"], vis=small["vis"]),
+    ), "the einsum must reproduce combine bit for bit"
+    f = _retexture_fixture(px)
+    return lambda: _combine_einsum(f["colours"], f["weights"], f["base"], f["vis"])
+
+
+# --------------------------------------------------------------------------
 # B7 -- clay/ops_bevel.bevel_edges
 # --------------------------------------------------------------------------
 
@@ -907,6 +1058,21 @@ CASES: dict[str, Case] = {
         build=_case_wang_drag,
         sizes=(32, 64, 128),
         variants={"shipped": _case_wang_drag, "holds_hoisted": _case_wang_drag_hoisted},
+    ),
+    "retexture_tail": Case(
+        name="retexture_tail",
+        site="pipelines/retexture.py:285 combine, :211 feather_blend, :314 dilate",
+        gate=">1.0 s at TEXTURE_PX (1024) with the ten shipped views",
+        build=_case_retexture_tail,
+        sizes=(512, 1024, 2048),
+        variants={
+            "tail": _case_retexture_tail,
+            "combine": _case_retexture_combine,
+            "combine_loop": _case_retexture_combine_loop,
+            "combine_einsum": _case_retexture_combine_einsum,
+            "feather": _case_retexture_feather,
+            "dilate": _case_retexture_dilate,
+        },
     ),
     "clay_bevel": Case(
         name="clay_bevel",
