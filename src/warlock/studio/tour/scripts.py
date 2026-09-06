@@ -88,6 +88,30 @@ FIRST_HOUR = Tour(
             anchor="create/prompt",
             chapter=("02-your-first-asset", "stage-one-the-reference"),
         ),
+        # Optional in the sense that matters here: it points at a *type* rather
+        # than a control, and the reader can pass it in one press. It earns its
+        # place in this tour on the same rule the others do -- ``first-hour``
+        # runs on a machine with no GPU and no weights, and Character is the
+        # one generation type that does too, so it is the only thing on this
+        # screen a reader without a card can be told to try rather than told
+        # about. It waits on ``mode_is create`` rather than Next: the reader is
+        # already there, so it advances the moment they are ready, but a reader
+        # who wandered off to look at the rail is not left with a card
+        # describing a screen they cannot see.
+        Step(
+            id="character-type",
+            title="One type needs no card",
+            body=(
+                "Set Generation type to Character and the column changes: no model, "
+                "no seed, no reference. Warlock builds the body itself from a registry "
+                "of species, rigs it and renders a sprite sheet, all on the CPU.\n\n"
+                "Try: fire ogre, 3/4 top down sprite sheet -- and watch the column "
+                "read your words back. If you would rather carry on here, Next."
+            ),
+            mode="create",
+            done=Condition("mode_is", "create"),
+            chapter=("22-generating-references", "characters"),
+        ),
         Step(
             id="generate",
             title="Generate",

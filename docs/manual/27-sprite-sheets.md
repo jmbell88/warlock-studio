@@ -55,9 +55,17 @@ stated as a summary line instead.
 The preview and the final render agree on framing by construction. Both put yaw 0 in the same place,
 and both size the camera to the subject's worst-case silhouette with the same 12% margin.
 
-One detail matters more than it looks: the camera is framed **once**, from the mesh's rest bounding
-box, and every cell in the sheet uses that same framing. Reframing per pose would make the subject
-jump in size between rows, which is exactly what a sprite sheet must not do.
+One detail matters more than it looks: the camera is framed **once**, and every cell in the sheet
+uses that same framing. Reframing per pose would make the subject jump in size between rows, which
+is exactly what a sprite sheet must not do.
+
+What it is framed *from* is the **union of every pose the sheet contains**, measured before anything
+renders — not the rest pose alone. A pose whose apex leaves the rest bounding box would otherwise be
+clipped on every cell of that run: a jump apex sat above the frame by twelve per cent of its upper
+half, on every jump ever rendered, with nothing in the sheet to say so. The orbit axis stays the rest
+pose's ground origin either way, so widening the window does not move the pivot — it lands on the
+same pixel at every direction. On a sheet whose only row is the rest pose the union *is* the rest
+box, and the framing is exactly what it always was.
 
 ## The sidecar
 
@@ -78,6 +86,34 @@ rectangle and what that rectangle shows: which pose, that pose's name, which yaw
 `cells` is a **flat list**, not a nested grid, and that is the format's one piece of foresight. An
 animated clip is not a different file format — it is simply more cells whose `frame` is above zero.
 A reader that walks the flat list handles both without knowing which it has.
+
+### The additive blocks
+
+Everything a later feature added went in as a **new top-level key**, never as a change to the header
+or to a cell's existing fields, so the version has never moved and a reader written against the
+snippet above still works. A reader that does not recognise a block should skip it.
+
+- **`camera`** — on every rendered character sheet. `preset` names which of the four camera presets
+  the elevation matched (or `null` if you set an angle off the ladder), `elevation` is that angle in
+  degrees, `projection` is always `"orthographic"`, `pixel_size` and `render_size` are the sprite
+  size and the size it was rendered at before reduction, and `frame_margin` is the margin the sheet
+  was **actually** framed with — which is not always the default, because a sheet whose poses did
+  not fit is re-rendered once at a wider one.
+- **`character`** — only on a sheet the character registry built. Three keys: `family` (the species),
+  `family_version`, and `recipe` — the whole recipe that produced this character, which is what lets
+  the app load it back into Create and vary it. A sheet from a supplied mesh has no such block.
+- **`validation`** — the structural check the render ran over itself: `ok`, then `clipped`, `blank`
+  and `missing` as lists of cell indices, `metadata` as a list of sentences about the sidecar
+  disagreeing with itself, and `reframed` saying whether the wider second render happened. It is a
+  report, never a refusal; see
+  [Troupe → Needs repair](33-troupe.md#needs-repair-and-why-it-is-not-the-heatmap).
+
+One addition is **per cell** rather than top level: a cell rendered with sockets carries a
+**`sockets`** map beside its `pivot_x`/`pivot_y` — one entry per socket the body plan places
+(`crown`, `core`, `weapon_main` and so on), each with `x`, `y` in that cell's own pixels, a `depth`,
+and `behind`, which says whether the socket was on the far side of the body in that direction. That
+is what lets an engine hang its own effect where Warlock hung its flame, and draw it behind the
+sprite when the character has turned away.
 
 Rendered sheets are listed under **Rendered sheets** with their cell count and frame size. Each
 offers **Save PNG...**, **Save JSON...** and **Delete**. Save both: the PNG without its sidecar is

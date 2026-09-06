@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any
 
 from ... import rigging
-from ...service import troupe as svc_troupe
 from .. import forms, tokens, troupe_mode, verbs, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -23,12 +22,11 @@ from ..tokens import sp
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
 
-    state = troupe_mode.ensure(ctx)
     widgets.section("New character")
     manual_render.help_button(ctx, "troupe-settings")
 
-    options = _options(ctx)
-    form = _form(state, options)
+    options = troupe_mode.options(ctx)
+    form = troupe_mode.form(ctx)
     # ``errors``/``on_edit``: the chain this form starts refuses by name --
     # ``prompt``, ``pose``, ``variant``, ``palette``, ``outline``,
     # ``reduce_mode`` -- and each is a field here, so the refusal had an
@@ -134,67 +132,12 @@ def _mesh_label(mesh: dict[str, Any]) -> str:
     return text if len(text) <= 48 else f"{text[:47]}..."
 
 
-def _options(ctx: Any) -> dict[str, Any]:
-    """The door's own answer about what may be asked for, read once.
-
-    Cached on the frame state rather than called per draw: it walks the palette
-    directory, and a directory walk sixty times a second is a cost with no
-    reader. Keyed on nothing, because the only thing that changes it is a file
-    the user dropped in -- which the Refresh below re-reads.
-    """
-    cached = ctx.state.preview.get("troupe_options")
-    if cached is None:
-        cached = svc_troupe.troupe_options(ctx.svc)
-        ctx.state.preview["troupe_options"] = cached
-    return cached
-
-
-def _form(state: Any, options: dict[str, Any]) -> dict[str, Any]:
-    """The request, kept on the mode's own state so a trip to Create and back
-    does not lose what was typed."""
-    defaults = options.get("defaults") or {}
-    if not state.form:
-        state.form = {
-            "prompt": "",
-            "variant": str(defaults.get("variant") or "male"),
-            "pose": str(defaults.get("pose") or "apose"),
-            "logical_size": int(defaults.get("logical_size") or 32),
-            "colors": int(defaults.get("colors") or 64),
-            "outline": str(defaults.get("outline") or "outer"),
-            "reduce_mode": str(defaults.get("reduce_mode") or "box"),
-            "dither": False,
-            "palette": "",
-            "name": "",
-            "layout": {
-                "version": 2,
-                "columns": 8,
-                "movements": [
-                    {
-                        "key": row.get("name"),
-                        "enabled": True,
-                        "frames": int(row.get("frames") or 1),
-                        "directions": 8,
-                    }
-                    for row in options.get("animations") or ()
-                ],
-            },
-        }
-    elif "layout" not in state.form:
-        # Session-state migration for a form created by a pre-v2 build.
-        state.form["layout"] = {
-            "version": 2,
-            "columns": 8,
-            "movements": [
-                {
-                    "key": row.get("name"),
-                    "enabled": True,
-                    "frames": int(row.get("frames") or 1),
-                    "directions": 8,
-                }
-                for row in options.get("animations") or ()
-            ],
-        }
-    return state.form
+# ``_options`` and ``_form`` moved to ``troupe_mode`` on 2026-09-05, when they
+# stopped having one caller: Create's Character arm offers "Draw it in Troupe"
+# as the escape route from a species the registry does not model, and that
+# route has to put the brief into *this* form -- so the construction of the
+# request had to live where both callers can reach it. They are
+# ``troupe_mode.options`` and ``troupe_mode.form``, unchanged line for line.
 
 
 def _layout(form: dict[str, Any], form_ui: forms.Form, options: dict[str, Any]) -> None:
@@ -249,6 +192,24 @@ def cell_count(form: dict[str, Any]) -> int:
 
 
 def _size(form: dict[str, Any], form_ui: forms.Form, options: dict[str, Any]) -> None:
+    # **Above the sprite size, and that order is the argument for it.** The
+    # camera is a statement about the *render* -- where the eye is while the
+    # 512px frames are made -- and the size is a statement about the sprite
+    # those frames become. Reading the render's questions before the sprite's
+    # is the order the pipeline actually runs in.
+    #
+    # The presets come from ``troupe_options``, which reads
+    # ``charsheet.CAMERA_PRESETS``: the form must never carry a second copy of
+    # an angle, or it offers a framing the renderer does not use.
+    presets = options.get("camera_presets") or {}
+    _changed, camera = form_ui.combo(
+        "camera",
+        "Camera",
+        str(form.get("camera") or ""),
+        [(key, str(entry.get("label") or key)) for key, entry in presets.items()],
+        helper=_camera_helper(presets, str(form.get("camera") or "")),
+    )
+    form["camera"] = camera
     _changed, size = form_ui.combo(
         "logical_size",
         "Sprite size",
@@ -275,6 +236,20 @@ def _size(form: dict[str, Any], form_ui: forms.Form, options: dict[str, Any]) ->
         [(m, m) for m in options.get("reduce_modes") or ()],
     )
     form["reduce_mode"] = reduce_mode
+
+
+def _camera_helper(presets: dict[str, Any], key: str) -> str:
+    """The chosen preset's angle, in words. Empty when there is nothing to say.
+
+    The number rather than a description, because the number is the thing that
+    transfers: a user matching Troupe sprites to a Plotter map already knows
+    what elevation that map is drawn at, and a preset's name does not answer
+    that question while its angle in degrees does.
+    """
+    entry = presets.get(key) or {}
+    if "elevation" not in entry:
+        return ""
+    return f"{float(entry['elevation']):g} degrees above the horizon"
 
 
 def _palette(

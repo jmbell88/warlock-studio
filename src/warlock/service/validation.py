@@ -155,6 +155,12 @@ DERIVED_PARAMS = (
     # orphans cleaned, colours used, which palette it chose. A rerun wearing it
     # would claim a colour count for pixels it has not rendered yet.
     "pixel_report",
+    # The character sheet's structural verdict -- which cells came back
+    # clipped, blank or missing, and whether it took a wider-margin second
+    # render. About *this* atlas, so a reroll inheriting it would claim a
+    # clipping verdict about frames it has not rendered yet, and worse, an
+    # ``ok: true`` about a sheet nobody has looked at.
+    "validation",
     "recipe",
     # What the tile-sheet worker recorded about the sheet it painted -- the
     # finished pixel size, the palette it quantized to, the base and LoRA it

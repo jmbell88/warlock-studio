@@ -159,6 +159,101 @@ ELSEWHERE = {
 }
 
 
+# --- Create's Character arm: two vocabularies, one address --------------------
+#
+# ``Recipe.from_dict`` refuses in the *recipe's* words -- ``logical_size``,
+# ``appearance``, ``animations`` -- because those are the keys it validates, and
+# ``service.errors.invalid_from`` passes that address through untouched. The
+# controls are named for the form keys they persist under (``character_pixel``,
+# ``character_body``, ``character_actions``). That is exactly the shape of drift
+# this file caught in ``retarget_panel`` -- ``profile`` on the form,
+# ``remesh_profile`` in the refusal -- so the map between them is asserted in
+# both directions rather than trusted.
+
+
+def test_the_character_panes_own_refusals_name_its_own_controls():
+    """Every ``Problem`` the pane raises has a control at the other end.
+
+    The pane's problems reach the user through ``settings_2d.refuse``, which
+    records each one against ``problem.field`` and rings whatever answers to
+    that name -- so a field the pane does not draw is an address recorded and
+    thrown away.
+    """
+    import inspect
+
+    from warlock.studio.panes import settings_character
+
+    drawn = _form_field_ids("panes/settings_character.py")
+    source = inspect.getsource(settings_character.problems)
+    source += inspect.getsource(settings_character._no_species)
+    fields = set(re.findall(r'widgets\.Problem\([^)]*?,\s*"([a-z_]+)"\s*\)', source, re.S))
+    assert fields, "the extraction found nothing, which is not an answer"
+    for name in sorted(fields):
+        assert name in drawn or name in ELSEWHERE, (
+            f"settings_character refuses with {name!r} and nothing on that pane "
+            "answers to the name"
+        )
+
+
+def test_a_recipe_refusal_is_re_filed_under_the_control_it_is_about():
+    """The other direction, and the one a call-site scan cannot see.
+
+    ``mirror_errors`` is what turns the door's ``logical_size`` into the pane's
+    ``character_pixel``. Every alias it maps has to be a name ``Recipe`` really
+    refuses with, and every control it maps onto has to be one the pane really
+    draws -- otherwise the map is a comment rather than a mechanism.
+    """
+    from types import SimpleNamespace
+
+    from warlock.characters.errors import CharacterError
+    from warlock.characters.recipe import DEFAULT_RECIPE, Recipe
+    from warlock.studio.panes import settings_character
+
+    #: One request per address, each wrong in exactly the way that address
+    #: names. Provoked rather than pattern-matched out of the source: several
+    #: of these refusals go through ``_on_ladder`` and ``_integer``, which take
+    #: the field name positionally, so a regex over ``field="..."`` calls four
+    #: real addresses imaginary.
+    provoke = {
+        "family": {"family": "not-a-species"},
+        "family_version": {"family_version": 99},
+        "theme": {"theme": "not-a-look"},
+        "camera": {"camera": "nowhere"},
+        "elevation": {"elevation": 200.0},
+        "animations": {"animations": {"flying": 4}},
+        "directions": {"directions": 3},
+        "logical_size": {"logical_size": 17},
+        "colors": {"colors": 7},
+        "appearance": {"appearance": {"not-a-channel": 1.0}},
+        "name": {"name": "x" * 500},
+    }
+    drawn = _form_field_ids("panes/settings_character.py")
+    mapped = {alias for aliases in settings_character.RECIPE_FIELDS.values() for alias in aliases}
+    assert mapped == set(provoke), "every address this map claims, and no other"
+    for control, aliases in settings_character.RECIPE_FIELDS.items():
+        assert control in drawn, f"{control} is mapped but nothing draws it"
+        for alias in aliases:
+            with pytest.raises(CharacterError) as excinfo:
+                Recipe.from_dict({**DEFAULT_RECIPE.as_dict(), **provoke[alias]})
+            assert excinfo.value.field == alias, (
+                f"{alias!r} is mapped onto {control!r} and the recipe refuses "
+                f"it under {excinfo.value.field!r} instead"
+            )
+
+    # And it actually moves one. A door refusal about the colour count must
+    # come back rung on the Colours control.
+    state = SimpleNamespace(field_errors={"colors": "colours must be one of [8, 16, 32, 64]"})
+    settings_character.mirror_errors(SimpleNamespace(state=state))
+    assert state.field_errors["character_colors"] == state.field_errors["colors"]
+    # An address the pane already holds is never overwritten: the pane's own
+    # sentence is about this frame's form, and the door's is about the last
+    # submitted one.
+    state.field_errors["character_pixel"] = "mine"
+    state.field_errors["logical_size"] = "theirs"
+    settings_character.mirror_errors(SimpleNamespace(state=state))
+    assert state.field_errors["character_pixel"] == "mine"
+
+
 def _field_names(fn) -> set[str]:
     """Every literal ``field="..."`` in one function's own source."""
     import inspect

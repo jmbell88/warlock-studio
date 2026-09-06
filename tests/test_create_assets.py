@@ -13,12 +13,16 @@ from warlock.studio.state import default_form_2d, primary_action
 
 
 def test_the_asset_registry_is_the_approved_flat_list():
-    """Five offered types, not eight.
+    """Six offered types, not eight.
 
     The three tilesets differed only by projection and the two sprite sheets
     only by layout, and both of those are fields on the form already -- so the
     selector was asking the same question twice and the answers could
     contradict each other. Projection and layout stayed; the types folded.
+
+    ``character`` is the sixth and is **last**: it is the one entry that
+    compiles no text-to-image request at all, and its position says so -- the
+    five above it are the SDXL set, in the order they were offered.
     """
     assert create_assets.ASSET_TYPE_OPTIONS == (
         ("image", "Image"),
@@ -26,7 +30,70 @@ def test_the_asset_registry_is_the_approved_flat_list():
         ("seamless_material", "Seamless Material"),
         ("tileset", "Tileset"),
         ("sprite_sheet", "Sprite Sheet"),
+        ("character", "Character"),
     )
+
+
+def test_the_character_type_derives_one_press_and_its_own_output():
+    """A character makes exactly one thing, and never through ``create_job``.
+
+    ``output`` is a fourth word rather than one of ``create_job``'s three,
+    which is what keeps the character arm off that door structurally instead of
+    by convention -- and ``count`` has to be cleared here rather than by the
+    ``output == "sheet"`` branch below it, or a restored image request would
+    carry a batch into a request nothing reads.
+    """
+    form = default_form_2d()
+    form.update(asset_type="character", count=4, sheet_type="tile")
+    spec = create_assets.sync_legacy_fields(form)
+    assert spec.key == "character"
+    assert spec.intent == "character"
+    assert (form["output"], form["sheet_type"], form["count"]) == ("character", "sprite", 1)
+
+
+def test_the_brief_hides_the_count_for_a_character_as_well_as_for_a_sheet():
+    """Both sheet doors and the character door make one thing per press, so
+    four radios of which three are refusals would be a control offering what
+    the thing behind it will not do."""
+    import inspect
+
+    from warlock.studio import create_brief
+
+    source = inspect.getsource(create_brief.draw)
+    assert '("sheet", "character")' in source
+    assert "if show_count:" in source
+
+
+def test_create_job_refuses_the_character_type_because_it_has_its_own_door(svc):
+    """The tileset arm's rule, one type further on.
+
+    ``service.characters.create_character`` mints the model row itself, exactly
+    as ``import_mesh`` does, so a character is not a generation request and must
+    never reach ``create_job``'s allowlist. Asserted at the door rather than
+    only in the pane, because the pane is one caller and the allowlist is the
+    thing that makes the rule structural.
+    """
+    from warlock.service import jobs as svc_jobs
+    from warlock.service.errors import Invalid
+
+    with pytest.raises(Invalid) as excinfo:
+        svc_jobs.create_job(
+            svc,
+            kind="text",
+            prompt="a fire ogre",
+            output="reference",
+            asset_type="character",
+        )
+    assert excinfo.value.field == "asset_type"
+    # And the intent with it: the pair is refused from either side.
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(
+            svc,
+            kind="text",
+            prompt="a fire ogre",
+            output="reference",
+            asset_intent="character",
+        )
 
 
 def test_the_retired_keys_still_resolve():
@@ -168,7 +235,7 @@ def test_corrupt_persisted_form_values_fall_back_safely(tmp_path):
     assert restored["lora_weight"] == defaults["lora_weight"]
 
 
-def test_the_two_registries_agree_on_every_key():
+def test_the_two_registries_agree_on_every_sdxl_backed_key():
     """``create_assets`` and ``generation`` are two spellings of one choice, and
     they disagreed about exactly one of them: this registry said ``model_3d``
     where ``generation.GENERATION_TYPES`` said ``3d_model``. Harmless only
@@ -176,11 +243,24 @@ def test_the_two_registries_agree_on_every_key():
     test that failed on the default type every frame and wrote it straight
     back. Unified onto ``generation``'s spelling, with the old one kept as an
     alias so a persisted form and a stored job row still resolve.
+
+    **Every SDXL-backed type**, which is the whole of ``generation``'s tuple and
+    a prefix of this one. ``generation.GENERATION_TYPES`` is the set that
+    compiles a text-to-image request -- it is what ``validate_request`` refuses
+    against and what ``resolve_recipe`` routes -- and ``character`` compiles
+    none, so it is deliberately absent there. Equality would have forced a
+    sixth entry into a table whose every reader would then have to special-case
+    it, which is exactly the shape the tileset arm already refused.
     """
     from warlock import generation
 
-    assert tuple(key for key, _ in create_assets.ASSET_TYPE_OPTIONS) == generation.GENERATION_TYPES
-    assert create_assets.ASSET_TYPE_OPTIONS == generation.GENERATION_TYPE_OPTIONS
+    offered = tuple(key for key, _ in create_assets.ASSET_TYPE_OPTIONS)
+    assert offered[: len(generation.GENERATION_TYPES)] == generation.GENERATION_TYPES
+    assert offered[len(generation.GENERATION_TYPES) :] == ("character",)
+    assert (
+        create_assets.ASSET_TYPE_OPTIONS[: len(generation.GENERATION_TYPE_OPTIONS)]
+        == generation.GENERATION_TYPE_OPTIONS
+    )
     assert create_assets.DEFAULT_ASSET_TYPE in generation.GENERATION_TYPES
     # The old spelling reads, and reads as the new one.
     assert create_assets.ASSET_TYPES["model_3d"].key == "3d_model"

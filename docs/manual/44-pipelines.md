@@ -200,8 +200,13 @@ yaw zero puts the camera on `+Z` in the exported Y-up frame, and the framing ext
 
 Three details are easy to undo by accident:
 
-- The camera is framed **once**, from the rest pose's bounding box. Reframing per pose makes the
-  subject jump in size between rows.
+- The camera is framed **once**, and it is framed from the *union* of every pose the sheet
+  contains, measured before anything renders. Reframing per pose would make the subject jump in
+  size between rows; framing from the rest pose alone clipped every pose whose apex leaves the rest
+  box — an overhead attack wind, the top of a jump — on every cell of that run. The orbit axis
+  stays the rest pose's ground origin either way, so the pivot lands on the same pixel at every
+  yaw. On a sheet with nothing but the rest pose the union *is* the rest box, and the framing is
+  unchanged.
 - The sidecar carries a flat list of cells rather than a nested grid, so an animated clip becomes
   more cells with a frame index above zero instead of a new sidecar format.
 - Cells arrive grouped by row, so the worker re-poses once per pose rather than once per frame.

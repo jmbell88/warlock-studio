@@ -162,6 +162,59 @@ def default_form_2d() -> dict[str, Any]:
         # img2img: off by default; the strength is the registry default.
         "init_image": False,
         "init_strength": 0.45,
+        # --- the Character type's own eleven fields ------------------------
+        #
+        # Flat and on *this* form rather than a nested block or a state of
+        # their own, because ``restore_form`` merges key by key and gates on
+        # ``type(value) is type(default)`` -- so every type below is chosen for
+        # what the control hands back and for what survives a round trip
+        # through JSON. The character door takes a ``characters.recipe.Recipe``
+        # dict; ``panes.settings_character.recipe_kwargs`` is the one place
+        # these are compiled into one.
+        #
+        # Empty means "whatever the prompt resolved to", and it stays empty
+        # when the prompt named no species: the resolver never substitutes, so
+        # neither does the form. Generate refuses instead, in
+        # ``resolve.offer_sentence``'s words.
+        "character_family": "",
+        # A sentinel, not a theme key: no species declares a "none" look, and
+        # this means "the species' own first theme" -- so switching species
+        # keeps the choice honest instead of carrying a fire palette onto a
+        # creature that has no fire.
+        "character_theme": "none",
+        # Empty means the door's default preset. Deliberately *not* the preset
+        # key spelled out: ``tests/troupe/test_camera_presets.py`` pins the
+        # default camera key to exactly two homes in the package
+        # (``charsheet.py`` and ``characters/resolve.py``), because an angle
+        # copied into a third module is a form offering a framing nothing
+        # renders. The pane reads it from ``troupe_options``.
+        "character_camera": "",
+        # Strings, for ``tile_size``'s reason two dozen lines up: the segmented
+        # controls that carry them hand back strings, and an int default here
+        # would make every persisted value fail ``restore_form``'s type gate
+        # silently. Converted at the submit boundary, once.
+        "character_pixel": "64",
+        "character_colors": "32",
+        # The movements this sheet carries, comma separated. A string rather
+        # than a list because it is three switches whose set is small and
+        # ordered, and because a comma-joined value diffs readably in the
+        # settings file; ``settings_character.actions_of`` splits it once.
+        "character_actions": "idle,walk,attack",
+        # The appearance sliders, as JSON: the channel *set* belongs to the
+        # species' archetype, so this cannot be a fixed group of float fields
+        # the way ``ip_scale`` is.
+        "character_body": "{}",
+        "character_name": "",
+        # Which of the fields above the user has touched. Everything not in
+        # here follows the prompt on every edit of it; everything in here is
+        # the user's and is never written over. "Reset to prompt" empties it.
+        "character_overrides": [],
+        # The last resolution, and the prompt it was made from -- so
+        # ``sync_from_prompt`` re-resolves on a prompt change and on nothing
+        # else. A JSON string rather than the dataclass because this form is
+        # persisted and restored by type.
+        "character_resolution": "",
+        "character_resolution_prompt": "",
     }
 
 def form_from_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -1309,6 +1362,17 @@ ACTIONS = {
     "inker": verbs.open_in("inker"),
     "clay": verbs.open_in("clay"),
     "plotter": verbs.add_to("plotter"),
+    # A character's sheet is *made* in Troupe rather than edited there, which
+    # is why this is "Send to" and not "Open in" -- ``verbs`` draws exactly that
+    # distinction, and the overflow menu's own Troupe row already uses it.
+    "troupe": verbs.send_to("troupe"),
+    # **Missing since Muse shipped, and it was a crash rather than a gap.**
+    # ``primary_action`` returns ``"muse"`` for a finished take and for a
+    # separate row, and the library's result card labels its button with
+    # ``ACTIONS[action]`` -- so a finished take's card raised ``KeyError`` and
+    # took the pane down with it. Found while adding the ``"character"`` arm
+    # above, which is the same shape of hole caught one step earlier.
+    "muse": verbs.open_in("muse"),
     "variation": "Variation",
     "revise": "Revise with prompt",
     "settings": "Use settings",
@@ -1384,6 +1448,16 @@ def primary_action(job: dict[str, Any], *, rigging_available: bool = True) -> st
         return "muse" if "track.wav" in files else None
     params = job.get("params") if isinstance(job.get("params"), dict) else {}
     intent = params.get("asset_intent")
+    if intent == "character":
+        # A character is minted finished and its rig is queued in the same
+        # press, so the interesting question on the card is which half has
+        # landed. Once ``rig.glb`` exists the sheet is what this asset is *for*;
+        # until then the body is all there is, and Clay is where a body is
+        # edited. Deliberately never "rig": the rig row already exists, and
+        # offering to make a second one is how a user spends Blender twice on
+        # one character. The ladder below would answer "rig" for exactly that
+        # window, which is why this arm sits above it rather than beside it.
+        return "troupe" if "rig.glb" in files else "clay"
     if intent == "tileset" and "input.png" in files:
         return "plotter"
     if intent in ("refine_2d", "sprite") and "input.png" in files:

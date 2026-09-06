@@ -20,7 +20,10 @@ from .. import docmodes, icons, inker_state, packwright_mode, theme, widgets
 from ..tokens import sp
 from . import packwright_textures
 
-CHECKER = 8
+#: This pane's square, in design pixels. ``widgets.CHECKER``'s value, named
+#: here because the preview has always had one and a call site that spelled
+#: the number would be a third copy of it.
+CHECKER = widgets.CHECKER
 
 
 def draw(ctx: Any) -> None:
@@ -71,7 +74,7 @@ def draw(ctx: Any) -> None:
     )
     lo = inker_state.to_screen(view, (origin.x, origin.y), 0, 0)
     hi = inker_state.to_screen(view, (origin.x, origin.y), size_px[0], size_px[1])
-    _checkerboard(draw_list, lo, hi)
+    widgets.checkerboard(draw_list, lo, hi, step=CHECKER)
 
     texture = packwright_textures.atlas_texture(ctx, tab)
     if texture is not None:
@@ -136,36 +139,6 @@ def _empty(ctx: Any) -> None:
         recent_paths=packwright_mode.recent_paths(ctx),
         on_open=lambda path: packwright_mode.open_path(ctx, Path(path)),
     )
-
-
-def _checkerboard(draw_list: Any, lo, hi) -> None:
-    """Drawn as rectangles rather than as a tiled texture.
-
-    A texture would be the right call at Inker's canvas sizes; an atlas preview
-    is bounded by the pane, so the worst case here is a few hundred quads and
-    the alternative is a second texture to create, register and release.
-    """
-    from imgui_bundle import imgui
-
-    light = imgui.get_color_u32(theme.rgba(theme.ELEV_2))
-    dark = imgui.get_color_u32(theme.rgba(theme.ELEV_1))
-    draw_list.add_rect_filled(lo, hi, dark)
-    step = sp(CHECKER)
-    rows = int((hi[1] - lo[1]) // step) + 1
-    columns = int((hi[0] - lo[0]) // step) + 1
-    # Bounded: past this the pattern is finer than it is useful and the cost is
-    # not. A flat fill is the honest fallback.
-    if rows * columns > 4096:
-        return
-    for row in range(rows):
-        for column in range(columns):
-            if (row + column) % 2:
-                continue
-            x0 = lo[0] + column * step
-            y0 = lo[1] + row * step
-            draw_list.add_rect_filled(
-                (x0, y0), (min(x0 + step, hi[0]), min(y0 + step, hi[1])), light
-            )
 
 
 def _outlines(state: Any, tab: Any, draw_list: Any, origin) -> None:

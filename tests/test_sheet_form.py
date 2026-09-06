@@ -89,11 +89,19 @@ def test_the_output_kind_comes_from_the_asset_registry_not_a_control():
     assert not hasattr(settings_2d, "OUTPUTS")
     assert not hasattr(settings_2d, "OUTPUT_NOTES")
     assert not hasattr(settings_2d, "_output")
-    # And the three kinds are still the three kinds, read where they live.
+    # And the kinds are still read where they live. ``character`` is a fourth
+    # word and deliberately *not* a fourth ``create_job`` output: it is what the
+    # Character type derives, and its door is ``service.characters`` -- so
+    # ``create_job``'s own three are the first three and nothing else may join
+    # them without a branch at that door.
+    from warlock.service import _jobs_create
     from warlock.studio import create_assets
 
     outputs = {spec.output for spec in create_assets.ASSET_TYPES.values()}
-    assert outputs == {"reference", "tile", "sheet"}
+    assert outputs == {"reference", "tile", "sheet", "character"}
+    door = inspect.getsource(_jobs_create.create_job)
+    assert '("reference", "model", "tile")' in door
+    assert '"character"' not in door, "the character type has its own door"
 
 
 def test_a_new_form_defaults_to_a_tile_grid():

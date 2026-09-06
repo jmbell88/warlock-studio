@@ -378,7 +378,12 @@ def _safe_form_value(key: str, value: Any) -> bool:
     if isinstance(value, float) and not math.isfinite(value):
         return False
     choices: dict[str, set[str]] = {
-        "output": {"reference", "tile", "sheet"},
+        # ``character`` is a fourth word here and deliberately not a fourth
+        # ``create_job`` output: it is what ``create_assets`` derives for the
+        # character type, whose door is ``service.characters`` rather than
+        # ``create_job``. A boundary check that did not know it would drop a
+        # remembered Character selection back to Reference on every launch.
+        "output": {"reference", "tile", "sheet", "character"},
         "sheet_type": {"tile", "sprite"},
         "projection": {"top_down", "three_quarter", "isometric", "orthogonal"},
         # The two fixed atlases plus every planned kind. Restored values are

@@ -33,7 +33,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1425,14 +1425,29 @@ def sheet_spec(
     frame_size: int,
     elevation: float,
     lighting: str,
+    margin: float | None = None,
+    sockets: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The worker spec for rendering one frame per sheet cell.
 
     ``cells`` carries each cell's pose bones inline rather than a pose id: the
     worker has no access to the job directory's pose files, and shipping the
     rotations with the cell keeps it a pure renderer.
+
+    ``margin`` widens the ortho window past ``sheet.FRAME_MARGIN``. Its one
+    writer is ``_q_troupe``'s reframe retry, and it is written **only when
+    given** -- a spec without it is byte-identical to the one this function
+    produced before the key existed, which is what keeps every sheet that does
+    not clip rendering exactly as it did.
+
+    ``sockets`` is ``[{"name", "bone", "offset": [along, lateral, up],
+    "reach"}]``: attachment points to project per cell, offsets in bone-length
+    units and reach in character heights so a socket list survives a re-fit
+    onto a character of another size. Written only when given, for the same
+    reason, and its presence is what makes the worker emit a ``sockets`` block
+    at all.
     """
-    return {
+    spec: dict[str, Any] = {
         "op": "sheet",
         "source_glb": str(source_glb),
         "frames_dir": str(frames_dir),
@@ -1442,6 +1457,11 @@ def sheet_spec(
         "lighting": lighting,
         "cells": cells,
     }
+    if margin is not None:
+        spec["margin"] = float(margin)
+    if sockets is not None:
+        spec["sockets"] = [dict(s) for s in sockets]
+    return spec
 
 
 def views_spec(

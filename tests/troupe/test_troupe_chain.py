@@ -693,10 +693,26 @@ def test_a_cancelled_sheet_takes_its_own_render_and_nothing_else(worker):
 # -- the render --------------------------------------------------------------
 
 
-def _fake_render(monkeypatch):
+def _fake_render(monkeypatch, *, clips="never", grey=False, socket_at=None):
     """A Blender that writes one flat frame per cell, at the size it was asked
     for. The size is the point: this path renders at ``RENDER_SIZE`` and packs
-    at the logical size, which is the one thing about it with no precedent."""
+    at the logical size, which is the one thing about it with no precedent.
+
+    ``clips`` drives the reframe retry without a card. ``"until_wider"`` fills
+    the frame edge to edge -- which is what a clipped apex measures as -- until
+    the spec carries a ``margin``, and draws the ordinary inset blob once it
+    does; ``"always"`` never stops. The default renders exactly what this fake
+    has always rendered, so every other test in the file is unchanged.
+
+    ``grey`` paints every cell the *same* neutral grey instead of the shifting
+    blue-purple. That is the effects tests' whole instrument: a grey body has no
+    warm colour anywhere, so an orange in the published palette can only have
+    come from a flame, and two cells that differ can only differ by one.
+
+    ``socket_at`` is ``(x, y)`` in render pixels, or a callable taking the cell
+    dict and returning ``{"x", "y", "depth", "behind"}``. The default keeps the
+    fixed corner projection this fake has emitted since sockets landed.
+    """
     from pathlib import Path
 
     from PIL import Image
@@ -705,21 +721,42 @@ def _fake_render(monkeypatch):
 
     calls: list[dict] = []
 
+    def _projection(cell):
+        if callable(socket_at):
+            return socket_at(cell)
+        x, y = socket_at or (1.0, 2.0)
+        return {"x": float(x), "y": float(y), "depth": 3.0, "behind": False}
+
     def fake(spec, **kwargs):
         calls.append({"spec": spec, **kwargs})
         frames_dir = Path(spec["frames_dir"])
+        clipped = clips == "always" or (clips == "until_wider" and not spec.get("margin"))
         for cell in spec["cells"]:
             shade = 40 + (cell["index"] % 4) * 50
+            fill = (128, 128, 128, 255) if grey else (shade, shade // 2, 200, 255)
             frame = Image.new("RGBA", (spec["frame_size"],) * 2, (0, 0, 0, 0))
             # A blob in the middle, so the matte is not empty and the outline
-            # has an edge to find.
-            inset = spec["frame_size"] // 4
+            # has an edge to find. Edge to edge when this render is meant to
+            # depict a subject that did not fit its window.
+            inset = 0 if clipped else spec["frame_size"] // 4
             frame.paste(
-                (shade, shade // 2, 200, 255),
+                fill,
                 (inset, inset, spec["frame_size"] - inset, spec["frame_size"] - inset),
             )
             frame.save(frames_dir / f"{cell['index']:04d}.png")
-        return {"ok": True, "pivot": [0.5, 0.9]}
+        result = {
+            "ok": True,
+            "pivot": [0.5, 0.9],
+            "framing": {"extent": 2.24, "margin": spec.get("margin") or 1.12},
+        }
+        if spec.get("sockets"):
+            result["sockets"] = {
+                cell["index"]: {
+                    str(s["name"]): _projection(cell) for s in spec["sockets"]
+                }
+                for cell in spec["cells"]
+            }
+        return result
 
     monkeypatch.setattr(rigging, "run_worker", fake)
     return calls
@@ -865,6 +902,191 @@ async def test_an_unrigged_source_fails_the_sheet_rather_than_rendering_it(
     finally:
         await worker.shutdown()
     assert worker.store.get(job_id)["status"] == "error"
+
+
+# -- framing and the structural check ----------------------------------------
+
+
+_TINY_LAYOUT = {
+    "version": 2,
+    "movements": [{"key": "idle", "frames": 3, "directions": 1}],
+}
+
+
+async def _run_charsheet(worker, **params):
+    """A finished character sheet job. -> ``(job id, source id, source dir)``."""
+    import json
+
+    from warlock import rigging
+
+    source = worker.store.create("image", "a ranger", {}, stage="model")
+    source_dir = worker.config.job_dir(source)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "model.glb").write_bytes(b"fake-glb")
+    (source_dir / "rig.glb").write_bytes(b"fake-rig")
+    (source_dir / "rig.json").write_text(json.dumps({"template": "humanoid"}), "utf-8")
+    worker.store.set_status(source, "done")
+
+    job_id = worker.store.create(
+        "charsheet",
+        "a ranger",
+        {
+            "source_job": source,
+            "sheet_id": rigging.new_id(),
+            "logical_size": 16,
+            "colors": 8,
+            "layout": _TINY_LAYOUT,
+            **params,
+        },
+    )
+    worker.start()
+    try:
+        await _wait_until(
+            lambda: worker.store.get(job_id)["status"] in ("done", "error"), 60.0
+        )
+    finally:
+        await worker.shutdown()
+    return job_id, source, source_dir
+
+
+async def test_a_clipped_first_render_is_reframed_once_and_recorded(worker, monkeypatch):
+    """A silhouette flush against the frame edge is a subject that did not fit
+    its window, and the answer is one wider render -- not a shrug, and not a
+    loop. The first spec carries no ``margin`` at all, so a sheet that frames
+    correctly is rendered by exactly the spec this stage has always sent."""
+    from warlock import rigging
+    from warlock.pipelines import sheet as sheetlib
+
+    calls = _fake_render(monkeypatch, clips="until_wider")
+    job_id, _source, source_dir = await _run_charsheet(worker)
+
+    assert worker.store.get(job_id)["error"] is None
+    assert len(calls) == 2
+    assert "margin" not in calls[0]["spec"]
+    assert calls[1]["spec"]["margin"] == pytest.approx(sheetlib.FRAME_MARGIN * 1.25)
+
+    sheet_id = worker.store.get(job_id)["params"]["sheet_id"]
+    meta = rigging.read_sheet(source_dir, sheet_id)
+    assert meta["validation"]["reframed"] is True
+    assert meta["validation"]["clipped"] == []
+    assert meta["validation"]["ok"] is True
+
+
+async def test_a_render_that_still_clips_is_published_and_flagged_not_failed(
+    worker, monkeypatch
+):
+    """``ok: False`` flags, it never fails: the atlas is packed, quantised and
+    on disk, and throwing a minute of rendering away over a verdict the user
+    may not share -- an intentionally edge-to-edge portrait sheet is "clipped"
+    by this measure -- would be the worse answer. And the retry happens once:
+    a second clipped result publishes rather than re-rendering forever."""
+    from warlock import rigging
+    from warlock.pipelines import sheetcheck
+
+    calls = _fake_render(monkeypatch, clips="always")
+    job_id, _source, source_dir = await _run_charsheet(worker)
+
+    row = worker.store.get(job_id)
+    assert row["status"] == "done"
+    assert len(calls) == 2
+
+    sheet_id = row["params"]["sheet_id"]
+    assert rigging.sheet_png_path(source_dir, sheet_id).exists()
+    meta = rigging.read_sheet(source_dir, sheet_id)
+    verdict = meta["validation"]
+    assert verdict["ok"] is False
+    assert verdict["clipped"]
+    assert verdict["reframed"] is True
+    assert any("clipped" in line for line in sheetcheck.describe(verdict))
+
+
+async def test_a_subset_re_render_is_framed_the_way_its_base_sheet_was(worker, monkeypatch):
+    """A re-render's whole geometry claim is that a cell keeps the rectangle it
+    has always had. A cell re-rendered at a *different* ortho window keeps the
+    rectangle and changes the character's size inside it, which is worse than
+    either error alone -- so the base sidecar's recorded margin is what the
+    subset frames with, and the reframe retry does not run on a subset at all.
+    """
+    import json
+
+    from warlock import rigging
+    from warlock.pipelines import sheet as sheetlib
+
+    layout = {
+        "version": 2,
+        "movements": [
+            {"key": "idle", "frames": 3, "directions": 1},
+            {"key": "attack", "frames": 2, "directions": 1},
+        ],
+    }
+    calls = _fake_render(monkeypatch, clips="until_wider")
+    source = worker.store.create("image", "a ranger", {}, stage="model")
+    source_dir = worker.config.job_dir(source)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "model.glb").write_bytes(b"fake-glb")
+    (source_dir / "rig.glb").write_bytes(b"fake-rig")
+    (source_dir / "rig.json").write_text(json.dumps({"template": "humanoid"}), "utf-8")
+    worker.store.set_status(source, "done")
+
+    def _queue(**extra):
+        return worker.store.create(
+            "charsheet",
+            "a ranger",
+            {
+                "source_job": source,
+                "sheet_id": rigging.new_id(),
+                "logical_size": 16,
+                "colors": 8,
+                "layout": layout,
+                **extra,
+            },
+        )
+
+    first = _queue()
+    worker.start()
+    try:
+        await _wait_until(
+            lambda: worker.store.get(first)["status"] in ("done", "error"), 60.0
+        )
+        assert worker.store.get(first)["error"] is None
+        base_sheet = worker.store.get(first)["params"]["sheet_id"]
+        meta = rigging.read_sheet(source_dir, base_sheet)
+        # The sidecar records what was rendered, not what was asked for.
+        assert meta["camera"]["frame_margin"] == pytest.approx(
+            sheetlib.FRAME_MARGIN * 1.25
+        )
+
+        before = len(calls)
+        rerun = _queue(
+            subset=[{"animation": "attack", "direction": "front"}],
+            base_sheet=base_sheet,
+        )
+        await _wait_until(
+            lambda: worker.store.get(rerun)["status"] in ("done", "error"), 60.0
+        )
+    finally:
+        await worker.shutdown()
+
+    assert worker.store.get(rerun)["error"] is None
+    assert len(calls) == before + 1, "a subset must not take the reframe retry"
+    assert calls[-1]["spec"]["margin"] == pytest.approx(sheetlib.FRAME_MARGIN * 1.25)
+
+
+async def test_validation_is_derived_and_never_inherited(worker, monkeypatch):
+    """It is a verdict about *this* atlas. A reroll that inherited it would
+    wear an ``ok: true`` about frames it has not rendered yet -- ``pixel_report``'s
+    case exactly, which is why it sits beside it in ``DERIVED_PARAMS``."""
+    from warlock.service.validation import DERIVED_PARAMS
+
+    _fake_render(monkeypatch)
+    job_id, _source, _source_dir = await _run_charsheet(worker)
+
+    params = worker.store.get(job_id)["params"]
+    assert params["validation"]["version"] == 1
+    assert "validation" in DERIVED_PARAMS
+    # The request half stays out, ``layout``'s rule: a margin the user asked
+    # for is what they asked for, and "run that again" means running that.
+    assert "margin" not in DERIVED_PARAMS
 
 
 # -- the A-pose --------------------------------------------------------------
@@ -1023,3 +1245,422 @@ async def test_a_failed_character_sheet_leaves_no_orphaned_render(worker):
         )
 
     assert not atlas.exists(), "the staged render outlived the job that made it"
+
+
+# -- themed effects ----------------------------------------------------------
+#
+# Increment 4: a species whose theme declares ``effects=("embers",)`` comes off
+# the sheet on fire. The instrument throughout is ``_fake_render(grey=True)``:
+# a neutral body has no warm colour anywhere, so an orange in the published
+# atlas can only have come from a flame.
+
+_CHARACTER = {
+    "version": 1,
+    "family": "elemental",
+    "family_version": 1,
+    "archetype": "amorphous",
+    "theme": "fire",
+    "recipe": {"seed": 4242, "family": "elemental", "theme": "fire"},
+}
+
+#: Render pixels. Low and central, so the whole flame lands *inside* the fake
+#: body's inset blob -- which is what makes "occluded" measurable rather than
+#: a matter of how tall the flame happened to come out.
+_SOCKET_PX = (256.0, 352.0)
+
+
+def _warm(pixels):
+    """A boolean plane of every opaque pixel warmer than it is cool.
+
+    The grey body is ``r == b`` exactly, so a positive red-minus-blue is a
+    flame pixel and nothing else. Forty rather than one because the quantiser
+    is allowed to move a colour a little.
+    """
+    import numpy as np
+
+    rgba = np.asarray(pixels).astype(np.int16)
+    return (rgba[..., 3] > 0) & ((rgba[..., 0] - rgba[..., 2]) > 40)
+
+
+def _character_source(worker, character=_CHARACTER):
+    """A finished, rigged mesh job, optionally with a ``character.json``."""
+    import json
+
+    source = worker.store.create("image", "an elemental", {}, stage="model")
+    source_dir = worker.config.job_dir(source)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "model.glb").write_bytes(b"fake-glb")
+    (source_dir / "rig.glb").write_bytes(b"fake-rig")
+    (source_dir / "rig.json").write_text(json.dumps({"template": "humanoid"}), "utf-8")
+    if character is not None:
+        (source_dir / "character.json").write_text(json.dumps(character), "utf-8")
+    worker.store.set_status(source, "done")
+    return source, source_dir
+
+
+async def _run_character_sheets(worker, requests):
+    """Every request queued, then **one** start and one shutdown.
+
+    A ``Worker`` that has been shut down does not come back, so two sheets in
+    one test have to share a single run of the queue -- which is also what the
+    app does, the queue being serial.
+
+    ``requests`` are ``{"character": ..., **params}``; the return is
+    ``[(job id, source id, source dir)]`` in the order given.
+    """
+    from warlock import rigging
+
+    out = []
+    for request in requests:
+        request = dict(request)
+        source, source_dir = _character_source(worker, request.pop("character", _CHARACTER))
+        job_id = worker.store.create(
+            "charsheet",
+            "an elemental",
+            {
+                "source_job": source,
+                "sheet_id": rigging.new_id(),
+                "logical_size": 32,
+                "colors": 16,
+                "layout": _TINY_LAYOUT,
+                **request,
+            },
+        )
+        out.append((job_id, source, source_dir))
+    worker.start()
+    try:
+        await _wait_until(
+            lambda: all(
+                worker.store.get(job)["status"] in ("done", "error") for job, _s, _d in out
+            ),
+            120.0,
+        )
+    finally:
+        await worker.shutdown()
+    for job_id, _source, _dir in out:
+        assert worker.store.get(job_id)["error"] is None
+    return out
+
+
+async def _run_character_sheet(worker, *, character=_CHARACTER, **params):
+    """One finished sheet, the single-request case of the helper above."""
+    return (await _run_character_sheets(worker, [{"character": character, **params}]))[0]
+
+
+def _cells(png, meta):
+    """``{index: cropped cell image}`` for a published sheet."""
+    from PIL import Image
+
+    with Image.open(png) as opened:
+        opened.load()
+        atlas = opened.convert("RGBA")
+    return {
+        int(c["index"]): atlas.crop((c["x"], c["y"], c["x"] + c["w"], c["y"] + c["h"]))
+        for c in meta["cells"]
+    }
+
+
+async def test_flame_composite_precedes_quantisation(worker, monkeypatch):
+    """The ordering the whole phase exists for. The flames go on between the
+    reduce and the pack, so the quantise is still **one shared pass** and the
+    flame's oranges enter the same cut as the body's grey.
+
+    Composited afterwards they would carry a palette of their own, and the
+    sheet would be two colour sets wide -- the "same shirt, two shades" failure
+    the whole-atlas pass exists to prevent, reached from the other side. So the
+    claim is both halves at once: the published palette contains a warm colour
+    that the grey body cannot have contributed, *and* every cell's colours come
+    out of the one palette.
+    """
+    import numpy as np
+
+    from warlock import rigging
+
+    _fake_render(monkeypatch, grey=True, socket_at=_SOCKET_PX)
+    job_id, _source, source_dir = await _run_character_sheet(worker)
+
+    row = worker.store.get(job_id)
+    assert row["error"] is None
+    meta = rigging.read_sheet(source_dir, row["params"]["sheet_id"])
+    png = rigging.sheet_png_path(source_dir, row["params"]["sheet_id"])
+    cells = _cells(png, meta)
+
+    assert any(
+        _warm(cell).any() for cell in cells.values()
+    ), "no flame reached the published atlas at all"
+
+    # One palette across the whole sheet: the union of every cell's colours is
+    # no bigger than the cut the job asked for.
+    colours = set()
+    for cell in cells.values():
+        rgba = np.asarray(cell).reshape(-1, 4)
+        colours |= {tuple(int(v) for v in px[:3]) for px in rgba if px[3] > 0}
+    assert len(colours) <= row["params"]["colors"], sorted(colours)
+    # And the warm one is in it, which is the half that would fail if the
+    # composite ran after the quantise -- the flame would then be carrying
+    # colours the sheet's palette never voted on.
+    assert any(r - b > 40 for r, _g, b in colours)
+
+
+async def test_a_flame_behind_the_body_is_occluded_and_one_in_front_is_not(
+    worker, monkeypatch
+):
+    """The single bit ``blender_worker`` measures view depth for. A
+    back-mounted flame drawn over the body is a character standing in front of
+    their own fire; the flame goes *under* the body when the socket is on the
+    far side of it.
+
+    The socket is placed inside the body's silhouette on purpose, so "under"
+    means invisible and the assertion is about pixels rather than about
+    ordering in the abstract.
+    """
+    from warlock import rigging
+
+    def projection(cell):
+        return {
+            "x": _SOCKET_PX[0],
+            "y": _SOCKET_PX[1],
+            "depth": 3.0,
+            # Alternating rather than split by run, so the two cases are drawn
+            # by one render with one palette and one body: any difference
+            # between two cells is the compositing order and nothing else.
+            "behind": bool(int(cell["index"]) % 2 == 0),
+        }
+
+    _fake_render(monkeypatch, grey=True, socket_at=projection)
+    job_id, _source, source_dir = await _run_character_sheet(worker)
+
+    row = worker.store.get(job_id)
+    assert row["error"] is None
+    meta = rigging.read_sheet(source_dir, row["params"]["sheet_id"])
+    cells = _cells(rigging.sheet_png_path(source_dir, row["params"]["sheet_id"]), meta)
+
+    behind = {i: int(_warm(c).sum()) for i, c in cells.items() if i % 2 == 0}
+    front = {i: int(_warm(c).sum()) for i, c in cells.items() if i % 2 == 1}
+    assert front and behind
+    assert all(n > 0 for n in front.values()), front
+    assert all(n == 0 for n in behind.values()), behind
+
+
+async def test_the_flame_animates_with_the_cell_frame_and_is_identical_across_two_runs(
+    worker, monkeypatch
+):
+    """Two claims that share a fixture because they are the same property seen
+    from two sides: the flame is a pure function of ``(recipe seed, movement,
+    frame)``.
+
+    *Animates*: with an identical grey body in every cell, two cells of one run
+    can only differ by their flame -- so a flame that ignored ``cell.frame``
+    would make the three cells of this idle byte-identical, which is a static
+    fire painted three times.
+
+    *Reproducible*: the same character rendered again is the same bytes. A
+    ``new_uid()`` in the recipe or a seed off the clock would break this and
+    nothing else would notice.
+    """
+    import numpy as np
+
+    from warlock import rigging
+
+    _fake_render(monkeypatch, grey=True, socket_at=_SOCKET_PX)
+    # The same character twice, in one run of the queue: a ``Worker`` that has
+    # been shut down does not come back.
+    (first, _s1, dir1), (second, _s2, dir2) = await _run_character_sheets(
+        worker, [{}, {}]
+    )
+
+    first_sheet = worker.store.get(first)["params"]["sheet_id"]
+    first_png = rigging.sheet_png_path(dir1, first_sheet)
+    cells = _cells(first_png, rigging.read_sheet(dir1, first_sheet))
+
+    frames = [np.asarray(cells[i]) for i in sorted(cells)]
+    assert len(frames) >= 2
+    assert any(
+        not np.array_equal(frames[0], other) for other in frames[1:]
+    ), "every cell of the movement drew the same flame"
+
+    second_png = rigging.sheet_png_path(
+        dir2, worker.store.get(second)["params"]["sheet_id"]
+    )
+    assert second_png.read_bytes() == first_png.read_bytes()
+
+
+async def test_the_sidecar_carries_camera_character_and_validation_and_older_sidecars_still_read(
+    worker, monkeypatch
+):
+    """``meta["character"]`` and per-cell ``sockets`` are additive on sheet v1,
+    ``meta["troupe"]``'s rule and its version -- so the two halves of the claim
+    have to be checked together.
+
+    The second half is the one that would break quietly: a sheet whose source
+    has no ``character.json`` must come back the sheet it always was, with no
+    ``character`` key and no ``sockets`` on any cell, and must still open
+    through both readers that consume a Troupe sidecar -- Inker's
+    ``document_from_sheet`` and Troupe's own ``preview_layout``.
+    """
+    import types
+
+    import numpy as np
+    from PIL import Image
+
+    from warlock import rigging
+    from warlock.studio import troupe_mode
+    from warlock.studio.inker import sheetin
+
+    calls = _fake_render(monkeypatch, grey=True, socket_at=_SOCKET_PX)
+    # A themed character and, in the same run, a mesh with no species behind it.
+    (job_id, _s, source_dir), (plain_id, _s2, plain_dir) = await _run_character_sheets(
+        worker, [{}, {"character": None}]
+    )
+    row = worker.store.get(job_id)
+    meta = rigging.read_sheet(source_dir, row["params"]["sheet_id"])
+
+    assert meta["version"] == 1
+    assert meta["camera"]["projection"] == "orthographic"
+    assert meta["camera"]["render_size"] == charsheet.RENDER_SIZE
+    assert meta["validation"]["version"] == 1
+    assert meta["character"] == {
+        "family": "elemental",
+        "family_version": 1,
+        "recipe": _CHARACTER["recipe"],
+    }
+    # Cell pixels, not the 512 the worker projected at: a 32px cell recording
+    # a socket near (256, 352) would place a flame sixteen cells away.
+    projected = [c["sockets"] for c in meta["cells"] if "sockets" in c]
+    assert projected
+    core = projected[0]["core"]
+    assert core["x"] == pytest.approx(_SOCKET_PX[0] * 32 / charsheet.RENDER_SIZE)
+    assert core["y"] == pytest.approx(_SOCKET_PX[1] * 32 / charsheet.RENDER_SIZE)
+
+    # --- and a sheet from before any of this existed ------------------------
+    sheet_id = worker.store.get(plain_id)["params"]["sheet_id"]
+    old = rigging.read_sheet(plain_dir, sheet_id)
+    assert "character" not in old
+    assert all("sockets" not in c for c in old["cells"])
+    # The spec is byte-identical too: no ``character.json`` means the worker is
+    # never asked to project anything, which is what keeps every sheet this
+    # program rendered before the registry unchanged. Two renders ran; exactly
+    # one of them asked for sockets.
+    asked = [call for call in calls if "sockets" in call["spec"]]
+    assert len(calls) == 2 and len(asked) == 1
+
+    with Image.open(rigging.sheet_png_path(plain_dir, sheet_id)) as opened:
+        opened.load()
+        atlas = np.asarray(opened.convert("RGBA"))
+    doc = sheetin.document_from_sheet(atlas, old["cells"], old.get("animation"))
+    assert len(doc.anim.frames) == len(old["cells"])
+
+    ctx = types.SimpleNamespace(state=types.SimpleNamespace(preview={}))
+    monkeypatch.setattr(troupe_mode, "active_sheet", lambda _ctx: old)
+    layout = troupe_mode.preview_layout(ctx)
+    assert layout["movements"] and layout["runs"]
+
+
+async def test_a_subset_rerender_of_a_character_reuses_its_seed_and_composites_only_its_cells(
+    worker, monkeypatch
+):
+    """The pinned palette's argument, applied to the flames.
+
+    A re-rendered run whose flames were seeded afresh would come back with
+    different tongues from the cells beside it -- which is worse than a stale
+    flame, because the two are visibly the same character on the same sheet.
+    And the composite must touch exactly the cells that were rendered: a flame
+    drawn onto a *copied* cell would be a second flame over the one already
+    baked into it.
+    """
+    import json
+
+    from warlock import rigging
+    from warlock.characters import effects as effects_mod
+
+    layout = {
+        "version": 2,
+        "movements": [
+            {"key": "idle", "frames": 3, "directions": 1},
+            {"key": "attack", "frames": 2, "directions": 1},
+        ],
+    }
+    seen: list[dict] = []
+    real = effects_mod.composite_effects
+
+    def spy(reduced, cells_by_index, sockets_px, **kwargs):
+        seen.append({"cells": sorted(reduced), "seed": kwargs["recipe_seed"]})
+        return real(reduced, cells_by_index, sockets_px, **kwargs)
+
+    monkeypatch.setattr(effects_mod, "composite_effects", spy)
+    _fake_render(monkeypatch, grey=True, socket_at=_SOCKET_PX)
+
+    source = worker.store.create("image", "an elemental", {}, stage="model")
+    source_dir = worker.config.job_dir(source)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "model.glb").write_bytes(b"fake-glb")
+    (source_dir / "rig.glb").write_bytes(b"fake-rig")
+    (source_dir / "rig.json").write_text(json.dumps({"template": "humanoid"}), "utf-8")
+    (source_dir / "character.json").write_text(json.dumps(_CHARACTER), "utf-8")
+    worker.store.set_status(source, "done")
+
+    def _queue(**extra):
+        return worker.store.create(
+            "charsheet",
+            "an elemental",
+            {
+                "source_job": source,
+                "sheet_id": rigging.new_id(),
+                "logical_size": 32,
+                "colors": 16,
+                "layout": layout,
+                **extra,
+            },
+        )
+
+    first = _queue()
+    worker.start()
+    try:
+        await _wait_until(
+            lambda: worker.store.get(first)["status"] in ("done", "error"), 90.0
+        )
+        assert worker.store.get(first)["error"] is None
+        base_sheet = worker.store.get(first)["params"]["sheet_id"]
+        rerun = _queue(
+            subset=[{"animation": "attack", "direction": "front"}],
+            base_sheet=base_sheet,
+        )
+        await _wait_until(
+            lambda: worker.store.get(rerun)["status"] in ("done", "error"), 90.0
+        )
+    finally:
+        await worker.shutdown()
+
+    assert worker.store.get(rerun)["error"] is None
+    assert len(seen) == 2
+    full, subset = seen
+    assert full["cells"] == list(range(5))
+    # The attack run is cells 3 and 4 -- exactly the ones the re-render drew.
+    assert subset["cells"] == [3, 4]
+    assert subset["seed"] == full["seed"]
+
+    # And in pixels: the idle's three cells were copied from the base, so they
+    # are byte-identical -- nothing drew a second flame over a cell that
+    # already had one baked into it. The attack's two are not compared, because
+    # a subset's quantise is pinned to the base's *exact* colour set rather
+    # than median-cutting two cells, and mapping into a richer set is allowed
+    # to land a faint flame pixel on a warmer entry than the base's own cut
+    # chose. That is ``_atlas_entries``' behaviour and predates this phase.
+    import numpy as np
+
+    rerun_sheet = worker.store.get(rerun)["params"]["sheet_id"]
+    cells_a = _cells(
+        rigging.sheet_png_path(source_dir, base_sheet),
+        rigging.read_sheet(source_dir, base_sheet),
+    )
+    cells_b = _cells(
+        rigging.sheet_png_path(source_dir, rerun_sheet),
+        rigging.read_sheet(source_dir, rerun_sheet),
+    )
+    for index in (0, 1, 2):
+        assert np.array_equal(
+            np.asarray(cells_a[index]), np.asarray(cells_b[index])
+        ), f"cell {index} was copied and should not have changed"
+    # The re-rendered run still carries a flame -- a subset that composited
+    # nothing would pass every assertion above.
+    assert _warm(cells_b[3]).any()

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, tokens, troupe_mode, widgets
+from .. import controls, icons, theme, tokens, troupe_mode, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -75,6 +75,15 @@ def draw(ctx: Any) -> None:
             f"sheet-{record['id']}", label, selected=selected
         ):
             troupe_mode.select(ctx, state.job_id, record["id"])
+        if troupe_mode.needs_repair(record):
+            # On the row rather than only in the inspector, because the whole
+            # reason this list exists is a second attempt at the same
+            # character: a user comparing 32 px against 64 has to be able to
+            # see which of them came back broken without selecting each in
+            # turn. It is the *structural* verdict -- clipped, empty or never
+            # rendered -- and never the QA scores, which rank and gate nothing.
+            imgui.same_line()
+            widgets.pill(f"{icons.TRIANGLE_ALERT} needs repair", theme.WARN)
 
 
 def _row_menu(ctx: Any, state: Any, character: dict[str, Any]) -> None:

@@ -17,6 +17,14 @@ through a linear filter is a blurred sprite, which is precisely the thing the
 whole pipeline exists to avoid producing; drawing it that way in the one place
 the user judges it would be the pipeline lying about its own output.
 
+**Two marks sit over the picture, and neither is part of it.** The
+checkerboard answers "where is the transparency" -- Packwright's question, in
+Packwright's pattern, through ``widgets.checkerboard`` so the two panes agree
+about what nothing looks like -- and the pivot cross answers "where will the
+engine put this". The pivot is drawn only where the sidecar records one: a
+cross at a guessed centre is a claim about placement that nothing measured, and
+it is indistinguishable from a measured one.
+
 The pane is also the mode's heartbeat. There is no per-mode update hook -- the
 arrangement ``packwright_mode`` already lives with -- so the pane that draws is
 what pumps the clock.
@@ -240,6 +248,27 @@ def _transport(ctx: Any, state: Any) -> None:
         toolbar.Item(key="play", label=label, icon=glyph, tooltip=tip, pinned=True),
         toolbar.Item(key="back", label="Previous frame", icon=icons.ARROW_LEFT, pinned=True),
         toolbar.Item(key="fwd", label="Next frame", icon=icons.CHEVRON_RIGHT, pinned=True),
+        # The two view marks. Not pinned: they are about *reading* the sprite
+        # and the transport is the row's reason for existing, so on a narrow
+        # pane these collapse into the overflow menu before Play does.
+        toolbar.Item(
+            key="checker",
+            label="Checkerboard",
+            icon=icons.GRID,
+            tooltip="C -- a checkerboard behind the sprite, so transparent "
+            "pixels are transparent rather than the panel's colour.",
+            selected=state.checker,
+            priority=1,
+        ),
+        toolbar.Item(
+            key="pivot",
+            label="Pivot",
+            icon=icons.CROSSHAIR,
+            tooltip="P -- where the engine will place this sprite, from the "
+            "sidecar. Nothing is drawn on a sheet that records no pivot.",
+            selected=state.show_pivot,
+            priority=1,
+        ),
     ]
     clicked = toolbar.toolbar("troupe-transport", row, trailing=(sp(340), _trailing))
     if clicked == "play":
@@ -248,6 +277,10 @@ def _transport(ctx: Any, state: Any) -> None:
         troupe_mode.step(ctx, -1)
     elif clicked == "fwd":
         troupe_mode.step(ctx, 1)
+    elif clicked == "checker":
+        state.checker = not state.checker
+    elif clicked == "pivot":
+        state.show_pivot = not state.show_pivot
 
     # A row each, and both wrapping. A 16-direction movement cannot fit on the
     # transport's line, and a clipped radio is a direction nobody can pick.
@@ -318,7 +351,18 @@ def _sprite(ctx: Any, state: Any, texture: Any, record: dict[str, Any]) -> None:
     imgui.dummy((0, max((avail.y - drawn) * 0.5, 0)))
     imgui.dummy((max((avail.x - drawn) * 0.5, 0), 0))
     imgui.same_line()
+    origin = imgui.get_cursor_screen_pos()
+    low = (origin.x, origin.y)
+    high = (origin.x + drawn, origin.y + drawn)
+    draw_list = imgui.get_window_draw_list()
+    if state.checker:
+        # Before the image, because the window draw list is one ordered stream
+        # and ``imgui.image`` appends to it: painted after, the pattern would
+        # cover the sprite it exists to sit behind.
+        widgets.checkerboard(draw_list, low, high)
     imgui.image(widgets.texture_ref(texture), (drawn, drawn), uv0, uv1)
+    if state.show_pivot:
+        _pivot_mark(draw_list, low, troupe_mode.pivot_of(record, index), state.zoom)
 
     # **The wheel, at last.** The centre pane has carried
     # ``no_scroll_with_mouse`` since the mode was built, on the stated grounds
@@ -329,3 +373,33 @@ def _sprite(ctx: Any, state: Any, texture: Any, record: dict[str, Any]) -> None:
     io = imgui.get_io()
     if imgui.is_item_hovered() and io.mouse_wheel:
         state.zoom = max(1, min(int(state.zoom + io.mouse_wheel), 32))
+
+
+#: The pivot cross' arm, in *sprite* pixels rather than design pixels: the mark
+#: has to keep its size relative to the character as the zoom changes, or at 1x
+#: it swallows a 32px sprite and at 16x it is a speck on one.
+PIVOT_ARM = 3.0
+
+
+def _pivot_mark(draw_list: Any, low, pivot, zoom: int) -> None:
+    """A cross and a ring where the engine will place this sprite's origin.
+
+    ``packwright_preview._pivot_mark``'s picture, deliberately -- the two panes
+    show the same fact about two atlases, and two drawings of one idea is how a
+    user comes to believe they are two things.
+
+    **No pivot, no mark.** ``troupe_mode.pivot_of`` answers None for a sheet
+    that records none, and the branch here is the whole of the response: a cross
+    drawn at a guessed centre is a claim about the engine's placement that
+    nothing measured, and it looks exactly like a measured one.
+    """
+    from imgui_bundle import imgui
+
+    if pivot is None:
+        return
+    at = (low[0] + pivot[0] * zoom, low[1] + pivot[1] * zoom)
+    colour = imgui.get_color_u32(theme.rgba(theme.ACCENT))
+    arm = max(PIVOT_ARM * zoom, sp(4))
+    draw_list.add_line((at[0] - arm, at[1]), (at[0] + arm, at[1]), colour, sp(1))
+    draw_list.add_line((at[0], at[1] - arm), (at[0], at[1] + arm), colour, sp(1))
+    draw_list.add_circle(at, arm * 0.6, colour, 12)

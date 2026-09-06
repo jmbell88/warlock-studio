@@ -245,7 +245,12 @@ async def test_a_cancel_after_a_character_sheet_is_published_records_it_as_done(
     async def fake_render(glb, layout, cells, *, pack_target, **kwargs):
         pack_target.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGBA", (8, 8), (1, 2, 3, 255)).save(pack_target, "PNG")
-        return {"pivot": (0.0, 0.0)}, {}
+        # Three values, not two: ``_render_charsheet`` grew the projected
+        # sockets on 2026-09-05 for the character effects pass. Empty here
+        # because this fixture has no ``character.json``, which is the same
+        # thing a sheet built before characters existed carries -- so this fake
+        # keeps standing for the case the test is actually about.
+        return {"pivot": (0.0, 0.0)}, {}, {}
 
     async def no_roots(*_args):
         return {}, None

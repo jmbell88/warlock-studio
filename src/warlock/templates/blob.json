@@ -1,0 +1,20 @@
+{
+  "key": "blob",
+  "label": "Blob (amorphous)",
+  "root": "base",
+  "comment": "The amorphous archetype -- slime, ooze, elemental, cloud. Named for the shape and not for the genre skin, the way bird and serpent are: 'slime' names one costume and 'amorphous' names the category rather than the skeleton. Same normalized frame as every other template, Blender axes: +X is the subject's left, -Y is forward, +Z is up. A blob has no limbs, so what it needs a skeleton for is a *centre of mass that can rise and sink* and a *surface that can bulge*: base/core/crown/top are that vertical column, and the four lobes are the equator. A pose carries rotation only, so squash and stretch are authored as the lobes swinging down-and-out or up-and-in about the equator while root_translation drops or lifts the whole body -- see templates/clips/blob.json.",
+  "bones": [
+    {"name": "base",       "parent": null,   "head": [0.00,  0.00, 0.00], "tail": [0.00,  0.00, 0.22]},
+    {"name": "core",       "parent": "base", "head": [0.00,  0.00, 0.22], "tail": [0.00,  0.00, 0.52]},
+    {"name": "crown",      "parent": "core", "head": [0.00,  0.00, 0.52], "tail": [0.00,  0.00, 0.80]},
+    {"name": "top",        "parent": "crown","head": [0.00,  0.00, 0.80], "tail": [0.00,  0.00, 1.00]},
+
+    {"name": "lobe_front", "parent": "core", "head": [0.00, -0.10, 0.30], "tail": [0.00, -0.42, 0.40]},
+    {"name": "lobe_back",  "parent": "core", "head": [0.00,  0.10, 0.30], "tail": [0.00,  0.42, 0.40]},
+    {"name": "lobe.L",     "parent": "core", "head": [0.10,  0.00, 0.30], "tail": [0.44,  0.00, 0.40]},
+    {"name": "lobe.R",     "parent": "core", "head": [-0.10, 0.00, 0.30], "tail": [-0.44, 0.00, 0.40]}
+  ],
+  "mirror_pairs": [
+    ["lobe.L", "lobe.R"]
+  ]
+}

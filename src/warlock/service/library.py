@@ -218,7 +218,7 @@ def backup(
     The store goes through ``JobStore.backup_to`` -- sqlite's online backup,
     because this connection is in WAL mode and a file copy is a snapshot missing
     every transaction since the last checkpoint. Assets go through
-    ``export._staged_copy``, the same temp-then-replace this codebase uses
+    ``export.staged_copy``, the same temp-then-replace this codebase uses
     everywhere a destination might be watched or re-read.
     """
     dest = Path(dest)
@@ -238,7 +238,7 @@ def backup(
     if not include_assets:
         return out
 
-    from .export import _staged_copy
+    from .export import staged_copy
 
     data_dir = Path(svc.config.data_dir)
     copied = 0
@@ -250,7 +250,7 @@ def backup(
             target = dest / "assets" / source.relative_to(data_dir)
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
-                _staged_copy(source, target)
+                staged_copy(source, target)
             except OSError:
                 # One unreadable file does not fail the backup. The count and
                 # the log are what say so -- the alternative is a two-hour copy

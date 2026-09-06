@@ -5,6 +5,14 @@ answers "what am I looking at" and "give me it again, differently". The second
 is the *direct* door (``service.troupe.create_charsheet``): a second sheet at
 another size, or a supplied base mesh that never went through the reference
 chain at all.
+
+**The structural verdict lives here and the QA scores do not**, and the wording
+keeps them apart on purpose. ``studio/troupe/qa.py`` ranks the drawing -- it is
+the heatmap over the sprite, it flags the worst cells, and nothing anywhere
+refuses a sheet on its account. ``pipelines/sheetcheck.py`` says a cell is
+clipped at the frame edge, empty, or was never rendered: facts about the file.
+"Needs repair" is the second one and says so, because a user who reads them as
+one thing will either ignore both or re-render over neither.
 """
 
 from __future__ import annotations
@@ -12,7 +20,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from .. import controls, tokens, troupe_mode, widgets
+from .. import controls, icons, theme, tokens, troupe_mode, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -35,6 +43,11 @@ def draw(ctx: Any) -> None:
     widgets.muted(f"{columns} x {rows} cells at {size} px")
     tags = (record.get("animation") or {}).get("tags") or []
     widgets.muted(f"{len(tags)} tagged runs")
+    line = camera_line(record)
+    if line:
+        widgets.muted(line)
+    _repair(ctx, record)
+    _character(ctx, record)
 
     report = _pixel_report(ctx, state)
     if report:
@@ -49,6 +62,108 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, sp(tokens.SP_2)))
     _rebuild(ctx, state)
     _rerender(ctx, state)
+
+
+def camera_line(record: dict[str, Any]) -> str:
+    """What this sheet was framed from, in one line. Empty when it does not say.
+
+    From the ``camera`` block, which every charsheet has carried since it was
+    added -- and falling back to the bare ``elevation`` that ``sheet.sidecar``
+    has always written, because a sheet rendered before the block existed still
+    knows its angle and a pane that showed nothing for it would be describing
+    the format rather than the file.
+
+    A pure function of the record so the wording is testable without a window;
+    the preset's *label* comes from ``charsheet.CAMERA_PRESETS``, which is the
+    one home for that table.
+    """
+    from ...pipelines import charsheet
+
+    camera = record.get("camera")
+    if not isinstance(camera, dict):
+        elevation = record.get("elevation")
+        return "" if elevation is None else f"framed at {float(elevation):g} degrees"
+    labels = {key: label for key, label, _angle in charsheet.CAMERA_PRESETS}
+    preset = str(camera.get("preset") or "")
+    # A preset the table no longer holds is named rather than hidden: the sheet
+    # was rendered at that framing whether or not this build still offers it.
+    name = labels.get(preset, preset) or "custom"
+    parts = [f"{name}, {float(camera.get('elevation') or 0.0):g} degrees"]
+    projection = str(camera.get("projection") or "")
+    if projection:
+        parts.append(projection)
+    pixel = camera.get("pixel_size")
+    if pixel:
+        parts.append(f"{int(pixel)} px sprite")
+    return " -- ".join(parts)
+
+
+def _repair(ctx: Any, record: dict[str, Any]) -> None:
+    """The structural verdict, and it is **not** the QA heatmap.
+
+    Two different questions over one sheet, and a pane that ran them together
+    would teach the user that a red square and this pill mean the same thing.
+    ``troupe/qa.py`` *ranks*: it compares each cell with its neighbours, flags
+    the worst, and nothing anywhere refuses a sheet on its account -- the
+    heatmap above the sprite is advice about the drawing.
+    ``pipelines/sheetcheck.py`` *checks structure*: a cell is cut off at the
+    frame edge, empty, or was never rendered at all. Those are facts about the
+    file, and they are what "needs repair" means.
+
+    It still does not gate anything -- the sheet plays, exports and opens in
+    Inker exactly as it did. What it does is name the runs worth re-rendering,
+    which is the button directly underneath.
+    """
+    if not troupe_mode.needs_repair(record):
+        return
+    widgets.pill(f"{icons.TRIANGLE_ALERT} Needs repair", theme.WARN)
+    widgets.muted_wrapped(
+        "Structural check: cells are missing, empty or cut off at the frame "
+        "edge. This is not the QA heatmap, which ranks the drawing and never "
+        "refuses anything -- re-render the runs below to fix these."
+    )
+    for note in troupe_mode.repair_notes(record):
+        widgets.muted_wrapped(f"- {note}")
+
+
+def _character(ctx: Any, record: dict[str, Any]) -> None:
+    """Who this is, and the way to make another one like them.
+
+    Only on a sheet the character registry built: one from a supplied mesh, or
+    from Troupe's own form, carries no ``character`` block and there is no
+    recipe to load -- so the button is absent rather than disabled, because a
+    greyed control implies a state the user could reach.
+    """
+    from imgui_bundle import imgui
+
+    block = record.get("character")
+    if not isinstance(block, dict):
+        return
+    recipe = troupe_mode.recipe_of(record)
+    family = str(block.get("family") or recipe.get("family") or "")
+    if not family:
+        return
+    version = block.get("family_version")
+    line = family if version is None else f"{family} v{int(version)}"
+    theme_name = str(recipe.get("theme") or "")
+    if theme_name:
+        line += f", {theme_name}"
+    widgets.muted(line)
+    seed = recipe.get("seed")
+    if seed is not None:
+        widgets.muted(f"seed {int(seed)}")
+    if not recipe:
+        return
+    imgui.dummy((0, sp(tokens.SP_1)))
+    if widgets.disabled_button(
+        "Vary in Create",
+        True,
+        (-1, 0),
+        tooltip="Loads this character's recipe into Create as your own "
+        "settings, so a new seed, a wider palette or a longer horn makes the "
+        "next one. Editing the prompt will not undo them.",
+    ):
+        troupe_mode.vary_in_create(ctx, record)
 
 
 def _pixel_report(ctx: Any, state: Any) -> dict[str, Any]:

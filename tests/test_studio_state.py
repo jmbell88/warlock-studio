@@ -813,3 +813,69 @@ def test_a_toast_carries_no_action_by_default():
     state = AppState()
     state.toast("saved")
     assert state.toasts[0].action is None
+
+
+# --- the action ladder's two halves have to agree ------------------------------
+
+
+def _primary_action_returns() -> set[str]:
+    """Every string literal ``primary_action`` can hand back.
+
+    Read out of the source rather than driven by fixtures, because the point is
+    *coverage*: a fixture-driven test only ever reaches the arms somebody
+    thought to write a fixture for, and the arm that crashed was the one nobody
+    had.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(statelib.primary_action))
+
+    def values(node: ast.AST) -> set[str]:
+        # Only *value* positions. ``ast.walk`` over the whole return expression
+        # also finds the strings inside its condition -- ``return "muse" if
+        # params.get("source_job") else None`` would report ``source_job`` as an
+        # action -- so the branches are recursed into by hand and the tests are
+        # not.
+        if isinstance(node, ast.Constant):
+            return {node.value} if isinstance(node.value, str) else set()
+        if isinstance(node, ast.IfExp):
+            return values(node.body) | values(node.orelse)
+        if isinstance(node, ast.BoolOp):
+            return set().union(*(values(v) for v in node.values))
+        return set()
+
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Return) and node.value is not None:
+            found |= values(node.value)
+    return found
+
+
+def test_every_action_the_ladder_returns_has_a_label():
+    """**A returned action with no ``ACTIONS`` entry is a crash, not a gap.**
+
+    The library's result card labels its button with ``ACTIONS[action]``, so a
+    missing key raises ``KeyError`` and takes the whole pane down. That is not
+    hypothetical: ``primary_action`` returned ``"muse"`` for a finished take and
+    for a separate row from the day Muse shipped, and ``"muse"`` was never added
+    here -- so a music row in the library crashed it. Found on 2026-09-05 while
+    adding the ``"character"`` arm, which had the same hole one step earlier
+    (labelled, so it merely did nothing).
+    """
+    missing = sorted(_primary_action_returns() - set(statelib.ACTIONS))
+    assert not missing, f"primary_action returns {missing}, which nothing can label"
+
+
+def test_every_action_the_ladder_returns_is_one_the_library_can_run():
+    """The other half of the same agreement. A labelled action with no arm in
+    ``run_action`` is a button that draws, enables, depresses and does nothing
+    -- which is worse than an absent button, because the user concludes the
+    feature is broken rather than missing."""
+    import inspect
+
+    from warlock.studio.panes import library
+
+    source = inspect.getsource(library.run_action)
+    for action in sorted(_primary_action_returns()):
+        assert f'"{action}"' in source, f"run_action has no arm for {action!r}"

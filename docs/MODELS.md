@@ -7,6 +7,12 @@ widens the choices. SDXL 1.0 is the shipped default because it measured best
 and because its 7 GB is the one base download four registered recipes share, so most of this page
 is a small adapter over weights you already have rather than another checkpoint.
 
+One thing on the generation side is **not** on this page and never will be: Create's **Character**
+type needs no weights at all. A character is built from an authored family of body plans and species
+rather than reconstructed from a picture, so its mesh, its rig and its rendered sheet are CPU work
+with nothing to download — which is why it is the one generation type a machine with no card can
+still use ([manual/22 → Characters](manual/22-generating-references.md#characters)).
+
 `warlock doctor` lists every entry here with the exact command to fetch it,
 and **Settings → Models** inside the app downloads any of them without touching a terminal (via
 the out-of-process fetch worker described in the README — the app process itself stays offline).

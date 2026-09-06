@@ -72,15 +72,18 @@ DEFAULT_TROUPE_LOGICAL_SIZE = 32
 DEFAULT_TROUPE_COLORS = 64
 DEFAULT_TROUPE_OUTLINE = "outer"
 
-#: The only rig template a Troupe sheet can be built on, because it is the only
-#: one the clip library carries clips for -- and ``rigging.clip_library``
-#: answers "no clips" for the rest rather than failing, so without this the
-#: refusal would land in the worker as a frame-count mismatch.
 #: How many ``charsheet`` rows deep the settings lookup looks. The library's
 #: own page size, and ``studio.troupe_mode``'s: a sheet older than this is one
 #: whose settings the door reports as no longer on record, by name.
 _SCAN_LIMIT = 400
 
+#: The rig template every door here *defaults* to, and no longer the only one
+#: allowed: what a character sheet actually needs is a template with clips
+#: authored for it, which is what ``create_charsheet`` refuses on. The pin
+#: survives as the default because it is the template the shipped clip library
+#: carries -- and ``rigging.clip_library`` answers "no clips" for the rest
+#: rather than failing, so without a refusal at the door the mismatch would
+#: land in the worker as a frame-count error.
 TROUPE_TEMPLATE = "humanoid"
 
 #: Pinned rather than inherited from the character's row, the rule
@@ -113,6 +116,13 @@ def troupe_options(svc: WarlockService) -> dict[str, Any]:
             for name, frames, loop, ms in charsheet.ANIMATIONS
         ],
         "directions": [name for name, _yaw in charsheet.DIRECTIONS],
+        # Read from ``charsheet`` rather than restated, this module's rule: the
+        # worker frames the render from that same table, and a second copy here
+        # would be one edit away from a form offering an angle nothing renders.
+        "camera_presets": {
+            key: {"label": label, "elevation": elevation}
+            for key, label, elevation in charsheet.CAMERA_PRESETS
+        },
         "direction_presets": list(charsheet.DIRECTION_PRESETS),
         "cells": len(charsheet.frame_table()),
         "warn_cells": charsheet.WARN_CELLS,
@@ -125,6 +135,7 @@ def troupe_options(svc: WarlockService) -> dict[str, Any]:
             "colors": DEFAULT_TROUPE_COLORS,
             "outline": DEFAULT_TROUPE_OUTLINE,
             "reduce_mode": TROUPE_REDUCE_MODES[0],
+            "camera": charsheet.DEFAULT_CAMERA_PRESET,
             "layout": charsheet.resolve_layout().as_dict(),
         },
     }
@@ -161,6 +172,15 @@ def check_troupe(svc: WarlockService, block: Any) -> dict[str, Any]:
     Troupe reference starts is reference -> gate -> mesh -> rig -> sheet, and
     only the first link exists when this runs; everything the later links will
     refuse that is knowable now is refused now.
+
+    ``elevation`` rides along because the Troupe form now offers a camera
+    preset, and the preset is only a name for an elevation -- resolved in the
+    pane and carried here as the number, so a preset table that grows a row is
+    not also a migration of every queued reference. Validated exactly as
+    ``charsheet.plan`` validates it, because that is the function that would
+    otherwise refuse it an hour later on a row the user never submitted.
+    Absent means absent: the key is not written, so a row queued before the
+    control existed is byte-identical to one queued after it.
     """
     entries = dict(block or {})
     variant = str(entries.get("variant") or DEFAULT_TROUPE_VARIANT)
@@ -181,7 +201,29 @@ def check_troupe(svc: WarlockService, block: Any) -> dict[str, Any]:
     # its own door. What is checked here is the reference stage's own base,
     # because this door pins it rather than inheriting it.
     check_vram(svc, "text", "reference", {"base_model": TROUPE_BASE_MODEL})
-    return {"variant": variant, "pose": pose, "layout": layout.as_dict(), **options}
+    checked = {"variant": variant, "pose": pose, "layout": layout.as_dict(), **options}
+    raw_elevation = entries.get("elevation")
+    if raw_elevation is not None:
+        # **Refused against ``camera``, not against ``elevation``.** The number
+        # is what this door validates, but nothing on the Troupe form is called
+        # ``elevation`` -- the control is the Camera combo, and
+        # ``troupe_mode.camera_elevation`` turns its preset into this number on
+        # the way here. A refusal naming the derived value would ring a field
+        # that pane does not draw, which is precisely what
+        # ``test_every_refusal_a_pane_can_provoke_names_something_that_pane_draws``
+        # exists to catch: it caught this one.
+        try:
+            elevation = float(raw_elevation)
+        except (TypeError, ValueError):
+            raise Invalid("that camera angle is not a number", field="camera") from None
+        if not -89.0 <= elevation <= 89.0:
+            raise Invalid(
+                "a camera angle must be between -89 and 89 degrees above the "
+                "horizon",
+                field="camera",
+            )
+        checked["elevation"] = elevation
+    return checked
 
 
 def create_charsheet(
@@ -198,6 +240,7 @@ def create_charsheet(
     lighting: str | None = None,
     name: str | None = None,
     layout: Mapping[str, Any] | None = None,
+    character: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Queue a configured character sheet for a finished, rigged mesh.
 
@@ -207,6 +250,11 @@ def create_charsheet(
     Aseprite writer all already read that pair. What makes it a Troupe sheet is
     the frame table it was laid out on and the ``animation`` block in the
     sidecar, both of which ``pipelines.charsheet`` owns.
+
+    ``character`` is the family block a caller may already hold about *who*
+    this is -- carried onto the row untouched and *nested*, so
+    ``VECTOR_PARAMS`` (an allowlist of flat settings) cannot pick a field of it
+    up and quietly turn it into a rerun vector.
     """
     from ..pipelines import sheet as sheetlib
 
@@ -223,10 +271,25 @@ def create_charsheet(
 
     rig_meta = rigging.read_rig(job_dir) or {}
     template = str(rig_meta.get("template") or "")
-    if template != TROUPE_TEMPLATE:
+    # **What a sheet needs is clips, not the humanoid template.** The refusal
+    # used to name ``humanoid`` and turned away every family that ships its own
+    # clip library -- a rig authored with a walk cycle was refused for not
+    # being the one template that happened to have one first.
+    # ``rigging.clip_library`` answers with an empty library rather than
+    # failing, so the question is asked here: without it the mismatch lands in
+    # the worker as a frame-count error, an hour and 256 EEVEE frames later.
+    try:
+        clips_authored = bool(rigging.clip_library(template).get("clips"))
+    except ValueError:
+        # An unrecorded or unknown template. Not a separate refusal: from the
+        # user's side it is the same fact -- there are no clips to animate this
+        # rig from -- and a second sentence for it would be a second wording of
+        # one problem.
+        clips_authored = False
+    if not clips_authored:
         raise Invalid(
-            f"a character sheet is animated from the {TROUPE_TEMPLATE} clip "
-            f"library, and this mesh is rigged as {template or 'something else'}"
+            "a character sheet is animated from a clip library, and nothing is "
+            f"authored for the {template or 'unknown'} rig"
         )
 
     options = _check_options(
@@ -247,7 +310,7 @@ def create_charsheet(
         # throws away: a clip library that does not fill the frame table, or a
         # size whose atlas is over the texture limit, is refused now instead of
         # failing a job that has already rendered.
-        records = expand_clips(TROUPE_TEMPLATE, resolved_layout)
+        records = expand_clips(template, resolved_layout)
         charsheet.plan(
             records,
             frame_size=options["logical_size"],
@@ -256,7 +319,7 @@ def create_charsheet(
             layout=resolved_layout,
         )
     except KeyError as exc:
-        raise Invalid(f"the {TROUPE_TEMPLATE} clip library is missing {exc}") from exc
+        raise Invalid(f"the {template} clip library is missing {exc}") from exc
     except ValueError as exc:
         raise invalid_from(exc, "That character sheet cannot be laid out") from exc
 
@@ -269,13 +332,18 @@ def create_charsheet(
     params = {
         "source_job": job_id,
         "sheet_id": rigging.new_id(),
-        "template": TROUPE_TEMPLATE,
+        # The rig's own template, read off ``rig.json`` -- the mesh is already
+        # rigged, so pinning ``humanoid`` here would have the worker expand a
+        # clip library the skeleton on disk does not match.
+        "template": template,
         "elevation": sheetlib.DEFAULT_ELEVATION if elevation is None else elevation,
         "lighting": lighting or "flat",
         "name": sheet_name,
         "layout": resolved_layout.as_dict(),
         **options,
     }
+    if character is not None:
+        params["character"] = dict(character)
     # The sheet cap, counted the way ``create_sheet`` counts it and under the
     # same job-wide hold: the artifact lands minutes after the row is minted,
     # so counting files alone lets N rapid submits all read the same count.
@@ -414,6 +482,9 @@ def send_to_troupe(
     lighting: str | None = None,
     name: str | None = None,
     layout: Mapping[str, Any] | None = None,
+    template: str | None = None,
+    bones: list[Any] | None = None,
+    character: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Take a mesh the user already has into Troupe, rigging it first if needed.
 
@@ -451,11 +522,29 @@ def send_to_troupe(
     everything that is not derived, so the next "Remesh" would silently spend
     a rig and 256 rendered cells nobody asked for.
 
-    The rig template is pinned to ``humanoid`` rather than taken from the
-    user's Rig-stage preference, because the clip library this animates from
-    is humanoid; ``joints="measured"`` for the reason ``_jobs_create`` gives
-    where it sets the same flag -- the shipped template is an A-pose and
-    mis-fits a T-posed mesh badly enough to skin the arms to the chest.
+    The rig template defaults to ``humanoid`` rather than being taken from the
+    user's Rig-stage preference, because the clip library this animates from is
+    humanoid; ``joints="measured"`` for the reason ``_jobs_create`` gives where
+    it sets the same flag -- the shipped template is an A-pose and mis-fits a
+    T-posed mesh badly enough to skin the arms to the chest.
+
+    Three parameters that every existing caller leaves alone, all defaulting to
+    None so the row a bare call mints is byte-identical to the one it minted
+    before they existed:
+
+    * ``template`` -- the rig template to use instead of the default. A family
+      that ships its own clip library is rigged on its own skeleton, and
+      ``expand_clips`` has to be given the same one or the frame table is
+      filled from the wrong library.
+    * ``bones`` -- an exact skeleton the caller already holds, validated the
+      way ``rig.adjust_joints`` validates a user correction. Passing it also
+      *withholds* ``joints="measured"``: measuring is a guess from the
+      reference image, and re-deriving joints a family stated exactly would
+      throw away the only precise answer in the chain.
+    * ``character`` -- who this is, carried into the ``troupe_sheet`` block so
+      ``_maybe_queue_sheet_after_rig`` copies it onto the sheet row. Nested,
+      like the block that carries it, so ``VECTOR_PARAMS`` cannot pick a field
+      of it up.
     """
     check_job_id(job_id)
     source = svc.require_job(job_id)
@@ -478,6 +567,7 @@ def send_to_troupe(
             lighting=lighting,
             name=name,
             layout=layout,
+            character=character,
         )
 
     spec = _charsheet_spec(
@@ -492,6 +582,8 @@ def send_to_troupe(
         lighting=lighting,
         name=name,
         layout=layout,
+        template=template,
+        character=character,
     )
     from .. import doctor
 
@@ -502,16 +594,29 @@ def send_to_troupe(
         # second test of the same thing.
         raise Invalid("Rigging needs Blender, which is not installed.")
 
-    params = {
+    rig_template = str(template or TROUPE_TEMPLATE)
+    params: dict[str, Any] = {
         "source_job": job_id,
-        # Pinned rather than taken from ``config.rig_template``: the sheet is
-        # animated from the humanoid clip library, so a quadruped rig here
-        # would produce a rig that the sheet then refuses.
-        "template": TROUPE_TEMPLATE,
+        # Defaulted rather than taken from ``config.rig_template``: the sheet is
+        # animated from a clip library, so a quadruped rig chosen elsewhere in
+        # the app would produce a rig that the sheet then refuses.
+        "template": rig_template,
         "auto": True,
         "joints": "measured",
         "troupe_sheet": spec,
     }
+    if bones is not None:
+        try:
+            params["bones"] = rigging.validate_joints(
+                {"bones": list(bones)}, rigging.get_template(rig_template)
+            )
+        except ValueError as exc:
+            raise invalid_from(exc, "Those joint positions cannot be used") from exc
+        # **And the measurement is dropped.** ``joints="measured"`` reads the
+        # joints off the reference image, which is a guess; a family that ships
+        # exact joints has already answered the question, and re-measuring
+        # would overwrite the precise answer with the approximate one.
+        params.pop("joints", None)
     # The rig row *is* a sheet reservation -- ``_maybe_queue_sheet_after_rig``
     # mints the charsheet from it with no door in between -- so the cap is
     # taken here, under the same hold the direct door takes it.
@@ -535,6 +640,8 @@ def _charsheet_spec(
     lighting: str | None,
     name: str | None,
     layout: Mapping[str, Any] | None,
+    template: str | None = None,
+    character: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate a sheet request and freeze it as the params the worker will use.
 
@@ -542,6 +649,12 @@ def _charsheet_spec(
     checked here and then *snapshotted*: the row the worker mints later must
     describe the settings that were on screen when the button was pressed, not
     whatever the pane holds by the time the rig finishes.
+
+    ``template`` is the rig the sheet will be animated on -- it has to be the
+    one ``send_to_troupe`` puts on the rig row, or the clips expanded here come
+    from one library and the skeleton from another. ``character`` is carried
+    through untouched: ``_maybe_queue_sheet_after_rig`` copies this block onto
+    the sheet row wholesale, which is the whole reason it is nested.
     """
     from ..pipelines import sheet as sheetlib
 
@@ -556,9 +669,10 @@ def _charsheet_spec(
             "palette": palette,
         },
     )
+    sheet_template = str(template or TROUPE_TEMPLATE)
     try:
         resolved_layout = charsheet.resolve_layout(layout)
-        records = expand_clips(TROUPE_TEMPLATE, resolved_layout)
+        records = expand_clips(sheet_template, resolved_layout)
         charsheet.plan(
             records,
             frame_size=options["logical_size"],
@@ -567,7 +681,7 @@ def _charsheet_spec(
             layout=resolved_layout,
         )
     except KeyError as exc:
-        raise Invalid(f"the {TROUPE_TEMPLATE} clip library is missing {exc}") from exc
+        raise Invalid(f"the {sheet_template} clip library is missing {exc}") from exc
     except ValueError as exc:
         raise invalid_from(exc, "That character sheet cannot be laid out") from exc
 
@@ -576,14 +690,17 @@ def _charsheet_spec(
         raise Invalid(
             f"sheet name must be at most {rigging.MAX_SHEET_NAME} characters", field="name"
         )
-    return {
-        "template": TROUPE_TEMPLATE,
+    spec: dict[str, Any] = {
+        "template": sheet_template,
         "elevation": sheetlib.DEFAULT_ELEVATION if elevation is None else elevation,
         "lighting": lighting or "flat",
         "name": sheet_name,
         "layout": resolved_layout.as_dict(),
         **options,
     }
+    if character is not None:
+        spec["character"] = dict(character)
+    return spec
 
 # ``get_charsheet`` was deleted on 2026-08-22. It delegated to
 # ``sheets.get_sheet`` so a Troupe pane would not have to know that a Troupe

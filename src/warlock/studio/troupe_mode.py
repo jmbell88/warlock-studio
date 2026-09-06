@@ -434,8 +434,8 @@ def can_send_to_troupe(ctx: Any, job: Any) -> bool:
     itself. **The rig template**: it lives only in the ``rig.json`` sidecar,
     which is a disk read -- so the button is offered optimistically and the
     service refuses, instantly and before anything is minted, in a sentence
-    that already reads well ("a character sheet is animated from the humanoid
-    clip library, and this mesh is rigged as quadruped"). Recording the
+    that already reads well ("a character sheet is animated from a clip
+    library, and nothing is authored for the quadruped rig"). Recording the
     template on the mesh row instead would mean a worker writing a fact onto
     its source's params, which then has to join ``DERIVED_PARAMS`` or a reroll
     wears a stale template -- all to save one toast.
@@ -532,14 +532,13 @@ def send_to_troupe(ctx: Any, job: Any, form: dict[str, Any] | None = None) -> bo
             reduce_mode=request.get("reduce_mode"),
             dither=bool(request.get("dither")),
             palette=request.get("palette") or None,
-            # **No control writes these two, and the read is still right.**
-            # ``elevation`` and ``lighting`` are validated by the door, reach
-            # ``charsheet.plan`` and ``op_sheet``, and have working defaults --
-            # they are simply not offered in the form yet. Read through
-            # ``request`` rather than dropped so that adding the controls is a
-            # pane change and nothing else; ``name`` sat in exactly this state
-            # until its field landed beside the palette.
-            elevation=request.get("elevation"),
+            # ``elevation`` now has a control -- the Camera combo, which offers
+            # preset *names* and is translated to the number here. ``lighting``
+            # is still in the state this one used to be in: validated by the
+            # door, reaching ``charsheet.plan`` and ``op_sheet``, with a working
+            # default and no control yet. Read through ``request`` rather than
+            # dropped so that adding it is a pane change and nothing else.
+            elevation=camera_elevation(request),
             lighting=request.get("lighting"),
             name=str(request.get("name") or ""),
             layout=settings or None,
@@ -886,6 +885,43 @@ def cell_geometry(record: Mapping[str, Any] | None) -> tuple[int, int, int] | No
     return columns, width, height
 
 
+def pivot_of(
+    record: Mapping[str, Any] | None, index: int | None
+) -> tuple[float, float] | None:
+    """One cell's pivot in **cell pixels**, or ``None`` if the sidecar has none.
+
+    Pure, and given the record rather than the context, so the marker the
+    preview draws can be tested without a window -- ``cell_geometry``'s
+    arrangement one function up, for its reason.
+
+    **``None`` rather than a centre.** The obvious fallback here is
+    ``(w / 2, h)``, which is what ``sheet.sidecar`` writes when the renderer
+    measured nothing -- but a marker drawn at a guessed origin is a lie about
+    where the engine will place the sprite, and the user cannot tell it apart
+    from a measured one. A sheet from before pivots were recorded, and a cell
+    of a subset re-render that was copied rather than rendered, both land here:
+    the honest answer is no mark at all.
+    """
+    if not record or index is None:
+        return None
+    for entry in record.get("cells") or ():
+        if not isinstance(entry, Mapping):
+            continue
+        try:
+            if int(entry.get("index")) != int(index):
+                continue
+        except (TypeError, ValueError):
+            continue
+        x, y = entry.get("pivot_x"), entry.get("pivot_y")
+        if x is None or y is None:
+            return None
+        try:
+            return float(x), float(y)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def scores_key(job_id: str, sheet_id: str) -> str:
     return f"troupe-qa:{job_id}:{sheet_id}"
 
@@ -1063,6 +1099,126 @@ def _layout_request(form: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def camera_elevation(form: Mapping[str, Any]) -> float | None:
+    """The elevation a form's camera choice means, or None if it makes none.
+
+    **The form holds a preset key and every door takes an elevation**, so the
+    translation happens once, here, on the way out -- a preset is a name for a
+    number and the number is what ``charsheet.plan`` and ``op_sheet`` frame
+    from. Doing it in the pane instead would mean two panes translating, and
+    doing it in the service would mean the door storing a name that a later
+    edit of the table could silently re-point at a different angle.
+
+    Read from ``pipelines.charsheet``, which is where the table lives and where
+    ``service.troupe_options`` reads it from too -- so the combo the user sees
+    and the number the worker renders at come from one home. This module
+    already sits above ``pipelines`` (see the module docstring); the *panes*
+    stay on ``troupe_options``, which is their single source.
+
+    An explicit ``elevation`` on the form still wins, and that is deliberate:
+    an angle off the preset ladder has to stay expressible, or the ladder
+    becomes the only thing anyone can render.
+    """
+    explicit = form.get("elevation")
+    if explicit not in (None, ""):
+        return float(explicit)
+    key = str(form.get("camera") or "")
+    if not key:
+        return None
+    from ..pipelines import charsheet
+
+    return next(
+        (angle for preset, _label, angle in charsheet.CAMERA_PRESETS if preset == key),
+        None,
+    )
+
+
+#: Where :func:`options` caches the door's answer. On ``state.preview`` rather
+#: than on ``TroupeState``: it is neither a selection nor a clock.
+OPTIONS_SLOT = "troupe_options"
+
+
+def options(ctx: Any) -> dict[str, Any]:
+    """The door's own answer about what a Troupe request may ask for.
+
+    Cached on the frame state rather than called per draw: it walks the palette
+    directory, and a directory walk sixty times a second is a cost with no
+    reader. Keyed on nothing, because the only thing that changes it is a file
+    the user dropped in.
+    """
+    from ..service import troupe as svc_troupe
+
+    cached = ctx.state.preview.get(OPTIONS_SLOT)
+    if cached is None:
+        cached = svc_troupe.troupe_options(ctx.svc)
+        ctx.state.preview[OPTIONS_SLOT] = cached
+    return cached
+
+
+def form(ctx: Any) -> dict[str, Any]:
+    """The new-character request, kept on the mode's own state.
+
+    Public and here rather than private in ``panes/troupe_settings``, because
+    it stopped having one caller: Create's Character arm offers "Draw it in
+    Troupe" as the escape route from a species this program does not model, and
+    that route has to put the brief into *this* form -- the one the pane will
+    draw when the mode opens. A second construction of the same dict in the
+    pane and in that hand-off is two defaults for one request.
+
+    The state survives a trip to Create and back, which is what makes the
+    hand-off work at all: setting ``prompt`` here is read by the next draw
+    rather than by a draw that has already happened.
+    """
+    defaults = options(ctx).get("defaults") or {}
+    state = ensure(ctx)
+    if not state.form:
+        state.form = {
+            "prompt": "",
+            "variant": str(defaults.get("variant") or "male"),
+            "pose": str(defaults.get("pose") or "apose"),
+            "logical_size": int(defaults.get("logical_size") or 32),
+            "colors": int(defaults.get("colors") or 64),
+            "outline": str(defaults.get("outline") or "outer"),
+            "reduce_mode": str(defaults.get("reduce_mode") or "box"),
+            # No literal fallback beside it, unlike its neighbours: a preset
+            # key spelled here would be a second home for the camera table,
+            # and the whole point of ``charsheet.CAMERA_PRESETS`` is that there
+            # is one. An empty string simply shows the door's first choice.
+            "camera": str(defaults.get("camera") or ""),
+            "dither": False,
+            "palette": "",
+            "name": "",
+            "layout": _default_layout(ctx),
+        }
+    elif "layout" not in state.form:
+        # Session-state migration for a form created by a pre-v2 build.
+        state.form["layout"] = _default_layout(ctx)
+    if "camera" not in state.form:
+        # Session-state migration, ``layout``'s above: a form the user left
+        # open across a build that predates the Camera control has no key for
+        # it, and the combo would read one that is not there. Not an ``elif``,
+        # because the two migrations are independent -- a form can be missing
+        # this one and not the other.
+        state.form["camera"] = str(defaults.get("camera") or "")
+    return state.form
+
+
+def _default_layout(ctx: Any) -> dict[str, Any]:
+    return {
+        "version": 2,
+        "columns": 8,
+        "movements": [
+            {
+                "key": row.get("name"),
+                "enabled": True,
+                "frames": int(row.get("frames") or 1),
+                "directions": 8,
+            }
+            for row in options(ctx).get("animations") or ()
+        ],
+    }
+
+
 def start_character(ctx: Any, form: dict[str, Any]) -> bool:
     """Submit the pose reference that starts a character.
 
@@ -1096,6 +1252,13 @@ def start_character(ctx: Any, form: dict[str, Any]) -> bool:
             "reduce_mode": form.get("reduce_mode"),
             "dither": bool(form.get("dither")),
             "palette": form.get("palette") or "",
+            # Both: the key is what the user chose and what a later screen can
+            # show back to them, and the elevation is what ``check_troupe``
+            # validates and what every renderer downstream actually frames
+            # from. Only the second is derived, so only the second can go
+            # stale, and it is refused here rather than an hour later.
+            "camera": form.get("camera"),
+            "elevation": camera_elevation(form),
             "layout": _layout_request(form),
         },
     )
@@ -1125,6 +1288,11 @@ def build_sheet(ctx: Any, job_id: str, form: dict[str, Any]) -> bool:
         reduce_mode=form.get("reduce_mode"),
         dither=bool(form.get("dither")),
         palette=form.get("palette") or "",
+        # The same translation ``send_to_troupe`` does, through the same
+        # helper: a second sheet built from this door has to be framable from
+        # the camera the form is showing, or the two doors disagree about what
+        # the combo means.
+        elevation=camera_elevation(form),
         layout=_layout_request(form),
         name=str(form.get("name") or ""),
     )
@@ -1200,6 +1368,178 @@ def add_to_packwright(ctx: Any) -> bool:
     return True
 
 
+def export_key(job_id: str, sheet_id: str) -> str:
+    return f"troupe-export:{job_id}:{sheet_id}"
+
+
+def export_package(ctx: Any) -> bool:
+    """Copy the selected sheet's PNG and its sidecar out together.
+
+    The third way out, and the only one that produces *files* -- Inker and
+    Packwright hand the sheet to another mode. ``service.characters
+    .export_package`` is what actually writes, through ``staged_copy_all``, so
+    the pair lands together or neither does: a folder holding the atlas without
+    the JSON holds an asset nothing can interpret.
+
+    The folder picker is asked **on the task thread**, inside ``run``, which is
+    ``library._export_zip``'s arrangement and its reason: the picker blocks, and
+    a blocking dialog on the frame thread freezes the window behind it. It is
+    asked only when no export folder is configured, and ``None`` from it means
+    the user cancelled -- which is why this returns whether the *request* was
+    taken rather than whether anything was written.
+    """
+    from ..service import characters as svc_characters
+
+    state = ensure(ctx)
+    if not (state.job_id and state.sheet_id):
+        return False
+    key = export_key(state.job_id, state.sheet_id)
+    if ctx.busy(key):
+        return False
+    job_id, sheet_id = state.job_id, state.sheet_id
+    # Read here rather than in ``run``: the task thread must not reach into the
+    # frame loop's context for a value the frame already has.
+    configured = getattr(ctx, "export_dir", None) or None
+
+    def run() -> Any:
+        dest = configured
+        if dest is None:
+            from . import dialogs
+
+            picked = dialogs.select_folder("Export the character sheet")
+            if picked is None:
+                return None
+            dest = picked
+        return svc_characters.export_package(ctx.svc, job_id, sheet_id, dest_dir=dest)
+
+    return bool(ctx.submit(key, run))
+
+
+# --- what the sheet says about itself ----------------------------------------
+#
+# Two different questions, and the panes must not blur them. ``troupe/qa.py``
+# *ranks*: it scores every cell against its neighbours and flags the worst, and
+# nothing anywhere refuses a sheet on its account. ``pipelines/sheetcheck.py``
+# *checks structure*: a cell is clipped at the frame edge, empty, or was never
+# rendered -- facts about the file rather than opinions about the drawing.
+
+
+def validation_of(record: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The sheet's ``validation`` block, or an empty one.
+
+    Empty for a sheet rendered before the block existed, which is the same
+    answer as a clean sheet on purpose: :func:`needs_repair` is False for both,
+    and a sheet nobody checked must not be accused of anything.
+    """
+    block = (record or {}).get("validation")
+    return dict(block) if isinstance(block, Mapping) else {}
+
+
+def needs_repair(record: Mapping[str, Any] | None) -> bool:
+    """Whether the sheet failed its structural check.
+
+    ``ok`` is read as False only when the block *says* so. A missing block is
+    an unchecked sheet, not a broken one.
+    """
+    block = validation_of(record)
+    return bool(block) and block.get("ok") is False
+
+
+def repair_notes(record: Mapping[str, Any] | None) -> list[str]:
+    """``sheetcheck.describe`` over this sheet's block. The pane's diagnostics."""
+    from ..pipelines import sheetcheck
+
+    return list(sheetcheck.describe(validation_of(record) or None))
+
+
+# --- back to Create ----------------------------------------------------------
+
+
+def recipe_of(record: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The recipe the sheet's ``character`` block carries, or an empty dict.
+
+    Only character sheets have one: a sheet built from a supplied mesh, or from
+    Troupe's own form, was never described by a :class:`~warlock.characters
+    .recipe.Recipe` and there is nothing here to vary.
+    """
+    block = (record or {}).get("character")
+    if not isinstance(block, Mapping):
+        return {}
+    recipe = block.get("recipe")
+    return dict(recipe) if isinstance(recipe, Mapping) else {}
+
+
+def vary_in_create(ctx: Any, record: Mapping[str, Any] | None) -> bool:
+    """Load this sheet's recipe into Create's form and go to the Reference stage.
+
+    ``settings_character.hand_to_troupe``'s opposite number: that route carries
+    a brief *out* of Create, and this carries a finished character back in so
+    the next one can differ by a seed, a colour count or a horn length.
+
+    **Every field is marked as an override.** The form follows the prompt for
+    anything the user has not touched (``settings_character.sync_from_prompt``),
+    and the prompt in the box is whatever was last typed there -- so without
+    this the species, the theme and the camera the user is varying would be
+    silently rewritten on the next keystroke, by a brief that is not about this
+    character at all. Marked here rather than left to the first touch, because
+    the touch that matters already happened: it was the press of this button.
+
+    Returns False when the sheet carries no recipe, so the caller can say so
+    rather than switching into a form describing somebody else.
+    """
+    import json
+
+    from . import create_assets, create_stages
+    from .panes import settings_character
+
+    recipe = recipe_of(record)
+    if not recipe:
+        return False
+    form = ctx.state.form_2d
+    form["asset_type"] = "character"
+    form["generation_type"] = "character"
+    body = recipe.get("appearance")
+    animations = recipe.get("animations") or {}
+    values = {
+        "character_family": str(recipe.get("family") or ""),
+        "character_theme": str(recipe.get("theme") or settings_character.THEME_UNSET),
+        "character_camera": str(recipe.get("camera") or ""),
+        # The recipe's own order is not trusted, for ``actions_of``'s reason:
+        # two forms naming the same movements in different orders would plan two
+        # different cell layouts.
+        "character_actions": ",".join(
+            name for name, _frames in settings_character.MOVEMENTS if name in animations
+        ),
+        # Strings, because ``state.default_form_2d`` declares these as strings
+        # and ``restore_form`` gates a restore on ``type(value) is type(default)``
+        # -- an int written here would silently fail to persist.
+        "character_pixel": str(int(recipe.get("logical_size") or 64)),
+        "character_colors": str(int(recipe.get("colors") or 32)),
+        "character_body": json.dumps(
+            {str(k): float(v) for k, v in dict(body).items()}, sort_keys=True
+        )
+        if isinstance(body, Mapping)
+        else "{}",
+        "character_name": str(recipe.get("name") or ""),
+    }
+    form.update(values)
+    for key in values:
+        settings_character.touched(form, key)
+    seed = recipe.get("seed")
+    if seed is not None:
+        # Carried and *not* marked, because ``seed`` is not one of the recipe
+        # fields the prompt ever writes -- it is the 2D form's own control, and
+        # the whole point of a variation is that this is the number to change.
+        form["seed"] = int(seed)
+    # The derived door fields (``output``, ``sheet_type``, ``count``) in one
+    # call rather than five assignments: ``settings_2d`` runs this every frame
+    # it draws, and a headless caller that skipped it would submit a character
+    # request wearing the previous type's output.
+    create_assets.sync_legacy_fields(form)
+    create_stages.go(ctx, "reference")
+    return True
+
+
 def on_task_done(ctx: Any, done: Any) -> None:
     """Adopt what a ``troupe-`` task returned.
 
@@ -1218,6 +1558,20 @@ def on_task_done(ctx: Any, done: Any) -> None:
         if done.key == scores_key(state.job_id, state.sheet_id):
             ctx.state.preview["troupe_scores"] = getattr(done, "result", None)
             ctx.state.preview["troupe_scores:key"] = (state.job_id, state.sheet_id)
+        return
+    if str(done.key).startswith("troupe-export:"):
+        # **Both names, because the pair is the deliverable.** A toast saying
+        # "Exported the sheet" leaves the user to discover for themselves
+        # whether the JSON came too, which is the one thing that makes the
+        # folder importable. ``None`` is the cancelled picker: no news.
+        written = getattr(done, "result", None)
+        if isinstance(written, dict):
+            png = Path(str(written.get("png") or "")).name
+            sidecar = Path(str(written.get("json") or "")).name
+            ctx.toast(
+                f"Exported {png} and {sidecar} to {written.get('dir') or ''}.",
+                "success",
+            )
         return
     # Every one of these queues or finishes a row the cast is built from, so
     # the throttled copy is dropped rather than waited out: the interval is
@@ -1281,14 +1635,36 @@ def on_task_failed(ctx: Any, done: Any) -> None:
     ctx.toast(str(getattr(done, "error", "") or "That request was refused."), "error")
 
 
+def _typing() -> bool:
+    """Whether a text field has the keyboard right now.
+
+    ``io.want_text_input`` is the app's one answer to that (``imgui_backend
+    ._forwards`` and ``main._passes_text_field`` both read it), guarded on the
+    context existing because this module is called from tests and from a
+    headless runtime where there is no imgui at all -- and ``get_io`` with no
+    context is an access violation rather than an exception, which is
+    ``probe.record``'s reason for the same check.
+    """
+    try:
+        from imgui_bundle import imgui
+    except ImportError:  # pragma: no cover -- imgui is a studio dependency
+        return False
+    if imgui.get_current_context() is None:
+        return False
+    return bool(imgui.get_io().want_text_input)
+
+
 def handle_key(ctx: Any, event: Any) -> bool:
     """The transport, at the keyboard. Every key here is one imgui never sees.
 
     Which is why ``troupe`` is in ``modes.NAV_KEY_MODES``: one press must not
     also step imgui's focus ring.
 
-    **The set is exactly ``imgui_backend._NAV_KEYS``, and that is the argument
-    for it.** Membership of ``NAV_KEY_MODES`` withholds all nine of those keys
+    **The transport's set is exactly ``imgui_backend._NAV_KEYS``, and that is
+    the argument for it.** (C and P are the two additions, and they are not
+    transport at all -- they are the view marks over the sprite, which is why
+    they are the only branch that has to ask whether somebody is typing.)
+    Membership of ``NAV_KEY_MODES`` withholds all nine of those keys
     from imgui while this mode is up, and ``main._shortcut``'s Troupe arm
     returns whether or not this function consumed the press. So a reserved key
     left unbound here is not a key that does nothing imgui-ish -- it is a key
@@ -1313,6 +1689,24 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if event.type != pygame.KEYDOWN:
         return False
     state = ensure(ctx)
+    if event.key in (pygame.K_c, pygame.K_p):
+        # **The two letters, and the only branch here that has to ask.** Every
+        # other key in this function is one of ``imgui_backend._NAV_KEYS``,
+        # which the reservation withholds from imgui *except* while a field has
+        # the keyboard -- so a typed arrow is never offered to this function at
+        # all. C and P are ordinary letters: ``main._passes_text_field`` lets
+        # plain keys through to the shortcut layer only when nothing is being
+        # typed into, and this asks the same question directly so that a
+        # headless caller (and this mode's own tests) get the same answer as
+        # the window does. Naming a character "pack" must not toggle two view
+        # marks on the way past.
+        if _typing():
+            return False
+        if event.key == pygame.K_c:
+            state.checker = not state.checker
+        else:
+            state.show_pivot = not state.show_pivot
+        return True
     if event.key == pygame.K_SPACE:
         state.playing = not state.playing
         return True

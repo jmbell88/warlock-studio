@@ -77,10 +77,63 @@ def plan_for(form: dict[str, Any], resolved: Any = None) -> Plan:
             f"1 character reference + {int(sprite['generations'])} sheet generation"
             + ("s" if int(sprite["generations"]) != 1 else "")
         )
+    elif spec.key == "character":
+        # **Zero image generations, and the plan says so out loud.** Every other
+        # arm here counts SDXL passes; a character spends none -- the body comes
+        # off the baked registry assets, the rig is Blender and the cells are
+        # EEVEE, all of it CPU. A user with a small card is owed that before the
+        # press rather than after it, which is why "no GPU needed" is in the
+        # line rather than in a tooltip.
+        from ..service import characters as svc_characters
+        from .panes import settings_character
+
+        candidates = 1
+        generations = 0
+        cells = settings_character.cell_count(form)
+        stages = (
+            f"1 character ({_species_label(form)}) → rig → {cells}-cell "
+            f"sheet, CPU only, no GPU needed"
+        )
+        duration = _about_minutes(svc_characters.estimate_minutes(cells))
     recipe = "Automatic recipe"
-    if resolved is not None:
+    if spec.key == "character":
+        # Never a checkpoint name. ``_resolved_recipe`` answers for *any* form
+        # -- ``generation.legacy_asset_type`` reads an unknown output as a 3D
+        # model -- so without this the plan would name an SDXL checkpoint under
+        # a press that never loads one.
+        recipe = "Character registry - no image model"
+    elif resolved is not None:
         recipe = str(getattr(resolved, "base_model", "") or "Automatic recipe")
     return Plan(candidates, generations, duration, stages, recipe)
+
+
+def _species_label(form: dict[str, Any]) -> str:
+    """What the plan calls the thing it is about to build.
+
+    Read from the registry rather than from ``character_family`` raw, so the
+    line says "ogre" and not "ogre" only by luck of the key matching the label.
+    Pure -- ``plan_for`` takes no ``ctx``, and ``characters.family`` imports
+    nothing but the standard library, so this drags nothing in behind it.
+    """
+    from ..characters.family import families
+
+    key = str(form.get("character_family") or "")
+    row = families().get(key)
+    # "no species yet" rather than an empty pair of brackets: this line is
+    # drawn while the brief is still being refused, and a plan that reads
+    # "1 character ()" says less than nothing.
+    return row.label.lower() if row is not None else "no species yet"
+
+
+def _about_minutes(minutes: float) -> str:
+    """``estimate_minutes`` as a phrase. **"About", always.**
+
+    ``service.characters`` states it: there is no dated document behind
+    ``RIG_MINUTES`` and ``SECONDS_PER_CELL``, so nothing may key a decision on
+    them and they are only ever rendered as "about N minutes".
+    """
+    value = max(1, round(float(minutes)))
+    return f"about {value} minute" + ("s" if value != 1 else "")
 
 
 def should_draw(ctx: Any) -> bool:

@@ -15,6 +15,7 @@ Three claims carry these:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pygame
@@ -903,6 +904,36 @@ def test_the_send_door_still_carries_every_parameter_it_validates(ctx, svc):
     for field in ("elevation", "lighting", "name"):
         assert f"{field}=" in source, field
 
+def test_the_camera_preset_reaches_build_sheet_as_elevation(ctx, svc):
+    """**The form holds a name and every door takes a number.**
+
+    A preset is a name for an elevation, and the translation happens once, on
+    the way out of the mode -- so a combo reading "Side" cannot reach a door
+    that renders at 30 degrees because nobody converted it. An elevation set
+    explicitly still wins, because an angle off the ladder has to stay
+    expressible or the ladder becomes the only thing anyone can render.
+    """
+    captured: dict = {}
+    ctx.submit = lambda key, fn, *a, **kw: (captured.update(kw), True)[1]
+    ctx.state.clear_field_errors = lambda: None
+    angles = {key: angle for key, _label, angle in charsheet.CAMERA_PRESETS}
+
+    for key, angle in angles.items():
+        captured.clear()
+        assert troupe_mode.build_sheet(ctx, "a-job", {"camera": key})
+        assert captured["elevation"] == angle, key
+
+    captured.clear()
+    troupe_mode.build_sheet(ctx, "a-job", {"camera": "side", "elevation": 42.0})
+    assert captured["elevation"] == 42.0, "a custom angle must stay expressible"
+
+    # A form from before the control existed names no camera, and the door's
+    # own default is what answers -- not a number invented here.
+    captured.clear()
+    troupe_mode.build_sheet(ctx, "a-job", {})
+    assert captured["elevation"] is None
+
+
 def test_the_picker_never_points_the_mode_at_a_bare_mesh(ctx, svc):
     """The trap this is written around.
 
@@ -1237,3 +1268,230 @@ def test_cell_geometry_reads_a_non_square_plan_in_the_right_order():
     ) == (4, 24, 40)
     assert troupe_mode.cell_geometry({"columns": 8}) is None
     assert troupe_mode.cell_geometry(None) is None
+
+
+# --- increment 7: the view marks, the structural verdict, the package --------
+
+
+class _TakenCtx(_SubmitCtx):
+    """``_SubmitCtx`` whose ``submit`` answers like the real runner's: True for
+    a key it took. The scoring tests above never read the answer; the export
+    door does, because a refused press has to be distinguishable from a taken
+    one."""
+
+    def submit(self, key, fn, *args, **kwargs):
+        super().submit(key, fn, *args, **kwargs)
+        return True
+
+
+def test_the_pivot_marker_reads_the_cell_and_not_a_constant():
+    """**The claim: ``pivot_of`` looks the cell up.** The tempting shortcut is
+    ``(w / 2, h)`` -- which is what ``sheet.sidecar`` itself writes when the
+    renderer measured nothing -- and it would agree with the record on most
+    cells and quietly disagree on the ones that matter: a character leaning
+    into an attack does not stand on the middle of its own cell."""
+    record = {
+        "cells": [
+            {"index": 0, "w": 32, "h": 32, "pivot_x": 16.0, "pivot_y": 32.0},
+            {"index": 1, "w": 32, "h": 32, "pivot_x": 9.5, "pivot_y": 28.0},
+        ]
+    }
+    assert troupe_mode.pivot_of(record, 1) == (9.5, 28.0), "the cell, not the first"
+    assert troupe_mode.pivot_of(record, 0) == (16.0, 32.0)
+    # A cell the sheet does not have is not the last cell's answer either.
+    assert troupe_mode.pivot_of(record, 7) is None
+
+
+def test_a_cell_with_no_pivot_answers_none_rather_than_the_centre():
+    """The regression the preview's marker depends on: a marker at a guessed
+    origin is a lie about where the engine will place the sprite, and it looks
+    exactly like a measured one."""
+    assert troupe_mode.pivot_of({"cells": [{"index": 0, "w": 32, "h": 32}]}, 0) is None
+    assert troupe_mode.pivot_of({"cells": [{"index": 0, "pivot_x": 4.0}]}, 0) is None
+    assert troupe_mode.pivot_of(None, 0) is None
+    assert troupe_mode.pivot_of({"cells": []}, None) is None
+
+
+def test_c_and_p_toggle_the_view_marks_on_the_press_only(ctx, svc):
+    """``handle_key`` acted on ``event.key`` without reading ``event.type``
+    once already, and every binding ran twice per press. A toggle that runs
+    twice is a toggle that does nothing."""
+    state = troupe_mode.ensure(ctx)
+    assert (state.checker, state.show_pivot) == (False, True)
+
+    assert troupe_mode.handle_key(ctx, _press(pygame.K_c)) is True
+    assert state.checker is True
+    assert troupe_mode.handle_key(
+        ctx, SimpleNamespace(type=pygame.KEYUP, key=pygame.K_c, mod=0)
+    ) is False
+    assert state.checker is True, "a release must not undo the press"
+
+    assert troupe_mode.handle_key(ctx, _press(pygame.K_p)) is True
+    assert state.show_pivot is False
+
+
+def test_typing_a_c_into_a_field_is_typing_and_not_a_view_toggle(ctx, monkeypatch):
+    """The rule every plain-letter shortcut in the app lives by
+    (``main._passes_text_field``): a focused text field takes the plain keys.
+    Naming a character "packwright" must not toggle the checkerboard four
+    times on the way past -- and the arrows above are exempt because the nav
+    reservation already withholds them while a field has the keyboard."""
+    monkeypatch.setattr(troupe_mode, "_typing", lambda: True)
+    state = troupe_mode.ensure(ctx)
+    before = (state.checker, state.show_pivot)
+
+    assert troupe_mode.handle_key(ctx, _press(pygame.K_c)) is False
+    assert troupe_mode.handle_key(ctx, _press(pygame.K_p)) is False
+    assert (state.checker, state.show_pivot) == before
+
+
+def test_a_sheet_that_needs_repair_says_what_is_wrong_and_still_plays(ctx, svc):
+    """**Structural validation is not the QA heatmap, and neither one gates.**
+    ``qa.py`` ranks the drawing; ``sheetcheck`` says a cell is clipped, empty
+    or was never rendered. This pins both halves of the second: the
+    diagnostics are the ones ``sheetcheck.describe`` writes, and the preview
+    plays the sheet exactly as it would a clean one -- a verdict the user may
+    disagree with must not take their sheet away."""
+    job_id, made = _v2_character(svc)
+    path = rigging.sheet_path(svc.job_dir(job_id), made[0])
+    record = json.loads(path.read_text("utf-8"))
+    record["validation"] = {
+        "version": 1,
+        "ok": False,
+        "clipped": [3, 4],
+        "blank": [],
+        "missing": [],
+        "metadata": [],
+        "reframed": False,
+    }
+    path.write_text(json.dumps(record), "utf-8")
+    troupe_mode.select(ctx, job_id, made[0])
+    live = troupe_mode.active_sheet(ctx)
+
+    assert troupe_mode.needs_repair(live) is True
+    notes = troupe_mode.repair_notes(live)
+    assert notes and "clipped at the frame edge" in notes[0]
+
+    state = troupe_mode.ensure(ctx)
+    state.playing = True
+    troupe_mode.advance(ctx, 10.0)
+    assert troupe_mode.cell_index(ctx) is not None, "a flagged sheet still plays"
+    assert state.playing is True, "nothing stops the clock over a verdict"
+
+
+def test_an_unchecked_sheet_is_not_accused_of_anything(ctx, svc):
+    """A sheet rendered before ``validation`` existed carries no block, and
+    "we did not look" must not read as "we looked and it is broken"."""
+    job_id, made = _v2_character(svc)
+    troupe_mode.select(ctx, job_id, made[0])
+    record = troupe_mode.active_sheet(ctx)
+    assert "validation" not in record
+    assert troupe_mode.needs_repair(record) is False
+    assert troupe_mode.repair_notes(record) == []
+    assert troupe_mode.needs_repair({"validation": {"ok": True}}) is False
+
+
+def test_exporting_a_package_writes_the_png_and_the_sidecar_together(svc, tmp_path):
+    """**The pair is the deliverable.** A folder holding the atlas without the
+    JSON holds an asset nothing can interpret -- the sidecar is what says which
+    cell is ``walk`` facing south-east. Submitted under its own key, so a
+    second press while one is in flight is refused rather than racing it."""
+    ctx = _TakenCtx(svc)
+    ctx.export_dir = str(tmp_path / "project")
+    job_id, made = _v2_character(svc)
+    troupe_mode.select(ctx, job_id, made[0])
+
+    assert troupe_mode.export_package(ctx) is True
+    assert len(ctx.submitted) == 1
+    key, run, _args, _kwargs = ctx.submitted[0]
+    assert key == f"troupe-export:{job_id}:{made[0]}"
+    # In flight: the second press is refused rather than queued behind it.
+    assert troupe_mode.export_package(ctx) is False
+    assert len(ctx.submitted) == 1
+
+    written = run()
+    assert Path(written["png"]).exists() and Path(written["json"]).exists()
+    assert Path(written["png"]).parent == Path(written["json"]).parent
+
+    troupe_mode.on_task_done(ctx, SimpleNamespace(key=key, result=written))
+    said = ctx.toasts[-1][0]
+    assert Path(written["png"]).name in said and Path(written["json"]).name in said
+
+
+def test_a_cancelled_export_picker_is_not_reported_as_an_export(svc):
+    """``dialogs.select_folder`` answers None for a cancel and nothing else,
+    and a toast naming two files nobody wrote would be the app claiming a
+    write it did not make."""
+    ctx = _SubmitCtx(svc)
+    job_id, made = _v2_character(svc)
+    troupe_mode.select(ctx, job_id, made[0])
+    troupe_mode.export_package(ctx)
+    key = ctx.submitted[0][0]
+
+    troupe_mode.on_task_done(ctx, SimpleNamespace(key=key, result=None))
+    assert ctx.toasts == []
+
+
+def test_varying_a_character_loads_its_recipe_as_the_users_own_choices(ctx, svc, monkeypatch):
+    """**Every field is marked as an override, and that is the whole claim.**
+
+    Create's character form follows the prompt for anything the user has not
+    touched (``settings_character.sync_from_prompt``), and the prompt in the
+    box is whatever was last typed there -- so a recipe loaded without the
+    override marks would have its species, theme and camera silently rewritten
+    on the next keystroke, by a brief that is not about this character. The
+    press of the button *is* the touch."""
+    from warlock.studio import create_stages
+    from warlock.studio.panes import settings_character
+    from warlock.studio.state import default_form_2d
+
+    went: list[str] = []
+    monkeypatch.setattr(create_stages, "go", lambda c, stage, **kw: went.append(stage))
+    ctx.state.form_2d = default_form_2d()
+    ctx.state.form_2d["prompt"] = "a completely different brief"
+    record = {
+        "character": {
+            "family": "wyvern",
+            "family_version": 3,
+            "recipe": {
+                "family": "wyvern",
+                "family_version": 3,
+                "theme": "ember",
+                "camera": "isometric",
+                "animations": {"walk": 8, "idle": 4},
+                "logical_size": 48,
+                "colors": 16,
+                "appearance": {"horn": 0.75},
+                "seed": 4242,
+                "name": "Ash",
+            },
+        }
+    }
+
+    assert troupe_mode.vary_in_create(ctx, record) is True
+    form = ctx.state.form_2d
+    assert went == ["reference"]
+    assert form["asset_type"] == "character"
+    assert form["character_family"] == "wyvern"
+    assert form["character_camera"] == "isometric"
+    assert form["character_pixel"] == "48" and form["character_colors"] == "16"
+    assert '"horn"' in form["character_body"]
+    assert form["seed"] == 4242
+
+    marked = set(settings_character.overrides_of(form))
+    assert set(settings_character.RECIPE_FIELDS) <= marked, "no field follows the prompt"
+
+    # And the proof of what the marks are for: re-resolving the brief in the
+    # box leaves every one of them exactly where this put it.
+    before = {key: form[key] for key in settings_character.RECIPE_FIELDS}
+    settings_character.sync_from_prompt(form)
+    assert {key: form[key] for key in settings_character.RECIPE_FIELDS} == before
+
+
+def test_a_sheet_with_no_recipe_offers_no_variation(ctx, svc):
+    """A sheet built from a supplied mesh, or from Troupe's own form, was never
+    described by a ``Recipe``. Refused rather than switching into a Create form
+    that describes somebody else."""
+    assert troupe_mode.vary_in_create(ctx, {}) is False
+    assert troupe_mode.vary_in_create(ctx, {"character": {"family": "wolf"}}) is False
+    assert troupe_mode.recipe_of(None) == {}

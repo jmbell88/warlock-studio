@@ -157,28 +157,25 @@ menu, inspector, or the picker inside Troupe) with `palette=cosmos`.
 
 **Partially unblocked 2026-08-30.** `tests/fixtures/humanoid/cesium_man.glb`
 (CesiumMan, CC-BY 4.0 — `tests/fixtures/humanoid/ATTRIBUTION.md`) is textured,
-rigged, +Z up, A-pose-ish and 4,672 polys, so **P5 is runnable**. It does not
-close this entry: a ramp verdict taken on a 3,273-vertex specification sample
+rigged, +Z up, A-pose-ish and 4,672 polys, so the chain was runnable from that
+day. It does not close this entry: a ramp verdict taken on a 3,273-vertex sample
 with a small JPEG and no female variant is a claim about CesiumMan, not about
 character art anyone would ship. Putting it through the path found and fixed
 three silent rig defects (`_strip_incoming_rig`, `tests/test_rig_supplied_mesh.py`,
 `docs/measurements/2026-08-30-art-verdicts-preregistration.md` Q5).
 
-**Expected outcome:** the first Troupe sheet with real colour, and a verdict on
-whether the ramp works at sprite scale. Unblocks P5 and P11.
+**Narrowed 2026-09-05.** This entry is no longer what stands between Troupe and
+a verdict, and it is no longer chapter 11's tutorial sample. Create's Character
+type builds a textured, rigged body from an authored family — thirty-one species
+over four body plans — so there is a base mesh with real colour on it in the
+build, and the ramp verdict is P28's. What is still owed here is what it always
+was underneath: a *human-authored* character anyone would ship, as the thing a
+generated species is judged against and as the mesh a user brings of their own.
+It no longer blocks anything.
 
-## P5. Run a `charsheet` job end to end against real Blender
-
-**Why it is yours:** a card. Troupe Phase 4's job has never run on hardware.
-The pieces either side of it have, and the render call is `rigging.sheet_spec`
-+ `run_worker` exactly as `_sheet` makes it — but the end-to-end run is owed,
-and it is how you find out that the clip edits from P8 reach a rendered sheet.
-
-**Do:** with P4's mesh (or CesiumMan), **Send to Troupe**, wait for the rig and
-the sheet, open the sheet in Troupe.
-
-**Expected outcome:** a rendered sheet from the shipped clips, or the first
-real defect in the chain. Either is worth more than the tests.
+**Expected outcome:** the first Troupe sheet from art rather than from a
+generator, and a verdict on whether the ramp works at sprite scale on it.
+Unblocks P11.
 
 ## P6. Open a Warlock-written `.aseprite` in real Aseprite
 
@@ -229,6 +226,21 @@ Tiled rather than about ourselves.
 authoring from frames to keyframes made a bad clip cheap to fix, not good; a
 bad clip reproduces exactly the "stiff posing" flaw being escaped.
 
+**Wider since 2026-09-05, and easier at the same time.** There are now four
+authored clip libraries, not one — `humanoid`, `quadruped`, `bird` and `blob`,
+each carrying all five movements because `charsheet.resolve_layout(None)` asks
+for five and `expand_clips` raises on a missing one. The 22 below are the
+humanoid's and are the ones to start with, but a four-beat lateral-sequence
+walk and a wing beat are their own problems and neither is a humanoid walk with
+different bone names. Easier because the thing that was missing is here: every
+species is a body you can build in one press with no card, so a clip edit can
+be judged on a *rendered* sheet within minutes instead of waiting on P4. That
+is also what unblocks the calibration below — `qa.THRESHOLDS` was chosen
+against synthetic sheets and explicitly not against rendered motion, and
+rendered motion now exists for four body plans. Calibrate it as part of P28
+rather than separately; one sitting judging four sheets is where the numbers
+come from.
+
 **Do:** Poser → **Clips** in the left sidebar. Pick a key, pose the skeleton
 with the normal gizmos, **Update key from pose**. Onion skin ghosts the keys
 either side; **Play** scrubs the real interpolation. **Save clips** writes to
@@ -265,7 +277,7 @@ sheet and record the values in
 `docs/measurements/2026-09-02-troupe-qa-thresholds.md`, which says so.
 
 **Expected outcome:** clips that look like movement at 32 px, verified through
-P5. This is the most important art task in the programme.
+P28's rendered sheets. This is the most important art task in the programme.
 
 ## P10. Decide: what the model picker offers
 
@@ -319,8 +331,9 @@ which is why splitting is a dead end). *Per-part passes with depth* give
 correct per-direction occlusion for free; the depth machinery is proven in
 `blender_worker._depth_material`. *Garment fitting*: skin-weight transfer by
 proximity (Blender Data Transfer) — hugging garments first; capes and long
-skirts are a separate problem. The supplied-base-mesh path (P4/P5) is untouched
-by P12's verdict and is the one to build on.
+skirts are a separate problem. The supplied-base-mesh path (P4) and the
+authored-family path Create's Character type shipped on 2026-09-05 are both
+untouched by P12's verdict, and are the two to build on.
 
 **Phase 8 — reconsider only against a working system.** *AI restyle*:
 `create_pixel_sheet` with `structure_lock` over a rendered sheet; note
@@ -485,8 +498,8 @@ delete `keyframes.py`, the door and its popup.
 people you invited. Only Troupe carries an **Experimental** chip. Four other
 surfaces have evidence gaps and no chip: Sirens has never been heard (P14),
 Muse has never been heard (P23), Plotter's Tiled interop has only round-tripped
-against itself (P7), Troupe's sheet job has never run against real Blender
-(P5), and Warlock-written `.aseprite` files have never been opened in Aseprite
+against itself (P7), no character sheet has been judged by an eye at sprite
+scale (P28), and Warlock-written `.aseprite` files have never been opened in Aseprite
 (P6). One more belongs here that is not a mode: on a base install, Create and
 Muse send you to Settings → **Models**, and the weights are only half of what
 they need — the matching **pack** is the other half, and nothing at the door
@@ -654,15 +667,96 @@ left needs a person:
 three packs a user chooses, and a figure for each of the two that have never
 been collected.
 
+## P28. Judge the character render benchmark — four verdicts, not one
+
+**Why it is yours:** art, and it is the entry the whole character programme was
+built to reach. Everything up to the pixels is measured, tested and structural:
+thirty-one species over four body plans, four clip libraries, union framing
+against a table (`docs/measurements/2026-09-05-union-framing.md`), a structural
+check that flags every clipped and blank cell. None of that is the question. The
+question is whether a 64-pixel sprite of a wolf reads as a wolf, and no test
+this repository can write answers it.
+
+**Why it is four verdicts.** The original scope was one fire ogre, and that was
+written when there was one body plan. A convincing humanoid walk tells you
+nothing about a quadruped: a four-beat lateral-sequence gait has diagonal pairs
+moving out of phase, and at 64 px the legs are two pixels wide and overlap for
+most of the cycle — it either reads as walking or reads as a smear, and which
+one is not derivable from the humanoid's result. A wing beat and a blob's surge
+are two more separate questions. So this entry does not close until it has four
+answers, and it may well close as *proven, proven, repair, proven*.
+
+**Do**, once per archetype — `humanoid`, `quadruped`, `winged`, `amorphous`:
+
+1. **A representative species at the ladder's middle.** Suggested: `ogre` (it
+   carries the fire theme, so it judges the effects pass at the same time),
+   `wolf`, `dragon`, `slime`. 64 px, 32 colours, 8 directions, all five
+   movements, **seed locked** — the same seed across the whole sitting, so a
+   difference between two sheets is the thing you changed.
+2. **Each body slider at both bounds, three seeds.** Six channels for humanoid,
+   quadruped and winged, five for amorphous (`family.ARCHETYPES[key].channels`
+   is the list; every range is −1 to +1 and every default 0). That is the
+   generator's actual span, and the failure it is looking for is a bound that
+   produces a body the rig no longer fits — an arm inside the ribcage at
+   `limb_length = -1`, a neck the clips swing through at `neck_length = +1`.
+3. **Look at every direction and every animation, at zoom 1 and at zoom 4.**
+   Zoom 1 is the size a player sees; zoom 4 is where you find out *why*. Troupe's
+   heatmap is the reading order, not the verdict — click the flagged squares
+   first, then watch the whole thing play.
+
+**What to judge, and it is the same seven questions each time:**
+
+- **Recognisable from the front, and from the back.** The back is the half a
+  generator has no reason to get right and the half a player looks at while
+  walking away.
+- **One identity across the eight directions.** The same creature turned, not
+  eight creatures. Cross-direction size drift is what `qa.py`'s `drift_*`
+  scores are pointed at.
+- **A readable attack.** One frame that is unmistakably the hit, at 64 px, with
+  no colour cue.
+- **Walk contact.** Feet on the ground at the contact frames, and a bob that
+  passes through zero between them.
+- **Clean loops.** Idle, walk and run hand their last frame back to their first
+  without a pop. Note that a fire theme's flame is *known* not to loop
+  seamlessly on a short idle (the noise field does not come back round); judge
+  the body separately from the flame.
+- **Effects on their sockets.** For the fire species, the flame at the crown or
+  the core, rising in world space in every direction, occluded when the socket
+  is behind the body.
+- **Feet on one line.** Across every direction of one animation, the ground
+  line is the same row of pixels — a sprite that floats in three of eight
+  directions is unusable however good it looks in the other five.
+
+**Outcome:** a dated character-benchmark document under `docs/measurements/`
+that records, **per archetype**, a verdict and the evidence for it. (Named here
+by its directory rather than by a `YYYY-MM-DD-` placeholder path:
+`tests/test_external_doc_links.py` reads a cited path as a claim that the file
+exists, and a placeholder is a citation of a document nobody can open.) That document is
+what lifts chapter 11's *"Built, awaiting the render benchmark"* to **Proven —
+per archetype, not in one line** — or names the repair, in which case the
+repair is code and comes back here as a finding. In the same sitting, calibrate
+`qa.THRESHOLDS` against those sheets and record the numbers in
+`docs/measurements/2026-09-02-troupe-qa-thresholds.md`, which was written
+against synthetic sheets and says in as many words that it is waiting for
+rendered motion. P8's authored keyframes are judged through the same sheets;
+if the clips change afterwards, the thresholds are re-taken, not patched.
+
+**No card is needed for any of this.** The character route is mesh generation
+in-process, Blender on the CPU for the rig and the render, and numpy for the
+reduction — which is what makes "run it again at both slider bounds" a
+reasonable instruction rather than an afternoon of GPU time.
+
 ## Also owed, smaller
 
 - **Tutorial sample assets** (art): a 32×32 `.ora` sprite with a few layers
   and frames for the Inker chapters; a 16 px tileset of sixteen to twenty-four
   tiles with a terrain set for Plotter and Packwright; a low-poly `crate.glb`
-  for Clay; the humanoid from P4 for Troupe. Original and project-licensed. If
-  they land: `src/warlock/assets/tutorial/`, added to the hatchling
-  force-include, under about a megabyte, used by the last section of chapters
-  05, 07, 09, 10 and 11.
+  for Clay; ~~the humanoid from P4 for Troupe~~ — struck 2026-09-05: chapter 11
+  now opens on Create's Character type, and the thirty-one shipped species *are*
+  its samples, in the build, needing no file and no licence. Original and
+  project-licensed. If they land: `src/warlock/assets/tutorial/`, added to the
+  hatchling force-include, under about a megabyte, used by the last section of
+  chapters 05, 07, 09 and 10.
 - **Delete the pre-purge mirror** at `D:/Projects/_archive/warlock-pre-purge.git`
   once you have worked in the rewritten repository long enough to be
   satisfied. Keeping it indefinitely means keeping the problem indefinitely.
@@ -740,6 +834,13 @@ Both belong to P1 step 4 now rather than here.
   `docs/measurements/2026-09-02-fantasy-v1.md`); the hole audit closed
   (`docs/measurements/2026-09-02-hole-audit-vs-grade.md`). The tex-res pin
   survived as the new P3.
+- **P5, the end-to-end `charsheet` run.** Struck 2026-09-05, absorbed into P28
+  rather than answered. Its premise was "a card": the sheet job had never run on
+  hardware and P4's mesh was what it was waiting for. Neither holds now — the
+  character route builds mesh, rig and sheet with no GPU at all and no supplied
+  file, so the run is a press rather than a scheduled event, and P28 makes it
+  four times over with something to judge at the end of each. A one-line "it
+  ran" verdict would have been strictly less than that.
 - **P9, code signing.** Answered no for the closed beta on 2026-09-03. The
   revisit triggers and the priced option (Azure Trusted Signing) are in
   `docs/INVARIANTS.md`.

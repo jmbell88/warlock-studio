@@ -30,7 +30,9 @@ from . import sheet
 
 __all__ = [
     "ANIMATIONS",
+    "CAMERA_PRESETS",
     "COLUMNS",
+    "DEFAULT_CAMERA_PRESET",
     "DIRECTION_PRESETS",
     "DIRECTIONS",
     "LAYOUT_VERSION",
@@ -47,6 +49,7 @@ __all__ = [
     "check_subset",
     "frame_table",
     "plan",
+    "point_in_cell",
     "resolve_layout",
     "spans",
     "subset_indices",
@@ -78,6 +81,32 @@ DIRECTIONS: tuple[tuple[str, float], ...] = (
 COLUMNS = 8
 SIZES = (16, 24, 32, 48, 64, 96, 128)
 RENDER_SIZE = 512
+
+#: ``(key, label, elevation)`` -- the camera angles a character sheet may be
+#: framed from, as a literal table for the same reason ``ANIMATIONS`` is one.
+#:
+#: ``isometric`` is 30.0 because that is :data:`sheet.DEFAULT_ELEVATION`, the
+#: elevation every sheet this program has ever rendered used; naming it
+#: "Isometric" rather than "2:1 dimetric" is deliberate, because "isometric" is
+#: what players and every engine's tileset documentation call that projection
+#: and a technically-correct label nobody searches for is a label nobody finds.
+#:
+#: ``top_down`` stops at 60 rather than reaching a true 90 overhead: a humanoid
+#: seen straight down is a pair of shoulders and a hat brim -- it reads as a
+#: blob, and every "top-down" sprite anyone actually ships is tilted.
+#:
+#: **The table lives in ``pipelines`` rather than in ``service.troupe``**
+#: because the worker frames from it too, and ``pipelines`` is the one layer
+#: both the door and the worker can see -- ``service`` is importable in neither
+#: the Blender process nor the worker.
+CAMERA_PRESETS: tuple[tuple[str, str, float], ...] = (
+    ("three_quarter_top_down", "3/4 top-down", 35.0),
+    ("isometric", "Isometric", 30.0),
+    ("side", "Side", 0.0),
+    ("top_down", "Top-down", 60.0),
+)
+
+DEFAULT_CAMERA_PRESET = "three_quarter_top_down"
 LAYOUT_VERSION = 2
 WARN_CELLS = 256
 MAX_CELLS = 512
@@ -503,10 +532,10 @@ def animation_block(
     }
 
 
-def pivot_in_cell(
-    pivot: tuple[float, float] | None, frame_size: int
+def point_in_cell(
+    point: tuple[float, float] | None, frame_size: int
 ) -> tuple[float, float] | None:
-    """A pivot the worker projected at ``RENDER_SIZE``, in *cell* pixels.
+    """A point the worker projected at ``RENDER_SIZE``, in *cell* pixels.
 
     The sidecar documents its pivot as pixels within a cell, and every reader
     of it assumes exactly that -- ``sheet.sidecar`` defaults the field to
@@ -522,12 +551,26 @@ def pivot_in_cell(
     feet far below the sprite. Placing without drift is the one property the
     field exists for.
 
+    **Generalised from ``pivot_in_cell`` on 2026-09-05**, when the worker began
+    projecting *sockets* as well as the ground origin: they are the same render
+    at the same size and want the same conversion, and a second copy of it
+    would put a composited flame sixteen cells away from the hand rather than
+    the feet.
+
     Here rather than inline in ``_q_troupe`` because this module is the
     filesystem-free half of the character sheet -- it decides what cell 137
     depicts and never reads a file -- which is what makes the arithmetic
     testable at all.
     """
-    if pivot is None:
+    if point is None:
         return None
     scale = float(frame_size) / float(RENDER_SIZE)
-    return (float(pivot[0]) * scale, float(pivot[1]) * scale)
+    return (float(point[0]) * scale, float(point[1]) * scale)
+
+
+def pivot_in_cell(
+    pivot: tuple[float, float] | None, frame_size: int
+) -> tuple[float, float] | None:
+    """The sheet's ground origin, in cell pixels. :func:`point_in_cell` by its
+    older name, kept because "pivot" is what the sidecar field is called."""
+    return point_in_cell(pivot, frame_size)

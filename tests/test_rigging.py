@@ -6,6 +6,7 @@ tests/test_offline.py guards the heavy paths.
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import subprocess
@@ -26,6 +27,7 @@ EXPECTED_TEMPLATES = {
     "insect",
     "serpent",
     "biped_tail",
+    "blob",
 }
 
 
@@ -480,6 +482,260 @@ def test_parse_clip_library_rejects_duplicate_clip_names():
     }
     with pytest.raises(ValueError, match="duplicate clip names"):
         rigging.parse_clip_library(raw)
+
+
+# --- the authored clip libraries --------------------------------------------
+#
+# A template can only produce a character sheet if its skeleton has clips --
+# ``service.troupe.create_charsheet`` refuses on exactly that, and for a long
+# time ``humanoid`` was the only template that had any. These are the families
+# that can be sent to Troupe, so the list is a claim and not a fixture: adding
+# a library is a deliberate act and so is losing one.
+
+AUTHORED_CLIP_LIBRARIES = ("humanoid", "quadruped", "bird", "blob")
+
+#: The frame counts a library has to survive, not just the one it was authored
+#: at. ``resample_clip`` re-times an authored clip onto whatever the layout
+#: asks for, including a single frame (which is the first key) and counts that
+#: cannot give every authored segment a frame of its own.
+FRAME_COUNTS = (1, 2, 4, 6, 8, 12)
+
+
+def test_the_authored_clip_libraries_are_exactly_the_four_families():
+    with_clips = {k for k in rigging.templates() if rigging.clip_library(k)["clips"]}
+    assert with_clips == set(AUTHORED_CLIP_LIBRARIES)
+
+
+@pytest.mark.parametrize("key", AUTHORED_CLIP_LIBRARIES)
+@pytest.mark.parametrize("frames", FRAME_COUNTS)
+def test_every_template_with_a_clip_library_expands_to_the_frame_table(key, frames):
+    """The whole point of authoring a library: the frame table asks, and the
+    library fills it exactly. A clip that expanded to one frame too few would
+    reach the renderer as ``check_frame_counts``' ValueError an hour and 256
+    EEVEE frames later, so it is asked here, at every count Troupe offers."""
+    from warlock import clips
+
+    library = rigging.clip_library(key)
+    names = [c["name"] for c in library["clips"]]
+    layout = {"movements": [{"name": name, "frames": frames} for name in names]}
+    records = clips.expand_clips(key, layout)
+    assert set(records) == set(names)
+    for name, rows in records.items():
+        assert len(rows) == frames, f"{key}/{name} at {frames} frames"
+        assert all(r["bones"] for r in rows), f"{key}/{name} expanded to empty poses"
+
+
+@pytest.mark.parametrize("key", AUTHORED_CLIP_LIBRARIES)
+def test_every_authored_library_fills_troupes_default_frame_table(key):
+    """The layout a user gets without touching anything asks for all five
+    animations, so a library carrying only three refuses the default sheet."""
+    from warlock import clips
+    from warlock.pipelines import charsheet
+
+    records = clips.expand_clips(key)
+    assert set(records) == {name for name, *_rest in charsheet.ANIMATIONS}
+
+
+@pytest.mark.parametrize("key", AUTHORED_CLIP_LIBRARIES)
+def test_every_authored_clip_library_is_delta_space(key):
+    """``space`` is per file and it is the whole meaning of every quaternion in
+    it: in ``delta`` a value is a rotation from the bone's own rest, in ``node``
+    it is absolute against the parent joint. The two are not interchangeable --
+    the same numbers read the other way contort the skeleton silently -- and a
+    library that said nothing at all would be read as ``node``, which is what
+    ``parse_clip_library`` defaults to for the files written before the field."""
+    library = rigging.clip_library(key)
+    assert library["space"] == "delta"
+    # Per file, so every clip in it agrees, and the records the renderer sees
+    # carry it too -- ``_blend`` treats a missing bone differently in each
+    # space, so a record that lost the field would blend a folded wing open.
+    assert {c["space"] for c in library["clips"]} == {"delta"}
+
+
+def test_a_quadruped_walk_moves_the_diagonal_pairs_out_of_phase():
+    """The gait claim, and the one a plausible-looking file gets wrong.
+
+    A four-beat lateral-sequence walk puts the footfalls in the order LH, LF,
+    RH, RF -- the four legs a quarter cycle apart, the two legs of each girdle
+    in strict antiphase. A walk whose legs swing together is a rocking horse,
+    and it is invisible in a single frame: it only shows in the expansion, so
+    that is what this reads rather than the authored file.
+
+    Every quadruped bone lies in a sagittal plane (head and tail share an x),
+    so Blender's roll-free bone frame puts the bone's local X on world X and
+    the delta quaternion's x component is ``sin(swing / 2)`` -- negative
+    forward. That is why the swing can be read straight off the record.
+    """
+    from warlock import clips
+
+    records = clips.expand_clips(
+        "quadruped", {"movements": [{"name": "walk", "frames": 8}]}
+    )["walk"]
+    legs = ("rear_upper.L", "front_upper.L", "rear_upper.R", "front_upper.R")
+    swing = {bone: [r["bones"][bone][0] for r in records] for bone in legs}
+
+    # Furthest forward -- the moment that foot strikes -- one per quarter.
+    reach = {bone: values.index(min(values)) for bone, values in swing.items()}
+    assert reach == {
+        "rear_upper.L": 0,
+        "front_upper.L": 2,
+        "rear_upper.R": 4,
+        "front_upper.R": 6,
+    }
+    # No two legs move together, which is the failure the ordering exists to
+    # avoid: four legs sharing one curve is one leg drawn four times.
+    for a, b in itertools.combinations(legs, 2):
+        assert swing[a] != swing[b], f"{a} and {b} swing in phase"
+    # And each girdle's pair is exactly half a cycle apart, not merely unequal.
+    for left, right in (("front_upper.L", "front_upper.R"), ("rear_upper.L", "rear_upper.R")):
+        shifted = swing[left][4:] + swing[left][:4]
+        assert swing[right] == pytest.approx(shifted), f"{left}/{right} are not antiphase"
+
+
+# The forward kinematics the assertion below stands on. ``bpy`` is installed on
+# no machine the default lane runs on, so Blender's two composition rules are
+# reproduced here rather than imported:
+#
+#   pose(b) = pose(parent) @ rest(parent)^-1 @ rest(b) @ basis(b)
+#
+# with ``rest(parent)^-1 @ rest(b) @ basis(b)`` being exactly
+# ``rigging.node_from_delta`` applied to the parent-relative rest -- the one
+# definition both ends of the pose feature already share -- and the bone's own
+# rest frame coming from ``vec_roll_to_mat3`` with roll 0, which is what
+# ``_build_armature`` leaves every bone at. Which way a bone's local X points
+# is what every delta quaternion in a clip library *means*, and Blender's
+# special case for a bone pointing along -Y flips it: the quadruped's ``spine``
+# points exactly -Y, so an approximation here would not be an approximation.
+
+
+def _bone_frame(direction):
+    """Blender's roll-free bone matrix as a quaternion. Local Y is the bone."""
+    x, y, z = direction
+    theta = 1.0 + y
+    alt = x * x + z * z
+    if theta > 6.1e-3 or alt > 2.5e-4**2:
+        if theta <= 6.1e-3:
+            theta = 0.5 * alt + alt * alt * 0.125
+        m00, m22, m02 = 1.0 - x * x / theta, 1.0 - z * z / theta, -x * z / theta
+    else:
+        # A bone pointing straight along -Y: local X is *minus* world X.
+        m00, m22, m02 = -1.0, 1.0, 0.0
+    return _quat_from_matrix([[m00, x, m02], [-x, y, -z], [m02, z, m22]])
+
+
+def _quat_from_matrix(m):
+    trace = m[0][0] + m[1][1] + m[2][2]
+    if trace > 0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        q = [(m[2][1] - m[1][2]) / s, (m[0][2] - m[2][0]) / s, (m[1][0] - m[0][1]) / s, 0.25 * s]
+    elif m[0][0] > m[1][1] and m[0][0] > m[2][2]:
+        s = math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2.0
+        q = [0.25 * s, (m[0][1] + m[1][0]) / s, (m[0][2] + m[2][0]) / s, (m[2][1] - m[1][2]) / s]
+    elif m[1][1] > m[2][2]:
+        s = math.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2.0
+        q = [(m[0][1] + m[1][0]) / s, 0.25 * s, (m[1][2] + m[2][1]) / s, (m[0][2] - m[2][0]) / s]
+    else:
+        s = math.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2.0
+        q = [(m[0][2] + m[2][0]) / s, (m[1][2] + m[2][1]) / s, 0.25 * s, (m[1][0] - m[0][1]) / s]
+    norm = math.sqrt(sum(v * v for v in q))
+    return [v / norm for v in q]
+
+
+def _rotate(q, v):
+    x, y, z, w = q
+    return [
+        (1 - 2 * (y * y + z * z)) * v[0] + 2 * (x * y - z * w) * v[1] + 2 * (x * z + y * w) * v[2],
+        2 * (x * y + z * w) * v[0] + (1 - 2 * (x * x + z * z)) * v[1] + 2 * (y * z - x * w) * v[2],
+        2 * (x * z - y * w) * v[0] + 2 * (y * z + x * w) * v[1] + (1 - 2 * (x * x + y * y)) * v[2],
+    ]
+
+
+def _compose(a, b):
+    """Two rotations, one after the other. ``mathutils``' ``@``, by hand."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return [
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ]
+
+
+def _joint_points(key, bones=None, root_translation=None):
+    """Every joint of ``key``'s unit-box fit, posed by one frame's deltas.
+
+    The unit box is the frame the library was authored in, and the one
+    ``fit_template`` maps onto a real mesh, so a height of 1.0 makes the
+    root offset (which is in character-height units) directly comparable.
+    """
+    fitted = rigging.fit_template(rigging.get_template(key), [-0.5, -0.5, 0.0], [0.5, 0.5, 1.0])
+    by_name = {b["name"]: b for b in fitted}
+    rest, posed = {}, {}
+    points = []
+    for bone in fitted:
+        head, tail = bone["head"], bone["tail"]
+        length = rigging._distance(head, tail)
+        direction = [(t - h) / length for h, t in zip(head, tail, strict=True)]
+        rest[bone["name"]] = _bone_frame(direction)
+        delta = (bones or {}).get(bone["name"]) or [0.0, 0.0, 0.0, 1.0]
+        parent = bone["parent"]
+        if parent is None:
+            rotation = rigging.node_from_delta(rest[bone["name"]], delta)
+            origin = list(head)
+        else:
+            inverse = [-v for v in rest[parent][:3]] + [rest[parent][3]]
+            relative = _compose(inverse, rest[bone["name"]])
+            parent_rotation, parent_origin = posed[parent]
+            rotation = _compose(parent_rotation, rigging.node_from_delta(relative, delta))
+            offset = [h - p for h, p in zip(head, by_name[parent]["head"], strict=True)]
+            moved = _rotate(parent_rotation, _rotate(inverse, offset))
+            origin = [p + m for p, m in zip(parent_origin, moved, strict=True)]
+        posed[bone["name"]] = (rotation, origin)
+        lift = float((root_translation or [0.0, 0.0, 0.0])[2])
+        end = [o + d for o, d in zip(origin, _rotate(rotation, [0.0, length, 0.0]), strict=True)]
+        points.append([origin[0], origin[1], origin[2] + lift])
+        points.append([end[0], end[1], end[2] + lift])
+    return points
+
+
+def test_the_forward_kinematics_this_file_uses_leaves_a_rest_pose_where_it_found_it():
+    """The FK above is only worth as much as its rest case: an empty pose has
+    to reproduce ``fit_template``'s own joints, or every claim built on it is
+    measuring the arithmetic rather than the clip."""
+    for key in AUTHORED_CLIP_LIBRARIES:
+        fitted = rigging.fit_template(
+            rigging.get_template(key), [-0.5, -0.5, 0.0], [0.5, 0.5, 1.0]
+        )
+        expected = [p for bone in fitted for p in (bone["head"], bone["tail"])]
+        for got, want in zip(_joint_points(key), expected, strict=True):
+            assert got == pytest.approx(want, abs=1e-6), key
+
+
+@pytest.mark.parametrize("key", AUTHORED_CLIP_LIBRARIES)
+def test_every_one_shot_attack_leaves_the_rest_bounding_box(key):
+    """An attack that fits inside the rest silhouette is not an attack.
+
+    Rearing, spreading wings, swinging overhead: the apex is supposed to leave
+    the box the character stands in, which is precisely why the sheet renderer
+    frames a row from the *union* of its cells rather than from the rest pose.
+    Asserted on the expansion through ``fit_template`` and
+    ``rigging.node_from_delta``, with no bpy, so it stays in the default lane.
+    """
+    from warlock import clips
+
+    rest_crown = max(p[2] for p in _joint_points(key))
+    records = clips.expand_clips(key, {"movements": [{"name": "attack", "frames": 6}]})["attack"]
+    peak = max(
+        p[2]
+        for record in records
+        for p in _joint_points(key, record["bones"], record.get("root_translation"))
+    )
+    # A fifth of a hair over would be an accident; 0.02 of the character's own
+    # height is the smallest rise that reads as one at 64 pixels.
+    assert peak > rest_crown + 0.02, (
+        f"{key}: attack peaks at {peak:.3f}, rest crown {rest_crown:.3f}"
+    )
 
 
 # --- pose payloads ----------------------------------------------------------

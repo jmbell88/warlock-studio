@@ -13,6 +13,12 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # why the grid is not a control, and why the sprite arm makes two rows --
     # are the questions a user has while looking at that section.
     "settings-sheet": ("22-generating-references", "sheets"),
+    # The Character type's own column. Its own entry rather than sharing
+    # ``settings-2d``: nothing in that section applies -- there is no model, no
+    # LoRA and no seed-per-candidate -- and the questions asked in front of this
+    # block (why the species picker is empty, what "no GPU needed" means, what
+    # happens to a creature Warlock does not model) are all in one place.
+    "settings-character": ("22-generating-references", "characters"),
     "settings-3d": ("23-generating-meshes", None),
     # The Rig stage's own column (the UI redesign, wave 5). Rigging was three
     # buttons in three places and no pane of its own, so it had no (?) either.

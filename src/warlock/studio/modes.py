@@ -276,10 +276,18 @@ MATURITY: dict[str, str] = {
 
 #: What the chip's own tooltip adds, past the word.
 MATURITY_NOTE: dict[str, str] = {
+    # Narrowed 2026-09-05, when Create's Character type shipped. The 2026-08-30
+    # verdict is unchanged but it is narrower than the chip used to say: what
+    # was measured not to work is building a character by *reconstruction from
+    # a drawing*, not "a character from a prompt" -- a prompt now resolves to an
+    # authored family, which needs no reconstruction and no card. The chip
+    # stays, because the keyframes are still provisional and that is the half a
+    # user judges.
     "troupe": (
         "The chain runs end to end, but the shipped animation keyframes are"
-        " provisional, and generating a character from a prompt is measured"
-        " not to work yet -- start from a mesh you already have."
+        " provisional, and building a character by reconstruction from a"
+        " drawing is measured not to work yet -- start from a mesh you already"
+        " have, or from Create's Character type."
         " See the manual (Troupe)."
     ),
 }

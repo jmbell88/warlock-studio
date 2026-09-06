@@ -28,6 +28,13 @@ CELL = 64
 # blender_worker.op_sheet frames with -- imported from the module both sides
 # already go through, rather than typed out a second time here. A preview that
 # frames differently from the renderer depicts a sheet nobody will get.
+#
+# What this preview depicts is the *unposed* model turning, which is exactly
+# the case ``op_sheet``'s posed union collapses to: with no pose to measure the
+# union is the rest box and the two agree to the bit. A sheet whose poses leave
+# the rest box (a jump apex) is framed a little wider than this strip shows --
+# correctly, since the alternative there is a clipped apex, and the strip has
+# no poses to know it from.
 MARGIN = sheetlib.FRAME_MARGIN
 
 

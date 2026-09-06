@@ -15,7 +15,7 @@ the app, and produces a `rig.glb` beside your `model.glb`.
 
 Two things happen: a skeleton is fitted, then the mesh is bound to it.
 
-**The skeleton** comes from one of seven templates — humanoid, quadruped, bird, fish, insect,
+**The skeleton** comes from one of eight templates — humanoid, quadruped, bird, blob, fish, insect,
 serpent and biped_tail. A template is a list of named joints at proportions inside a unit box, and
 fitting it is *bbox-proportional scaling*. Nothing is learned, nothing is detected. That is worth
 knowing because it explains both why it usually works and how it fails: it assumes your mesh is
@@ -130,6 +130,12 @@ than quietly writing to the nearest key.
 
 Saving clips writes to your own data folder and never touches the shipped template, so **Revert** is
 always safe.
+
+Four of the eight templates carry a clip library — `humanoid`, `quadruped`, `bird` and `blob` — and
+each carries all five movements a character sheet asks for: idle, walk, run, attack and jump. Those
+four are the four body plans a generated character can have. `fish`, `insect`, `serpent` and
+`biped_tail` have no clips, so a mesh rigged on one of them can be posed but not turned into a
+sheet.
 
 Two honest notes about the shipped clips. They are **provisional placeholders** rather than finished
 animation — good enough to prove the pipeline, not good enough to ship. And easing currently does

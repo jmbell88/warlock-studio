@@ -17,6 +17,11 @@ from warlock.studio.state import default_form_2d
         ("tileset", 1),
         # A sheet always includes its character reference plus its sheet work.
         ("sprite_sheet", 2),
+        # And a character includes *none*: it draws no images at all. Zero is
+        # the honest floor here rather than a hole in the table -- the plan
+        # still has a duration and still has stages, which is what this test is
+        # about.
+        ("character", 0),
     ),
 )
 def test_generation_plan_covers_every_create_outcome(asset_type, minimum_generations):

@@ -48,6 +48,7 @@ from .. import (
 from ..manual import render as manual_render
 from ..tokens import sp
 from ..widgets import field_options as _options
+from . import settings_character
 
 # This pane's key in the focus ring (UX.md Phase 3). The controls on the common
 # path take a place in it: the ring exists so a first job can be composed and
@@ -82,6 +83,11 @@ def draw(ctx: Any) -> None:
     # field_error(ctx.state, "base_model")
     # field_error(ctx.state, "style_lora")
     # field_error(ctx.state, "count")
+    # Before the form is built, because ``forms.Form`` snapshots the error map
+    # at construction: a refusal recorded under a *recipe* field name has to be
+    # re-filed under the control that answers to it, or the ring lands nowhere.
+    if _is_character(form):
+        settings_character.mirror_errors(ctx)
     with forms.Form("create-2d", errors=ctx.state.field_errors) as form_ui:
         # The plan block is pinned and does not scroll (K92): the statement of
         # what a press will cost must not be at the bottom of a scrolled column
@@ -102,52 +108,68 @@ def draw(ctx: Any) -> None:
                 # chosen type needs, and the conditioning -- and it is flat,
                 # because "Advanced controls" was one disclosure holding six
                 # sections, which is a second navigation inside a sidebar.
-                widgets.section("Recipe")
-                manual_render.help_button(ctx, "settings-2d")
                 intent = create_assets.selected(form).intent
-                if intent == "tileset":
-                    _locked_sheet_recipe(ctx, "Tile-set recipe", part="model")
-                    _locked_sheet_recipe(ctx, "Locked for coherent pixel tiles", part="lora")
+                if intent == "character":
+                    # **The whole column, and none of the rest of this one.** A
+                    # character runs no text encoder: there is no checkpoint to
+                    # pick, no LoRA fitted to it, no negative branch to weight,
+                    # no conditioning image and no prompt history worth reusing
+                    # -- so every section in the ``else`` would be a control
+                    # whose only outcome is that it does nothing. ``_reset_row``
+                    # and ``_plan_footer`` stay shared, because both are about
+                    # the *form* rather than about SDXL. An ``if/else`` rather
+                    # than an early return: the block scope and the child both
+                    # have to close in order, and this file has already shipped
+                    # the frame-corrupting version of that once.
+                    settings_character.draw_block(ctx, form, form_ui)
                 else:
-                    _model(ctx, form, findings_doc)
-                    _lora(ctx, form, show_strength=False, findings_doc=findings_doc)
-                if intent == "sprite":
-                    _locked_sheet_recipe(ctx, "Final sheet recipe", sprite=True)
-                _seed_row(ctx, form, form_ui)
-                if form.get("style_lora") and intent != "tileset":
-                    widgets.section("Style strength")
-                    _lora_strength(ctx, form, findings_doc)
-                if _negative_supported(ctx, form):
-                    widgets.section("Negative prompt / Avoid")
-                    _negative(ctx, form)
-                _history(ctx, form)
-                # One contextual section, for the one type that needs it.
-                # Image and 3D Model draw none at all, which is the whole
-                # point: a control that cannot apply is not shown greyed, it
-                # is not shown.
-                if _is_tile_arm(form):
-                    widgets.section("Tileset")
-                    manual_render.help_button(ctx, "settings-sheet")
-                    _tile_layout(ctx, form, form_ui)
-                    _tile_size(ctx, form, form_ui)
-                    _target_cell(ctx, form, form_ui)
-                    _pixel_look(ctx, form, form_ui, sprite=False)
-                elif form.get("output") == "sheet":
-                    widgets.section("Sprite sheet")
-                    manual_render.help_button(ctx, "settings-sheet")
-                    _sprite_layout(ctx, form, form_ui)
-                    _sprite_size(ctx, form, form_ui)
-                    _target_cell(ctx, form, form_ui)
-                    _pixel_look(ctx, form, form_ui, sprite=True)
-                # The one disclosure left, and it holds one thing. Collapsed by
-                # default because most runs attach no image at all; the tail
-                # says when one is attached, so a closed section never hides a
-                # setting that is doing something.
-                opened = controls.collapsing_header(
-                    f"Conditioning{_conditioning_tail(form)}##create"
-                )
-                if opened:
-                    _references(ctx, form)
+                    widgets.section("Recipe")
+                    manual_render.help_button(ctx, "settings-2d")
+                    if intent == "tileset":
+                        _locked_sheet_recipe(ctx, "Tile-set recipe", part="model")
+                        _locked_sheet_recipe(
+                            ctx, "Locked for coherent pixel tiles", part="lora"
+                        )
+                    else:
+                        _model(ctx, form, findings_doc)
+                        _lora(ctx, form, show_strength=False, findings_doc=findings_doc)
+                    if intent == "sprite":
+                        _locked_sheet_recipe(ctx, "Final sheet recipe", sprite=True)
+                    _seed_row(ctx, form, form_ui)
+                    if form.get("style_lora") and intent != "tileset":
+                        widgets.section("Style strength")
+                        _lora_strength(ctx, form, findings_doc)
+                    if _negative_supported(ctx, form):
+                        widgets.section("Negative prompt / Avoid")
+                        _negative(ctx, form)
+                    _history(ctx, form)
+                    # One contextual section, for the one type that needs it.
+                    # Image and 3D Model draw none at all, which is the whole
+                    # point: a control that cannot apply is not shown greyed, it
+                    # is not shown.
+                    if _is_tile_arm(form):
+                        widgets.section("Tileset")
+                        manual_render.help_button(ctx, "settings-sheet")
+                        _tile_layout(ctx, form, form_ui)
+                        _tile_size(ctx, form, form_ui)
+                        _target_cell(ctx, form, form_ui)
+                        _pixel_look(ctx, form, form_ui, sprite=False)
+                    elif form.get("output") == "sheet":
+                        widgets.section("Sprite sheet")
+                        manual_render.help_button(ctx, "settings-sheet")
+                        _sprite_layout(ctx, form, form_ui)
+                        _sprite_size(ctx, form, form_ui)
+                        _target_cell(ctx, form, form_ui)
+                        _pixel_look(ctx, form, form_ui, sprite=True)
+                    # The one disclosure left, and it holds one thing.
+                    # Collapsed by default because most runs attach no image at
+                    # all; the tail says when one is attached, so a closed
+                    # section never hides a setting that is doing something.
+                    opened = controls.collapsing_header(
+                        f"Conditioning{_conditioning_tail(form)}##create"
+                    )
+                    if opened:
+                        _references(ctx, form)
                 _reset_row(ctx)
         imgui.end_child()
         top = imgui.get_cursor_pos_y()
@@ -1073,6 +1095,17 @@ def _is_tile_arm(form: dict[str, Any]) -> bool:
     return form.get("output") == "sheet" and form.get("sheet_type") != "sprite"
 
 
+def _is_character(form: dict[str, Any]) -> bool:
+    """Whether this form is the Character type. **The registry, not a field.**
+
+    Asked through ``create_assets.selected`` rather than by testing
+    ``output == "character"``, for the reason ``selected`` itself gives: a form
+    that one writer touched and another did not can carry a stale ``output``,
+    and the *type* is the field the user set.
+    """
+    return create_assets.selected(form).intent == "character"
+
+
 def sheet_rows(form: dict[str, Any]) -> tuple[str, ...]:
     """Which registry rows the Sheet output currently needs.
 
@@ -1915,6 +1948,14 @@ def problems_for(ctx: Any, form: dict[str, Any]) -> list[widgets.Problem]:
     if cache is not None and cache[0] == key:
         return cache[1]
     problems = validate(form)
+    if _is_character(form):
+        # Appended here rather than inside ``validate`` because they need a
+        # ``ctx``: whether Blender exists is a fact about this install, and the
+        # species registry is read through the service door. Appended *at all*
+        # so the ring, this footer, the disabled Generate's tooltip and the
+        # Ctrl+Enter toast are one sentence -- which is the property this
+        # function's cache exists to guarantee.
+        problems = [*problems, *settings_character.problems(ctx, form)]
     weight = weights_problem(ctx, form)
     if weight is not None:
         problems = [*problems, weight]
@@ -1946,11 +1987,18 @@ def _generation_plan(ctx: Any, form: dict[str, Any], problems: list[widgets.Prob
     resolved = _resolved_recipe(ctx, form)
     plan = generation_workspace.plan_for(form, resolved)
     imgui.text_wrapped(plan.stages)
-    widgets.muted(
-        f"{plan.candidates} candidate{'s' if plan.candidates != 1 else ''} · "
-        f"{plan.generations} image generation{'s' if plan.generations != 1 else ''} · "
-        f"{plan.duration}"
-    )
+    if plan.generations > 0:
+        widgets.muted(
+            f"{plan.candidates} candidate{'s' if plan.candidates != 1 else ''} · "
+            f"{plan.generations} image generation"
+            f"{'s' if plan.generations != 1 else ''} · "
+            f"{plan.duration}"
+        )
+    else:
+        # A character draws no images at all, and "1 candidate · 0 image
+        # generations" is a line that reads as a bug rather than as a fact.
+        # The duration still matters -- it is the whole cost of the press.
+        widgets.muted(plan.duration)
     widgets.muted(f"Recipe: {plan.recipe}")
     active = getattr(ctx.cache, "active", None)
     if active is not None:
@@ -1984,6 +2032,13 @@ def _preflight_fix(ctx: Any, form: dict[str, Any], problem: widgets.Problem) -> 
     """Offer the safe, direct repairs which do not need another decision."""
     field = getattr(problem, "field", "")
     message = str(problem)
+    # First, because the character arm's refusals are about a species and this
+    # function's other arms are about a checkpoint: "guidance 0" appears in no
+    # character sentence, but "not downloaded" could one day, and a pane that
+    # offered "Open model setup" under "Warlock has no manticore yet" would be
+    # pointing at a download that changes nothing.
+    if _is_character(form) and settings_character.preflight_fix(ctx, form, problem):
+        return
     if field == "ref_path":
         if controls.button(
             "Choose a reference##preflight-reference", role=controls.ButtonRole.GHOST
@@ -2060,17 +2115,25 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     # one thing is about the arm, because what makes a tile set exempt from them
     # is that its door pins its own recipe, which all three layouts do.
     tileset = _is_tile_arm(form)
+    # **The tileset precedent, applied to the second type with its own door.**
+    # A character request reaches ``service.characters.create_character``, which
+    # reads no checkpoint, no LoRA, no ControlNet and no reference -- so every
+    # check below guarded by this flag would be a refusal about somebody else's
+    # job, and reachable rather than theoretical: ``control`` is persisted while
+    # ``ref_path`` is VOLATILE, so any session that once conditioned an Object
+    # reopens with the pair already split.
+    pinned = tileset or _is_character(form)
     base = form.get("base_model")
     style = form.get("style_lora")
     # A tile set's fixed recipe does not read either selection. It validates
     # its pinned pair at its own service door.
-    if not tileset and (not isinstance(base, str) or base not in modelslib.BASE_MODELS):
+    if not pinned and (not isinstance(base, str) or base not in modelslib.BASE_MODELS):
         problems.append(widgets.Problem("Choose a recognised image model.", "base_model"))
-    if not tileset and (
+    if not pinned and (
         not isinstance(style, str) or (style and style not in modelslib.STYLE_LORAS)
     ):
         problems.append(widgets.Problem("Choose a recognised style LoRA.", "style_lora"))
-    if not tileset and style:
+    if not pinned and style:
         try:
             weight = float(form.get("lora_weight"))
         except (TypeError, ValueError, OverflowError):
@@ -2099,7 +2162,7 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     # justified it (ref_path is VOLATILE), and the base model can be changed
     # under Advanced after a control was picked.
     if (
-        not tileset
+        not pinned
         and not form.get("ref_path")
         and (form.get("ip_adapter") or form.get("control"))
     ):
@@ -2107,7 +2170,7 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
             widgets.Problem("Conditioning needs a reference image.", "ref_path")
         )
     if (
-        not tileset
+        not pinned
         and form.get("control")
         and base not in modelslib.controlnet_bases()
     ):
@@ -2122,7 +2185,7 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     # models.py bases list -- see ``generation._takes_img2img``.
     base_spec = modelslib.BASE_MODELS.get(base)
     if (
-        not tileset
+        not pinned
         and form.get("init_image")
         and base_spec is not None
         and base_spec.family != modelslib.FAMILY_SDXL
@@ -2136,7 +2199,7 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     # Reachable the same way: a style picked under one base survives a change
     # of base under Advanced, and the service refuses the submit outright
     # rather than generating without it.
-    if not tileset and form.get("style_lora") and form["style_lora"] not in (
+    if not pinned and form.get("style_lora") and form["style_lora"] not in (
         modelslib.loras_by_base().get(base) or []
     ):
         problems.append(
@@ -2476,6 +2539,14 @@ def weights_problem(ctx: Any, form: dict[str, Any]) -> widgets.Problem | None:
     missing warning, never a wrong outcome -- ``service.validation.check_weights``
     is still the authority and still refuses at the door.
     """
+    if _is_character(form):
+        # A character downloads nothing. Its body comes off the baked assets
+        # this build ships and its cells are rendered by Blender, so walking
+        # ``_WEIGHT_FIELDS`` here would point a "not downloaded" refusal at a
+        # checkpoint the run never opens. What a character *is* short of --
+        # Blender -- is ``settings_character.problems``' sentence, in the Rig
+        # segment's exact words.
+        return None
     by_key = {str(row.get("row_key")): row for row in (getattr(ctx, "model_rows", None) or [])}
     if not by_key:
         return None
@@ -2544,7 +2615,16 @@ def refuse(ctx: Any, problems: list[widgets.Problem]) -> None:
 
 
 def generate(ctx: Any, form: dict[str, Any]) -> None:
+    character = _is_character(form)
+    if character:
+        # **The keyboard door.** Ctrl+Enter and the palette call straight in
+        # here and never draw the Character block, so a form filled only from
+        # that draw would submit the species of the *previous* prompt for
+        # anyone who typed and pressed in one motion.
+        settings_character.sync_from_prompt(form)
     problems = validate(form)
+    if character:
+        problems = [*problems, *settings_character.problems(ctx, form)]
     # The install-shaped refusal, folded in behind the form-shaped ones: it is
     # the same "this will not submit" from the user's side, and putting it here
     # rather than at the service door turns a two-minute queue-and-fail into an
@@ -2576,6 +2656,18 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         # Generation is deterministic in the seed, so an unchanged form would
         # otherwise produce the identical image twice and read as a no-op.
         form["seed"] = random_seed()
+    if character:
+        # The second output that does not go through ``create_job``, and the
+        # only one that generates no image at all: ``create_character`` builds
+        # a mesh from the recipe, mints its row finished and queues the rig
+        # that will mint the sheet. ``create_job``'s own allowlist refuses
+        # ``asset_type="character"`` by name, which is what keeps this branch
+        # from being merely a convention.
+        if settings_character.submit(ctx, form):
+            ctx.state.remember_prompt(form["prompt"])
+        else:
+            form["seed"] = seed_before
+        return
     if _is_tile_arm(form):
         # The one output that does not go through ``create_job``: a tile set is
         # its own job kind, with its own door and its own admission. The sprite

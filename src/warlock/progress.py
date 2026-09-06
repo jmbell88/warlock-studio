@@ -175,9 +175,19 @@ PHASES_TILE_SHEET: dict[str, tuple[float, float]] = {
 # mapped onto the whole bar, and the never-regress creep pinned it at 100% for
 # the entire tail. This table is one of the nine stage-keyed tables a new job
 # kind must sweep (``docs/INVARIANTS.md``), and Troupe swept eight of them.
+#
+# ``effects`` joined on 2026-09-05, between the reduction and the pack, and it
+# is where a themed character's flames are composited onto the reduced cells.
+# It is narrow -- one 32px Flourish render per cell that projects the socket,
+# against 256 supersampled reductions before it -- and it is *skipped entirely*
+# on a sheet whose source has no ``character.json``, which is every sheet this
+# program rendered before the registry existed. The span it takes comes out of
+# ``reduce``'s rather than out of the pack's, so a sheet that skips it simply
+# sits at 0.79 a moment longer.
 PHASES_CHARSHEET: dict[str, tuple[float, float]] = {
     "sheet": (0.00, 0.70),
-    "reduce": (0.70, 0.82),
+    "reduce": (0.70, 0.79),
+    "effects": (0.79, 0.82),
     "pack": (0.82, 0.88),
     "pixel": (0.88, 1.00),
 }

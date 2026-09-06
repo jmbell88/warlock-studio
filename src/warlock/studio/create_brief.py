@@ -85,13 +85,17 @@ def draw(ctx: Any) -> None:
     focus.pump(state, FOCUS_PANE)
     focus.begin(state, FOCUS_PANE)
 
-    sheet = form.get("output") == "sheet"
+    # **Both sheet doors and the character door make exactly one thing per
+    # press.** ``sync_legacy_fields`` has already written ``count = 1`` for all
+    # three, so four radios of which three are refusals would be a control
+    # offering what the thing behind it will not do.
+    hide_count = form.get("output") in ("sheet", "character")
     problems = settings_2d.problems_for(ctx, form)
     busy = ctx.busy("submit")
 
     _type(ctx, form)
     imgui.same_line()
-    prompt_w, show_count = _row_widths(sheet)
+    prompt_w, show_count = _row_widths(hide_count)
     _prompt(ctx, form, prompt_w)
     imgui.same_line()
     if show_count:
@@ -283,6 +287,17 @@ _COUNT_HINTS: dict[str, str] = {
     "8": "Draw eight, the most one press can generate.",
 }
 
+def _species_count() -> int:
+    """How many species the character registry ships. Counted, never typed.
+
+    ``characters.family`` imports nothing but the standard library, so reading
+    it at import time here costs a dict copy and drags nothing in behind it.
+    """
+    from ..characters.family import families
+
+    return len(families())
+
+
 #: One line per type, on the combo's tooltip. The five-row descriptive block
 #: that used to sit under the selector is gone with the column it sat in; this
 #: is what survives of it, which is the orientation and not the prose.
@@ -292,6 +307,18 @@ _TYPE_HINTS: dict[str, str] = {
     "seamless_material": "A seamless surface texture.",
     "tileset": "A coherent pixel-art tile sheet.",
     "sprite_sheet": "A character in several frames and directions.",
+    # The real scope, in one line, because every other hint here describes an
+    # SDXL request and this one describes the opposite: a body built from the
+    # species registry, rigged and rendered on the CPU. "No GPU needed" is the
+    # half a user with a small card most needs to read.
+    #
+    # The species count is *counted*, never typed: a sibling adding a row to
+    # ``characters.family._FAMILIES`` must not leave a tooltip promising the
+    # number the registry held last month.
+    "character": (
+        f"{_species_count()} species across four body plans, built and animated "
+        f"into a sprite sheet. No GPU needed."
+    ),
 }
 
 __all__ = ["BAR_H", "FOCUS_PANE", "draw", "shows"]

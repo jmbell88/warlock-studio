@@ -416,6 +416,21 @@ def _chip(label: str, colour: tuple[float, float, float, float], fill: float) ->
         imgui.dummy((size.x + pad_x * 2, size.y + pad_y * 2))
 
 
+def pill(label: str, colour: int, *, fill: float = 0.16) -> None:
+    """A rounded chip in one palette colour, for a fact that is not a job status.
+
+    :func:`status_pill`'s shape without its table: the sheet inspector's "needs
+    repair" is a verdict about a *file*, not one of ``STATUS_COLORS``' five job
+    states, and giving it a sixth entry there would put it in the vocabulary
+    every card's status pill is read from.
+
+    The caller supplies the glyph, because the two-channel rule
+    (``theme.STATUS_GLYPHS``) is the caller's to keep: a chip that differs from
+    its neighbours only by hue is unreadable to a chunk of people.
+    """
+    _chip(label, theme.rgba(colour), fill)
+
+
 def status_pill(status: str) -> None:
     """A rounded chip: colour *and* a glyph, because a pill that differs only
     by hue is unreadable to a chunk of people and useless in a screenshot."""
@@ -1553,6 +1568,50 @@ def ring(low: Any, high: Any, colour: int, alpha: float, thick: float = 2.0) -> 
         sp(4),
         thickness=sp(thick),
     )
+
+
+#: One square of the transparency checkerboard, in design pixels. Packwright's
+#: figure, because Packwright is where the pattern was drawn first.
+CHECKER = 8
+
+
+def checkerboard(draw_list: Any, low: Any, high: Any, *, step: float = CHECKER) -> None:
+    """The transparency pattern behind a sprite, into a rectangle.
+
+    **One checkerboard, not two.** Packwright drew this on ``ELEV_1``/``ELEV_2``
+    and Troupe's preview had none at all, so the app answered "where is the
+    transparency" in one pane and not the other -- and the pane that did answer
+    used the panel elevations rather than ``CHECKER_A``/``CHECKER_B``, which are
+    the tokens Inker's canvas has always tiled and the only two the palettes
+    define for this job. Lifted here on those tokens so the three surfaces that
+    show a sprite over nothing agree about what nothing looks like.
+
+    Rectangles rather than a tiled texture, which is ``packwright_preview``'s
+    original call and its reason: a preview is bounded by the pane, so the worst
+    case is a few hundred quads and the alternative is a second texture to
+    create, register and release.
+    """
+    light = imgui.get_color_u32(theme.rgba(theme.CHECKER_A))
+    dark = imgui.get_color_u32(theme.rgba(theme.CHECKER_B))
+    draw_list.add_rect_filled(low, high, dark)
+    side = sp(step)
+    if side <= 0.0:
+        return
+    rows = int((high[1] - low[1]) // side) + 1
+    columns = int((high[0] - low[0]) // side) + 1
+    # Bounded: past this the pattern is finer than it is useful and the cost is
+    # not. A flat fill is the honest fallback.
+    if rows * columns > 4096:
+        return
+    for row in range(rows):
+        for column in range(columns):
+            if (row + column) % 2:
+                continue
+            x0 = low[0] + column * side
+            y0 = low[1] + row * side
+            draw_list.add_rect_filled(
+                (x0, y0), (min(x0 + side, high[0]), min(y0 + side, high[1])), light
+            )
 
 
 class Problem(str):

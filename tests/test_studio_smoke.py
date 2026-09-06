@@ -220,6 +220,23 @@ def test_the_2d_pane_builds_every_output_kind(app_ctx, imgui_ctx):
         _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
 
 
+def test_the_2d_pane_builds_the_character_column_and_its_refusal(app_ctx, imgui_ctx):
+    """The fourth arm, which draws none of the other three's sections.
+
+    Both states, because they are different columns: a resolved species grows a
+    look combo and a slider per channel, and an unresolved one grows neither
+    and puts three repair buttons under the plan instead. Drawn rather than
+    reasoned about for this test's own reason -- the failures here are layout
+    ones, and no pure test sees a control put nowhere.
+    """
+    from warlock.studio.panes import settings_2d
+
+    app_ctx.state.form_2d["asset_type"] = "character"
+    for prompt in ("an attacking fire ogre, 3/4 top down", "a manticore", ""):
+        app_ctx.state.form_2d["prompt"] = prompt
+        _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+
 def test_the_2d_pane_builds_both_arms_of_the_sheet_output(app_ctx, imgui_ctx):
     """The two arms draw different controls off the same form dict, and the
     sprite arm's are the ones a stale tile-arm value can reach."""

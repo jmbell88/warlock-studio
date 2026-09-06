@@ -77,6 +77,52 @@ def test_an_ordinary_asset_still_routes_by_its_stage(stage, expected):
     assert target == asset_open.Route("create", expected, "A", "", "")
 
 
+def test_a_character_model_row_opens_on_the_mesh_stage_and_its_sheet_in_troupe():
+    """The two halves of a character land in two different places, on purpose.
+
+    ``create_character`` mints the *model* row finished, with ``stage="model"``
+    and no ``input.png`` at all -- there is no generator behind a character, so
+    there is no reference image to approve. Routing it by stage therefore lands
+    on Mesh, which is the surface that draws a body, and never on Reference,
+    where the canvas would be empty with a row selected.
+
+    Its ``charsheet`` follow-up is unchanged: it holds nothing of its own and
+    opens in Troupe against the mesh it was rendered from. So one press produces
+    an asset that opens in Create and a product that opens in a mode, and the
+    routing table says which is which without either of them knowing about the
+    other.
+    """
+    from warlock.service import characters as svc_characters
+
+    body = {
+        "id": "CHAR",
+        "kind": "image",
+        "stage": "model",
+        "files": ["model.glb"],
+        "params": {
+            "built": True,
+            "asset_type": svc_characters.ASSET_TYPE,
+            "asset_intent": svc_characters.ASSET_INTENT,
+        },
+    }
+    assert asset_open.route(body) == asset_open.Route("create", "mesh", "CHAR", "", "")
+
+    sheet = _row("charsheet", source_job="CHAR", sheet_id="S1")
+    assert asset_open.route(sheet) == asset_open.Route("troupe", "", "CHAR", "S1", "")
+
+
+def test_a_character_row_wears_the_placeholder_glyph_of_a_built_mesh():
+    """It has no ``thumb.png`` until one is rendered, and ``job_thumb`` draws a
+    framed glyph rather than a hole for exactly that case -- the arrangement an
+    imported mesh has always had. Asserted through the file list, which is the
+    condition the drawing branches on."""
+    from warlock.studio.panes import thumbs
+
+    body = {"id": "CHAR", "kind": "image", "stage": "model", "files": ["model.glb"]}
+    assert "thumb.png" not in body["files"]
+    assert thumbs.thumb_glyph(body)
+
+
 def test_a_follow_up_with_no_source_falls_back_rather_than_going_nowhere():
     """An old row or a hand-edited params blob. The old blank stage is still
     better than a click that does nothing."""

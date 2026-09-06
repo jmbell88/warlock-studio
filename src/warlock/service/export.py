@@ -84,7 +84,7 @@ def bulk_export(
     if not members:
         raise NotFound("nothing to export")
     dest_zip.parent.mkdir(parents=True, exist_ok=True)
-    # Through a temp sibling, like ``_staged_copy`` below and for its reason:
+    # Through a temp sibling, like ``staged_copy`` below and for its reason:
     # the destination is wherever the user pointed the save dialog -- possibly
     # a watched project folder -- and writing the zip in place would leave a
     # torn archive there for the length of the build (SVC-06).
@@ -114,7 +114,7 @@ def export_to_folder(
     for arcname, path in members:
         dest = svc.config.export_dir / arcname
         dest.parent.mkdir(parents=True, exist_ok=True)
-        _staged_copy(path, dest)
+        staged_copy(path, dest)
         copied += 1
     return {
         "copied": copied,
@@ -143,7 +143,7 @@ def degraded_ids(svc: WarlockService, ids: list[str]) -> list[str]:
     return out
 
 
-def _staged_copy(source: Path, dest: Path) -> None:
+def staged_copy(source: Path, dest: Path) -> None:
     """Copy through a temp sibling and rename. Never truncates the destination.
 
     ``WARLOCK_EXPORT_DIR`` exists to be *watched* -- it is a game project's
@@ -151,11 +151,40 @@ def _staged_copy(source: Path, dest: Path) -> None:
     a byte, so a hot-reloading engine could read a torn GLB for the length of
     the copy. Outside the letter of the staged-writes invariant, which is about
     files this app serves, and squarely inside its reasoning (SVC-06).
+
+    Public since 2026-09-05: ``service.characters.export_package`` writes a
+    sheet and its sidecar into the same watched folder and needs exactly this
+    guarantee, and a second private copy of it in that module would be one edit
+    away from a plain ``copyfile`` landing in a project's assets directory.
     """
-    tmp = dest.with_name(f".{dest.name}.{secrets.token_hex(4)}.tmp")
+    staged_copy_all([(source, dest)])
+
+
+def staged_copy_all(pairs: list[tuple[Path, Path]]) -> None:
+    """Stage *every* copy first, then rename them all. Both land or neither.
+
+    The pair case is why this exists rather than a loop over :func:`staged_copy`
+    at each call site. A character sheet is a PNG **and** its JSON sidecar, and
+    a reader that finds one without the other has an asset it cannot interpret
+    -- ``rigging.list_sheets`` states the same rule for the directory this app
+    serves, where the sidecar is written last as the completion marker. Copying
+    one at a time puts a disk-full between them; staging both and then replacing
+    both narrows the window to two renames.
+
+    Not atomic, because no filesystem offers that across two names. What it is
+    is *all-or-nothing about the expensive half*: nothing appears at either
+    destination until both temps are fully written.
+    """
+    tmps = [
+        (source, dest, dest.with_name(f".{dest.name}.{secrets.token_hex(4)}.tmp"))
+        for source, dest in pairs
+    ]
     try:
-        shutil.copyfile(source, tmp)
-        os.replace(tmp, dest)
+        for source, _dest, tmp in tmps:
+            shutil.copyfile(source, tmp)
+        for _source, dest, tmp in tmps:
+            os.replace(tmp, dest)
     finally:
-        with contextlib.suppress(OSError):
-            tmp.unlink()
+        for _source, _dest, tmp in tmps:
+            with contextlib.suppress(OSError):
+                tmp.unlink()

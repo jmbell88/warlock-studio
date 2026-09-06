@@ -34,6 +34,16 @@ _ORDERED = (
         "sprite_sheet", "Sprite Sheet", "sprite", "Create sprite sheet", "sheet",
         sheet_type="sprite",
     ),
+    # **Last, and it is not an SDXL type at all.** Every entry above compiles a
+    # text-to-image request; this one builds a mesh from the character registry,
+    # rigs it and renders the cells. It is in this registry because it is a
+    # thing the Create selector offers -- but its ``output`` is its own word,
+    # not one of ``create_job``'s three, precisely so that no arm of that door
+    # can be reached with it. ``generation.GENERATION_TYPES`` deliberately does
+    # *not* grow a sixth entry: that tuple is the SDXL-backed set, and the
+    # tileset arm already established that a type with its own door belongs
+    # here and not there.
+    AssetType("character", "Character", "character", "Create character", "character"),
 )
 
 # Old keys remain readable by settings and service adapters. They are not
@@ -122,6 +132,20 @@ def sync_legacy_fields(form: dict[str, Any]) -> AssetType:
         form["sheet_type"] = "sprite"
         form["sheet_layout"] = form.get("sheet_layout") or "turnaround"
         form["projection"] = "top_down"
+    elif spec.key == "character":
+        # ``sheet_type="sprite"`` because a character *is* a sprite sheet by
+        # the time it reaches the user -- the legacy field is read by the
+        # library's and Review's stage-keyed tables, and leaving it on the
+        # inherited "tile" would file a rendered character under tiles.
+        form["sheet_type"] = "sprite"
+        form["sheet_layout"] = form.get("sheet_layout") or "turnaround"
+        form["projection"] = "top_down"
+        # One press, one character. The count below only fires for
+        # ``output == "sheet"``, and this output is its own word, so the batch
+        # a restored image request left behind has to be cleared here or a
+        # character request would carry a count nothing reads and the brief
+        # would draw a control the door ignores.
+        form["count"] = 1
     else:
         form["sheet_type"] = spec.sheet_type
         form["projection"] = spec.projection

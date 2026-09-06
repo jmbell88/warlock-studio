@@ -530,11 +530,15 @@ def test_the_multi_pass_kinds_have_their_own_contiguous_tables(kind):
             ("views", "restyle", "t2i_load", "t2i_sample", "project", "assemble"),
         ),
         ("tile_sheet", ("guide", "t2i_load", "t2i_sample", "slice", "quantize")),
-        # Troupe's. The Blender render, then the three host-side steps of the
-        # tail, in the order ``_q_troupe`` emits them. Every one was undeclared,
-        # so the bar reached 100% when Blender finished and the never-regress
-        # creep held it there for the whole pixel-art pass.
-        ("charsheet", ("sheet", "reduce", "pack", "pixel")),
+        # Troupe's. The Blender render, then the host-side steps of the tail,
+        # in the order ``_q_troupe`` emits them. Every one was undeclared, so
+        # the bar reached 100% when Blender finished and the never-regress
+        # creep held it there for the whole pixel-art pass. ``effects`` joined
+        # them on 2026-09-05: it is emitted only by a themed character's sheet,
+        # and a phase emitted by *some* runs of a kind is exactly the shape
+        # that trips the fallback, because the runs that emit it are the ones
+        # nobody tested.
+        ("charsheet", ("sheet", "reduce", "effects", "pack", "pixel")),
     ],
 )
 def test_every_phase_these_kinds_emit_is_declared(kind, emitted):

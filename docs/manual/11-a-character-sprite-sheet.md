@@ -1,85 +1,78 @@
 # A character sprite sheet
 
-Troupe makes animated character sprite sheets by building a 3D character, rigging it, animating it,
-rendering it from eight directions and reducing every frame to pixels. Two hundred and fifty-six
-cells from one description.
+A character sprite sheet is a grid of one creature, animated, seen from eight directions and reduced
+to pixels. Warlock makes them three ways, and this chapter puts the one that works first.
 
-It is the most ambitious thing in the app, and it is the one where being straight with you about what
-is proven matters most. This chapter says which half is solid, which half has been measured and
-found wanting, and which features do not exist yet at all.
+The short version: **Create → Character → describe the creature → Generate.** No graphics card, no
+downloaded weights, no reference image to approve. Warlock builds the body itself, rigs it, animates
+it from an authored clip library and renders the sheet. The other two routes — a mesh you already
+have, and a reconstruction from a generated drawing — are further down, with what has been measured
+about each.
 
-## How it actually works
+## The route worth starting on
 
-Troupe is **four ordinary jobs and one human gate**, not a single orchestrated process. Knowing that
-explains everything about how it behaves — including why it stops in the middle and waits.
+1. Open **Create** and set **Generation type** to *Character*.
+2. Type a brief. `fire ogre, 3/4 top down sprite sheet` is a complete one.
+3. **Read the column back.** It has filled itself in from your words: the species is *Ogre*, the
+   look is *Fire*, the camera is *3/4 top-down*, and anything it did not understand is listed under
+   **Not interpreted** rather than silently dropped. Change anything you disagree with; a control
+   you touch becomes yours and stops following the prompt.
+4. Press **Generate**.
 
-1. **A reference.** One image job draws your character standing in a fixed pose. The pose is not
-   hoped for: a guide figure is drawn and handed to the image model as structural conditioning.
-   **A-pose is the default** and T-pose is the alternative — see
-   [Making a character](33-troupe.md#making-a-character).
-2. **The gate.** You approve that drawing in Create, exactly as in
-   [Your first asset](02-your-first-asset.md). Nothing expensive runs until you do. This is the same
-   reasoning as the main pipeline, for the same reason: the reconstruction is the costly step and it
-   should not run on a drawing nobody wanted.
-3. **The mesh.** An ordinary reconstruction.
-4. **The rig.** Fitted automatically, with joints measured off the mesh rather than assumed —
-   see [the A-pose trap](08-rigging-and-posing.md#the-a-pose-trap), which is exactly the failure this
-   avoids.
-5. **The sheet.** Every animation, from every direction, rendered and reduced to your chosen pixel
-   size.
+What happens next has no gate in it. The body is built in the app, minted as a finished mesh asset,
+and a rig is queued behind it; when the rig lands the sheet follows, and the finished character
+plays in [Troupe](33-troupe.md). Create moves to the **Mesh** stage rather than the Reference stage,
+because there is no drawing behind a character to look at.
 
-## The other door, and why you might prefer it
+**None of it needs a GPU.** The mesh is generated in-process, the rig and the render are Blender on
+the CPU, and the pixel reduction is arithmetic. Rigging does need Blender installed — the press is
+refused before anything is built if it is missing, because a body with no skeleton is half an asset.
 
-There is a second way in that skips the first three steps entirely: **Build another sheet** takes a
-mesh that is *already rigged* and renders a sheet from it.
+### Why it works when reconstruction does not
 
-That door is worth knowing about for a practical reason. The sheet render itself is **Blender on the
-CPU — no GPU, no VRAM, no model weights.** So if you bring your own rigged character, the whole of
-Troupe's actual output is available to you on a machine that cannot run the generators at all. It
-costs minutes of CPU and nothing else.
+Because nothing is being *recovered* from a picture. A character comes from a registry: **four body
+plans** — humanoid, quadruped, winged, amorphous — and **thirty-one species** across them, each a row
+of generator parameters with its own palette themes. The body plan decides the skeleton, which clip
+library animates it, and which appearance sliders that creature has; an ogre and a wolf do not have
+the same ones.
 
-To use it: import your mesh, rig it in Poser against the humanoid template, then Build another sheet.
-
-Your mesh needs to meet a contract the app cannot enforce, only state. GLB or glTF. T-pose or
-A-pose — a dynamically posed mesh degrades both the joint fit and the automatic weights. **+Z up, −Y
-forward.** **No very short bones** — Blender deletes them silently along with their children, and
-fingers and toes are the usual casualties. Under about 300,000 faces. And a licence that permits you
-to ship what comes out.
-
-A rig it arrives with is **discarded**, not adopted, so bone names do not have to match anything.
-Warlock fits its own nineteen-bone skeleton, because a supplied rig is not evidence about where the
-template's joints go — CesiumMan has nineteen bones like the template and still splits them
-differently, three per arm and four per leg against the template's four and three. The mesh is
-unbound and the old armature removed before a single measurement is taken.
+That is also the honest limit of it. The registry is a fixed vocabulary, and **Warlock never
+substitutes**. Ask for a phoenix and it does not quietly hand you a dragon: the species stays empty,
+Generate is refused, and the refusal says *"Warlock has no phoenix yet. The closest it makes is a
+dragon"* with three presses under it — take the offer, switch to the experimental sprite-sheet type,
+or take the brief to Troupe. The offer is always the same body plan, and taking it is your press.
+[Generating references → Characters](22-generating-references.md#characters) has the whole of that
+screen.
 
 ## What a sheet contains
 
-By default, five animations across eight directions:
+A Character sheet defaults to three movements across eight directions:
 
 | Animation | Frames | Loops | Frame time |
 | --- | --- | --- | --- |
 | Idle | 4 | yes | 150 ms |
 | Walk | 8 | yes | 100 ms |
-| Run | 8 | yes | 60 ms |
 | Attack | 6 | no | 80 ms |
-| Jump | 6 | no | 100 ms |
 
-Eight directions clockwise from front in 45° steps. Five animations by eight directions is 256
-cells.
+Eighteen frames in eight directions is 144 cells, at 64 pixels and 32 colours. Switch on the other
+two — **Run** and **Jump** — and you have the full five, 32 frames per direction and 256 cells,
+which is what Troupe's own form defaults to.
 
-That layout is configurable. Each movement can be turned off or given a different frame count, and
-the direction count can be 1, 4, 8 or 16. A sheet warns above 256 cells and refuses above 512.
+Eight directions clockwise from front in 45° steps. Each movement can be turned off or given a
+different frame count, and the direction count can be 1, 4, 8 or 16. A sheet warns above 256 cells
+and refuses above 512.
 
 Pixel sizes are 16, 24, 32, 48, 64, 96 and 128. Only 16, 32, 64 and 128 divide the render size
 evenly; the other three go through a documented resize.
-
-There are male and female builds, differing in shoulder width, arm length and the stance of the
-guide figure.
 
 One implementation detail with a visible consequence: each rendered frame is reduced to its final
 pixel size *before* the cells are packed, not after. A 256-cell sheet packed at render resolution
 would exceed the maximum atlas size, so per-frame reduction is the only route rather than an
 optimisation. It also keeps the smooth resize used for previews away from your pixel art.
+
+If your species carries a fire theme, the flame is composited in that same gap — after the reduce,
+before the pack — so its oranges go through the same colour cut as the character's skin. *Troupe →
+[Characters that are on fire](33-troupe.md#characters-that-are-on-fire)* is why.
 
 ## Watching it
 
@@ -99,6 +92,11 @@ drifted in size from the rest; red where it is well past that, or empty. Hover a
 numbers; click one and the preview jumps to that cell and stops. The scores rank cells for you to
 look at and never reject a sheet -- nothing downstream reads them.
 
+Separately from the heatmap, the sheet panel reports what the render **checked** about itself —
+cells that came back clipped at the frame edge, cells that came back empty, and whether the sheet
+needed a second, wider render to fit its poses. That is a structural note rather than a judgement,
+and it never refuses a sheet either.
+
 Troupe is the one workspace that holds no document. There is nothing to save and no undo stack;
 entering it creates nothing. Sheets are ordinary library assets.
 
@@ -110,6 +108,42 @@ entering it creates nothing. Sheets are ordinary library assets.
 That is the intended shape of the work: the pipeline produces frames that are close, and you fix
 them by hand.
 
+## The other routes
+
+### A mesh you already have
+
+**Build another sheet** takes a mesh that is *already rigged* and renders a sheet from it — no
+species, no registry, your own model. It costs the same minutes of CPU and no GPU at all, so if you
+bring your own rigged character the whole of Troupe's output is available to you.
+
+To use it: import your mesh, rig it in Poser against one of the templates that has clips authored
+for it, then Build another sheet.
+
+Your mesh needs to meet a contract the app cannot enforce, only state. GLB or glTF. T-pose or
+A-pose — a dynamically posed mesh degrades both the joint fit and the automatic weights. **+Z up, −Y
+forward.** **No very short bones** — Blender deletes them silently along with their children, and
+fingers and toes are the usual casualties. Under about 300,000 faces. And a licence that permits you
+to ship what comes out.
+
+A rig it arrives with is **discarded**, not adopted, so bone names do not have to match anything.
+Warlock fits its own nineteen-bone skeleton, because a supplied rig is not evidence about where the
+template's joints go — CesiumMan has nineteen bones like the template and still splits them
+differently, three per arm and four per leg against the template's four and three. The mesh is
+unbound and the old armature removed before a single measurement is taken.
+
+This is the route where joints are *measured off your mesh*, and it is why
+[the A-pose trap](08-rigging-and-posing.md#the-a-pose-trap) matters here and not on the Character
+route — a built character ships its own joints, so there is nothing to guess.
+
+### A reconstruction from a generated drawing
+
+The third route is the original one, and it is in Troupe's own form: describe a character, let the
+app draw a pose reference, approve that drawing, and let it be reconstructed into a mesh which is
+then rigged and rendered. See [Making a character](33-troupe.md#making-a-character).
+
+It is still there, and it is still the only route that will draw you a creature the registry does
+not model. What it is not is reliable, and the next section is the measurement.
+
 ## What is proven, and what is not
 
 Read this part before building expectations on top of it.
@@ -118,17 +152,25 @@ Read this part before building expectations on top of it.
 from real meshes through real Blender. The supplied-base-mesh path in particular works today and
 needs no GPU.
 
+**Built, awaiting the render benchmark.** The Character route — the registry, the four body plans,
+the rig, the clips, the render, the effects — is built, tested and structurally checked, and no
+human has yet sat down and judged the pixels. That judgement is four separate verdicts, not one: a
+convincing humanoid walk tells you nothing about whether a quadruped's four-beat gait reads at 64
+pixels. Until that sitting happens this route is *built* rather than *proven*, and this sentence is
+what will change, per body plan, when it does.
+
 **Measured, and the answer is no — for now.** Reconstructing a *humanoid* from a single generated
 image was judged on a graded corpus on 2026-08-30, and it came back with limbs bent and stretched.
 The references themselves were fine; it is the mesh that is lost, because a character asks the
-reconstruction for separable limbs from one view and it does not deliver them. So the prompt-to-
-character half of this chapter is a mechanism that runs rather than a route to a usable sheet, and
-**the supplied-base-mesh path is the one to build on**. That verdict is on today's default
-reconstruction, not on the idea. Related and permanent either way: reconstruction works from one
-image, so **the back of a generated character is invented**, not observed.
+reconstruction for separable limbs from one view and it does not deliver them. That verdict is on
+today's default reconstruction, not on the idea. Related and permanent either way: reconstruction
+works from one image, so **the back of a generated character is invented**, not observed. What that
+verdict has stopped meaning, since the Character route shipped, is "you cannot get a character from
+a prompt" — you can, and the sentence you type is read rather than drawn.
 
 **Provisional.** The shipped animation keyframes are placeholders — enough to prove the pipeline,
-not finished animation. Expect to author your own in Poser's clip editor.
+not finished animation. There are four libraries of them now, one per body plan. Expect to author
+your own in Poser's clip editor.
 
 **Built, for the cleanup.** Open the sheet in Inker and a strip under the transport sends one
 correction to the same frame in every direction, to a whole direction, an animation or the sheet,
@@ -146,24 +188,26 @@ the whole of it.
 
 - Swappable or layered equipment.
 - AI restyling of a rendered sheet, or a learned pixel refiner.
-- Any animation beyond the five above.
+- Any animation beyond idle, walk, run, attack and jump.
+- A species the registry does not carry. There are thirty-one, and the resolver will tell you when
+  yours is not one of them rather than approximating it.
 
 ## Try it
 
 Without a GPU, with Blender installed:
 
-1. Import a rigged character of your own, or rig one in Poser.
-2. **Build another sheet** at 32 px. Note that it costs CPU minutes and no GPU at all.
-3. Play it with `Space`, step through the walk with the arrow keys.
-4. Open the sheet in Inker and fix one cell by hand.
-5. Add the sheet to a Packwright atlas.
+1. Create → **Character**. Type `fire ogre, 3/4 top down sprite sheet` and read the column back.
+2. Press **Preview character** to see the body before you commit to a sheet.
+3. **Generate**, and watch the mesh, rig and sheet rows go by in the in-progress list.
+4. Play it with `Space`, step through the walk with the arrow keys, and look at it from behind.
+5. Ask for something the registry does not make — `phoenix` — and read the refusal. Then take the
+   offer and see what you get.
+6. Open the sheet in Inker and fix one cell by hand, then add the sheet to a Packwright atlas.
 
-With a GPU and weights:
+If you have your own rigged character:
 
-1. Describe a character and let Troupe draw the pose reference.
-2. Approve it in Create — and notice that nothing expensive happened until you did.
-3. Watch the mesh, rig and sheet stages go by in the in-progress list.
-4. Judge the result honestly against the measured note above, especially from behind.
+1. Import it, rig it in Poser, and use **Build another sheet** at 32 px.
+2. Note that it costs CPU minutes and no GPU at all.
 
 ## What to read next
 

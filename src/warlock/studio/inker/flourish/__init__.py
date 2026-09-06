@@ -32,6 +32,14 @@ The modules, bottom up:
 The Inker document that *hosts* a recipe -- a layer group whose cels are these
 renders -- is ``_doc_flourish`` one level up; this package never learns what a
 document is.
+
+**A second caller arrived on 2026-09-05**: ``warlock.characters.effects`` builds
+a one-layer flame recipe and renders it onto the cells of a Troupe character
+sheet, so a species whose theme declares ``effects=("embers",)`` comes out on
+fire. It imports ``recipe`` and ``render`` at function scope only (pinned by
+``tests/characters/test_characters_imports.py``) and adds nothing here -- it is
+a reader, and the reason the package is headless is exactly so a caller that is
+not Inker can be one.
 """
 
 from __future__ import annotations

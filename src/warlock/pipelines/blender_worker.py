@@ -20,7 +20,7 @@ import contextlib
 import dataclasses
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -522,13 +522,36 @@ def _apply_pose(
 # one thing only Blender can do.
 
 
-def _scene_bounds(bpy: Any) -> tuple[list[float], list[float]]:
-    from mathutils import Vector
+def _render_meshes(bpy: Any) -> list[Any]:
+    """The objects a render actually shows.
 
-    corners = [
-        obj.matrix_world @ Vector(c)
+    Its own function because two callers now share the predicate -- the rest
+    bounds and the posed union below -- and a union taken over a *different*
+    set of objects than the rest box would frame from two disagreeing subjects.
+    ``hide_render`` is what keeps Blender's glTF importer's bone-shape widgets
+    out; see ``test_a_rigged_subject_is_framed_by_its_own_size``.
+    """
+    return [
+        obj
         for obj in bpy.context.scene.objects
         if obj.type == "MESH" and not obj.hide_render
+    ]
+
+
+def _scene_bounds(bpy: Any) -> tuple[list[float], list[float]]:
+    """The rest bounding box of everything that renders.
+
+    Through ``_transform`` rather than ``mathutils`` since 2026-09-05, when the
+    posed union arrived: ``_union_framing`` takes a ``max`` over corners from
+    *both* sources, and two arithmetics for one corner is a difference that
+    would show up as a hair of framing nobody could account for. (mathutils
+    vectors are single precision; this is double, so the rest box moved by
+    about a part in 10^7 -- far below a pixel at any frame size, and the
+    2026-09-05 union-framing measurement records it.)
+    """
+    corners = [
+        _transform(obj.matrix_world, c)
+        for obj in _render_meshes(bpy)
         for c in obj.bound_box
     ]
     if not corners:
@@ -537,6 +560,248 @@ def _scene_bounds(bpy: Any) -> tuple[list[float], list[float]]:
         [min(c[i] for c in corners) for i in range(3)],
         [max(c[i] for c in corners) for i in range(3)],
     )
+
+
+def _transform(matrix: Any, point: Sequence[float]) -> tuple[float, float, float]:
+    """A 4x4 row-major matrix applied to a point, in plain arithmetic.
+
+    ``mathutils`` is not imported here on purpose: everything below this line
+    that decides the sheet's *framing* has to be reachable from the ordinary
+    (bpy-less) test lane, and a matrix-point product is three dot products. The
+    rows of a ``mathutils.Matrix`` index exactly like the nested sequences a
+    test hands it.
+    """
+    x, y, z = (float(point[0]), float(point[1]), float(point[2]))
+    return tuple(  # type: ignore[return-value]
+        float(matrix[r][0]) * x
+        + float(matrix[r][1]) * y
+        + float(matrix[r][2]) * z
+        + float(matrix[r][3])
+        for r in range(3)
+    )
+
+
+def _evaluated_corners(bpy: Any, meshes: Sequence[Any]) -> list[tuple[float, float, float]]:
+    """World-space bounding-box corners of ``meshes`` **as currently posed**.
+
+    ``_scene_bounds`` reads ``obj.bound_box`` off the original object, and for
+    a skinned mesh that is its *rest* box: armature deformation is a modifier,
+    so the posed extent exists only on the depsgraph-evaluated copy. Framing a
+    whole sheet from the rest box is what clipped the top off every overhead
+    attack wind and every jump apex -- on every cell of the run, because the
+    camera is framed once.
+
+    ``view_layer.update()`` is the caller's job: it has just applied a pose and
+    knows whether anything moved.
+    """
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    corners: list[tuple[float, float, float]] = []
+    for obj in meshes:
+        evaluated = obj.evaluated_get(depsgraph)
+        matrix = evaluated.matrix_world
+        corners.extend(_transform(matrix, corner) for corner in evaluated.bound_box)
+    return corners
+
+
+def _socket_world_point(
+    arm_obj: Any, socket: Mapping[str, Any]
+) -> tuple[float, float, float] | None:
+    """Where a named socket sits in the world, in the pose that is applied now.
+
+    A socket is ``{"bone", "offset": [along, lateral, up], "reach"}`` with the
+    offset in *bone-length* units, so it survives a re-fit onto a character of
+    a different size -- the same reasoning ``delta`` pose space is authored
+    under. Blender puts a bone's own +Y along the bone, +X lateral and +Z up,
+    which is the order the offset is written in.
+
+    An unknown bone costs the socket and never the sheet, the rule
+    ``_apply_pose`` and ``_apply_root_translation`` already follow: a socket
+    list authored against one template applied after a re-rig should lose the
+    attachment point, not 256 frames.
+    """
+    pbone = arm_obj.pose.bones.get(str(socket.get("bone") or ""))
+    if pbone is None:
+        print(f"socket names a bone this rig does not have: {socket.get('bone')!r}", flush=True)
+        return None
+    along, lateral, up = (list(socket.get("offset") or (0.0, 0.0, 0.0)) + [0.0, 0.0, 0.0])[:3]
+    length = float(pbone.bone.length)
+    local = (float(lateral) * length, float(along) * length, float(up) * length)
+    # pose-bone matrix is armature-object space; the object's own transform
+    # carries it the rest of the way.
+    return _transform(arm_obj.matrix_world, _transform(pbone.matrix, local))
+
+
+def _sphere_corners(
+    point: Sequence[float], radius: float
+) -> list[tuple[float, float, float]]:
+    """The eight corners of the box around a sphere of ``radius`` at ``point``.
+
+    A flame or a muzzle flash drawn at a socket has extent of its own, and
+    framing to the body alone would clip it. Cube corners rather than the six
+    axis extremes: over-covering a sphere by its diagonal frames a little wide,
+    which is the safe direction, where under-covering it clips.
+    """
+    x, y, z = (float(point[0]), float(point[1]), float(point[2]))
+    r = float(radius)
+    return [
+        (x + sx * r, y + sy * r, z + sz * r)
+        for sx in (-1.0, 1.0)
+        for sy in (-1.0, 1.0)
+        for sz in (-1.0, 1.0)
+    ]
+
+
+def _union_framing(
+    rest_lo: Sequence[float],
+    rest_hi: Sequence[float],
+    corners: Sequence[Sequence[float]],
+    *,
+    margin: float,
+) -> tuple[list[float], float]:
+    """The ortho window that holds every posed corner. -> ``(centre, extent)``.
+
+    **The orbit axis stays the rest ground origin.** Only the window widens:
+    ``centre``'s x and y are the *rest* box's, so the projected pivot -- which
+    sits on that axis -- lands on the same pixel at every yaw, which is the one
+    property an engine placing a sprite by it depends on. Letting the axis
+    follow the union would make the pivot drift as the character turns, which
+    is a worse defect than the clipping this fixes.
+
+    ``extent`` is the larger of the union's full height and twice the furthest
+    any corner reaches *from that axis* horizontally -- the widest the subject
+    can look from any yaw, which is the argument the single-bbox version made
+    with its horizontal diagonal. On a rest-only sheet the union is the rest
+    box and this returns exactly what that arithmetic did, to the bit.
+    """
+    import math
+
+    cx = (float(rest_lo[0]) + float(rest_hi[0])) / 2.0
+    cy = (float(rest_lo[1]) + float(rest_hi[1])) / 2.0
+    points = [tuple(float(v) for v in c) for c in corners]
+    points.extend(
+        (x, y, z)
+        for x in (float(rest_lo[0]), float(rest_hi[0]))
+        for y in (float(rest_lo[1]), float(rest_hi[1]))
+        for z in (float(rest_lo[2]), float(rest_hi[2]))
+    )
+    lo_z = min(p[2] for p in points)
+    hi_z = max(p[2] for p in points)
+    radius = max(math.hypot(p[0] - cx, p[1] - cy) for p in points)
+    extent = max(2.0 * radius, hi_z - lo_z, 1e-6) * float(margin)
+    return [cx, cy, (lo_z + hi_z) / 2.0], extent
+
+
+def _view_forward(yaw_deg: float, elevation_deg: float) -> tuple[float, float, float]:
+    """The unit vector the camera looks *along*, for one turntable position.
+
+    The same construction ``_aim_camera`` places the camera with, restated in
+    plain arithmetic for the same reason ``_transform`` is: depth ordering is
+    part of the framing decision and has to be testable without Blender. Yaw 0
+    looks along +Y.
+    """
+    import math
+
+    elevation = math.radians(float(elevation_deg))
+    yaw = math.radians(float(yaw_deg))
+    fx, fy, fz = 0.0, math.cos(elevation), -math.sin(elevation)
+    return (
+        fx * math.cos(yaw) - fy * math.sin(yaw),
+        fx * math.sin(yaw) + fy * math.cos(yaw),
+        fz,
+    )
+
+
+def _view_depth(
+    centre: Sequence[float],
+    point: Sequence[float],
+    *,
+    yaw_deg: float,
+    elevation_deg: float,
+    distance: float,
+) -> float:
+    """How far ``point`` is from the camera, measured along the view direction.
+
+    Not the straight-line distance: an orthographic camera has no eye point to
+    measure from, and what an overlay compositor needs is the ordering along
+    the view axis. ``_aim_camera`` puts the camera at ``centre - forward *
+    distance``, so this is ``dot(point - centre, forward) + distance`` -- a
+    positive number that grows away from the viewer, which is what makes
+    ``behind`` a plain ``>``.
+    """
+    forward = _view_forward(yaw_deg, elevation_deg)
+    return float(distance) + sum(
+        (float(point[i]) - float(centre[i])) * forward[i] for i in range(3)
+    )
+
+
+def _pose_union(
+    bpy: Any,
+    armature: Any,
+    cells: Sequence[Mapping[str, Any]],
+    sockets: Sequence[Mapping[str, Any]],
+    *,
+    rest_height: float,
+) -> tuple[
+    list[tuple[float, float, float]],
+    dict[Any, dict[str, tuple[float, float, float]]],
+    dict[Any, tuple[float, float, float]],
+]:
+    """Walk every distinct pose the sheet contains and measure what it reaches.
+
+    Returns the union's corners, each pose's socket world points, and each
+    pose's own body centre (what ``behind`` is measured against below).
+
+    Keyed on ``(pose, frame)`` -- the render loop's own cache key, reused
+    deliberately: measuring a key the loop would not pose would frame for a
+    pose the sheet does not contain, and measuring fewer would clip. Every
+    frame of a clip shares a pose id, which is why the frame is in the key.
+
+    The pose is left at rest afterwards, so the render loop's ``posed`` cache
+    starts from the state it claims to.
+    """
+    meshes = _render_meshes(bpy)
+    corners: list[tuple[float, float, float]] = []
+    socket_points: dict[Any, dict[str, tuple[float, float, float]]] = {}
+    body_centres: dict[Any, tuple[float, float, float]] = {}
+    seen: set[Any] = set()
+    for cell in cells:
+        key = (cell.get("pose"), cell.get("frame", 0))
+        if key in seen:
+            continue
+        seen.add(key)
+        if armature is not None:
+            # Exactly what the render loop does, in the same order: a pose
+            # measured differently from the way it is rendered is a window
+            # sized for a picture nobody gets.
+            _reset_pose(armature)
+            _apply_pose(
+                armature, cell.get("bones") or {}, str(cell.get("pose_space") or "node")
+            )
+            if cell.get("root_offset"):
+                _apply_root_translation(armature, cell.get("root_bone"), cell["root_offset"])
+        bpy.context.view_layer.update()
+        mine = _evaluated_corners(bpy, meshes)
+        if not mine:
+            raise RuntimeError("nothing to render: the scene has no mesh")
+        corners.extend(mine)
+        body_centres[key] = tuple(  # type: ignore[assignment]
+            (min(c[i] for c in mine) + max(c[i] for c in mine)) / 2.0 for i in range(3)
+        )
+        if sockets and armature is not None:
+            points: dict[str, tuple[float, float, float]] = {}
+            for socket in sockets:
+                point = _socket_world_point(armature, socket)
+                if point is None:
+                    continue
+                points[str(socket.get("name") or socket.get("bone"))] = point
+                reach = float(socket.get("reach") or 0.0) * float(rest_height)
+                if reach > 0.0:
+                    corners.extend(_sphere_corners(point, reach))
+            socket_points[key] = points
+    if armature is not None:
+        _reset_pose(armature)
+        bpy.context.view_layer.update()
+    return corners, socket_points, body_centres
 
 
 def _setup_render(bpy: Any, size: int, *, taa_samples: int | None = None) -> None:
@@ -908,9 +1173,15 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
 
     The host decided the grid and will do the packing; this walks the cell list
     in order, posing and spinning the camera as it goes. The framing is
-    computed once from the *rest* bounding box and never touched again --
-    reframing per pose would make the subject jump between rows of the finished
-    sheet.
+    computed **once, from the union of every pose the sheet contains**, and
+    never touched again -- reframing per pose would make the subject jump
+    between rows of the finished sheet, and framing from the rest box alone
+    clipped every pose whose apex leaves it (an overhead attack wind, a jump)
+    on every cell of that run.
+
+    The pre-pass is universal rather than gated on which animations were asked
+    for: a clipped apex is a defect on any sheet, and on a rest-only sheet the
+    union *is* the rest box, so those sheets come out byte-identical.
     """
     source = Path(spec["source_glb"])
     if not source.exists():
@@ -920,6 +1191,7 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     size = int(spec["frame_size"])
     elevation = float(spec["elevation"])
     cells = spec["cells"]
+    sockets = [dict(s) for s in (spec.get("sockets") or [])]
 
     progress(0.05, "Loading model")
     _reset_scene(bpy)
@@ -928,16 +1200,24 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     armature = next((o for o in bpy.context.scene.objects if o.type == "ARMATURE"), None)
 
     lo, hi = _scene_bounds(bpy)
-    centre = [(a + b) / 2.0 for a, b in zip(lo, hi, strict=True)]
-    span = [b - a for a, b in zip(lo, hi, strict=True)]
-    # The widest the subject can look from any yaw is its horizontal diagonal;
-    # sizing to that rather than to a single axis is what stops the corner
-    # views clipping.
-    # sheet.FRAME_MARGIN, not a literal and not spec.get("margin", ...): nothing
-    # has ever written `margin` into a sheet spec, so that fallback was the only
-    # value it ever took -- and it was a second copy of the figure the in-app
-    # preview frames with, which has to match this one.
-    extent = max((span[0] ** 2 + span[1] ** 2) ** 0.5, span[2], 1e-6) * sheet.FRAME_MARGIN
+    # ``spec.get("margin")`` has two writers and only one of them invents a
+    # number. ``_q_troupe``'s validation retry chooses one, re-rendering a sheet
+    # whose first attempt clipped at a wider margin; a *subset* re-render passes
+    # back the ``frame_margin`` its base sidecar recorded, because cells landing
+    # beside existing ones have to be framed exactly as those were or the
+    # character changes size inside rectangles that must not change.
+    # Every other caller omits the key and gets ``sheet.FRAME_MARGIN`` -- the
+    # same figure ``studio.viewer.sheet`` frames the in-app preview with, which
+    # is why it is that constant and not a literal here.
+    margin = float(spec.get("margin") or sheet.FRAME_MARGIN)
+    progress(0.07, "Measuring poses")
+    union, socket_points, body_centres = _pose_union(
+        bpy, armature, cells, sockets, rest_height=max(hi[2] - lo[2], 1e-6)
+    )
+    if not union:
+        # An empty cell list -- nothing to pose, so the union is the rest box.
+        union = [(x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+    centre, extent = _union_framing(lo, hi, union, margin=margin)
     distance = extent * 2.0
 
     progress(0.10, "Setting up")
@@ -961,6 +1241,7 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
 
     posed: Any = "__rest__"
     rendered = []
+    projected: dict[int, dict[str, dict[str, Any]]] = {}
     for i, cell in enumerate(cells):
         # Cells arrive grouped by row, so this re-poses once per row rather than
         # once per frame -- eight times less work on an eight-yaw sheet. A
@@ -980,6 +1261,30 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
                 _apply_root_translation(armature, cell.get("root_bone"), cell["root_offset"])
             posed = key
         _aim_camera(cam, centre, float(cell["yaw"]), elevation, distance)
+        if sockets:
+            # Per cell, because a socket is attached to a bone and both the
+            # pose and the yaw move it. Projected through the same ``_project``
+            # the pivot goes through, so a socket and the feet are in one
+            # coordinate system -- pixels within the rendered frame, which the
+            # host converts to cell pixels with ``charsheet.point_in_cell``.
+            yaw = float(cell["yaw"])
+            body = body_centres.get(key)
+            here: dict[str, dict[str, Any]] = {}
+            for name, point in (socket_points.get(key) or {}).items():
+                px, py = _project(bpy, cam, point, size)
+                depth = _view_depth(
+                    centre, point, yaw_deg=yaw, elevation_deg=elevation, distance=distance
+                )
+                behind = body is not None and depth > _view_depth(
+                    centre, body, yaw_deg=yaw, elevation_deg=elevation, distance=distance
+                )
+                here[name] = {
+                    "x": float(px),
+                    "y": float(py),
+                    "depth": float(depth),
+                    "behind": bool(behind),
+                }
+            projected[int(cell["index"])] = here
         out = frames_dir / f"{cell['index']:04d}.png"
         bpy.context.scene.render.filepath = str(out)
         bpy.ops.render.render(write_still=True)
@@ -987,12 +1292,31 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
         progress(0.10 + 0.85 * (i + 1) / max(len(cells), 1), f"Rendering {i + 1}/{len(cells)}")
 
     progress(1.0, "Frames rendered")
-    return {
+    result: dict[str, Any] = {
         "ok": True,
         "frames": rendered,
         "bounds": {"min": lo, "max": hi},
         "pivot": list(pivot),
+        # What the window was actually sized to, so the host can record it and
+        # a retry at a wider margin can say what changed. ``bounds`` above stays
+        # the *rest* box: it is what the pivot is derived from and readers of it
+        # predate the union.
+        "framing": {
+            "extent": float(extent),
+            "margin": float(margin),
+            "union_bounds": {
+                "min": [min(c[i] for c in union) for i in range(3)],
+                "max": [max(c[i] for c in union) for i in range(3)],
+            },
+        },
     }
+    if sockets:
+        # Only when they were asked for, so every sheet rendered before sockets
+        # existed comes back with the dict it always came back with. The keys
+        # are cell indices and arrive at the host as JSON object keys, i.e.
+        # strings -- the result travels through ``result.json``.
+        result["sockets"] = projected
+    return result
 
 
 def op_fbx(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:

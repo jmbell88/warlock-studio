@@ -333,6 +333,15 @@ class JobOps:
             # change what an older request means.
             "layout": block.get("layout"),
         }
+        if block.get("elevation") is not None:
+            # The camera preset the form chose, resolved to an angle and
+            # validated at the reference door. Copied only when the request
+            # named one: an absent key means ``sheet.DEFAULT_ELEVATION``, and
+            # writing ``None`` instead would be a key that exists and is not a
+            # number -- ``_charsheet`` reads it with a default, which a present
+            # ``None`` defeats. So a row queued before the control existed
+            # stays byte-identical.
+            sheet_params["elevation"] = block["elevation"]
         try:
             sheet_id = await asyncio.to_thread(
                 self.store.create, "charsheet", job["prompt"], sheet_params, None

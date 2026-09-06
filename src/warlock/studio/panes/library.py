@@ -1271,6 +1271,25 @@ def run_action(ctx: Any, job: Any, action: str) -> None:
         from .. import plotter_mode
 
         plotter_mode.use_as_tileset(ctx, job)
+    elif action in ("troupe", "muse"):
+        # **Both through ``asset_open``, which already knows where each of these
+        # goes.** Neither had an arm here, and the two failed differently:
+        # ``primary_action`` has returned ``"muse"`` for a finished take and for
+        # a separate row since Muse shipped, and ``"muse"`` was in neither this
+        # chain *nor* ``state.ACTIONS`` -- so ``ACTIONS[action]`` on the card
+        # (``_result_row`` above) raised ``KeyError`` and took the whole library
+        # pane down on a music row. ``"troupe"`` was the same gap caught one
+        # step earlier: the character work gave it a label, which turned the
+        # crash into a button that silently did nothing.
+        #
+        # Delegated rather than restated because ``asset_open`` is the module
+        # that owns "where does this asset open", including the two refusals
+        # neither arm could sensibly repeat here -- a Troupe sheet whose sidecar
+        # has gone, and a take whose selection has to be set before the mode
+        # switch. A third spelling of that routing is a third thing to go stale.
+        from .. import asset_open
+
+        asset_open.open_asset(ctx, job)
 
 
 #: The one task key an import lands under, claimed by ``main`` so the result

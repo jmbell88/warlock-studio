@@ -72,17 +72,24 @@ they draw no bar at all and their columns simply start higher.
 
 The column below holds **Recipe** (the model, the style LoRA and the seed), **Style strength** once
 a LoRA is chosen, **Negative prompt / Avoid** while the chosen recipe can use one, one section
-belonging to the chosen type — **Tileset** or **Sprite sheet**, and nothing at all for the other
-three — and one collapsed **Conditioning** disclosure. Its header counts how many of its controls
-are switched on, so a closed section never hides a setting that is doing something.
+belonging to the chosen type — **Tileset**, **Sprite sheet** or **Character**, and nothing at all
+for the other three — and one collapsed **Conditioning** disclosure. Its header counts how many of
+its controls are switched on, so a closed section never hides a setting that is doing something.
+
+**Character replaces the column rather than adding to it.** There is no model, no style LoRA, no
+seed-per-candidate and no conditioning on that type, because nothing is being generated from a
+picture — so those sections are absent and the Character section is the column. See
+[Characters](#characters).
 
 Pinned at the bottom of the column, never scrolling, is the **generation plan**: what the press will
 cost, what recipe it will use, and — when Generate is disabled — every reason why, each with a
 one-click repair. The button itself carries the first of those reasons as its tooltip.
 
-**Generation type** has five entries: *Image*, *3D Model*, *Seamless Material*, *Tileset* and
-*Sprite Sheet*. Two of them are described elsewhere in this chapter — see
-[Seamless tiles](#seamless-tiles) and [Sheets](#sheets).
+**Generation type** has six entries: *Image*, *3D Model*, *Seamless Material*, *Tileset*, *Sprite
+Sheet* and *Character*. Three of them are described elsewhere in this chapter — see
+[Seamless tiles](#seamless-tiles), [Sheets](#sheets) and [Characters](#characters). *Character* is
+the odd one out and worth knowing about early: it is the only type on this screen that generates no
+image, uses no model weights and needs no graphics card.
 
 Earlier versions carried a twelve-select creative taxonomy (category, genre, material and the
 rest) behind a "More options" reveal. It was retired on 2026-08-17: no taxonomy axis ever measured
@@ -430,7 +437,7 @@ Export tab offers it too.
 
 ## Sheets
 
-Two of the five asset types make several pictures from one prompt rather than one: **Tileset** and
+Two of the six asset types make several pictures from one prompt rather than one: **Tileset** and
 **Sprite Sheet**. Each brings its own layout section above the model, because what the sheet is a
 sheet *of* is the choice everything else follows from — including how long the press will take.
 
@@ -574,3 +581,66 @@ edge has nowhere to grow into, so *Around* would clip it. There is deliberately 
 sheet: a tile is opaque edge to edge,
 so an outline finds the border of every cell and draws a grid line around all of them rather than
 around anything in them.
+
+## Characters
+
+**Character** is the one asset type on this screen that generates no image at all. There is no
+model, no LoRA, no seed-per-candidate and no reference: the body is built from a registry of
+thirty-one species across four body plans, it is rigged, and its frames are rendered. All of that is
+CPU work, which is why the plan block says *no GPU needed* — on a machine that cannot run SDXL at
+all, this type still works.
+
+Type a brief the way you would for anything else. The Character column reads it and fills itself in:
+the species, the look, the camera and the actions all move to what the words said. Everything the
+brief did not mention keeps its default, and anything it said that Warlock did not understand is
+listed under **Not interpreted** so you can see what was ignored rather than wonder.
+
+Change a control and it becomes yours. From then on editing the prompt leaves that control alone —
+otherwise every keystroke would undo the species you just picked. **Reset to prompt** forgets those
+choices and reads the brief again.
+
+### When it does not make that creature
+
+Warlock never substitutes. If you ask for a phoenix, the prompt resolver does not quietly hand you a
+dragon: the species stays empty, Generate is refused, and the refusal says exactly what happened —
+*Warlock has no phoenix yet. The closest it makes is a dragon.* Under that sentence are the three
+ways forward, and each of them is a press you make:
+
+- **Make it a dragon** applies the offer. This is the only place in the program where a species you
+  did not name becomes the one that is built, and it happens because you read the sentence and
+  pressed the button. What is offered is always the same body plan — a winged thing is offered a
+  winged thing, never a puddle.
+- **Sprite sheet (experimental)** switches the asset type and leaves your brief alone. SDXL will
+  draw things the registry does not model; see [Sheets](#sheets) for what that costs.
+- **Draw it in Troupe** copies the brief into [Troupe](33-troupe.md) and opens it, which is the
+  route through a generated reference and a reconstruction.
+
+A brief that names no creature at all is refused in the same register, and the Species picker is
+there to answer it directly.
+
+### The controls
+
+**Species** is grouped by body plan, because the plan decides the skeleton, the clips and which
+appearance sliders this character has. **Look** offers only the palettes that species is painted in;
+*The species' own* means its first one. **Camera** is the same preset table Troupe uses, and its
+helper states the elevation in degrees and the direction count, which is what transfers when you are
+matching sprites to a map.
+
+**Idle**, **Walk** and **Attack** are switches, each carrying the frames it costs; the muted total
+under them is the cell count the render will produce. **Sprite size** and **Colours** are the same
+two ladders every other pixel surface in Warlock offers. Below them is one slider per appearance
+channel the species' body plan declares — an ogre and a wolf do not have the same ones — and a
+**Name**, which is what the library will call it.
+
+**Preview character** builds the body on its own and shows it in the viewport. It makes no library
+row and never blocks Generate, so it is safe to press while you are still deciding.
+
+### What one press makes
+
+Generate builds the mesh, mints it as a finished asset, and queues the rig that will produce the
+sheet. Create moves to the Mesh stage, because there is no reference image to look at — a character
+has no drawing behind it. When the rig lands, the sheet follows, and the finished character is
+played in [Troupe](33-troupe.md).
+
+Rigging needs Blender. Without it the press is refused before anything is built, because a body with
+no skeleton is half an asset and the whole ordering of that door exists to prevent one.

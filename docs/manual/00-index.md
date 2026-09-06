@@ -19,10 +19,10 @@ Part IV explains how it is built.
 - [Drawing](05-drawing.md) — Inker: tools, inks, layers, colour and selections.
 - [Animating](06-animating.md) — the timeline: frames, copy versus link, tags and onion skin.
 - [Modelling](07-modelling.md) — Clay: primitives, element editing, and merge versus union.
-- [Rigging and posing](08-rigging-and-posing.md) — fitting a skeleton, the A-pose trap, and the pose library.
+- [Rigging and posing](08-rigging-and-posing.md) — fitting a skeleton, the A-pose trap, the pose library and the four clip libraries.
 - [Building a map](09-building-a-map.md) — Plotter: tilesets, terrain, objects and Tiled.
 - [Packing an atlas](10-packing-an-atlas.md) — Packwright, and the power-of-two trap.
-- [A character sprite sheet](11-a-character-sprite-sheet.md) — Troupe, and what in it is proven.
+- [A character sprite sheet](11-a-character-sprite-sheet.md) — a creature from a sentence, with no GPU, and what in it is proven.
 - [Tuning what you get](12-tuning-what-you-get.md) — seeds, LoRAs and conditioning.
 - [Putting it in a game](13-putting-it-in-a-game.md) — exports, engines, and the interop caveats.
 - [Making a soundtrack](14-making-a-soundtrack.md) — Sirens: a bassline, an envelope, a sound effect, a WAV.
@@ -33,18 +33,18 @@ Part IV explains how it is built.
 
 - [Overview](20-overview.md) — what the app is, the two-stage pipeline, and what each part of the window does.
 - [The Home screen](21-home.md) — the chooser the app opens on, and the diagnostics row under it.
-- [Generating references](22-generating-references.md) — the prompt, models, seeds and image conditioning.
+- [Generating references](22-generating-references.md) — the prompt, the six asset types, models, seeds and image conditioning.
 - [Generating meshes](23-generating-meshes.md) — promoting a reference, mesh settings, triangle budgets, quality reports and exports.
 - [The 3D viewport](24-the-3d-viewport.md) — the camera, the toolbar over it, and what else the scene carries.
 - [Rigging and posing](25-rigging-and-posing.md) — fitting a skeleton to a mesh, and posing that asset.
 - [Poser](26-poser.md) — authoring a pose against a skeleton, so it applies to every asset that shares it.
-- [Sprite sheets](27-sprite-sheets.md) — baking poses and directions into a 2D sheet with a JSON sidecar.
+- [Sprite sheets](27-sprite-sheets.md) — baking poses and directions into a 2D sheet, and every block of its JSON sidecar.
 - [Inker](28-inker.md) — the layered raster editor and the two directions it connects to the pipeline.
 - [Inker: animation](29-inker-animation.md) — the timeline: cels, links, tags, onion skin, ranges and clip exports.
 - [Clay](30-clay.md) — modelling from primitives, and the two ways a built document leaves the mode.
 - [Plotter](31-plotter.md) — tile maps: tilesets, layers, objects, and Tiled import and export.
 - [Packwright](32-packwright.md) — packing sprites into an atlas, and the sidecar that describes it.
-- [Troupe](33-troupe.md) — character sprite sheets: a prompt to a rigged mesh to 256 animated cells.
+- [Troupe](33-troupe.md) — character sprite sheets: three routes to a rigged mesh, and 256 animated cells out of it.
 - [Sirens](34-sirens.md) — the chiptune tracker: patterns, instruments, sound effects and WAV export.
 - [Muse](35-muse.md) — generated music: style tags, lyrics, takes, and the bridge into Sirens.
 - [The library and jobs](36-library-and-jobs.md) — job status, filters, rerunning, storage and pruning.

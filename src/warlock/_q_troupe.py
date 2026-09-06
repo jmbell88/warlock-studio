@@ -22,6 +22,26 @@ and the Aseprite writer all already read that pair. What makes it a character
 sheet is the frame table it was laid out on and the ``animation`` block in the
 sidecar, and both of those are ``pipelines.charsheet``'s.
 
+**Themed effects composite between the reduction and the pack**, and that
+ordering is the whole point of where the phase sits. The trims, the structural
+check and the outline pass all run afterwards, so they see the flames rather
+than the body they hang off; and the quantisation stays **one shared pass**, so
+a flame's oranges enter the same 32-colour cut as the character's skin.
+Compositing *after* the quantise would give the flames a palette of their own
+and a sheet two colour sets wide -- the same "same shirt, two shades" failure
+the whole-atlas pass exists to prevent, reached from the other side.
+
+A sheet only asks for sockets when the source directory holds a
+``character.json``, and only that request makes the worker project them. Every
+sheet rendered before the character registry existed is therefore byte-identical
+to the one it was.
+
+**A four-frame idle flame does not loop seamlessly**: Flourish's flame erodes
+its silhouette with fbm scrolled along the rise, and fbm is not periodic, so the
+last frame of a short loop does not hand back to the first. At 16-64px and 32
+colours it reads as a flicker in the tongues rather than a pop, which is why it
+ships; ``characters.effects`` and ``docs/manual/33-troupe.md`` both say so.
+
 CPU and an EEVEE render throughout: nothing here touches the resident models or
 the VRAM handoff, and the serial queue is what keeps it from overlapping a
 trellis run.
@@ -52,7 +72,7 @@ class TroupeOps:
 
     async def _charsheet(self: Worker, job: dict[str, Any]) -> None:
         from . import queue as queue_mod
-        from .pipelines import charsheet, pixelize, pixelsheet
+        from .pipelines import charsheet, pixelize, pixelsheet, sheetcheck
         from .pipelines import sheet as sheetlib
 
         job_id = job["id"]
@@ -90,6 +110,7 @@ class TroupeOps:
             raise ValueError("a re-render needs both the runs and the sheet to copy")
         wanted: set[int] = set()
         base_png: Path | None = None
+        base_margin: float | None = None
         if subset:
             if not rigging.is_valid_id(base_sheet):
                 raise ValueError(f"base_sheet is not a sheet id: {base_sheet!r}")
@@ -100,6 +121,25 @@ class TroupeOps:
                 raise RuntimeError(
                     "the sheet this re-render copies from is no longer on disk"
                 )
+            # **Framed the way the sheet it is composited onto was framed.**
+            # The re-render's whole geometry claim is that a cell keeps the
+            # rectangle it has always had; a cell drawn at a different ortho
+            # scale keeps the rectangle and changes the character's size inside
+            # it, which is worse than either error alone. The base sidecar
+            # records what it was actually rendered at, so a base that took the
+            # reframe retry hands its wider window on. Only when it differs
+            # from the constant, so an ordinary re-render's spec is the spec it
+            # has always been.
+            recorded = float((base_record.get("camera") or {}).get("frame_margin") or 0.0)
+            if recorded and recorded != sheetlib.FRAME_MARGIN:
+                base_margin = recorded
+        # **Read before anything is rendered, so the socket list reaches the
+        # spec.** Its presence is what makes the worker project sockets at all,
+        # and a sheet whose source has no ``character.json`` sends the spec it
+        # has always sent -- byte for byte.
+        character = await asyncio.to_thread(_read_character, source_dir)
+        socket_specs = _socket_specs(character)
+
         records = await asyncio.to_thread(clips.expand_clips, template, troupe_layout)
         logical = int(params.get("logical_size", 32))
         layout = charsheet.plan(
@@ -172,11 +212,62 @@ class TroupeOps:
         # would never reclaim, and nothing sweeps. ``_discard_artifacts`` is
         # not the answer: the queue calls that on a cancel, not on an error.
         try:
-            result, trims = await self._render_charsheet(
+            result, trims, sockets_px = await self._render_charsheet(
                 rig_glb, layout, cells, on_progress=on_progress, job_id=job_id,
                 pack_target=atlas_path, reduce_mode=reduce_mode,
                 only=wanted or None,
+                margin=base_margin,
+                sockets=socket_specs,
+                character=character,
+                troupe_layout=troupe_layout,
             )
+
+            # **The reframe retry, and it runs exactly once.**
+            #
+            # A pose whose apex leaves the rest bounding box used to render
+            # clipped on every cell of its run; ``op_sheet`` now frames from
+            # the union of every pose, which fixes the cause. This is the
+            # backstop for what the union cannot know: a silhouette wider than
+            # its bounding volume once the outline and the alpha snap have had
+            # it, or a socket nobody declared. One wider window, then publish
+            # whatever comes back -- looping would let a subject that touches
+            # the edge for any other reason re-render the whole sheet forever,
+            # at a minute a go.
+            #
+            # **Measured on the packed, pre-quantisation trims.** ``_quantise``
+            # produces the published ones, and it runs after this: it is the
+            # pass that grows every silhouette by an outline pixel and snaps
+            # the alpha, so judging the *framing* by its output would call a
+            # correctly framed sheet clipped and reframe it for nothing. The
+            # framing question is about what the camera drew, and these are
+            # the trims of exactly that.
+            #
+            # **Never on a subset re-render.** Those cells are composited onto
+            # a sheet rendered at another window, and reframing them would put
+            # a differently sized character on the same rectangle -- see
+            # ``base_margin`` above. A clipped subset stays clipped and is
+            # flagged, which is the smaller of the two wrongs.
+            reframed = False
+            if base_png is None and sheetcheck.clipped_cells(layout, trims):
+                reframed = True
+                log.info(
+                    "character sheet %s clipped at margin %.2f; re-rendering wider",
+                    sheet_id, sheetlib.FRAME_MARGIN,
+                )
+                # Discarded rather than left to be overwritten: the second pack
+                # writes the same name, and a half-written atlas from a failed
+                # retry must not be mistaken for the first render's.
+                with contextlib.suppress(OSError):
+                    atlas_path.unlink(missing_ok=True)
+                result, trims, sockets_px = await self._render_charsheet(
+                    rig_glb, layout, cells, on_progress=on_progress, job_id=job_id,
+                    pack_target=atlas_path, reduce_mode=reduce_mode,
+                    only=wanted or None,
+                    margin=sheetlib.FRAME_MARGIN * 1.25,
+                    sockets=socket_specs,
+                    character=character,
+                    troupe_layout=troupe_layout,
+                )
 
             # --- the pixel-art pass -------------------------------------------
             #
@@ -332,6 +423,7 @@ class TroupeOps:
         # The sidecar is written last and is what ``list_sheets`` treats as the
         # completion marker -- ``_sheet``'s rule, and ``rig.json``'s before it.
         pivot = result.get("pivot") if isinstance(result, dict) else None
+        framing = (result.get("framing") if isinstance(result, dict) else None) or {}
         # Into *cell* pixels: the worker projected it at ``RENDER_SIZE`` and
         # the sidecar documents cell-relative. ``_q_rig._sheet`` hands the same
         # value straight through and is right to -- there, render size *is*
@@ -361,6 +453,68 @@ class TroupeOps:
         # consume ``animation``; Troupe uses this immutable snapshot to drive
         # its per-sheet preview controls.
         meta["troupe"] = troupe_layout.as_dict()
+        # Additive on the ordinary sheet v1 format too -- ``meta["troupe"]``'s
+        # neighbour and its rule, sidecar version unchanged: a reader that does
+        # not know this key sees the sheet it would have seen anyway.
+        #
+        # Written on **every** sheet and not only on the ones a preset named,
+        # because "what was this framed from" is a question about the sheet
+        # rather than about the request: an importer placing a sprite in a
+        # scene needs the projection and the elevation whether or not the user
+        # picked them off a list.
+        meta["camera"] = _camera_meta(
+            layout.elevation,
+            pixel_size=logical,
+            # **What was rendered, not what was requested.** The worker reports
+            # the margin it actually framed with, which after a reframe retry
+            # is not the one this row asked for -- and the field's only reader
+            # is a subset re-render deciding how to frame itself to match, so a
+            # requested figure there would put a differently sized character
+            # onto the sheet's own rectangles. The param remains the fallback
+            # for a result from before ``framing`` existed.
+            margin=float(
+                framing.get("margin") or params.get("margin") or sheetlib.FRAME_MARGIN
+            ),
+        )
+        # **Flags, never fails.** Every finding here is about a sheet that is
+        # already packed, quantised and on disk: it opens, it exports, and the
+        # user can look at it. Raising would throw away a minute of rendering
+        # over a verdict they may not care about -- an intentionally
+        # edge-to-edge portrait sheet is "clipped" by this measure and fine by
+        # theirs. Recorded on the sidecar so Troupe can say what it found.
+        #
+        # Off the *published* trims, unlike the reframe decision above: this
+        # answer is about the pixels the user gets, outline and alpha snap
+        # included, which is what an importer will see.
+        meta["validation"] = sheetcheck.validate(
+            layout, trims, meta, reframed=reframed
+        )
+        # Additive on sheet v1, ``meta["troupe"]``'s rule and its version --
+        # a reader that has never heard of either key sees the sheet it would
+        # have seen anyway.
+        #
+        # **Which character, not which recipe would rebuild it.** The recipe is
+        # carried whole because it is the only thing that can reproduce this
+        # subject, and the family plus its version because a species row that
+        # moves is a sheet that can no longer be re-rendered to match -- the
+        # same reason ``character.json`` carries both.
+        if character:
+            meta["character"] = {
+                "family": character.get("family"),
+                "family_version": character.get("family_version"),
+                "recipe": character.get("recipe"),
+            }
+        if sockets_px:
+            # Per cell and **only where the worker actually projected one**, in
+            # cell pixels like ``pivot_x``/``pivot_y`` beside them. Absent on a
+            # cell whose socket named a bone the rig does not have, and absent
+            # on every cell of a subset re-render that was copied rather than
+            # rendered -- an attachment point invented for a cell nobody
+            # rendered would be a claim about geometry nothing measured.
+            for entry in meta["cells"]:
+                here = sockets_px.get(int(entry["index"]))
+                if here:
+                    entry["sockets"] = here
         await asyncio.to_thread(
             queue_mod._publish_text,
             rigging.sheet_path(source_dir, sheet_id),
@@ -403,6 +557,11 @@ class TroupeOps:
         # writing the resolved form back cannot pin a default that later moves.
         params["layout"] = troupe_layout.as_dict()
         params["pixel_report"] = pixel_report
+        # Derived: what the worker learned about *this* atlas, ``pixel_report``'s
+        # neighbour, and in ``DERIVED_PARAMS`` for the same reason -- a reroll
+        # inheriting it would wear a clipping verdict about frames it has not
+        # rendered yet.
+        params["validation"] = meta["validation"]
         await asyncio.to_thread(self.store.set_params, job_id, params)
         log.info(
             "rendered character sheet %s for job %s: %dx%d cells at %dpx, %s palette",
@@ -441,8 +600,12 @@ class TroupeOps:
         pack_target: Path,
         reduce_mode: str = "box",
         only: set[int] | None = None,
-    ) -> tuple[Any, Any]:
-        """Render at ``RENDER_SIZE``, reduce to the layout's size, then pack.
+        margin: float | None = None,
+        sockets: list[dict[str, Any]] | None = None,
+        character: dict[str, Any] | None = None,
+        troupe_layout: Any = None,
+    ) -> tuple[Any, Any, dict[int, dict[str, dict[str, Any]]]]:
+        """Render at ``RENDER_SIZE``, reduce, composite effects, then pack.
 
         The three-step shape the module docstring argues for, and the reason
         this is not ``_render_sheet_atlas`` with an extra parameter: that
@@ -453,8 +616,17 @@ class TroupeOps:
         downscale being precisely the soft, fringed result the alpha snap would
         then have to guess about.
 
-        Returns the worker's result and the pack's trims; the atlas itself is
-        left at ``pack_target``.
+        Returns the worker's result, the pack's trims, and the projected
+        sockets in *cell* pixels; the atlas itself is left at ``pack_target``.
+        ``margin`` widens the ortho window and has one caller, the reframe
+        retry -- see ``_charsheet``.
+
+        ``sockets`` is the attachment list to project, present only for a
+        source that carries a ``character.json``; ``character`` is that sidecar,
+        and its theme is what decides whether anything is composited at all.
+        The effects pass sits between the reduce and the pack for the reason the
+        module docstring gives: quantisation is one shared pass and the flames
+        have to be in it.
         """
         from .pipelines import charsheet, pixelize
         from .pipelines import sheet as sheetlib
@@ -470,6 +642,14 @@ class TroupeOps:
                 frame_size=charsheet.RENDER_SIZE,
                 elevation=layout.elevation,
                 lighting=layout.lighting,
+                # Omitted unless the reframe retry asked for one, so the first
+                # render's spec is byte-identical to the spec this stage has
+                # always sent and the worker takes ``sheet.FRAME_MARGIN``.
+                margin=margin,
+                # Same rule, same reason: ``None`` writes no key at all, and no
+                # key is what every sheet rendered before the character
+                # registry existed was rendered with.
+                sockets=sockets or None,
             )
             result = await asyncio.to_thread(
                 functools.partial(
@@ -505,6 +685,42 @@ class TroupeOps:
                     mode=reduce_mode,
                 )
             )
+
+            # --- the effects pass ---------------------------------------
+            #
+            # **Between the reduce and the pack, and that is the whole point.**
+            # Everything after this line -- the trim measurement, the
+            # structural check, the outline pass and the quantise -- then sees
+            # the flames rather than the bare body, and the quantise stays one
+            # shared pass, so a flame's oranges enter the same 32-colour cut as
+            # the skin beside them. Compositing after it would hand the flames
+            # a second palette.
+            #
+            # It works at the *logical* size because that is what
+            # ``reduce_frames`` just produced: a composited cell is a drop-in
+            # replacement for the reduced one, so ``pack`` cannot tell them
+            # apart.
+            sockets_px = _sockets_in_cells(result, layout.frame_size)
+            if character and sockets_px:
+                self.progress.update(
+                    job_id, phase="effects", label="Drawing effects", inner=0.0,
+                    inner_next=1.0, nominal=2.0, detail="",
+                )
+                composited = await asyncio.to_thread(
+                    functools.partial(
+                        _composite_effects,
+                        character,
+                        reduced,
+                        sockets_px,
+                        troupe_layout=troupe_layout,
+                        logical=layout.frame_size,
+                        out_dir=scratch / "effects",
+                    )
+                )
+                # Merged rather than replaced: a cell whose socket the worker
+                # did not project keeps the reduced frame it already had.
+                reduced.update(composited)
+
             self.progress.update(
                 job_id, phase="pack", label="Packing sheet", inner=0.0,
                 inner_next=1.0, nominal=3.0, detail="",
@@ -520,7 +736,218 @@ class TroupeOps:
             trims = await asyncio.to_thread(
                 functools.partial(sheetlib.pack, layout, reduced, pack_target, only=only)
             )
-        return result, trims
+        return result, trims, sockets_px
+
+
+def _read_character(source_dir: Path) -> dict[str, Any] | None:
+    """The mesh job's ``character.json``, or ``None``.
+
+    ``None`` is the ordinary answer and not an error: every mesh this program
+    reconstructed from a photograph has no character sidecar, and a sheet of
+    one is a sheet with no sockets and no effects -- exactly the sheet it has
+    always been.
+
+    **A malformed one costs the effects and never the sheet.** A minute of
+    Blender is already spent by the time anything here is read, and the failure
+    mode of raising would be "the sheet you waited for is gone because a JSON
+    file next to the mesh had a typo".
+    """
+    path = source_dir / "character.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        log.warning("ignoring an unreadable %s: %s", path, exc)
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _socket_specs(character: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The archetype's sockets in the shape ``rigging.sheet_spec`` wants.
+
+    Off the **archetype** rather than off ``character.json``'s own ``sockets``
+    block, and the difference matters: the sidecar records each socket's world
+    *position* in the rest pose, and the worker needs the ``(along, lateral,
+    up)`` offset in bone-length units so it can re-derive the point in every
+    pose of every cell. A rest-pose position hung on a running character would
+    leave the flame standing where the hand used to be.
+    """
+    if not character:
+        return []
+    from .characters import family
+
+    try:
+        arch = family.get_archetype(str(character.get("archetype") or ""))
+    except Exception as exc:  # pragma: no cover - a sidecar naming no archetype
+        log.warning("ignoring a character sidecar with no known archetype: %s", exc)
+        return []
+    return [
+        {
+            "name": s.name,
+            "bone": s.bone,
+            "offset": [float(v) for v in s.offset],
+            "reach": float(s.reach),
+        }
+        for s in arch.sockets
+    ]
+
+
+def _sockets_in_cells(
+    result: Any, frame_size: int
+) -> dict[int, dict[str, dict[str, Any]]]:
+    """The worker's per-cell socket projection, in **cell** pixels.
+
+    The worker projects at ``charsheet.RENDER_SIZE`` and this sheet packs at the
+    logical size, so the numbers need the same conversion the pivot needs --
+    ``charsheet.point_in_cell``, which was generalised from ``pivot_in_cell``
+    for exactly this. Without it a 32px cell would place a flame sixteen cells
+    away from the hand.
+
+    The keys arrive as JSON object keys, i.e. strings, because the result
+    travels through ``result.json``; they come back as ints.
+    """
+    from .pipelines import charsheet
+
+    if not isinstance(result, dict):
+        return {}
+    raw = result.get("sockets")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[int, dict[str, dict[str, Any]]] = {}
+    for index, block in raw.items():
+        if not isinstance(block, dict):
+            continue
+        here: dict[str, dict[str, Any]] = {}
+        for name, point in block.items():
+            if not isinstance(point, dict):
+                continue
+            converted = charsheet.point_in_cell(
+                (point.get("x", 0.0), point.get("y", 0.0)), frame_size
+            )
+            here[str(name)] = {
+                "x": converted[0],
+                "y": converted[1],
+                "depth": float(point.get("depth") or 0.0),
+                "behind": bool(point.get("behind")),
+            }
+        if here:
+            out[int(index)] = here
+    return out
+
+
+def _cells_by_index(troupe_layout: Any) -> dict[int, dict[str, Any]]:
+    """``{cell index: {"frame", "frames", "fps"}}`` -- where each cell sits in
+    its movement, how long that movement is, and how fast it plays.
+
+    ``composite_effects`` needs all three and ``sheet.Cell`` carries only the
+    first: a cell knows it is frame 5 and not that its walk is eight frames
+    long. Built here because the frame table is ``charsheet``'s arithmetic and
+    a second copy of it would be a second opinion about what cell 137 depicts.
+    """
+    from .pipelines import charsheet
+
+    # ``frame_table``'s own guard, restated: the caller holds a resolved
+    # ``LayoutSpec`` and ``resolve_layout`` takes a mapping.
+    resolved = (
+        troupe_layout
+        if isinstance(troupe_layout, charsheet.LayoutSpec)
+        else charsheet.resolve_layout(troupe_layout)
+    )
+    movements = {
+        m.name: (int(m.frames), max(1, int(round(1000.0 / max(int(m.duration_ms), 1)))))
+        for m in resolved.movements
+    }
+    out: dict[int, dict[str, Any]] = {}
+    for cell in charsheet.frame_table(resolved):
+        frames, fps = movements.get(cell.animation, (1, 12))
+        out[int(cell.index)] = {"frame": int(cell.frame), "frames": frames, "fps": fps}
+    return out
+
+
+def _composite_effects(
+    character: dict[str, Any],
+    reduced: dict[int, Any],
+    sockets_px: dict[int, dict[str, dict[str, Any]]],
+    *,
+    troupe_layout: Any,
+    logical: int,
+    out_dir: Path,
+) -> dict[int, Any]:
+    """``characters.effects.composite_effects``, with the registry lookups.
+
+    Separated from the coroutine for ``_camera_meta``'s reason -- the
+    interesting part is a pair of registry lookups, and a lookup buried in a
+    300-line coroutine that needs Blender to reach is a lookup nothing can test.
+
+    **The recipe seed is used exactly as it is stored**, on a subset re-render
+    as much as on a full one, and that is the same argument as the pinned
+    palette: a re-rendered run whose flames were seeded afresh would come back
+    with different tongues from the cells beside it, which is worse than either
+    a stale flame or no flame at all. The subset falls out of ``reduced``
+    holding only the cells that were rendered -- nothing filters here.
+    """
+    from .characters import effects, family
+
+    try:
+        fam = family.get_family(str(character.get("family") or ""))
+    except Exception as exc:
+        log.warning("a character sidecar names no known species: %s", exc)
+        return {}
+    key = str(character.get("theme") or "")
+    theme = next((t for t in fam.themes if t.key == key), None)
+    if theme is None or not theme.effects:
+        return {}
+    recipe = character.get("recipe")
+    seed = int((recipe or {}).get("seed", 0) or 0) if isinstance(recipe, dict) else 0
+    return effects.composite_effects(
+        reduced,
+        _cells_by_index(troupe_layout),
+        sockets_px,
+        theme=theme,
+        sockets=fam.arch.sockets,
+        recipe_seed=seed,
+        logical=int(logical),
+        out_dir=out_dir,
+    )
+
+
+def _camera_meta(
+    elevation: float, *, pixel_size: int, margin: float
+) -> dict[str, Any]:
+    """The ``camera`` block of a character sheet's sidecar.
+
+    A named helper rather than a dict literal inside ``_charsheet`` for
+    ``_atlas_entries``' reason: the interesting part is the preset lookup, and
+    a lookup buried in a 300-line coroutine that needs Blender to reach is a
+    lookup nothing can test.
+
+    **The preset is matched, never trusted.** The row carries an elevation and
+    not a preset name -- that is deliberate, so a preset table that gains a row
+    is not a migration of every queued sheet -- so the key here is whichever
+    preset holds exactly this elevation, and ``None`` when a caller set an
+    angle of its own. Recording a *nearest* preset would be the sidecar
+    claiming a framing the sheet was not rendered at.
+    """
+    from .pipelines import charsheet
+
+    elevation = float(elevation)
+    preset = next(
+        (key for key, _label, angle in charsheet.CAMERA_PRESETS if angle == elevation),
+        None,
+    )
+    return {
+        "preset": preset,
+        "elevation": elevation,
+        # Orthographic throughout: ``rigging.sheet_spec`` frames every cell with
+        # an ortho camera, which is what makes a sprite the same size wherever
+        # it sits on the atlas.
+        "projection": "orthographic",
+        "pixel_size": int(pixel_size),
+        "render_size": charsheet.RENDER_SIZE,
+        "frame_margin": float(margin),
+    }
+
 
 def _atlas_entries(png: Path, colors: int) -> list[tuple[int, int, int]]:
     """The exact colour set a published sheet is already mapped to.

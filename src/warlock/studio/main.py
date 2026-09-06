@@ -75,6 +75,12 @@ REVIEW_MESH_KEY = "viewer-review"
 # key-dedupe while the user is watching for it (UX-09).
 VERIFY_KEY = "verify-install"
 
+#: Where a character preview records what it put on screen, so ``_sync_viewer``
+#: stands down for it. ``(path, selection)``: the selection is half the key so
+#: the pin releases by itself the moment the user picks another asset, rather
+#: than holding the viewport on a temporary GLB for the rest of the session.
+CHARACTER_PIN = "character_preview_pin"
+
 #: Task keys whose **success** has nothing to do on the frame thread, listed so
 #: that everything else arriving unclaimed can be reported. Each is silent for
 #: its own reason, and the reasons are the point of the list:
@@ -1820,11 +1826,17 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
 
             matte_preview.on_task_done(ctx, done)
             return
+        if key == "character-preview":
+            self._show_character_preview(done.result)
+            return
         if key == "submit":
             # The press was taken, so whatever the last one was refused for is
             # no longer the state of things.
             ctx.state.submit_refusal = ""
             ctx.cache.invalidate()
+            if isinstance(done.result, dict) and done.result.get("kind") == "character":
+                self._landed_character(done.result)
+                return
             # Say where in line it landed: five rapid submits used to produce
             # five identical "Queued." toasts and no sense of depth.
             # ``+ 1`` for the job this submit just created. ``invalidate()``
@@ -2252,6 +2264,60 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
         if source_job and source_job == self.app_ctx.state.selected:
             self._reload_viewer()
 
+    def _landed_character(self, result: dict[str, Any]) -> None:
+        """A finished character, straight to the stage that can draw it.
+
+        **Not the Reference stage.** ``create_character`` mints the model row
+        finished and it has no ``input.png`` at all -- there is no generator
+        behind a character, no seed a reconstruction could re-roll and no
+        picture to approve -- so landing on Reference would put the user in
+        front of an empty canvas with a row selected. The Mesh stage is where a
+        body is drawn, and the row wears the placeholder glyph every unrendered
+        row wears until its thumbnail exists.
+
+        ``create_stages.go`` rather than a bare ``select``: it is the one stage
+        switch, and it is what moves the selection along with the stage.
+        """
+        from . import create_stages
+        from .panes import settings_character
+
+        ctx = self.app_ctx
+        job_id = str(result.get("id") or "")
+        if job_id:
+            create_stages.go(ctx, "mesh", select=job_id)
+        # Composed at *submit* time, on the frame thread, where the form and
+        # the species registry are both to hand -- the result carries two ids
+        # and a kind, which is all a door should have to know about a sentence.
+        ctx.toast(
+            str(ctx.state.preview.pop(settings_character.TOAST_SLOT, ""))
+            or "Building the character."
+        )
+
+    def _show_character_preview(self, path: Any) -> None:
+        """Put a just-built character preview in the viewport, and keep it.
+
+        ``_sync_viewer`` decides what to show from the *selection* alone, so a
+        preview loaded here is swapped back out on the next cache tick unless
+        something says otherwise. That something is the pin below, which is
+        ``_clear_viewport``'s idiom in the other direction: the path plus the
+        selection it was pinned under, so the pin releases by itself the moment
+        the user selects a different asset rather than sticking forever.
+        """
+        ctx = self.app_ctx
+        if path is None or self.viewer is None:
+            return
+        wanted = Path(path)
+        try:
+            self.viewer.load_model(wanted)
+        except Exception:
+            log.exception("could not open the character preview %s", wanted)
+            ctx.toast("Could not show that character preview.", "error")
+            return
+        ctx.state.preview[CHARACTER_PIN] = (
+            str(wanted),
+            str(getattr(ctx.state, "selected", "") or ""),
+        )
+
     def _clear_viewport(self) -> None:
         """Empty the canvas of whichever Create stage is on screen.
 
@@ -2328,6 +2394,16 @@ class App(ClayViewport, PoserViewport, ReviewPanes):
             # next cache tick decides the selection "should" be showing
             # model.glb and reloads it, which drops the editor -- half a second
             # after it was opened.
+            return
+        if ctx.state.preview.get(CHARACTER_PIN) == (
+            str(self.viewer.path or ""),
+            str(getattr(ctx.state, "selected", "") or ""),
+        ):
+            # A character preview is a build of the *form*, not of the
+            # selection, so this sync has nothing to say about it. The pin
+            # names the selection it was taken under, which is what releases it
+            # the moment the user selects something else -- the tuple stops
+            # matching and the ordinary rule takes over again.
             return
         job_dir = ctx.job_dir(job["id"])
         files = job.get("files") or []

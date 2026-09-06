@@ -61,6 +61,16 @@ class TroupeState:
     #: thing a pixel-art preview must never show.
     zoom: int = 6
 
+    #: The two view marks over the sprite, and they default differently on
+    #: purpose. The checkerboard is **off**: a character sheet is judged on its
+    #: colours first, and a pattern behind every frame is noise until the
+    #: question is "where is the transparency". The pivot is **on**: it is the
+    #: one thing on the picture that is not in the picture -- where the engine
+    #: will put this sprite's feet -- and a user who does not know the mark
+    #: exists will never turn it on to find out.
+    checker: bool = False
+    show_pivot: bool = True
+
     #: The new-character form, kept here rather than in ``state.preview`` so it
     #: survives a trip to another mode and back.
     form: dict[str, Any] = field(default_factory=dict)

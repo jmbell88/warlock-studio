@@ -979,6 +979,337 @@ def test_records_without_offsets_build_nothing_and_warn_about_nothing(caplog):
     assert not caplog.records
 
 
+# --- framing, against a fake Blender ----------------------------------------
+#
+# op_sheet decides the ortho window before it renders anything, and that
+# decision is the whole of this section: which corners it unions, where the
+# orbit axis sits, and where a socket lands in the frame. None of it needs
+# pixels, and putting it behind the gpu marker would mean the framing rules
+# were only ever checked on a machine with a card in it.
+#
+# What is faked is Blender's *scene* -- objects with bounding boxes, an
+# armature whose evaluated box depends on the pose applied to it -- and the two
+# calls that need a real ``bpy`` context, ``_aim_camera`` and ``_project``.
+# ``_ortho_pixel`` below restates exactly the arithmetic those two perform for
+# an orthographic camera, so a framing that moved the orbit axis would move the
+# pixel here for the same reason it would move it in Blender.
+
+_IDENTITY4 = (
+    (1.0, 0.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0, 0.0),
+    (0.0, 0.0, 1.0, 0.0),
+    (0.0, 0.0, 0.0, 1.0),
+)
+
+
+def _box_corners(lo, hi):
+    return [
+        (x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])
+    ]
+
+
+class _FakeEvaluated:
+    def __init__(self, box):
+        self.matrix_world = _IDENTITY4
+        self.bound_box = _box_corners(*box)
+
+
+class _FakeMesh:
+    """A render mesh whose *evaluated* box follows the pose, and whose own
+    ``bound_box`` does not -- which is precisely Blender's behaviour for a
+    skinned mesh, and the distinction the pre-pass exists for."""
+
+    type = "MESH"
+    hide_render = False
+
+    def __init__(self, rig, rest, posed=None):
+        self._rig, self._rest, self._posed = rig, rest, dict(posed or {})
+        self.matrix_world = _IDENTITY4
+
+    @property
+    def bound_box(self):
+        return _box_corners(*self._rest)
+
+    def evaluated_get(self, _depsgraph):
+        return _FakeEvaluated(self._posed.get(self._rig.pose_key, self._rest))
+
+
+class _FakePoseBone:
+    def __init__(self, matrix, length):
+        self.matrix = matrix
+        self.bone = type("B", (), {"length": length})()
+
+
+class _FakeArmature:
+    type = "ARMATURE"
+    hide_render = True
+
+    def __init__(self, bones=None):
+        self.pose_key = None
+        self.matrix_world = _IDENTITY4
+        self.pose = type("P", (), {"bones": dict(bones or {})})()
+
+
+class _FakeCamera:
+    def __init__(self, extent, distance):
+        self.extent, self.distance = extent, distance
+        self.aims = []
+
+
+def _ortho_pixel(cam, point, size):
+    """Blender's orthographic projection, restated.
+
+    ``_aim_camera`` builds the camera basis as ``Rz(yaw) @ Rx(90 - elevation)``
+    and ``_setup_camera`` sets ``ortho_scale`` to the extent, so a world point's
+    pixel is its offset from the camera's own axes over that extent. Written
+    out here rather than imported because ``bpy_extras`` needs a real scene --
+    and because a projection this section can compute is what makes "the pivot
+    lands on the same pixel at every yaw" a claim a test can make.
+    """
+    centre, yaw_deg, elevation_deg, _distance = cam.aims[-1]
+    yaw, elevation = math.radians(yaw_deg), math.radians(elevation_deg)
+    right = (math.cos(yaw), math.sin(yaw), 0.0)
+    up = (
+        -math.sin(yaw) * math.sin(elevation),
+        math.cos(yaw) * math.sin(elevation),
+        math.cos(elevation),
+    )
+    d = [float(point[i]) - float(centre[i]) for i in range(3)]
+    dx = sum(d[i] * right[i] for i in range(3))
+    dy = sum(d[i] * up[i] for i in range(3))
+    return ((0.5 + dx / cam.extent) * size, (0.5 - dy / cam.extent) * size)
+
+
+class _FakeBpySheet:
+    """Just enough ``bpy`` for ``op_sheet`` to walk its cells."""
+
+    def __init__(self, objects):
+        renders = type("R", (), {"filepath": ""})()
+        scene = type("S", (), {"objects": list(objects), "render": renders})()
+        self.rendered = []
+        outer = self
+
+        class _Render:
+            @staticmethod
+            def render(write_still=False):
+                outer.rendered.append(scene.render.filepath)
+
+        class _Import:
+            @staticmethod
+            def gltf(**_kwargs):
+                pass
+
+        self.ops = type("O", (), {"render": _Render, "import_scene": _Import})()
+        self.context = type(
+            "C",
+            (),
+            {
+                "scene": scene,
+                "view_layer": type("V", (), {"update": staticmethod(lambda: None)})(),
+                "evaluated_depsgraph_get": staticmethod(lambda: "depsgraph"),
+            },
+        )()
+
+
+def _fake_sheet_render(monkeypatch, objects):
+    """Point ``op_sheet`` at a fake scene. -> ``(bpy, cameras)``."""
+    from warlock.pipelines import blender_worker
+
+    bpy = _FakeBpySheet(objects)
+    cameras = []
+    rig = next((o for o in objects if o.type == "ARMATURE"), None)
+
+    def fake_setup_camera(_bpy, extent, distance):
+        cameras.append(_FakeCamera(extent, distance))
+        return cameras[-1]
+
+    def fake_aim(cam, centre, yaw, elevation, distance):
+        cam.aims.append((list(centre), float(yaw), float(elevation), float(distance)))
+
+    def fake_apply_pose(_arm, bones, _space="node"):
+        # The fake's pose is a name, not rotations: ``_FakeMesh`` looks its
+        # evaluated box up by it. The first bone name in the cell is the pose.
+        rig.pose_key = next(iter(bones), None)
+        return len(bones), []
+
+    monkeypatch.setattr(blender_worker, "_reset_scene", lambda _bpy: None)
+    monkeypatch.setattr(blender_worker, "_purge_import_helpers", lambda _bpy: None)
+    monkeypatch.setattr(blender_worker, "_setup_render", lambda *a, **k: None)
+    monkeypatch.setattr(blender_worker, "_make_flat", lambda _bpy: None)
+    monkeypatch.setattr(blender_worker, "_make_lit", lambda *a, **k: None)
+    monkeypatch.setattr(blender_worker, "_world", lambda *a, **k: None)
+    monkeypatch.setattr(blender_worker, "_setup_camera", fake_setup_camera)
+    monkeypatch.setattr(blender_worker, "_aim_camera", fake_aim)
+    monkeypatch.setattr(
+        blender_worker, "_project", lambda _bpy, cam, point, size: _ortho_pixel(cam, point, size)
+    )
+    monkeypatch.setattr(
+        blender_worker, "_reset_pose", lambda _arm: setattr(rig, "pose_key", None)
+    )
+    monkeypatch.setattr(blender_worker, "_apply_pose", fake_apply_pose)
+    return bpy, cameras
+
+
+def _sheet_spec_for(tmp_path, cells, **kwargs):
+    glb = tmp_path / "model.glb"
+    glb.write_bytes(b"fake-glb")
+    frames = tmp_path / "frames"
+    return rigging.sheet_spec(
+        glb, frames, cells, frame_size=64, elevation=0.0, lighting="flat", **kwargs
+    )
+
+
+REST_BOX = ((-0.3, -0.2, 0.0), (0.3, 0.2, 2.0))
+
+
+def test_union_framing_never_clips_the_attack_apex(tmp_path, monkeypatch):
+    """The defect: the camera was framed once from the *rest* bounding box, so
+    a pose whose apex leaves it -- an overhead attack wind, a jump -- was
+    clipped on every cell of that run, with nothing in the sheet to say so.
+
+    Three claims in one, because they are one decision: the window grows to
+    hold the posed apex, the apex is then inside the frame, and the orbit axis
+    does *not* move -- the pivot lands on the same pixel at every yaw, which is
+    the property an engine placing a sprite by it depends on and the reason the
+    union is not simply re-centred on itself.
+    """
+    from warlock.pipelines import blender_worker
+
+    apex = (-0.3, -0.2, 0.0), (0.3, 0.2, 3.2)
+    rig = _FakeArmature()
+    mesh = _FakeMesh(rig, REST_BOX, {"jump": apex})
+    cells = [
+        {"index": 0, "yaw": 0.0, "pose": None, "frame": 0, "bones": {}},
+        {"index": 1, "yaw": 90.0, "pose": None, "frame": 0, "bones": {}},
+        {"index": 2, "yaw": 0.0, "pose": "p", "frame": 0, "bones": {"jump": IDENTITY}},
+        {"index": 3, "yaw": 90.0, "pose": "p", "frame": 0, "bones": {"jump": IDENTITY}},
+    ]
+
+    bpy, cameras = _fake_sheet_render(monkeypatch, [mesh, rig])
+    result = blender_worker.op_sheet(bpy, _sheet_spec_for(tmp_path, cells))
+    widened = cameras[0]
+
+    bpy2, rest_only = _fake_sheet_render(monkeypatch, [_FakeMesh(_FakeArmature(), REST_BOX), rig])
+    blender_worker.op_sheet(bpy2, _sheet_spec_for(tmp_path, cells[:2]))
+    assert widened.extent > rest_only[0].extent
+
+    # The apex is inside the frame it is rendered in. Against the rest-framed
+    # window it is not: 3.2 is 2.2 above a centre of 1.0 in a 2.24 window.
+    px, py = _ortho_pixel(widened, (0.0, 0.0, 3.2), 64)
+    assert 0.0 <= px <= 64.0 and 0.0 <= py <= 64.0
+
+    # ...and the pivot does not move as the subject turns.
+    pivot_point = (widened.aims[0][0][0], widened.aims[0][0][1], REST_BOX[0][2])
+    seen = set()
+    for i in range(1, len(widened.aims)):
+        cam = _FakeCamera(widened.extent, widened.distance)
+        cam.aims = [widened.aims[i]]
+        seen.add(tuple(round(v, 9) for v in _ortho_pixel(cam, pivot_point, 64)))
+    assert len(seen) == 1
+    assert tuple(round(v, 9) for v in result["pivot"]) in seen
+    assert result["framing"]["union_bounds"]["max"][2] == pytest.approx(3.2)
+
+
+def test_a_rest_only_sheet_frames_exactly_as_before(tmp_path, monkeypatch):
+    """The union is universal, not gated on which animations were asked for --
+    which is only safe while a sheet with nothing to union comes out exactly as
+    it did. This is that arithmetic, spelled the way op_sheet used to spell it.
+    """
+    from warlock.pipelines import blender_worker
+
+    rig = _FakeArmature()
+    mesh = _FakeMesh(rig, REST_BOX)
+    cells = [{"index": 0, "yaw": 0.0, "pose": None, "frame": 0, "bones": {}}]
+    bpy, cameras = _fake_sheet_render(monkeypatch, [mesh, rig])
+    result = blender_worker.op_sheet(bpy, _sheet_spec_for(tmp_path, cells))
+
+    span = [hi - lo for lo, hi in zip(*REST_BOX, strict=True)]
+    old = max(math.hypot(span[0], span[1]), span[2], 1e-6) * sheetlib.FRAME_MARGIN
+    assert cameras[0].extent == old
+    assert cameras[0].aims[0][0] == [0.0, 0.0, 1.0]
+    assert result["bounds"] == {"min": [-0.3, -0.2, 0.0], "max": [0.3, 0.2, 2.0]}
+    assert "sockets" not in result
+
+
+def test_the_margin_key_is_read_only_when_written(tmp_path, monkeypatch):
+    """``margin`` has one writer -- the reframe retry -- so a spec without it
+    must take ``sheet.FRAME_MARGIN`` and nothing else."""
+    from warlock.pipelines import blender_worker
+
+    cells = [{"index": 0, "yaw": 0.0, "pose": None, "frame": 0, "bones": {}}]
+    extents = []
+    for kwargs in ({}, {"margin": sheetlib.FRAME_MARGIN * 1.25}):
+        rig = _FakeArmature()
+        bpy, cameras = _fake_sheet_render(monkeypatch, [_FakeMesh(rig, REST_BOX), rig])
+        blender_worker.op_sheet(bpy, _sheet_spec_for(tmp_path, cells, **kwargs))
+        extents.append(cameras[0].extent)
+    assert extents[1] == pytest.approx(extents[0] * 1.25)
+
+
+def test_sockets_are_projected_per_cell_with_a_depth_order(tmp_path, monkeypatch):
+    """A socket is where an effect gets composited, so it needs a pixel *and*
+    whether it is in front of or behind the body -- a flame at the far hand is
+    drawn under the character and one at the near hand over it. Projected per
+    cell because both the pose and the yaw move it."""
+    from warlock.pipelines import blender_worker
+
+    hand = _FakePoseBone(
+        ((1.0, 0.0, 0.0, 0.4), (0.0, 1.0, 0.0, -0.5), (0.0, 0.0, 1.0, 1.2), (0.0, 0.0, 0.0, 1.0)),
+        0.25,
+    )
+    rig = _FakeArmature({"hand_r": hand})
+    cells = [
+        {"index": 0, "yaw": 0.0, "pose": None, "frame": 0, "bones": {}},
+        {"index": 1, "yaw": 180.0, "pose": None, "frame": 0, "bones": {}},
+    ]
+    sockets = [{"name": "hand_r", "bone": "hand_r", "offset": [1.0, 0.0, 0.0], "reach": 0.2}]
+    bpy, cameras = _fake_sheet_render(monkeypatch, [_FakeMesh(rig, REST_BOX), rig])
+    result = blender_worker.op_sheet(bpy, _sheet_spec_for(tmp_path, cells, sockets=sockets))
+
+    assert sorted(result["sockets"]) == [0, 1]
+    front, back = result["sockets"][0]["hand_r"], result["sockets"][1]["hand_r"]
+    # Yaw 0 looks along +Y, so a socket at -Y is the near one.
+    assert front["behind"] is False
+    assert back["behind"] is True
+    assert back["depth"] > front["depth"]
+    for entry in (front, back):
+        assert 0.0 <= entry["x"] <= 64.0 and 0.0 <= entry["y"] <= 64.0
+    # The socket's own reach is part of the window: framing to the body alone
+    # would clip an effect drawn at the hand.
+    assert cameras[0].extent > _rest_extent()
+
+
+def _rest_extent():
+    span = [hi - lo for lo, hi in zip(*REST_BOX, strict=True)]
+    return max(math.hypot(span[0], span[1]), span[2], 1e-6) * sheetlib.FRAME_MARGIN
+
+
+def test_sheet_spec_emits_margin_and_sockets_only_when_given(tmp_path):
+    """Additive keys, the rule every optional worker-spec field follows: an
+    omitted one leaves the spec byte-identical to the one this function has
+    always produced, so a render that asks for neither cannot change."""
+    plain = rigging.sheet_spec(
+        tmp_path / "m.glb", tmp_path / "f", [], frame_size=64, elevation=0.0, lighting="flat"
+    )
+    assert "margin" not in plain and "sockets" not in plain
+
+    both = rigging.sheet_spec(
+        tmp_path / "m.glb",
+        tmp_path / "f",
+        [],
+        frame_size=64,
+        elevation=0.0,
+        lighting="flat",
+        margin=1.4,
+        sockets=[{"name": "hand_r", "bone": "hand_r", "offset": [1, 0, 0], "reach": 0.2}],
+    )
+    assert both["margin"] == 1.4
+    assert both["sockets"] == [
+        {"name": "hand_r", "bone": "hand_r", "offset": [1, 0, 0], "reach": 0.2}
+    ]
+    assert {k: v for k, v in both.items() if k not in ("margin", "sockets")} == plain
+
+
 # --- the real renderer ------------------------------------------------------
 
 
