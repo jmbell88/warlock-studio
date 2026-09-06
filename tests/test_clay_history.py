@@ -164,6 +164,46 @@ def test_one_ctrl_z_puts_all_three_dragged_objects_back():
         assert list(doc.by_uid(uid).translation) == list(was)
 
 
+def _element_drag(doc: bd.ClayDoc, uids: list[int]) -> None:
+    """Move two vertices on every object, then commit the way a release does.
+
+    Mirrors ``_drag`` above but for the element path: ``_commit_element_drag``
+    is a ``DragOps`` method reading ``_element_drags`` and ``_cache``, so this
+    exercises the app's real commit logic, not a re-implementation of it.
+    """
+    from warlock.studio._view_drag import DragOps, _ElementDrag
+
+    doc.element_mode = "vertex"
+    drags = {}
+    for uid in uids:
+        obj = doc.by_uid(uid)
+        doc.set_element_sel(uid, el.ElementSel(verts=[0, 1]))
+        drags[uid] = _ElementDrag(
+            before=obj.mesh,
+            verts=np.array([0, 1]),
+            local=obj.mesh.positions[[0, 1]].astype("f8"),
+            matrix=np.eye(4),
+            inverse=np.eye(4),
+            preview=obj.mesh.positions.copy() + 1.0,
+        )
+    view = SimpleNamespace(_element_drags=drags, _cache={})
+    DragOps._commit_element_drag(view, doc)
+
+
+def test_a_multiobject_element_drag_is_one_undo_step():
+    """The 2026-09-06 audit found ``_commit_element_drag`` pushing one
+    ``set_mesh`` per dragged object with no fold around the loop, unlike its
+    sibling ``_commit_drag`` -- the same "some limbs moved and some not"
+    failure ``test_one_ctrl_z_puts_all_three_dragged_objects_back`` exists to
+    prevent, just on the element path nobody had re-checked."""
+    doc, uids = _doc(3)
+    depth = len(doc.history)
+
+    _element_drag(doc, uids)
+
+    assert len(doc.history) == depth + 1, "three set_mesh pushes, one drag"
+
+
 def test_a_drag_step_is_labelled_with_the_tool_that_made_it():
     doc, uids = _doc(3)
 

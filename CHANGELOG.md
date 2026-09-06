@@ -38,6 +38,54 @@ leave the building.
   records) and offers only the four templates that ship with clips; the door
   refuses a clipless or unknown one with a `field`, where it used to raise a
   message about a missing dictionary key.
+- **A malformed rigged mesh crashed the viewport and leaked what it had
+  already loaded.** The glTF loader checks a node's mesh and skin indices
+  against the file's own counts, but never checked the indices *inside* a skin
+  — so a GLB naming a joint that does not exist loaded without complaint and
+  then raised out of the skinning-matrix build, after the buffers and textures
+  for every valid node were on the card. Nothing frees those; they were gone
+  until the app closed. A glTF arrives from the reconstruction worker, from a
+  user's disk or from a downloaded pack, so every count in it is now checked
+  before anything is allocated, including a joint count that disagrees with the
+  bind matrices beside it.
+- **Deleting a sprite sheet while its pixel restyle was still rendering
+  brought the restyle back.** The delete unlinked all four files immediately,
+  outside the lock its own create door has always taken, and the job then
+  finished and wrote its output back over the top — leaving a restyle of a
+  sheet that no longer exists, which nothing lists and nothing can reach. The
+  delete now waits behind the same lock and refuses while a restyle is in
+  flight, naming the sheet, rather than racing it.
+- **One vertex drag across two objects took two presses of Ctrl+Z to undo.**
+  The element path committed one history step per object; the object-transform
+  path beside it was fixed for this a while ago and carries a docstring
+  explaining why — that the state in between is a document the user never made,
+  with some parts moved back and some not. The element path now folds the same
+  way. A drag on a single object is unchanged.
+- **The negative prompt could be greyed out on models that honour it.** The
+  section decided whether to appear by resolving the recipe the request would
+  actually run, but the sentence inside it read the base model stored in the
+  form — which keeps its last Advanced value after a return to Automatic. A
+  form that had once been switched to a distilled model therefore reported
+  "this model runs at guidance 0" over a live field. The two now answer from
+  the same place.
+- **A custom triangle budget was honoured for a generated reference and
+  dropped for an uploaded one.** The upload path sent the profile without the
+  number the profile needs, so an upload with a custom budget was refused by
+  the door with a message about the budget being unusable, while the identical
+  form promoting a library reference went through. Both paths now send both.
+- **Two limits announced themselves only by refusing a press.** The sheet cap
+  and the sprite-draft cap were enforced at the door and nowhere else, so the
+  201st sheet and the 51st draft were discovered by pressing a live button and
+  reading an error. Both panels now state the limit where they already state
+  every other reason a press would fail, reading the counts the frame has
+  rather than asking the database.
+- **A generation request built from JSON could crash validation instead of
+  failing it.** Every top-level field was cast to its type on the way in; the
+  tile, sprite and model sub-documents were not, so a number arriving as text
+  survived into the comparison and raised. Validation is meant to answer with a
+  problem, not an exception. All three sub-documents now cast, and a value that
+  is not a number at all is reported as the problem it is rather than folded to
+  a default that would hide it.
 - **A re-texture refusal marked nothing on the panel that raised it.** The
   re-texture door refuses by name — an empty prompt, a restyle strength or
   anchor strength outside the model's range, an anchor scale with no control,

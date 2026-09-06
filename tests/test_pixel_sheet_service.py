@@ -15,7 +15,7 @@ from PIL import Image
 from warlock import rigging
 from warlock.service import jobs as svc_jobs
 from warlock.service import sheets as svc_sheets
-from warlock.service.errors import Invalid, NotFound
+from warlock.service.errors import Conflict, Invalid, NotFound
 
 
 def _sheet_on_disk(svc, *, frame_size=128, columns=8, rows=1):
@@ -155,6 +155,30 @@ def test_deleting_a_sheet_takes_its_restyle_with_it(svc):
     assert not rigging.sheet_pixel_path(job_dir, sheet_id).exists()
     assert not rigging.sheet_pixel_png_path(job_dir, sheet_id).exists()
     assert not rigging.sheet_path(job_dir, sheet_id).exists()
+
+
+def test_deleting_a_sheet_while_its_restyle_is_running_does_not_resurrect_it(svc):
+    # create2-02: a queued/running ``pixel_sheet`` row targeting this sheet
+    # will later stage-and-replace the pixel PNG/sidecar pair. Expressed as
+    # state rather than a thread race: the row exists in the store, and the
+    # delete must refuse rather than let that row resurrect what it removes.
+    job_id, sheet_id = _sheet_on_disk(svc)
+    job_dir = svc.job_dir(job_id)
+    rigging.sheet_pixel_png_path(job_dir, sheet_id).write_bytes(b"png")
+    rigging.sheet_pixel_path(job_dir, sheet_id).write_text("{}", encoding="utf-8")
+
+    svc.store.create(
+        "pixel_sheet",
+        "restyle",
+        {"source_job": job_id, "sheet_id": sheet_id},
+        status="running",
+    )
+
+    with pytest.raises(Conflict):
+        svc_sheets.delete_sheet(svc, job_id, sheet_id)
+
+    assert rigging.sheet_path(job_dir, sheet_id).exists()
+    assert rigging.sheet_pixel_png_path(job_dir, sheet_id).exists()
 
 
 def test_a_malformed_sheet_id_never_reaches_the_filesystem(svc):

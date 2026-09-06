@@ -746,12 +746,41 @@ class _Reader:
 
     def skin(self, skin: dict) -> Skin:
         joints = list(skin["joints"])
+        # Bounds-checked the same way ``node()`` checks ``node.mesh``/
+        # ``node.skin`` against the file's own declared counts: the
+        # 2026-09-06 audit, finding create2-01, found that a skin's *own*
+        # ``joints`` array was never checked against how many nodes the file
+        # declares, even though ``node.skin`` itself was in range. Such a file
+        # loaded clean and only raised a bare ``IndexError`` later, out of
+        # ``Model.joint_palette`` -- called from ``GpuModel.__init__``
+        # (scene.py) after GPU buffers/textures for every earlier node were
+        # already allocated. Refusing here, before any ``Skin`` is returned,
+        # keeps that refusal on the load-time side of the same line
+        # ``node()`` already draws.
+        n_nodes = len(self.gltf.get("nodes", []))
+        for joint in joints:
+            if not 0 <= joint < n_nodes:
+                raise ValueError(
+                    f"a skin references joint (node) index {joint}, but this "
+                    f"GLB declares {n_nodes} node(s)"
+                )
         if "inverseBindMatrices" in skin:
             # glTF stores each matrix column-major; ours are M @ v with the
             # translation in the last column, so every one is transposed here
             # and nowhere else.
             raw = self._astype(self.accessor(skin["inverseBindMatrices"]), "f8")
             ibm = raw.reshape(-1, 4, 4).transpose(0, 2, 1)
+            # Same shape of bug, one line over: ``joint_palette`` zips
+            # ``skin.joints`` against ``skin.inverse_bind`` by position
+            # (``enumerate(skin.joints)`` indexing ``inverse_bind[i]``), so an
+            # accessor with fewer matrices than joints is the same
+            # load-clean-crash-later failure as an out-of-range joint index,
+            # just discovered in the same 2026-09-06 audit pass (create2-01).
+            if len(ibm) != len(joints):
+                raise ValueError(
+                    f"a skin declares {len(joints)} joint(s) but "
+                    f"{len(ibm)} inverse bind matrices"
+                )
         else:
             ibm = np.tile(np.eye(4), (len(joints), 1, 1))
         return Skin(joints=joints, inverse_bind=ibm)

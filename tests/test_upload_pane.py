@@ -77,6 +77,45 @@ def test_an_unreadable_file_becomes_a_readable_toast(tmp_path):
         fn(*args, **kwargs)
 
 
+def test_upload_kwargs_sends_custom_triangles_when_profile_is_custom(tmp_path, monkeypatch):
+    """The 2026-09-06 audit (create2-05): ``_upload_kwargs``'s own docstring
+    states the rule -- a form field cannot be honoured for a dropped file and
+    quietly ignored for a rendered one -- but it dropped ``custom_triangles``
+    while ``promote_kwargs`` sent it, so an upload-started mesh job with a
+    custom triangle budget reached ``optimize.resolve`` with ``custom=None``
+    and was refused even though the same form promoting a library reference
+    would have succeeded with the exact count the user set. Covers both
+    upload sites: the file picker's ``upload`` and Clay's ``upload_bytes``,
+    since both are meant to share ``_upload_kwargs`` and must not drift.
+    """
+    ctx = _Ctx()
+    ctx.state.form_3d["profile"] = "custom"
+    ctx.state.form_3d["custom_triangles"] = 5000
+
+    seen = {}
+    monkeypatch.setattr(
+        settings_3d.svc_jobs, "create_job", lambda svc, **kw: seen.update(kw) or "id"
+    )
+
+    path = tmp_path / "ref.png"
+    path.write_bytes(b"png-bytes")
+    settings_3d.upload(ctx, path)
+    _key, fn, args, kwargs = ctx.submitted[0]
+    fn(*args, **kwargs)
+    assert seen["profile"] == "custom"
+    assert seen["custom_triangles"] == 5000
+
+    seen.clear()
+    ctx2 = _Ctx()
+    ctx2.state.form_3d["profile"] = "custom"
+    ctx2.state.form_3d["custom_triangles"] = 5000
+    settings_3d.upload_bytes(ctx2, b"png-bytes")
+    _key, fn, args, kwargs = ctx2.submitted[0]
+    fn(*args, **kwargs)
+    assert seen["profile"] == "custom"
+    assert seen["custom_triangles"] == 5000
+
+
 # --- the 2D pane's conditioning reference ------------------------------------
 
 

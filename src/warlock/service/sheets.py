@@ -228,11 +228,38 @@ def sheet_png(svc: WarlockService, job_id: str, sheet_id: str) -> Path:
     return path
 
 
+def _restyle_in_flight(svc: WarlockService, sheet_id: str) -> bool:
+    """Is a ``pixel_sheet`` row for *sheet_id* still queued or running.
+
+    The 2026-09-06 audit (create2-02): unlike ``create_sheet``, this door used
+    to take no lock and check nothing, so deleting a sheet while its own
+    restyle job was mid-flight let the job's later ``os.replace`` resurrect
+    the pixel PNG/sidecar pair the confirmed delete had just removed -- an
+    orphan ``list_sheets`` would never show again, because it keys off the
+    base sidecar this function's caller is about to unlink.
+    """
+    for j in svc.store.active_jobs():
+        if j["kind"] != "pixel_sheet":
+            continue
+        if (j.get("params") or {}).get("sheet_id") == sheet_id:
+            return True
+    return False
+
+
 def delete_sheet(svc: WarlockService, job_id: str, sheet_id: str) -> dict[str, Any]:
     check_job_id(job_id)
     check_sheet_id(sheet_id)
-    if not rigging.delete_sheet(svc.job_dir(job_id), sheet_id):
-        raise NotFound("no such sheet")
+    # Same per-asset hold ``create_sheet`` takes, so a restyle cannot be
+    # queued in the gap between the check above and the unlink below.
+    with svc.convert_lock(job_id, "sheets"):
+        if _restyle_in_flight(svc, sheet_id):
+            raise Conflict(
+                "this sheet's pixel restyle is still running; wait for it to"
+                " finish before deleting the sheet",
+                field="sheet_id",
+            )
+        if not rigging.delete_sheet(svc.job_dir(job_id), sheet_id):
+            raise NotFound("no such sheet")
     return {"ok": True}
 
 

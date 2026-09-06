@@ -198,6 +198,42 @@ def cost_text(plan: dict[str, Any]) -> str:
     return f"{count}, queued behind the GPU, {plan['duration']}. {tail}"
 
 
+def sprite_draft_cap_reason(
+    records: list[dict[str, Any]], jobs: list[dict[str, Any]], job_id: str
+) -> str | None:
+    """Whether one more draft would push this reference past MAX_SPRITE_DRAFTS.
+
+    The 2026-09-06 audit, finding create2-08: this pane graded its button on
+    ``busy``/``locked``/``plan["drawable"]`` alone, so
+    ``create_sprite_synthesis``'s own cap (``service.sprites``,
+    ``MAX_SPRITE_DRAFTS``) was discovered only after a wasted press -- and a
+    paid generation -- as a fieldless ``Conflict`` toast.
+
+    A pure function over state the frame already has, matching
+    ``retarget_panel.dependent_job_reason``: ``records`` is
+    ``draft_records(ctx, job_id)``, the same stamp-cached on-disk listing
+    ``_drafts`` already draws (no new query -- the stamp check it costs is
+    the one ``_drafts`` already pays every frame), and ``jobs`` is
+    ``ctx.cache.jobs``, the frame-thread-safe window every dependent-job
+    reason reads. The service counts on-disk drafts plus queued/running
+    ``sprite_synthesis`` rows for this reference; this mirrors that exactly
+    so the two inventories cannot disagree.
+    """
+    queued = sum(
+        1
+        for job in jobs
+        if job.get("status") in ("queued", "running")
+        and job.get("kind") == "sprite_synthesis"
+        and (job.get("params") or {}).get("source_job") == job_id
+    )
+    if len(records) + queued < rigging.MAX_SPRITE_DRAFTS:
+        return None
+    return (
+        f"This reference already holds {rigging.MAX_SPRITE_DRAFTS} sprite "
+        "sheet drafts; delete one first."
+    )
+
+
 def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     key = f"sprite:{job_id}"
     busy = ctx.busy(key)
@@ -207,18 +243,26 @@ def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     # The plan for what is *currently selected*, so the label and the note below
     # move with the two combos rather than describing the default forever.
     plan = svc_sprites.sprite_cost(form["sheet_type"], form["logical_size"])
+    cap_reason = None
+    if not busy:
+        cap_reason = sprite_draft_cap_reason(draft_records(ctx, job_id), ctx.cache.jobs, job_id)
+        if cap_reason:
+            widgets.text_colored(theme.WARN, cap_reason)
     if busy:
         widgets.spinner()
         imgui.same_line()
     if widgets.disabled_button(
         submit_label(plan),
-        not busy and not locked and bool(plan["drawable"]),
+        not busy and not locked and not cap_reason and bool(plan["drawable"]),
         reason="A synthesis is already running for this drawing."
         if busy
         else (
-            "The weights this needs are not installed; see the note above."
-            if locked
-            else plan["refusal"]
+            cap_reason
+            or (
+                "The weights this needs are not installed; see the note above."
+                if locked
+                else plan["refusal"]
+            )
         ),
     ):
         # Last time's rings first: a new submit is judged on its own.

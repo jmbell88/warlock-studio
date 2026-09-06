@@ -700,6 +700,58 @@ def test_a_glb_with_an_out_of_range_mesh_index_is_refused_with_a_value_error_not
         gltf.load(_graph([{"name": "bad", "mesh": 5}], [0]))
 
 
+def test_a_skin_joint_index_past_the_node_count_is_refused_at_load():
+    """The 2026-09-06 audit, finding create2-01. ``node()`` bounds-checks
+    ``node.mesh``/``node.skin`` against the file's declared counts (create-01,
+    2026-09-05), but nothing checked the *contents* of ``skins[i].joints``
+    against ``len(nodes)``. A skin whose own ``node.skin`` index is in range
+    but which names a joint past the end of ``nodes`` used to load clean and
+    only raise a bare ``IndexError`` later, out of ``Model.joint_palette`` --
+    called from ``GpuModel.__init__`` (scene.py) after GPU buffers/textures
+    for every earlier node already exist.
+    """
+    positions = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype="<f4")
+    joints_attr = np.array([[0, 0, 0, 0]] * 3, dtype="<u1")
+    weights = np.tile(np.array([1, 0, 0, 0], dtype="<f4"), (3, 1))
+    indices = np.array([0, 1, 2], dtype="<u4")
+    ibm = np.array([np.eye(4, dtype="<f4").T])
+
+    blobs = [positions.tobytes(), joints_attr.tobytes(), weights.tobytes(),
+             indices.tobytes(), ibm.tobytes()]
+    views, binary = [], b""
+    for blob in blobs:
+        views.append({"buffer": 0, "byteOffset": len(binary), "byteLength": len(blob)})
+        binary += blob + b"\x00" * (-len(blob) % 4)
+
+    doc = {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        # Only ONE node declared. node.skin (0) is in range, but the skin
+        # below names joint index 5, which does not exist -- create-01's
+        # check on node.skin never fires for this file.
+        "nodes": [{"name": "mesh_node", "mesh": 0, "skin": 0}],
+        "meshes": [{
+            "primitives": [{
+                "attributes": {"POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2},
+                "indices": 3,
+            }]
+        }],
+        "skins": [{"joints": [5], "inverseBindMatrices": 4}],
+        "buffers": [{"byteLength": len(binary)}],
+        "bufferViews": views,
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5121, "count": 3, "type": "VEC4"},
+            {"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC4"},
+            {"bufferView": 3, "componentType": 5125, "count": 3, "type": "SCALAR"},
+            {"bufferView": 4, "componentType": 5126, "count": 1, "type": "MAT4"},
+        ],
+    }
+    with pytest.raises(ValueError, match="joint .*5"):
+        gltf.load(_glb(doc, binary))
+
+
 def test_a_glb_with_an_out_of_range_skin_index_does_not_leak_gpu_buffers_from_earlier_valid_nodes(
     gl, tmp_path
 ):

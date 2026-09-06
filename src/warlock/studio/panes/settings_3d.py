@@ -791,6 +791,15 @@ def _upload_kwargs(ctx: Any) -> dict[str, Any]:
         kwargs["bg_removal"] = form["bg_removal"]
     if form["profile"]:
         kwargs["profile"] = form["profile"]
+        # The 2026-09-06 audit (create2-05): this helper's own docstring states
+        # the rule -- a form field cannot be honoured for a dropped file and
+        # quietly ignored for a rendered one -- and this line broke it. Without
+        # it, an uploaded reference with a custom triangle budget reached
+        # ``resolve_profile``/``optimize.resolve`` with ``custom=None`` and was
+        # refused, even though ``promote_kwargs`` sends the exact same pair for
+        # a promoted reference.
+        if int(form["custom_triangles"]) > 0:
+            kwargs["custom_triangles"] = int(form["custom_triangles"])
     if int(form["mesh_seed"]) > 0:
         kwargs["mesh_seed"] = int(form["mesh_seed"])
     kwargs["reference_prep"] = bool(form["reference_prep"])

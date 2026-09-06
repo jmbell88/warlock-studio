@@ -246,17 +246,40 @@ class GenerationRequest:
             seed=int(raw.get("seed") or 0),
             count=int(raw.get("count") or 1),
             tile=TileSettings(
-                **{
-                    k: (tuple(v) if k == "prompt_items" else v)
-                    for k, v in tile.items()
-                    if k in TileSettings.__dataclass_fields__
-                }
+                **_coerce_settings(
+                    {
+                        k: (tuple(v) if k == "prompt_items" else v)
+                        for k, v in tile.items()
+                        if k in TileSettings.__dataclass_fields__
+                    },
+                    _TILE_COERCIONS,
+                ),
+                **{"prompt_items": tuple(tile["prompt_items"])}
+                if "prompt_items" in tile
+                else {},
+                **{"target_cell_px": _optional_int(tile["target_cell_px"])}
+                if "target_cell_px" in tile
+                else {},
             ),
             sprite=SpriteSettings(
-                **{k: v for k, v in sprite.items() if k in SpriteSettings.__dataclass_fields__}
+                **_coerce_settings(
+                    {k: v for k, v in sprite.items() if k in SpriteSettings.__dataclass_fields__},
+                    _SPRITE_COERCIONS,
+                ),
+                **{
+                    k: _optional_int(sprite[k])
+                    for k in ("frame_count", "candidate_count", "target_cell_px")
+                    if k in sprite
+                },
             ),
             model=ModelSettings(
-                **{k: v for k, v in model.items() if k in ModelSettings.__dataclass_fields__}
+                **_coerce_settings(
+                    {k: v for k, v in model.items() if k in ModelSettings.__dataclass_fields__},
+                    _MODEL_COERCIONS,
+                ),
+                **{"custom_triangles": _optional_int(model["custom_triangles"])}
+                if "custom_triangles" in model
+                else {},
             ),
             schema_version=int(raw.get("schema_version") or 1),
         )
@@ -715,7 +738,17 @@ def validate_request(
                         "tile.prompt_items", "Collection tilesets accept 1–16 prompt lines."
                     )
                 )
-            if not 1 <= t.variants <= 4 or len(t.prompt_items) * t.variants > 64:
+            # The 2026-09-06 audit, finding create2-07: a string-typed
+            # "variants" survives ``_required_int``'s best-effort coercion
+            # unconverted (rather than being silently folded to a default
+            # that would hide the mistake), so this range comparison must
+            # check the type before it compares -- an uncaught ``TypeError``
+            # here is exactly the crash the finding reproduced.
+            if not isinstance(t.variants, int) or isinstance(t.variants, bool):
+                issues.append(
+                    CompatibilityIssue("tile.variants", "Tile variants must be a whole number.")
+                )
+            elif not 1 <= t.variants <= 4 or len(t.prompt_items) * t.variants > 64:
                 issues.append(
                     CompatibilityIssue(
                         "tile.variants",
@@ -1050,6 +1083,133 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _required_int(value: Any, default: int) -> Any:
+    """Coerce a sub-document field declared as a bare ``int`` (no ``None``).
+
+    Unlike :func:`_optional_int`, an unconvertible value is **not** folded to
+    the default -- the 2026-09-06 audit, finding create2-07: ``TileSettings``
+    and ``SpriteSettings`` passed sub-dict values straight through uncast, so
+    ``{"variants": "2"}`` survived construction as the string ``"2"`` and then
+    made ``validate_request``'s ``1 <= t.variants <= 4`` raise an uncaught
+    ``TypeError`` instead of returning a ``CompatibilityIssue``. Folding a
+    bad value to the default here would just as quietly *hide* the mistake
+    (a request for a stray ``"banana"`` would validate as if nobody had
+    asked), so an unconvertible value is returned unchanged and it is
+    :func:`validate_request`'s job to refuse it by type before comparing it.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _coerce_str(value: Any, default: str) -> str:
+    return default if value is None else str(value)
+
+
+def _coerce_bool(value: Any, default: bool) -> Any:
+    """Coerce a sub-document field declared ``bool``, same reasoning as
+    :func:`_required_int`: a string that plainly means true/false is
+    accepted, anything else is left alone for ``validate_request`` (or, for
+    fields no check inspects, for the worker that reads it next) rather than
+    silently becoming a default that was never asked for.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "1", "yes", "on"):
+            return True
+        if lowered in ("false", "0", "no", "off"):
+            return False
+        return value
+    return value
+
+
+def _coerce_settings(data: Mapping[str, Any], fields: Mapping[str, tuple[type, Any]]) -> dict:
+    """Cast a sub-document's present keys to their dataclass-declared types.
+
+    The 2026-09-06 audit, finding create2-07: ``GenerationRequest.from_dict``
+    cast every top-level scalar field explicitly but built ``TileSettings``,
+    ``SpriteSettings`` and ``ModelSettings`` from raw sub-dict values with no
+    casting at all, so a string-typed numeric field in ``tile`` or ``sprite``
+    (e.g. ``{"variants": "2"}``) survived construction and later crashed
+    ``validate_request`` instead of being refused. ``fields`` maps a field
+    name to ``(declared_type, default)`` for the fields worth coercing here;
+    a field absent from the map (or the mapping) is passed through unchanged.
+    """
+    out: dict[str, Any] = {}
+    for key, value in data.items():
+        if key not in fields:
+            continue
+        kind, default = fields[key]
+        if kind is int:
+            out[key] = _required_int(value, default)
+        elif kind is bool:
+            out[key] = _coerce_bool(value, default)
+        elif kind is str:
+            out[key] = _coerce_str(value, default)
+        else:
+            out[key] = value
+    return out
+
+
+#: ``field name -> (declared type, default)`` for the :class:`TileSettings`
+#: members worth coercing from a JSON sub-document. ``prompt_items`` is
+#: excluded -- :func:`GenerationRequest.from_dict` gives it its own
+#: ``_prompt_lines`` treatment -- and ``target_cell_px`` is excluded because
+#: it is ``int | None`` and already survives a string or garbage value
+#: unharmed through :func:`validate_target_cell`, which does its own
+#: ``int()`` conversion and returns a ``CompatibilityIssue`` rather than
+#: raising; coercing it here would only add a second place that decision
+#: is made.
+_TILE_COERCIONS: dict[str, tuple[type, Any]] = {
+    "mode": (str, TileSettings.mode),
+    "view": (str, TileSettings.view),
+    "content_kind": (str, TileSettings.content_kind),
+    "inner_terrain": (str, TileSettings.inner_terrain),
+    "outer_terrain": (str, TileSettings.outer_terrain),
+    "boundary": (str, TileSettings.boundary),
+    "ground": (str, TileSettings.ground),
+    "path": (str, TileSettings.path),
+    "edge": (str, TileSettings.edge),
+    "variants": (int, TileSettings.variants),
+    "terrain_layout": (str, TileSettings.terrain_layout),
+    "style_lock": (bool, TileSettings.style_lock),
+    "seam_erase": (bool, TileSettings.seam_erase),
+    "palette": (str, TileSettings.palette),
+    "dither": (bool, TileSettings.dither),
+}
+
+#: :data:`_TILE_COERCIONS`, for :class:`SpriteSettings`. ``candidate_count``,
+#: ``frame_count`` and ``target_cell_px`` are ``int | None`` fields already
+#: served by :func:`_optional_int` (the same helper the legacy form-decoding
+#: path below already uses for exactly this reason), so they are coerced
+#: separately in :func:`GenerationRequest.from_dict` rather than listed here.
+_SPRITE_COERCIONS: dict[str, tuple[type, Any]] = {
+    "mode": (str, SpriteSettings.mode),
+    "action": (str, SpriteSettings.action),
+    "directions": (int, SpriteSettings.directions),
+    "palette": (str, SpriteSettings.palette),
+    "dither": (bool, SpriteSettings.dither),
+}
+
+#: :data:`_TILE_COERCIONS`, for :class:`ModelSettings`. ``custom_triangles``
+#: is ``int | None`` and coerced with :func:`_optional_int` alongside the
+#: other optional-int sub-fields, not listed here.
+_MODEL_COERCIONS: dict[str, tuple[type, Any]] = {
+    "output_profile": (str, ModelSettings.output_profile),
+}
 
 
 @dataclass(frozen=True, slots=True)

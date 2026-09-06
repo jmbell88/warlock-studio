@@ -608,6 +608,16 @@ class DragOps:
         # positions is the new transform measured against a picture of the old
         # one.
         self._restore_overlays(doc, list(self._drag_start))
+        # The 2026-09-06 audit found the GPU vertex buffer left one frame
+        # stale here: an element drag never touches ``obj.translation`` above,
+        # only ``_preview_element_drag``'s per-vertex write, so switching kind
+        # mid-drag restored the overlay to the mesh's own positions while the
+        # drawn mesh itself still showed the abandoned transform's preview
+        # until the next mouse-move or typed digit. A zero-delta preview
+        # rewrites the buffer the same frame the overlay is restored.
+        for uid, drag in self._element_drags.items():
+            drag.preview = None
+            self._preview_positions(doc, uid, np.array(drag.before.positions, dtype="f4"))
         self._key_kind = kind
         self._key_anchor = self._view_plane_point(self._last_mouse, self._drag_origin)
         self._clear_drag_input()
@@ -964,7 +974,19 @@ class DragOps:
             overlay.write_positions(positions)
 
     def _commit_element_drag(self: ClayView, doc: Any) -> None:
-        """One ``MeshEdit`` per object, against the mesh the drag began on.
+        """One history step for the whole gesture, against the mesh each drag began on.
+
+        The 2026-09-06 audit found this pushing one ``set_mesh`` per dragged
+        object with no fold around the loop -- unlike ``_commit_drag``, its
+        sibling on the object-transform path, which was given exactly this
+        wrap for the same reason (see that method's docstring), and unlike
+        ``clay_ops.run_mesh_op``. A marquee or gizmo grab spanning several
+        visible objects otherwise cost one Ctrl+Z per object, with the same
+        "some limbs moved and some not" state in between that the other two
+        paths were fixed to prevent.
+        ``test_a_multiobject_element_drag_is_one_undo_step`` pins the fold;
+        ``collapse_since`` refuses a run of fewer than two, so a one-object
+        element drag still keeps its own single step.
 
         A drag that moved nothing pushes nothing -- dirty is a comparison
         against the history head, and a no-op step would make a saved document
@@ -975,6 +997,8 @@ class DragOps:
         """
         from dataclasses import replace
 
+        history = getattr(doc, "history", None)
+        mark = 0 if history is None else history.mark()
         drags, self._element_drags = self._element_drags, {}
         for uid, drag in drags.items():
             try:
@@ -992,6 +1016,8 @@ class DragOps:
                 replace(drag.before, positions=final),
                 select=doc.element_sel_of(uid),
             )
+        if history is not None:
+            history.collapse_since(mark)
 
     def _drag_gizmo(self: ClayView, doc: Any, local: tuple[float, float]) -> None:
         """Apply a gizmo delta to every selected object, in place.

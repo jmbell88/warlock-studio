@@ -109,6 +109,32 @@ def test_an_unset_base_is_treated_as_the_default_which_is_distilled():
     assert settings_2d.negative_prompt_note(_ctx(), {"base_model": ""}) is not None
 
 
+def test_negative_prompt_note_follows_the_resolved_tier():
+    """The 2026-09-06 audit, finding create2-04: this note used to test only
+    the raw, persisted ``form["base_model"]`` while the section's own gate,
+    ``_negative_supported``, read the *resolved* recipe -- so a form left
+    over from an Advanced session on a distilled base, then switched back to
+    Automatic, could resolve to a full-CFG tier while the note still claimed
+    the field was inert. ``quality="quality"`` resolves to ``sdxl_cfg`` (a
+    ``cfg_bases`` member) regardless of the stale ``base_model="turbo"``
+    below it, so a fixed note must say the field is live and agree with the
+    gate that already does.
+    """
+    ctx = _ctx_resolving()
+    form = {
+        "asset_type": "image",
+        "generation_type": "image",
+        "prompt": "a wooden crate",
+        "model_mode": "auto",
+        "quality": "quality",
+        # Stale: left behind by an earlier Advanced pick of a distilled base,
+        # never cleared by ``_model``'s switch back to Automatic.
+        "base_model": "turbo",
+    }
+    assert settings_2d.negative_prompt_note(ctx, form) is None
+    assert settings_2d._negative_supported(ctx, form) is True
+
+
 def test_a_controlnet_base_gets_no_structure_note():
     form = {"base_model": models.controlnet_bases()[0]}
     assert settings_2d.structure_note(_ctx(), form) is None

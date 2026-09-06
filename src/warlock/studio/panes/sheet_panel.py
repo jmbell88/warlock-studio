@@ -17,7 +17,7 @@ from imgui_bundle import imgui
 from ... import models, rigging
 from ...service import sheets as svc_sheets
 from ...service import validation
-from .. import asset_open, atomic, controls, dialogs, forms, icons, verbs, widgets
+from .. import asset_open, atomic, controls, dialogs, forms, icons, theme, verbs, widgets
 from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
 from . import model_gate, stamps
@@ -328,22 +328,64 @@ def _summary(ctx: Any, form: dict[str, Any]) -> None:
     del ctx
 
 
+def sheet_cap_reason(
+    saved: list[dict[str, Any]], jobs: list[dict[str, Any]], job_id: str
+) -> str | None:
+    """Whether rendering one more sheet would push this asset past MAX_SHEETS.
+
+    The 2026-09-06 audit, finding create2-06: this pane greyed its button on
+    ``busy`` and ``validate()`` alone, so ``create_sheet``'s own
+    ``check_sheet_cap`` (``service.sheets``) was discovered only after a
+    wasted press, as a fieldless ``Conflict`` toast, instead of as a reason
+    stated before the button the way every other refusal on it is.
+
+    A pure function over state the frame already has, matching
+    ``retarget_panel.dependent_job_reason``: ``ctx.state.preview["sheets"]``
+    is the same on-disk listing ``_saved`` already draws (loaded async by
+    ``main._collect_tasks``, not queried here), and ``ctx.cache.jobs`` is the
+    frame-thread-safe window every dependent-job reason reads. The service
+    counts ``sheet``/``charsheet`` jobs plus a troupe ``rig`` job carrying
+    ``troupe_sheet`` (``sheets.queued_sheets``); this mirrors that exactly so
+    the two inventories cannot disagree.
+    """
+    queued = sum(
+        1
+        for job in jobs
+        if job.get("status") in ("queued", "running")
+        and (job.get("params") or {}).get("source_job") == job_id
+        and (
+            job.get("kind") in ("sheet", "charsheet")
+            or (job.get("kind") == "rig" and (job.get("params") or {}).get("troupe_sheet"))
+        )
+    )
+    if len(saved) + queued < rigging.MAX_SHEETS:
+        return None
+    return (
+        f"This asset already holds the maximum of {rigging.MAX_SHEETS} sheets; "
+        "delete one first."
+    )
+
+
 def _submit(ctx: Any, job: Any, form: dict[str, Any]) -> None:
     job_id = job["id"]
     busy = ctx.busy(f"sheet:{job_id}")
     problems = validate(job, form)
     for problem in problems:
         widgets.muted(problem)
+    saved = (ctx.state.preview or {}).get("sheets") or []
+    cap_reason = None if busy else sheet_cap_reason(saved, ctx.cache.jobs, job_id)
+    if cap_reason:
+        widgets.text_colored(theme.WARN, cap_reason)
     if widgets.disabled_button(
         "Render sheet",
-        not problems and not busy,
+        not problems and not busy and not cap_reason,
         (-1, 0),
         # The problems are already listed above the button, so repeating them
         # here would be the same sentence twice; the reason says which of the
-        # two gates is shut and lets the list say why.
+        # gates is shut and lets the list say why.
         reason="A sheet is already rendering for this asset."
         if busy
-        else "; ".join(problems),
+        else cap_reason or "; ".join(problems),
     ):
         # Last time's rings first: a new submit is judged on its own.
         ctx.state.clear_field_errors()

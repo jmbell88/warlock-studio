@@ -1467,10 +1467,38 @@ def negative_prompt_note(ctx: Any, form: dict[str, Any]) -> str | None:
     branch only above 1.0 -- so on turbo the field accepted text, stored it in
     params and changed nothing about the image. That silence is the bug; this
     is the sentence that ends it.
+
+    The 2026-09-06 audit, finding create2-04: this note used to test only
+    ``form["base_model"]`` directly, while the section's own visibility gate,
+    ``_negative_supported``, read the *resolved* recipe -- so under Automatic
+    routing a stale distilled ``base_model`` left over from a prior Advanced
+    selection (``_model``'s ``else`` branch clears ``model_override``, never
+    ``base_model``) could disagree with a resolution that now lands on a
+    full-CFG tier: the section opened because ``_negative_supported`` and
+    ``generate()`` both correctly consult the resolved recipe, but this note
+    still reported the field dead. Resolve the recipe here too, exactly as
+    ``img2img_note`` does for the same shape of staleness, and fall back to
+    the raw base check whenever there is nothing to resolve -- a picked base
+    with missing weights under Advanced, or a caller (this file's own note
+    tests included) that supplies only a bare ``base_model`` with no
+    ``ctx.svc`` to resolve against at all -- so the note and the gate can
+    never say different things about the same field once a recipe *does*
+    resolve.
     """
-    bases = ctx.guidance.get("cfg_bases") or []
-    if (form.get("base_model") or "") in bases:
+    resolved = _resolved_recipe(ctx, form)
+    if resolved is not None:
+        request = generation.request_from_legacy(form)
+        supported = generation.capability_controls(request, resolved)["negative_prompt"]
+    else:
+        # No recipe to resolve: fall back to the raw base check, the pre-fix
+        # rule. ``ctx.guidance`` is read only down this path -- a caller that
+        # can resolve a recipe need not carry a catalog at all, and several of
+        # this file's own tests don't.
+        bases = ctx.guidance.get("cfg_bases") or []
+        supported = (form.get("base_model") or "") in bases
+    if supported:
         return None
+    bases = ctx.guidance.get("cfg_bases") or []
     return (
         "This model runs at guidance 0, so the negative prompt has no effect. "
         f"It does on: {_base_labels(ctx, bases)}."
@@ -1885,11 +1913,18 @@ def _negative(ctx: Any, form: dict[str, Any]) -> None:
 
 
 def _negative_supported(ctx: Any, form: dict[str, Any]) -> bool:
-    """Show Avoid only when the resolved recipe will actually consume it."""
+    """Show Avoid only when the resolved recipe will actually consume it.
+
+    The 2026-09-06 audit, finding create2-04: this used to resolve the recipe
+    independently of ``negative_prompt_note``, which read only the raw
+    ``form["base_model"]`` -- so the two could disagree on a stale field and
+    the section would open with a note claiming the opposite. Deriving this
+    gate from the same note that draws under it makes that impossible: there
+    is exactly one place left that decides whether the negative prompt is
+    live.
+    """
     try:
-        request = generation.request_from_legacy(form)
-        resolved = generation.resolve_recipe(request, ctx.svc.config)
-        return generation.capability_controls(request, resolved)["negative_prompt"]
+        return negative_prompt_note(ctx, form) is None
     except Exception:
         # The service remains the final compatibility gate.  During a partially
         # restored form, hiding an unresolved control is safer than presenting
