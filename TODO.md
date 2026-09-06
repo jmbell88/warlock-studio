@@ -788,6 +788,46 @@ thing no test in this repository can reach.
   once you have worked in the rewritten repository long enough to be
   satisfied. Keeping it indefinitely means keeping the problem indefinitely.
 
+## P30. Decide which of Inker's four right-hand panes gives up height
+
+**Why it is yours:** art direction. Four panes want the same 750 px and the
+question is which one matters least while drawing, which is a judgement about
+how the mode is used rather than a fact about the code.
+
+**Where it stands.** Inker's five export doors moved out of the timeline's
+second toolbar row into the bridge on 2026-09-05 (`3476f114`), because that row
+was measured overflowing at 1280x800 scale 1.0: three of the five collapsed into
+a `...` menu, "Skip empty" was clipped mid-word, and the row beneath it was cut
+off by the pane's bottom edge. The exports the row existed for were the part of
+it a user could not see.
+
+The move fixed that and moved the pressure. `inker-generate` now stacks Drawing
+file, Export and the exits, under Preview and Tools in the same column, and at
+1280x800 the last three doors, the collapsed **Sheet options** header and the
+four exit buttons are below the fold. **Nothing is unreachable** -- the pane is
+an ordinary scrolling child -- and the exercise harness reports `clipped: 5`
+against a measured baseline of `clipped: 1`, that one being **Revert to
+original**, which was already below the fold before this work.
+
+This is a soft overflow where there was a hard one, which is why it shipped. It
+is still worse than it should be.
+
+**Do** -- one of these, and it is a choice, not a defect to grind at:
+
+1. **Give Preview less.** It is the largest of the four and it is a playback
+    surface; a shorter one may cost nothing while drawing.
+2. **Compact the doors to two columns.** Three rows instead of five, about
+    76 px back. It costs the labels: "Export per layer..." does not fit ~130 px,
+    so they would have to shorten, and the label is the door.
+3. **Put Export behind a collapsed header**, as Sheet options already is. Keeps
+    the exits visible and adds a click to every export -- which is the thing the
+    move just removed, so this is the weakest of the three.
+4. **Decide it is fine.** A sidebar that scrolls is a sidebar that scrolls, and
+    1280x800 is the floor rather than the common case.
+
+Whichever is taken, `scripts/exercise_mode.py inker` reports the clipped count,
+so the result is measurable rather than a matter of opinion about a screenshot.
+
 ## Open findings
 
 Code work a review or a real run turned up. Each is buildable and is struck out
