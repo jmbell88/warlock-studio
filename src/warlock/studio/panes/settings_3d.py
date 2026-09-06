@@ -636,14 +636,13 @@ def matte_modal(ctx: Any) -> None:
     if appearing:
         imgui.open_popup(MATTE_TITLE)
         state._open = True
-    centre = imgui.get_main_viewport().get_center()
-    imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
     alpha, rise = widgets.popover_enter("matte-preview", appearing)
     frosted = widgets.frosted()
     if frosted:
         imgui.set_next_window_bg_alpha(0.0)
     imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
     radius = widgets.push_surface_rounding()
+    widgets.modal_bounds(sp(480))
     opened, _ = imgui.begin_popup_modal(
         MATTE_TITLE, None, imgui.WindowFlags_.always_auto_resize.value
     )
@@ -669,20 +668,24 @@ def matte_modal(ctx: Any) -> None:
 
 def _matte_body(ctx: Any, state: Any) -> None:
     preview = state.preview
-    if preview is None:
-        widgets.muted("Cutting the subject out...")
-    else:
-        _matte_image(ctx, preview)
-        widgets.muted(f"{MATTE_SOURCES.get(preview.source, preview.source)} - "
-                      f"keeps {preview.coverage * 100:.0f}% of the frame")
-        if preview.approved:
-            widgets.muted("This reference already carries this matte; it will be kept.")
-        for reason in preview.reasons:
-            imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
-            imgui.text_wrapped(reason)
-            imgui.pop_style_color()
-        for warning in preview.warnings:
-            imgui.text_wrapped(warning)
+    # The cutout is as tall as the reference is: a portrait image plus a stack
+    # of warnings is exactly the body that used to push Accept off the bottom of
+    # a short viewport. It scrolls; the three buttons below do not.
+    with widgets.modal_body("matte-body"):
+        if preview is None:
+            widgets.muted("Cutting the subject out...")
+        else:
+            _matte_image(ctx, preview)
+            widgets.muted(f"{MATTE_SOURCES.get(preview.source, preview.source)} - "
+                          f"keeps {preview.coverage * 100:.0f}% of the frame")
+            if preview.approved:
+                widgets.muted("This reference already carries this matte; it will be kept.")
+            for reason in preview.reasons:
+                imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
+                imgui.text_wrapped(reason)
+                imgui.pop_style_color()
+            for warning in preview.warnings:
+                imgui.text_wrapped(warning)
     imgui.dummy((0, sp(6)))
     ready = preview is not None
     refused = bool(preview is not None and preview.reasons)
@@ -737,7 +740,20 @@ def _matte_image(ctx: Any, preview: Any) -> None:
     )
     if texture is None:
         return
-    imgui.image(widgets.texture_ref(texture), (preview.width, preview.height))
+    # Drawn to fit rather than at its pixel size. The reference is whatever the
+    # generator made (1024 px square, commonly), and an always-auto-resize modal
+    # simply grew to hold it -- which on a 1280x800 viewport at UI scale 2.0 is
+    # already taller than the screen before a single warning line is added
+    # (2026-09-05). Aspect is preserved; the cap is half the viewport so the
+    # buttons and the reasons still have room.
+    width = float(preview.width)
+    height = float(preview.height)
+    avail = imgui.get_content_region_avail().x
+    if avail <= 1.0:
+        avail = sp(480)
+    limit = widgets.modal_max_height(float(imgui.get_main_viewport().size.y)) * 0.5
+    scale = min(1.0, avail / width, limit / height)
+    imgui.image(widgets.texture_ref(texture), (width * scale, height * scale))
 
 
 def upload_bytes(ctx: Any, data: bytes) -> None:

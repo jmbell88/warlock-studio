@@ -263,3 +263,97 @@ def test_settings_draws_no_bare_imgui_text_as_a_name_column():
     # Only ``##``-hidden ids may reach raw ``imgui.text``-family label calls.
     bare = re.findall(r"^\s*imgui\.text\((?!_wrapped)", source, re.M)
     assert bare == [], bare
+
+
+# --- Item 7: bound the modals -------------------------------------------
+#
+# At 1280x800 with UI scale 2.0 Plotter's "New map" ran off the bottom of the
+# viewport: the popup is ``always_auto_resize`` with no constraints, so it grew
+# past the screen, imgui centred the overflow, and Create and Cancel were
+# unreachable with nothing to scroll (2026-09-05).
+
+
+def _modal_sources() -> dict[str, str]:
+    from warlock.studio import dialogs
+    from warlock.studio.panes import plotter_canvas, settings_3d
+
+    return {
+        name: inspect.getsource(module)
+        for name, module in (
+            ("dialogs", dialogs),
+            ("plotter_canvas", plotter_canvas),
+            ("settings_3d", settings_3d),
+        )
+    }
+
+
+def test_modal_max_height_is_a_fraction_of_the_viewport():
+    from warlock.studio import widgets
+
+    assert widgets.MODAL_MAX_FRACTION == 0.85
+    assert widgets.modal_max_height(800.0) == 680.0
+    assert widgets.modal_max_height(1369.0) == pytest.approx(1163.65)
+    # Never zero or negative, whatever a degenerate viewport reports.
+    assert widgets.modal_max_height(0.0) > 0.0
+    assert widgets.modal_max_height(-100.0) > 0.0
+
+
+def test_modal_body_height_reserves_the_action_row():
+    from warlock.studio import widgets
+
+    # 800 px viewport -> 680 for the modal, less a 40 px button row and 60 px
+    # of title bar and padding.
+    assert widgets.modal_body_height(800.0, 40.0, 60.0) == 580.0
+    # A viewport too short for the reservation floors rather than going
+    # negative: imgui reads a negative child height as "fill", which is exactly
+    # the overflow this helper exists to prevent.
+    assert widgets.modal_body_height(100.0, 200.0, 60.0) == widgets.MODAL_MIN_BODY
+
+
+def test_every_auto_resize_modal_is_bounded():
+    """The four ``always_auto_resize`` popups each ask for bounds first."""
+    found = 0
+    for name, source in _modal_sources().items():
+        for match in re.finditer(r"begin_popup_modal\(", source):
+            head = source[: match.start()]
+            assert "widgets.modal_bounds(" in head[-600:], name
+            found += 1
+    assert found == 4, found
+
+
+def test_every_bounded_modal_scrolls_its_body():
+    for name, source in _modal_sources().items():
+        assert "widgets.modal_body(" in source, name
+
+
+def test_plotter_presets_do_not_all_share_one_row():
+    """Five presets at ``grid_width(5)`` truncated every label."""
+    from warlock.studio import plotter_setup
+    from warlock.studio.panes import plotter_canvas
+
+    assert len(plotter_setup.PRESETS) == 5
+    assert len(plotter_setup.PRESETS) > plotter_canvas.PRESET_COLUMNS
+    source = _modal_sources()["plotter_canvas"]
+    assert "grid_width(len(plotter_setup.PRESETS))" not in source
+    assert "grid_width(PRESET_COLUMNS)" in source
+    # The stale comment named three presets.
+    assert "The three presets" not in source
+
+
+def test_no_modal_centres_only_on_the_appearing_frame():
+    """Capping the height was not enough on its own. Each site centred once,
+    on ``Cond_.appearing``, with a ``(0.5, 0.5)`` pivot -- applied to the size
+    an auto-resize window has before it has measured anything, so the window
+    grew downwards from a top edge chosen for a stub and "New map" still hung
+    off the bottom at 1280x800, scale 2.0. ``modal_bounds`` centres every
+    frame; no site may go back to doing it itself."""
+    for name, source in _modal_sources().items():
+        assert "set_next_window_pos(centre" not in source, name
+
+
+def test_modal_bounds_centres_every_frame():
+    from warlock.studio import widgets
+
+    source = inspect.getsource(widgets.modal_bounds)
+    assert "set_next_window_pos(" in source
+    assert "Cond_.always" in source

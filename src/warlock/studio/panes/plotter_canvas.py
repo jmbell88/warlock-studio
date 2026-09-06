@@ -346,6 +346,9 @@ def _empty(ctx: Any) -> None:
 #: Plotter pane drawn on both the empty and the open branch.
 SETUP_POPUP = "New map"
 
+#: Preset buttons per row in the setup modal. See ``_setup_body``.
+PRESET_COLUMNS = 2
+
 
 def setup_popup(ctx: Any, state: Any) -> None:
     """Ask what the new map is, then make it.
@@ -367,14 +370,13 @@ def setup_popup(ctx: Any, state: Any) -> None:
         form = plotter_setup.blank_form()
         ctx.state.preview[key] = form
 
-    centre = imgui.get_main_viewport().get_center()
-    imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
     alpha, rise = widgets.popover_enter("plotter-new-map", appearing)
     frosted = widgets.frosted()
     if frosted:
         imgui.set_next_window_bg_alpha(0.0)
     imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
     radius = widgets.push_surface_rounding()
+    widgets.modal_bounds(sp(480))
     opened, _ = imgui.begin_popup_modal(
         SETUP_POPUP, None, imgui.WindowFlags_.always_auto_resize.value
     )
@@ -387,7 +389,9 @@ def setup_popup(ctx: Any, state: Any) -> None:
         widgets.window_backdrop(radius=radius)
     if rise > 0.0:
         imgui.dummy((0, rise))
-    _setup_body(ctx, form, key)
+    with widgets.modal_body("plotter-new-map-body"):
+        _setup_body(ctx, form, key)
+    _setup_actions(ctx, form, key)
     imgui.end_popup()
     imgui.pop_style_var()
 
@@ -395,9 +399,11 @@ def setup_popup(ctx: Any, state: Any) -> None:
 def _setup_body(ctx: Any, form: dict, key: str) -> None:
     from imgui_bundle import imgui
 
-    # The three presets are the widest row in this modal.  Giving the form a
+    # The five presets are the widest thing in this modal. Giving the form a
     # stable minimum measure keeps "Isometric, 64 x 32" intact instead of
-    # allowing always-auto-resize to settle on the paragraph's narrower width.
+    # allowing always-auto-resize to settle on the paragraph's narrower width;
+    # the same floor is now also a constraint on the window (``modal_bounds``),
+    # so it survives the body being moved into a scrolling child.
     imgui.dummy((sp(480), 0))
     widgets.muted_wrapped(
         "The projection and the tile size are worth getting right now: a map's "
@@ -407,9 +413,14 @@ def _setup_body(ctx: Any, form: dict, key: str) -> None:
     imgui.dummy((0, sp(6)))
 
     widgets.field_label("Start from")
-    width = widgets.grid_width(len(plotter_setup.PRESETS))
+    # Two across, not five: at the modal's 480 px floor five columns are 90 px
+    # each and every label was cut mid-word ("Standard, 32 p", "Isometric, 64
+    # x"). The labels are what the presets *are* -- a projection and a tile size
+    # -- so narrowing them is not on offer, and 240 px holds the longest of them
+    # at any UI scale the floor survives (2026-09-05).
+    width = widgets.grid_width(PRESET_COLUMNS)
     for index, preset in enumerate(plotter_setup.PRESETS):
-        if index:
+        if index % PRESET_COLUMNS:
             imgui.same_line()
         label = preset[0]
         if controls.button(f"{label}##preset-{index}", (width, 0)):
@@ -473,7 +484,12 @@ def _setup_body(ctx: Any, form: dict, key: str) -> None:
         if controls.radio_button(f"{label}##next-{value}", form["next"] == value):
             form["next"] = value
 
-    imgui.dummy((0, sp(8)))
+
+def _setup_actions(ctx: Any, form: dict, key: str) -> None:
+    """Create and Cancel, drawn *outside* the scrolling body so a tall form or a
+    short viewport can never put them off screen."""
+    from imgui_bundle import imgui
+
     if widgets.primary_button("Create", (sp(180), 0)):
         _create(ctx, form)
         ctx.state.preview.pop(key, None)

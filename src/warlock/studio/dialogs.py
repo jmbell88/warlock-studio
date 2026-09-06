@@ -322,8 +322,6 @@ class ConfirmQueue:
         if appearing:
             imgui.open_popup(confirm.title)
             confirm._open = True
-        centre = imgui.get_main_viewport().get_center()
-        imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
         # Fade and rise on the way in (UX.md Phase 1). Pushed around ``begin``
         # rather than inside it: the modal's own background is painted there,
         # and a dialog whose panel cuts in while its text fades up is worse
@@ -338,6 +336,8 @@ class ConfirmQueue:
             imgui.set_next_window_bg_alpha(0.0)
         imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
         radius = widgets.push_surface_rounding()
+        # Wide enough for the two buttons and a line of the question.
+        widgets.modal_bounds(sp(BUTTON_W * 2 + 60))
         opened, _ = imgui.begin_popup_modal(
             confirm.title, None, imgui.WindowFlags_.always_auto_resize.value
         )
@@ -353,12 +353,16 @@ class ConfirmQueue:
             widgets.window_backdrop(radius=radius)
         if rise > 0.0:
             imgui.dummy((0, rise))
-        imgui.text_wrapped(confirm.message)
-        if self.waiting:
-            widgets.muted(f"{self.waiting} more to answer")
-        if confirm.body is not None:
-            imgui.dummy((0, sp(6)))
-            confirm.body()
+        # The question scrolls; the answer does not. A ``body`` callback may
+        # draw any amount (a file list, a preview), and before this the buttons
+        # went off the bottom of the viewport with it.
+        with widgets.modal_body(f"confirm-body/{confirm.title}"):
+            imgui.text_wrapped(confirm.message)
+            if self.waiting:
+                widgets.muted(f"{self.waiting} more to answer")
+            if confirm.body is not None:
+                imgui.dummy((0, sp(6)))
+                confirm.body()
         imgui.dummy((0, sp(6)))
         # The action is red, the escape is neutral: two identical buttons make
         # a destructive question a coin toss.
@@ -456,8 +460,6 @@ class PromptQueue:
         if appearing:
             imgui.open_popup(prompt.title)
             prompt._open = True
-        centre = imgui.get_main_viewport().get_center()
-        imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
         alpha, rise = widgets.popover_enter(f"prompt/{prompt.title}", appearing)
         # Translucent over the app it is blocking (UX.md Phase 5): the
         # background is cleared before ``begin`` paints it and drawn back
@@ -468,6 +470,10 @@ class PromptQueue:
             imgui.set_next_window_bg_alpha(0.0)
         imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
         radius = widgets.push_surface_rounding()
+        # The floor is the field: drawn at ``sp(FIELD_W)`` inside a scrolling
+        # child, a narrower modal gives the child a horizontal scrollbar and the
+        # focused field scrolls the label off its left edge.
+        widgets.modal_bounds(sp(FIELD_W + 60))
         opened, _ = imgui.begin_popup_modal(
             prompt.title, None, imgui.WindowFlags_.always_auto_resize.value
         )
@@ -493,50 +499,54 @@ class PromptQueue:
         # hold the same object: any tool or test that rebinds either one, for a
         # reason having nothing to do with this label, ships a form field with
         # no label at all, and no test exercises the production shape.
-        if _has_context():
-            widgets.field_label(prompt.label)
-        imgui.set_next_item_width(sp(FIELD_W))
-        # Only on the frame the modal appears -- ``Confirm``'s one-shot and its
-        # reason. ``is_any_item_active`` is true of the *field*, so the old
-        # spelling re-grabbed the keyboard on every frame the field was not
-        # active, which is every frame after a Tab: the focus snapped straight
-        # back and the buttons could not be reached from the keyboard at all.
-        if not prompt._focused:
-            imgui.set_keyboard_focus_here()
-            prompt._focused = True
-        # ``enter_returns_true`` makes the returned flag mean *Enter was
-        # pressed*, not *the text changed* -- but the returned string is the
-        # live buffer either way. Storing it only when the flag was set left
-        # ``value`` at whatever it was seeded with for the whole modal, so
-        # typing a name and clicking Save saved the old one (or, for a fresh
-        # prompt, silently refused an empty string). Only Enter ever worked.
-        entered, value = controls.input_text(
-            "##prompt-value",
-            prompt.value,
-            imgui.InputTextFlags_.enter_returns_true.value,
-            _imgui=imgui,
-        )
-        prompt.value = value
-        if self.waiting:
-            widgets.muted(f"{self.waiting} more to answer")
-        # A blank name has always been refused -- silently. Save looked
-        # enabled, clicking it closed nothing and did nothing, and the modal sat
-        # there with no indication that the field was the problem (UX-24). The
-        # refusal is the same; what is added is saying so and disabling the
-        # control that cannot work.
-        blank = not prompt.value.strip()
-        if blank:
-            # Through the module-local ``imgui`` rather than ``widgets.muted``,
-            # deliberately: this file's tests replace ``dialogs.imgui`` with a
-            # fake, and ``widgets`` reaches for the real module -- which, with
-            # no imgui context in a headless test, is an access violation
-            # rather than an error. The existing ``waiting`` note gets away
-            # with it only because that branch is never taken in those tests.
-            #
-            # Opaque rather than ``text_disabled`` (UX-18): this is the one
-            # sentence in the modal that says why Save will not work, so it is
-            # the last copy in the app that should be drawn at 3.20:1.
-            imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.MUTED)), "Name required.")
+        # One field, but through the same helper as every other modal: the
+        # action row lives outside the scroll, so nothing drawn here can
+        # push Save and Cancel off the bottom.
+        with widgets.modal_body(f"prompt-body/{prompt.title}"):
+            if _has_context():
+                widgets.field_label(prompt.label)
+            imgui.set_next_item_width(sp(FIELD_W))
+            # Only on the frame the modal appears -- ``Confirm``'s one-shot and its
+            # reason. ``is_any_item_active`` is true of the *field*, so the old
+            # spelling re-grabbed the keyboard on every frame the field was not
+            # active, which is every frame after a Tab: the focus snapped straight
+            # back and the buttons could not be reached from the keyboard at all.
+            if not prompt._focused:
+                imgui.set_keyboard_focus_here()
+                prompt._focused = True
+            # ``enter_returns_true`` makes the returned flag mean *Enter was
+            # pressed*, not *the text changed* -- but the returned string is the
+            # live buffer either way. Storing it only when the flag was set left
+            # ``value`` at whatever it was seeded with for the whole modal, so
+            # typing a name and clicking Save saved the old one (or, for a fresh
+            # prompt, silently refused an empty string). Only Enter ever worked.
+            entered, value = controls.input_text(
+                "##prompt-value",
+                prompt.value,
+                imgui.InputTextFlags_.enter_returns_true.value,
+                _imgui=imgui,
+            )
+            prompt.value = value
+            if self.waiting:
+                widgets.muted(f"{self.waiting} more to answer")
+            # A blank name has always been refused -- silently. Save looked
+            # enabled, clicking it closed nothing and did nothing, and the modal sat
+            # there with no indication that the field was the problem (UX-24). The
+            # refusal is the same; what is added is saying so and disabling the
+            # control that cannot work.
+            blank = not prompt.value.strip()
+            if blank:
+                # Through the module-local ``imgui`` rather than ``widgets.muted``,
+                # deliberately: this file's tests replace ``dialogs.imgui`` with a
+                # fake, and ``widgets`` reaches for the real module -- which, with
+                # no imgui context in a headless test, is an access violation
+                # rather than an error. The existing ``waiting`` note gets away
+                # with it only because that branch is never taken in those tests.
+                #
+                # Opaque rather than ``text_disabled`` (UX-18): this is the one
+                # sentence in the modal that says why Save will not work, so it is
+                # the last copy in the app that should be drawn at 3.20:1.
+                imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.MUTED)), "Name required.")
         saved = controls.button(
             "Save",
             (sp(BUTTON_W), 0),

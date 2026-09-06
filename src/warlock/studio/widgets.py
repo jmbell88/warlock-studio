@@ -1553,6 +1553,104 @@ def pop_surface_rounding() -> None:
         imgui.pop_style_var(2)
 
 
+#: How much of the viewport's height a modal may take. A modal that is taller
+#: than the window it blocks has no way out: imgui centres a popup on the
+#: viewport, so the overflow is split top and bottom and the action row goes off
+#: the bottom edge with nothing to scroll. Measured at 1280x800 with UI scale
+#: 2.0, where Plotter's "New map" ran off the screen mid-form at "Infinite" and
+#: neither Create nor Cancel could be reached (2026-09-05).
+MODAL_MAX_FRACTION = 0.85
+
+#: The floor for the scrolling body, in unscaled pixels: on a very short
+#: viewport it is better to scroll a stub of the form than to compute a
+#: negative height and have imgui clamp it to "fill", which puts the action row
+#: back off the bottom.
+MODAL_MIN_BODY = 80.0
+
+
+def modal_max_height(viewport_h: float, fraction: float = MODAL_MAX_FRACTION) -> float:
+    """The tallest a modal may be on a viewport this tall. Pure arithmetic."""
+    return max(1.0, viewport_h * fraction)
+
+
+def modal_body_height(
+    viewport_h: float, actions: float, chrome: float = 0.0, fraction: float = MODAL_MAX_FRACTION
+) -> float:
+    """How tall the scrolling body may be once the action row is reserved.
+
+    ``actions`` is the height of the row kept outside the scroll, ``chrome`` the
+    title bar and padding around both. Pure arithmetic so
+    ``tests/test_ux_consistency_pass3.py`` can check it with no imgui context.
+    """
+    return max(MODAL_MIN_BODY, modal_max_height(viewport_h, fraction) - actions - chrome)
+
+
+def modal_bounds(min_width: float = 0.0, *, fraction: float = MODAL_MAX_FRACTION) -> None:
+    """Constrain the *next* modal: a width floor and :data:`MODAL_MAX_FRACTION`.
+
+    Called immediately before ``begin_popup_modal``. The four modals in the app
+    are ``always_auto_resize``, which has no upper bound at all -- so the cap
+    has to come from here, and the body has to be able to scroll inside it
+    (:func:`modal_body`).
+
+    It also **centres the modal every frame**, which is the other half of the
+    same incident. Each site used to centre once, on ``Cond_.appearing``, with a
+    ``(0.5, 0.5)`` pivot -- and on the appearing frame an auto-resize window has
+    no measured size yet, so the pivot was applied to a stub and the window then
+    grew downwards from a top edge chosen for a much shorter dialog. Capping the
+    height alone left "New map" hanging off the bottom of a 1280x800 viewport at
+    UI scale 2.0 all the same.
+    """
+    if not _has_context():
+        return
+    viewport_obj = imgui.get_main_viewport()
+    viewport = viewport_obj.size
+    imgui.set_next_window_pos(
+        viewport_obj.get_center(), imgui.Cond_.always.value, imgui.ImVec2(0.5, 0.5)
+    )
+    height = modal_max_height(float(viewport.y), fraction)
+    imgui.set_next_window_size_constraints(
+        imgui.ImVec2(min_width, 0.0),
+        imgui.ImVec2(max(min_width, float(viewport.x)), height),
+    )
+
+
+@contextmanager
+def modal_body(name: str, *, rows: int = 1, fraction: float = MODAL_MAX_FRACTION) -> Any:
+    """The modal's scrolling body. The action row goes *after* the ``with``.
+
+    The child fits its content (so a two-line confirm is still a two-line
+    dialog) until it reaches the height :func:`modal_body_height` allows, and
+    scrolls from there. ``rows`` is how many rows of buttons the caller draws
+    below it; that space is reserved so Create/Cancel are on screen whatever the
+    body does.
+    """
+    if not _has_context():
+        yield
+        return
+    style = imgui.get_style()
+    actions = rows * (imgui.get_frame_height() + style.item_spacing.y)
+    chrome = imgui.get_frame_height() + style.window_padding.y * 2 + sp(16)
+    viewport = imgui.get_main_viewport().size
+    height = modal_body_height(float(viewport.y), actions, chrome, fraction)
+    imgui.set_next_window_size_constraints(imgui.ImVec2(0.0, 0.0), imgui.ImVec2(1.0e6, height))
+    # Transparent: this child is a scroll region, not a surface. Left at the
+    # theme's ``child_bg`` it reads as a sunken panel inside the dialog, which
+    # is a second elevation the ramp does not have and made a two-line confirm
+    # look like a text box.
+    imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(0.0, 0.0, 0.0, 0.0))
+    imgui.begin_child(
+        name,
+        (0.0, 0.0),
+        imgui.ChildFlags_.auto_resize_y.value | imgui.ChildFlags_.always_auto_resize.value,
+    )
+    imgui.pop_style_color()
+    try:
+        yield
+    finally:
+        imgui.end_child()
+
+
 def ring(low: Any, high: Any, colour: int, alpha: float, thick: float = 2.0) -> None:
     """An outline around a rectangle, drawn into the current window.
 
