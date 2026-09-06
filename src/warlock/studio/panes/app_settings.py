@@ -212,11 +212,20 @@ def _interface(ctx: Any, form_ui: forms.Form | None = None) -> None:
     # categories that hold *more than one* group keep theirs.
     lo, hi = tokens.ui_scale_bounds(_base(ctx))
     stored = _scale_of(ctx)
-    imgui.set_next_item_width(sp(FIELD_W))
-    changed, value = controls.slider_float("UI scale", stored, lo, hi, "%.2fx")
-    widgets.help_marker(
-        "On top of what the monitor already scales by, so 1.00x is the size "
-        "Windows asked for rather than 96 dpi."
+    # Through the form rather than a raw slider with a trailing label: this
+    # pane was drawing three registers at once, and the sanctioned one is
+    # ``forms.Form``'s small-caps ``field_label``.
+    changed, value = form_ui.slider(
+        "ui_scale",
+        "UI scale",
+        float(stored),
+        float(lo),
+        float(hi),
+        fmt="%.2fx",
+        help_text=(
+            "On top of what the monitor already scales by, so 1.00x is the "
+            "size Windows asked for rather than 96 dpi."
+        ),
     )
     if changed:
         # Live, so dragging shows what it will look like -- but only committed
@@ -616,7 +625,12 @@ def _health(ctx: Any) -> None:
     for row in rows:
         widgets.text_colored(row.colour, row.glyph)
         imgui.same_line()
-        imgui.text(row.name)
+        # ``muted`` and not ``selectable_row``: a check row is read-only. Its
+        # actions are the buttons under the list, nothing selects a row and
+        # nothing opens one, so a selectable would draw a hover highlight for
+        # a click that does nothing. Bare ``imgui.text`` was the third register
+        # in a pane that now has one.
+        widgets.muted(row.name)
         # The detail under the name rather than chained onto it. The popup
         # these rows come from was 480 px of its own and still ran a glyph, a
         # name, a dash and a sentence across one line; in a settings column
@@ -1089,8 +1103,14 @@ def _lora_import_form(ctx: Any) -> None:
         if changed:
             form["tuned_weight"] = value
         _c, form["family"] = form_ui.combo("family", "Family", form["family"], _LORA_FAMILIES)
-        _c, form["commercial"] = controls.checkbox(
-            "Licensed for commercial use", bool(form["commercial"])
+        # A Boolean in a form grid is a switch here, not a checkbox: the grid
+        # submits the control as ``##field`` and an unlabelled imgui checkbox
+        # draws its frame in ELEV_1 on an ELEV_1 panel, so off it is an empty
+        # gap. ``forms.Form`` records that incident where it declines to grow
+        # a ``checkbox`` method; this was the last labelled Boolean in this
+        # pane still spelled the other way.
+        _c, form["commercial"] = form_ui.switch(
+            "commercial", "Licensed for commercial use", bool(form["commercial"])
         )
     if widgets.disabled_button("Add style", not ctx.busy("lora:import")):
         # Last time's rings first: a new submit is judged on its own. Spelled

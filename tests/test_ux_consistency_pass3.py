@@ -195,3 +195,71 @@ def test_the_count_is_the_real_one(monkeypatch, count):
     drawn = _clay_props_ctx(monkeypatch, {str(index) for index in range(count)})
     assert drawn[0][0] == f"{count} objects selected"
     assert re.fullmatch(r"\d+ objects selected", drawn[0][0])
+
+
+# --- item 6: Settings speaks in one register --------------------------------
+#
+# ``panes/app_settings.py`` was drawing three registers on one page: a
+# ``forms.Form`` field (small caps through ``widgets.field_label``), a raw
+# ``controls.*`` call carrying its own trailing sentence-case label, and a
+# bare ``imgui.text`` used as a name column. The decision of 2026-09-05 is
+# that ``field_label`` is the one field face, so the raw labelled controls
+# move onto the form and the bare text moves onto a widgets wrapper.
+#
+# This is pass 2's ``test_a_form_field_is_labelled_in_the_one_field_face``
+# (tests/test_ux_consistency_pass2.py) extended to the call sites: that test
+# pins the face inside ``Form._label``, and these pin that Settings actually
+# goes through it.
+
+
+def _app_settings_source() -> str:
+    return _pane_sources()["app_settings.py"]
+
+
+#: Raw ``controls.*`` calls take a *label* as their first argument, and imgui
+#: draws it beside the control. A quoted first argument that is not an
+#: ``##``-hidden id is therefore a second field face on the page.
+_LABELLED_RAW = re.compile(
+    r"controls\.(slider_float|slider_int|checkbox|input_text|input_float|combo|drag_int)"
+    r"\(\s*\n?\s*\"(?!##)([^\"]+)\"",
+)
+
+
+def test_settings_labels_no_field_outside_the_form():
+    """``controls.slider_float("UI scale", ...)`` and
+    ``controls.checkbox("Licensed for commercial use", ...)`` drew sentence
+    case in the body face two rungs from a small-caps ``field_label``."""
+    offenders = [match.group(0) for match in _LABELLED_RAW.finditer(_app_settings_source())]
+    assert offenders == [], offenders
+
+
+def test_settings_ui_scale_and_the_licence_box_are_form_fields():
+    """The two migrated call sites, named, so a revert is a failure rather
+    than a silently absent assertion."""
+    source = _app_settings_source()
+    assert 'form_ui.slider(\n        "ui_scale",\n        "UI scale",' in source
+    assert 'form_ui.switch(\n            "commercial", "Licensed for commercial use"' in source
+
+
+def test_the_licence_box_is_a_switch_because_the_form_has_no_checkbox():
+    """A Boolean in the field grid is submitted as ``##field``; an unlabelled
+    imgui checkbox is ELEV_1 on ELEV_1 and vanishes when off. ``forms.Form``
+    records that where it declines to grow a ``checkbox`` method, and this is
+    the claim that the record still holds."""
+    from warlock.studio import forms
+
+    assert not hasattr(forms.Form, "checkbox")
+    assert callable(forms.Form.switch) and callable(forms.Form.slider)
+
+
+def test_settings_draws_no_bare_imgui_text_as_a_name_column():
+    """The health list ran ``imgui.text(row.name)`` under a coloured glyph,
+    beside a ``muted_wrapped`` detail -- body face in a pane whose every other
+    line goes through ``widgets``. The wrapped *prose* at the two
+    ``imgui.text_wrapped`` sites is not a field and stays."""
+    source = _app_settings_source()
+    assert "imgui.text(row.name)" not in source
+    assert "widgets.muted(row.name)" in source
+    # Only ``##``-hidden ids may reach raw ``imgui.text``-family label calls.
+    bare = re.findall(r"^\s*imgui\.text\((?!_wrapped)", source, re.M)
+    assert bare == [], bare
