@@ -807,6 +807,79 @@ def _case_retexture_combine_einsum(px: int) -> Callable[[], Any]:
     return lambda: _combine_einsum(f["colours"], f["weights"], f["base"], f["vis"])
 
 
+def _floor_fused(weights: Any, vis: Any) -> Any:
+    """The facing floor and the visibility multiply as one masked pass.
+
+    Shipped: ``np.where(weights >= MIN_FACING, weights, 0.0).astype(f32)`` then
+    ``* vis`` -- two full passes over the (n, h, w) stack, 255 ms at 2048. Here
+    ``np.multiply(..., where=mask, out=zeros)`` writes ``weights * vis`` where
+    the floor holds and leaves the zero elsewhere. Identical: the shipped path
+    multiplies a zero by ``vis`` there and gets ``0.0`` (vis is 0..1, never
+    negative), and the product where the floor holds is the same float32
+    product in both. Asserted by the case builders.
+    """
+    from warlock.pipelines import retexture
+
+    weights = np.asarray(weights, dtype=np.float32)
+    out = np.zeros(weights.shape, dtype=np.float32)
+    keep = weights >= retexture.MIN_FACING
+    np.multiply(weights, np.asarray(vis, dtype=np.float32), out=out, where=keep)
+    return out
+
+
+def _combine_from_floored(colours: Any, w: Any, base: Any) -> Any:
+    total = w.sum(axis=0)
+    safe = np.where(total > 0.0, total, 1.0)
+    mixed = np.einsum("nhwc,nhw->hwc", colours, w) / safe[..., None]
+    return np.where((total > 0.0)[..., None], mixed, base).astype(np.float32), total
+
+
+def _tail_reference(f: dict[str, Any]) -> Any:
+    from warlock.pipelines import retexture
+
+    mixed = retexture.combine(f["colours"], f["weights"], f["base"], vis=f["vis"])
+    floored = np.where(f["weights"] >= retexture.MIN_FACING, f["weights"], 0.0) * f["vis"]
+    total = floored.sum(axis=0)
+    blend = retexture.feather_blend(total)
+    mixed = f["base"] + (mixed - f["base"]) * blend[..., None]
+    return retexture.dilate(mixed, total > 0.0)
+
+
+def _case_retexture_tail_fused(px: int) -> Callable[[], Any]:
+    """The fused floor inside ``combine`` only; ``assemble`` still repeats it."""
+    from warlock.pipelines import retexture
+
+    def tail(f: dict[str, Any]) -> Any:
+        w = _floor_fused(f["weights"], f["vis"])
+        mixed, _ = _combine_from_floored(f["colours"], w, f["base"])
+        total = _floor_fused(f["weights"], f["vis"]).sum(axis=0)
+        blend = retexture.feather_blend(total)
+        mixed = f["base"] + (mixed - f["base"]) * blend[..., None]
+        return retexture.dilate(mixed, total > 0.0)
+
+    small = _retexture_fixture(256)
+    assert np.array_equal(tail(small), _tail_reference(small)), "fused floor changed the tail"
+    f = _retexture_fixture(px)
+    return lambda: tail(f)
+
+
+def _case_retexture_tail_shared(px: int) -> Callable[[], Any]:
+    """The fused floor computed once and its ``total`` handed to the tail."""
+    from warlock.pipelines import retexture
+
+    def tail(f: dict[str, Any]) -> Any:
+        w = _floor_fused(f["weights"], f["vis"])
+        mixed, total = _combine_from_floored(f["colours"], w, f["base"])
+        blend = retexture.feather_blend(total)
+        mixed = f["base"] + (mixed - f["base"]) * blend[..., None]
+        return retexture.dilate(mixed, total > 0.0)
+
+    small = _retexture_fixture(256)
+    assert np.array_equal(tail(small), _tail_reference(small)), "sharing the floor changed the tail"
+    f = _retexture_fixture(px)
+    return lambda: tail(f)
+
+
 # --------------------------------------------------------------------------
 # B7 -- clay/ops_bevel.bevel_edges
 # --------------------------------------------------------------------------
@@ -1067,6 +1140,8 @@ CASES: dict[str, Case] = {
         sizes=(512, 1024, 2048),
         variants={
             "tail": _case_retexture_tail,
+            "tail_fused": _case_retexture_tail_fused,
+            "tail_shared": _case_retexture_tail_shared,
             "combine": _case_retexture_combine,
             "combine_loop": _case_retexture_combine_loop,
             "combine_einsum": _case_retexture_combine_einsum,

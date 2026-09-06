@@ -282,26 +282,51 @@ def depth_hint(depth_png: Path, view_png: Path, dest: Path) -> bool:
     return True
 
 
-def combine(colours: Any, weights: Any, base: Any, vis: Any | None = None) -> Any:
-    """Weighted mean of N projections, falling back to ``base``.
-
-    ``colours`` is (n, h, w, 3), ``weights`` is (n, h, w), ``base`` is
-    (h, w, 3) -- the atlas the mesh already has. Everything in 0..1.
-    ``vis``, when given, is (n, h, w) from ``visibility`` and multiplies each
-    view's say *after* the facing floor: an occluded texel of a square-on view
-    is a wall's opinion at any facing, and a sub-floor facing stays dropped no
-    matter how visible.
+def floor_weights(weights: Any, vis: Any | None = None) -> Any:
+    """Drop every weight below ``MIN_FACING`` and fold in ``vis`` in one pass.
 
     Weights below ``MIN_FACING`` are dropped rather than scaled down, and a
-    texel left with no contributor at all keeps its base colour. Both are the
-    same decision: an answer nothing actually saw must not be invented, and the
-    mesh's own texture is the one honest thing to say instead.
+    texel left with no contributor at all keeps its base colour: an answer
+    nothing actually saw must not be invented, and the mesh's own texture is
+    the one honest thing to say instead. ``vis``, when given, is (n, h, w)
+    from ``visibility`` and multiplies each view's say *after* the facing
+    floor: an occluded texel of a square-on view is a wall's opinion at any
+    facing, and a sub-floor facing stays dropped no matter how visible.
+
+    The shipped shape of this was ``np.where(weights >= MIN_FACING, weights,
+    0.0).astype(f32)`` then ``* vis`` -- two full passes over the (n, h, w)
+    stack, 255 ms at a 2048 atlas, and `assemble` repeated the whole thing a
+    second time to get its own `total`. Here ``np.multiply(weights, vis,
+    out=zeros, where=keep)`` writes ``weights * vis`` where the floor holds
+    and leaves the zero everywhere else -- one masked pass instead of two,
+    computed once per call (docs/measurements/2026-09-06-native-batch-9-
+    facing-floor.md).
+
+    Identical to the two-pass form in both regimes: where the floor fails,
+    the shipped path multiplies ``0.0`` by a ``vis`` in 0..1 (never negative)
+    and gets ``0.0``, exactly what leaving the output's zero untouched gives;
+    where the floor holds, both compute the same float32 product of
+    ``weights`` and ``vis``.
     """
     import numpy as np
 
-    w = np.where(weights >= MIN_FACING, weights, 0.0).astype(np.float32)
-    if vis is not None:
-        w = w * vis.astype(np.float32)
+    weights = np.asarray(weights, dtype=np.float32)
+    if vis is None:
+        return np.where(weights >= MIN_FACING, weights, 0.0).astype(np.float32)
+    out = np.zeros(weights.shape, dtype=np.float32)
+    keep = weights >= MIN_FACING
+    np.multiply(weights, np.asarray(vis, dtype=np.float32), out=out, where=keep)
+    return out
+
+
+def combine_floored(colours: Any, w: Any, base: Any) -> Any:
+    """Weighted mean of N projections from already-``floor_weights``ed ``w``.
+
+    ``colours`` is (n, h, w, 3), ``w`` is (n, h, w), ``base`` is (h, w, 3) --
+    the atlas the mesh already has. Everything in 0..1.
+    """
+    import numpy as np
+
     total = w.sum(axis=0)
     # The sum is computed everywhere and used only where it means something;
     # dividing under a where() rather than after it keeps the zero-weight
@@ -316,6 +341,18 @@ def combine(colours: Any, weights: Any, base: Any, vis: Any | None = None) -> An
     # element that `.sum(axis=0)` already uses on a C-contiguous stack.
     mixed = np.einsum("nhwc,nhw->hwc", colours, w) / safe[..., None]
     return np.where((total > 0.0)[..., None], mixed, base).astype(np.float32)
+
+
+def combine(colours: Any, weights: Any, base: Any, vis: Any | None = None) -> Any:
+    """Weighted mean of N projections, falling back to ``base``.
+
+    ``colours`` is (n, h, w, 3), ``weights`` is (n, h, w), ``base`` is
+    (h, w, 3) -- the atlas the mesh already has. Everything in 0..1.
+    ``vis``, when given, is (n, h, w) from ``visibility`` and multiplies each
+    view's say *after* the facing floor (see ``floor_weights`` for what the
+    floor means and why it is one masked pass).
+    """
+    return combine_floored(colours, floor_weights(weights, vis), base)
 
 
 def dilate(image: Any, mask: Any, passes: int = DILATE) -> Any:
@@ -439,11 +476,9 @@ def assemble(
 
     stack_c = np.stack(colours)
     stack_w = np.stack(weights)
-    mixed = combine(stack_c, stack_w, base, vis=vis)
-    floored = np.where(stack_w >= MIN_FACING, stack_w, 0.0)
-    if vis is not None:
-        floored = floored * vis
-    total = floored.sum(axis=0)
+    w = floor_weights(stack_w, vis)
+    total = w.sum(axis=0)
+    mixed = combine_floored(stack_c, w, base)
     covered = total > 0.0
     if occlusion:
         blend = feather_blend(total)

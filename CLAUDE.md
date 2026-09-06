@@ -56,4 +56,5 @@ pwsh native\build.ps1     # optional C kernels → vendor/warlockc/warlockc.dll 
 ## Tooling notes
 
 - `scripts/exercise_mode.py` (also the `/exercise-mode` skill) drives every control in a mode through the real input path and screenshots each press; `scripts/screenshot_modes.py` captures all modes.
+- Fable and Opus plan, orchestrate and review; Sonnet subagents (`model: "sonnet"`) do the implementing, unless the user says otherwise.
 - Subagents working in parallel must never `git stash`, `checkout` or `reset` — a stash from one fixer reverts the shared tree for the others.
