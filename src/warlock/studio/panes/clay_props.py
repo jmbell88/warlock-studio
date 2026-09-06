@@ -64,7 +64,21 @@ def _body(ctx: Any) -> None:
     _element_summary(doc)
     obj = _selected(doc)
     if obj is None:
-        widgets.empty_state(icons.BOX, "Nothing selected", "Click an object in the viewport.")
+        # Two sentences, because ``_selected`` returns None for two different
+        # reasons and one of them used to lie: with sixteen objects lit up the
+        # pane said "Nothing selected", which the viewport plainly contradicts
+        # -- and a click that drops a whole multi-object figure makes that the
+        # ordinary case rather than the odd one. The *refusal* is unchanged
+        # (see ``_selected``); only the sentence the user reads is.
+        count = len(doc.selection)
+        if count > 1:
+            widgets.empty_state(
+                icons.BOX,
+                f"{count} objects selected",
+                "Select one to edit it.",
+            )
+        else:
+            widgets.empty_state(icons.BOX, "Nothing selected", "Click an object in the viewport.")
         return
 
     imgui.begin_disabled(tab.saving)

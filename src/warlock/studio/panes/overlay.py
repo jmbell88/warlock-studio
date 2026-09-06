@@ -495,13 +495,115 @@ PLACEHOLDERS: dict[str, tuple[str, str, str]] = {
 }
 
 
-def centred_empty(icon: str, title: str, hint: str) -> None:
+def _focus_brief(ctx: Any) -> None:
+    """Put the keyboard on the brief's prompt box.
+
+    The Reference stage's "one thing to do" is *typing*, and there is no
+    button that means it -- so the action moves the focus ring rather than
+    running a command. Written against :mod:`focus`'s two fields directly
+    because ``focus.move`` only knows about relative steps.
+    """
+    from .. import create_brief
+
+    ctx.state.focus_key[create_brief.FOCUS_PANE] = "prompt"
+    ctx.state.focus_moved = True
+
+
+def _clay_box(ctx: Any) -> None:
+    """Drop one primitive at its defaults into the open Clay document.
+
+    Which primitive is read off the registry rather than spelled here (the
+    ``clay_props`` rule: the pane never names a generator), so a rename in
+    ``primitives.GENERATORS`` cannot leave this button pointing at nothing.
+    """
+    from ..clay import primitives as bp
+    from . import clay_tools
+
+    tab = ctx.state.clay.active if getattr(ctx.state, "clay", None) else None
+    if tab is None:
+        return
+    clay_tools.add_primitive(ctx, tab.doc, next(iter(bp.GENERATORS)))
+
+
+#: What the button under an empty viewport does, per :data:`PLACEHOLDERS` key.
+#:
+#: Resolved *at draw time* rather than stored beside the sentence, so the
+#: table above stays what it has always been -- data, importable by a test and
+#: by the manual without dragging every mode module in behind it. The value is
+#: the label and a callable taking ``ctx``; :func:`placeholder` binds the ctx.
+#:
+#: Only the keys whose hint names something *this pane* can do are here. The
+#: rest ("Pick a finished mesh", "Describe the music you want above") point at
+#: a control the user works elsewhere, and a button repeating a pointer is a
+#: second way to do one thing -- which is the divergence this whole pass is
+#: closing, not a new one to open.
+ACTIONS: dict[str, tuple[str, Any]] = {
+    "create/reference": ("Write a brief", _focus_brief),
+    "create/pose": ("Go to Rig", lambda ctx: _go_stage(ctx, "rig")),
+    "clay": ("Add a primitive", _clay_box),
+    "inker": ("New drawing", lambda ctx: _inker_new(ctx)),
+    "plotter": ("New map...", lambda ctx: _plotter_new(ctx)),
+    "packwright": ("Add an image...", lambda ctx: _packwright_add(ctx)),
+    "sirens": ("New song", lambda ctx: _sirens_new(ctx)),
+}
+
+
+def _go_stage(ctx: Any, stage: str) -> None:
+    from .. import create_stages
+
+    create_stages.go(ctx, stage)
+
+
+def _inker_new(ctx: Any) -> None:
+    from .. import inker_mode
+
+    inker_mode.new_document(ctx, *inker_mode.NEW_DEFAULT)
+
+
+def _plotter_new(ctx: Any) -> None:
+    from .. import plotter_mode
+
+    plotter_mode.ask_new_document(ctx)
+
+
+def _sirens_new(ctx: Any) -> None:
+    from .. import sirens_mode
+
+    sirens_mode.new_document(ctx)
+
+
+def _packwright_add(ctx: Any) -> None:
+    from .. import packwright_mode
+
+    packwright_mode.ask_add_sources(ctx)
+
+
+def action_for(ctx: Any, key: str) -> tuple[str, Any] | None:
+    """:data:`ACTIONS`' entry for ``key``, bound to ``ctx``, or ``None``."""
+    entry = ACTIONS.get(key)
+    if entry is None:
+        return None
+    label, run = entry
+    return (label, lambda: run(ctx))
+
+
+def centred_empty(
+    icon: str,
+    title: str,
+    hint: str,
+    *,
+    action: tuple[str, Any] | None = None,
+) -> None:
     """An :func:`widgets.empty_state` centred in the viewport it is drawn in.
 
     Hoisted out of :func:`placeholder` so a viewport with a *transient* empty
     state -- the Poser while Blender builds an armature, or after it failed --
     can look like the nine that have a permanent one, instead of two lines of
     muted text in the top-left corner.
+
+    ``action`` is passed straight through to :func:`widgets.empty_state`: the
+    button under an empty viewport is the same control as the button under an
+    empty list, and this wrapper only owns the centring.
     """
     from ..tokens import sp
 
@@ -509,7 +611,7 @@ def centred_empty(icon: str, title: str, hint: str) -> None:
     # Centred vertically by hand: ``empty_state`` centres its own text
     # horizontally but knows nothing about the height it is sitting in.
     imgui.dummy((0, max(avail.y * 0.5 - sp(48), 0)))
-    widgets.empty_state(icon, title, hint)
+    widgets.empty_state(icon, title, hint, action=action)
 
 
 def placeholder(ctx: Any) -> None:
@@ -530,7 +632,9 @@ def placeholder(ctx: Any) -> None:
             if prompt
             else f"Choose a {asset.lower()}, describe the outcome at left, then create it."
         )
-        centred_empty(icons.WAND, "Start with a brief", hint)
+        centred_empty(
+            icons.WAND, "Start with a brief", hint, action=action_for(ctx, "create/reference")
+        )
         return
     key = (
         f"{create_stages.MODE}/{ctx.state.create_stage}"
@@ -538,4 +642,4 @@ def placeholder(ctx: Any) -> None:
         else ctx.state.mode
     )
     icon, title, hint = PLACEHOLDERS.get(key, PLACEHOLDERS["create/mesh"])
-    centred_empty(icon, title, hint)
+    centred_empty(icon, title, hint, action=action_for(ctx, key))

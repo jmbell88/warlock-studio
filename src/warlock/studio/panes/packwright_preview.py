@@ -18,7 +18,7 @@ from typing import Any
 
 from .. import docmodes, icons, inker_state, packwright_mode, theme, widgets
 from ..tokens import sp
-from . import packwright_textures
+from . import overlay, packwright_textures
 
 #: This pane's square, in design pixels. ``widgets.CHECKER``'s value, named
 #: here because the preview has always had one and a call site that spelled
@@ -40,14 +40,22 @@ def draw(ctx: Any) -> None:
         _empty(ctx)
         return
     if tab.atlas is None:
-        imgui.dummy((0, 40))
         if tab.pack_error:
+            imgui.dummy((0, 40))
             widgets.text_colored(theme.ERR, tab.pack_error)
+        elif tab.packing:
+            imgui.dummy((0, 40))
+            widgets.busy("Packing")
         else:
-            if tab.packing:
-                widgets.busy("Packing")
-            else:
-                widgets.muted("Add a sprite to see the atlas.")
+            # The one viewport that answered "nothing here yet" with a muted
+            # sentence in the top-left corner while the other nine drew the
+            # icon-title-hint form. One empty-state vocabulary (2026-09-05),
+            # and this is the state with exactly one thing to do, so it is
+            # also the sentence's own verb as a button.
+            overlay.centred_empty(
+                *overlay.PLACEHOLDERS["packwright"],
+                action=overlay.action_for(ctx, "packwright"),
+            )
         return
     if tab.pack_stale_why:
         # Above the picture rather than instead of it: the last good atlas is
