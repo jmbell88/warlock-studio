@@ -440,18 +440,51 @@ def downscale_grid(image: PILImage, scale: int, phase: tuple[int, int]) -> PILIm
 # --------------------------------------------------------------------------
 
 
-def _to_oklab(rgb: Any) -> Any:
-    """sRGB (0..255 float) -> Oklab. Closed form, no lookup, no dependency.
+def _srgb_to_linear_lut() -> Any:
+    """256-entry sRGB->linear lookup, built once and cached.
 
-    Perceptual and not RGB because nearest-in-RGB picks by a distance nobody
-    sees: it will map a mid-grey onto a saturated blue over a slightly darker
-    grey whenever the arithmetic happens to be closer, which on a limited
-    palette is a visible wrong colour rather than a subtle one.
+    The expression is exactly the sRGB->linear step from ``_to_oklab``,
+    applied to every integer 0..255 instead of to an arbitrary array. Because
+    that step is elementwise (each output depends only on its own input
+    value), ``lut[x]`` is bit-identical to running the same expression on
+    ``x`` -- there is nothing to test beyond that equality, which is the
+    parity argument in full.
     """
     import numpy as np
 
-    c = np.asarray(rgb, dtype=np.float64) / 255.0
-    linear = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    c = np.arange(256, dtype=np.float64) / 255.0
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+_srgb_lut_cache: Any = None
+
+
+def _get_srgb_lut() -> Any:
+    global _srgb_lut_cache
+    if _srgb_lut_cache is None:
+        _srgb_lut_cache = _srgb_to_linear_lut()
+    return _srgb_lut_cache
+
+
+def _to_oklab(rgb: Any) -> Any:
+    """sRGB (0..255 float, or 0..255 uint8) -> Oklab.
+
+    docs/measurements/2026-08-30-native-batch-6-candidates.md #3: at 1024^2 the
+    float sRGB->linear step allocates several 8 MB float64 temporaries and
+    evaluates the discarded ``** 2.4`` branch on every pixel. When the input
+    is already ``uint8`` (the dtype ``map_palette`` hands the frame in as),
+    a 256-entry lookup table replaces that step; anything else -- including a
+    palette explicitly widened to float64 -- keeps the original closed form,
+    since a float array is not provably a set of 0..255 integers.
+    """
+    import numpy as np
+
+    arr = np.asarray(rgb)
+    if arr.dtype == np.uint8:
+        linear = _get_srgb_lut()[arr]
+    else:
+        c = np.asarray(arr, dtype=np.float64) / 255.0
+        linear = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
     r, g, b = linear[..., 0], linear[..., 1], linear[..., 2]
     lm = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
     mm = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b

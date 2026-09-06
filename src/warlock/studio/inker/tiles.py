@@ -264,11 +264,21 @@ def materialize(refs: np.ndarray, ts: Tileset, size: tuple[int, int]) -> np.ndar
     cropped wherever that runs past the canvas edge -- the ordinary case
     whenever ``size`` is not an exact multiple of the tile size, since
     :func:`grid_shape` always rounds up.
+
+    A canvas asks for one of at most ``tile_count * 8`` distinct answers
+    hundreds of thousands of times, so ``oriented`` is memoised per distinct
+    raw ref -- the cost is per cell, not per pixel (2026-08-30 batch-6 candidates,
+    docs/measurements/2026-08-30-native-batch-6-candidates.md#1: bit-identical,
+    444ms -> 142ms at 3200^2 with 8px tiles). ``oriented`` returns a view onto
+    the tileset's pixels, and the memo holds those views; the only use of a
+    memoised entry below is the copy into ``canvas``, never a write through
+    it, so aliasing several cells to the same array is safe.
     """
     width, height = int(size[0]), int(size[1])
     canvas = np.zeros((height, width, 4), dtype=np.uint8)
     grid_h, grid_w = refs.shape
     tile_w, tile_h = ts.tile_w, ts.tile_h
+    memo: dict[int, np.ndarray] = {}
     for row in range(grid_h):
         y0 = row * tile_h
         if y0 >= height:
@@ -278,12 +288,15 @@ def materialize(refs: np.ndarray, ts: Tileset, size: tuple[int, int]) -> np.ndar
             if x0 >= width:
                 break
             raw = int(refs[row, col])
-            # ``refs`` is uint32 and the mask keeps it non-negative, so the
-            # only way to be out of range is past the end.
-            local = raw & gid.GID_MASK
-            if local >= ts.tile_count:
-                local = 0
-            tile = oriented(ts.tile_pixels(local), raw)
+            tile = memo.get(raw)
+            if tile is None:
+                # ``refs`` is uint32 and the mask keeps it non-negative, so
+                # the only way to be out of range is past the end.
+                local = raw & gid.GID_MASK
+                if local >= ts.tile_count:
+                    local = 0
+                tile = oriented(ts.tile_pixels(local), raw)
+                memo[raw] = tile
             h = min(tile.shape[0], height - y0)
             w = min(tile.shape[1], width - x0)
             canvas[y0 : y0 + h, x0 : x0 + w] = tile[:h, :w]

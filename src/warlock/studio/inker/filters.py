@@ -376,25 +376,6 @@ def _kernel(radius: float) -> np.ndarray:
     return (weights / weights.sum()).astype(np.float32)
 
 
-def _shift(mask: np.ndarray, dy: int, dx: int, *, wrap: bool) -> np.ndarray:
-    """``mask`` moved by one step, off-canvas filled with False -- or rolled.
-
-    ``wrap`` is the tiling case: a document drawn as a repeating tile has no
-    edge, so an outline that stopped at the border would leave a seam exactly
-    where the tile joins itself. It is ``np.roll`` and nothing else, deliberately
-    -- no import of ``tiling.py``, which is about *previewing* a tiled canvas and
-    owns no wrapping arithmetic this could share.
-    """
-    if wrap:
-        return np.roll(mask, (dy, dx), axis=(0, 1))
-    out = np.zeros_like(mask)
-    height, width = mask.shape
-    out[max(dy, 0):height + min(dy, 0), max(dx, 0):width + min(dx, 0)] = mask[
-        max(-dy, 0):height + min(-dy, 0), max(-dx, 0):width + min(-dx, 0)
-    ]
-    return out
-
-
 _CORNERS_4 = ((-1, 0), (1, 0), (0, -1), (0, 1))
 _CORNERS_8 = _CORNERS_4 + ((-1, -1), (-1, 1), (1, -1), (1, 1))
 
@@ -406,14 +387,26 @@ def _grow(mask: np.ndarray, steps: int, corners: int, *, wrap: bool) -> np.ndarr
     the sizes an outline is drawn at (1 to 32 px) the loop is cheap, and a
     single-step dilation repeated is what makes the 4-connected case a diamond
     and the 8-connected case a square -- which is the whole difference between
-    a rounded outline and a boxy one.
+    a rounded outline and a boxy one. Each step is fused into a single
+    in-place OR per neighbour (``grown |= ...`` on a slice, or ``np.roll`` for
+    the wrap case) rather than building a fresh whole-canvas shift array per
+    neighbour and OR-ing that in: docs/measurements/2026-08-30-native-batch-6-candidates.md
+    §2 measured the old per-neighbour ``_shift`` allocation at 174.7 ms vs
+    27.8 ms fused (6.3x) at r=32 on a 1024^2 canvas, bit-identical either way.
     """
     neighbours = _CORNERS_8 if int(corners) >= 8 else _CORNERS_4
+    height, width = mask.shape
     out = mask
     for _ in range(steps):
-        grown = out
-        for dy, dx in neighbours:
-            grown = grown | _shift(out, dy, dx, wrap=wrap)
+        grown = out.copy()
+        if wrap:
+            for dy, dx in neighbours:
+                grown |= np.roll(out, (dy, dx), axis=(0, 1))
+        else:
+            for dy, dx in neighbours:
+                grown[max(dy, 0):height + min(dy, 0), max(dx, 0):width + min(dx, 0)] |= out[
+                    max(-dy, 0):height + min(-dy, 0), max(-dx, 0):width + min(-dx, 0)
+                ]
         out = grown
     return out
 
