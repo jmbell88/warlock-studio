@@ -64,6 +64,10 @@ MEDIA = {
     "model.fbx": "application/octet-stream",
     "textures.zip": "application/zip",
     "rig.glb": "model/gltf-binary",
+    # The rig with every authored clip baked on as a named glTF animation.
+    # Derived from rig.glb rather than model.glb -- see ``DERIVED_RIG`` -- and
+    # the only artifact in this table that carries motion.
+    "animated.glb": "model/gltf-binary",
     # The deformation battery rendered against the rig: the poses a rig is
     # reviewed in, one atlas, written by the rig job into the mesh's own
     # directory the way rig.glb is. Its sidecar is deliberately not here --
@@ -681,6 +685,23 @@ STEMS_DIR = "stems"
 #: ``track.wav`` has one that never touches it again. Existence is the test.
 DERIVED_AUDIO = ("track.flac", "track.mp3", "track.ogg")
 
+#: Derived from ``rig.glb``, not from ``model.glb``.
+#:
+#: Its own tuple for ``DERIVED_AUDIO``'s stated reason: which source an
+#: artifact is derived *from* is the thing ``ready`` and ``unready_reason``
+#: branch on, and a name in ``DERIVED`` would make this wait on a mesh being
+#: finished while ignoring whether the thing it is actually made of exists.
+#: The second gate is the clip library: a skeleton nobody authored a walk cycle
+#: for has nothing to animate, which is ``create_charsheet``'s refusal in
+#: another door.
+#:
+#: **No staleness rule**: existence is the freshness test, which is why
+#: ``derive`` stages the export and renames it in. A Blender that dies part way
+#: through would otherwise leave a truncated file that is served for the life
+#: of the job directory -- ``model.fbx``'s incident, on the one other artifact
+#: a subprocess writes.
+DERIVED_RIG = ("animated.glb",)
+
 #: The stem artifacts, as the names ``MEDIA`` and ``LISTED`` know them.
 #: Derived from ``MEDIA`` rather than re-typed, so the two cannot drift.
 STEM_FILES = tuple(f"{STEMS_DIR}/{name}.wav" for name in ("drums", "bass", "other", "vocals"))
@@ -829,6 +850,23 @@ def fresh_2d(job_dir: Path, name: str) -> bool:
         return False
 
 
+def _rig_has_clips(job_dir: Path) -> bool:
+    """Whether this job's rig is on a skeleton with authored clips.
+
+    Read off ``rig.json``, which is where the template is recorded and the only
+    place it is -- ``create_charsheet`` asks the same question of the same file.
+    Through ``rigging`` rather than ``service.troupe``: that module imports this
+    one, and a listing loop must not depend on a door.
+    """
+    from .. import rigging
+
+    try:
+        template = str((rigging.read_rig(job_dir) or {}).get("template") or "")
+        return bool(rigging.clip_library(template).get("clips"))
+    except (ValueError, OSError):
+        return False
+
+
 def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
     """Whether ``name`` may be served/exported for this job. The one place the
     rules live.
@@ -895,6 +933,10 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
         # through the vendored pipeline and the row is marked done afterwards,
         # so existence alone can hand a reader a half-encoded take.
         return job.get("status") == "done" and path.exists()
+    if name in DERIVED_RIG:
+        # Derivable, not present -- ``DERIVED``'s arm on the other source --
+        # and only for a rig whose skeleton has clips authored for it.
+        return ready(job, job_dir, "rig.glb") and _rig_has_clips(job_dir)
     if name in DERIVED:
         # Derivable, not present: the caller still has to produce it.
         return ready(job, job_dir, "model.glb")
@@ -927,6 +969,7 @@ def unready_reason(job: dict[str, Any], job_dir: Path, name: str) -> str:
         or name in DERIVED
         or name in DERIVED_2D
         or name in DERIVED_AUDIO
+        or name in DERIVED_RIG
     )
     if status in ("queued", "running", "error", "cancelled") and derived_from_a_run:
         return not_done_message(f"{name} is not available yet: this job", str(status))
@@ -944,6 +987,15 @@ def unready_reason(job: dict[str, Any], job_dir: Path, name: str) -> str:
         return f"{name} is only offered for a reference or a tile, not for a mesh."
     if name in DERIVED_2D and not (job_dir / "input.png").exists():
         return f"{name} is derived from the reference image, which is not on disk."
+    if name in DERIVED_RIG and not (job_dir / "rig.json").exists():
+        return "This asset has not been rigged yet."
+    if name in DERIVED_RIG and not _rig_has_clips(job_dir):
+        # ``create_charsheet``'s sentence, so one fact has one wording wherever
+        # it is met.
+        return (
+            "An animated GLB is baked from a clip library, and nothing is "
+            "authored for this rig's skeleton."
+        )
     if name in DERIVED and not (job_dir / "model.glb").exists():
         return f"{name} is derived from the mesh, which is not on disk."
     if name in DERIVED_AUDIO and not (job_dir / "track.wav").exists():

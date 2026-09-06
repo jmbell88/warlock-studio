@@ -358,13 +358,19 @@ def _has_weights(mesh: Any) -> bool:
     return any(g.group in groups and g.weight > 0.0 for v in mesh.data.vertices for g in v.groups)
 
 
-def _export(bpy: Any, out_glb: Path) -> None:
+def _export(bpy: Any, out_glb: Path, *, animations: bool = False) -> None:
     """Write the whole scene as a skinned GLB.
 
     ``export_rest_position_armature=False`` is what makes a posed export mean
     anything: left at its default the exporter writes every joint node at its
     rest transform and relegates the current pose to an animation track, so a
     baked pose would come back looking like a T-pose.
+
+    ``animations=True`` is the exact inverse, and the only caller is
+    :func:`op_animate`: an animation track is a rotation *from rest*, so a file
+    carrying one has to carry the rest armature to play it against. The two
+    flags move together for that reason -- they are one decision about what the
+    file means, not two knobs.
     """
     out_glb.parent.mkdir(parents=True, exist_ok=True)
     bpy.ops.object.select_all(action="SELECT")
@@ -373,8 +379,8 @@ def _export(bpy: Any, out_glb: Path) -> None:
         export_format="GLB",
         export_skins=True,
         export_yup=True,
-        export_animations=False,
-        export_rest_position_armature=False,
+        export_animations=animations,
+        export_rest_position_armature=animations,
     )
 
 
@@ -1140,6 +1146,76 @@ def op_pose(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     _export(bpy, Path(spec["out_glb"]))
     progress(1.0, "Pose complete")
     return {"ok": True, "bones": applied, "unknown": unknown}
+
+
+def op_animate(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
+    """Bake every authored clip onto the rig as a named glTF animation.
+
+    ``op_pose``'s sibling one step up: a pose is one set of bone rotations, and
+    a clip is a sequence of them under a name an engine can play. The frames
+    arrive **already interpolated** -- ``clips.animate_spec`` resolves them
+    through ``pipelines.sheet`` on the host, the same split ``op_sheet`` and
+    ``fit_template`` take -- so nothing here decides what a walk cycle looks
+    like. What only Blender can do is key an armature and write the samplers.
+
+    One action per clip, each kept alive with ``use_fake_user`` because the
+    glTF exporter writes one animation per action and an action with no user is
+    gone by the time the export runs. Keyframes land on ``track["step"]`` scene
+    frames apart against ``spec["fps"]``, which is how five clips with five
+    different tempos share one timebase (see ``clips.ANIMATION_FPS``).
+    """
+    rig_glb = Path(spec["rig_glb"])
+    if not rig_glb.exists():
+        raise RuntimeError(f"no rig to animate at {rig_glb}")
+    tracks = list(spec.get("clips") or ())
+    if not tracks:
+        # Refused rather than exported empty: a GLB whose whole reason is its
+        # animations, carrying none, answers the question wrongly rather than
+        # not at all. ``animate_spec`` refuses first; this is the worker's own
+        # floor.
+        raise RuntimeError("no clips to bake")
+
+    progress(0.05, "Loading rig")
+    _reset_scene(bpy)
+    arm_obj = _import_rig(bpy, rig_glb)
+    bpy.context.scene.render.fps = int(spec.get("fps") or 30)
+    if arm_obj.animation_data is None:
+        arm_obj.animation_data_create()
+
+    baked: list[dict[str, Any]] = []
+    unknown: list[str] = []
+    for index, track in enumerate(tracks):
+        name = str(track.get("name") or f"clip{index}")
+        progress(0.10 + 0.70 * (index / max(len(tracks), 1)), f"Baking {name}")
+        frames = list(track.get("frames") or ())
+        if not frames:
+            continue
+        action = bpy.data.actions.new(name)
+        # The exporter writes one animation per *action*, and an action with no
+        # user is collected before the export runs.
+        action.use_fake_user = True
+        arm_obj.animation_data.action = action
+        step = float(track.get("step") or 1.0)
+        space = str(track.get("space") or "delta")
+        for frame_index, frame in enumerate(frames):
+            _applied, missing = _apply_pose(arm_obj, frame.get("bones") or {}, space)
+            unknown.extend(n for n in missing if n not in unknown)
+            at = 1.0 + frame_index * step
+            for pbone in arm_obj.pose.bones:
+                pbone.rotation_mode = "QUATERNION"
+                pbone.keyframe_insert(data_path="rotation_quaternion", frame=at)
+        baked.append({"name": name, "frames": len(frames), "loop": bool(track.get("loop"))})
+    # Left unassigned, or the last clip is also the pose the mesh is exported
+    # in -- and with the rest armature written out, a stray current action is
+    # the one thing that could still put a bind pose in the file.
+    arm_obj.animation_data.action = None
+
+    progress(0.85, "Exporting animations")
+    _export(bpy, Path(spec["out_glb"]), animations=True)
+    progress(1.0, "Animations complete")
+    if unknown:
+        print(f"clips name {len(unknown)} bone(s) this rig does not have: {unknown}", flush=True)
+    return {"ok": True, "clips": baked, "unknown": unknown}
 
 
 def op_armature(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
@@ -2044,6 +2120,7 @@ def op_remesh(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
 OPS = {
     "rig": op_rig,
     "pose": op_pose,
+    "animate": op_animate,
     "armature": op_armature,
     "sheet": op_sheet,
     "fbx": op_fbx,

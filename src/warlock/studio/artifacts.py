@@ -22,6 +22,11 @@ ARTIFACTS = (
     ("collision.glb", "Collision"),
     ("textures.zip", "Textures"),
     ("rig.glb", "Rigged GLB"),
+    # The rig with every authored clip baked on as a named glTF animation --
+    # the one artifact here that carries motion, and the only way the clip
+    # library leaves the app as anything but Troupe's 2D sheet. Offered only
+    # for a rig whose skeleton has clips (``files.ready``).
+    ("animated.glb", "Animated GLB"),
     # The pixels the mesh was reconstructed from. Last because it is an input
     # rather than an output, but present because a promoted job copies it and
     # then had no way to give it back: the inspector showed it as a 96px

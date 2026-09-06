@@ -94,6 +94,37 @@ def get_file(
                     log.error("fbx export for %s failed: %s", job_id, exc)
                     raise Failed("could not export FBX") from exc
 
+    # The rig with its clips baked on. ``model.fbx``'s branch exactly: a
+    # Blender subprocess under the same per-artifact lock, staged and renamed
+    # in because existence *is* the freshness test -- a child that dies part
+    # way through would otherwise leave a truncated GLB that is served for the
+    # life of the job directory.
+    if name == "animated.glb" and (job_dir / "rig.glb").exists():
+        with svc.convert_lock(job_id, name):
+            if not path.exists():
+                from .. import clips
+
+                template = str((rigging.read_rig(job_dir) or {}).get("template") or "")
+                try:
+                    _staged(
+                        job_dir,
+                        name,
+                        tmp_name=".animated.tmp.glb",
+                        write=lambda tmp: rigging.run_worker(
+                            clips.animate_spec(job_dir, template, tmp, job_dir),
+                            # Import, key and export, like a pose bake: the
+                            # same budget rather than a knob of its own.
+                            timeout=svc.config.pose_timeout,
+                        ),
+                    )
+                except ValueError as exc:
+                    # No clips for this skeleton. ``ready`` refuses first, so
+                    # this is the race, and the artifact simply cannot exist.
+                    raise NotReady(str(exc)) from exc
+                except rigging.BlenderError as exc:
+                    log.error("animation bake for %s failed: %s", job_id, exc)
+                    raise Failed("could not bake the animations") from exc
+
     from ..pipelines import postprocess
 
     # Everything that is a pure function of model.glb, derived on first request
@@ -277,7 +308,7 @@ def _pixel_current(
     return entry.get("palette") == (pixel_colors or None)
 
 
-def _staged(job_dir: Path, name: str, write) -> None:
+def _staged(job_dir: Path, name: str, write, *, tmp_name: str | None = None) -> None:
     """Write ``name`` through a dotfile and rename it into place.
 
     The rule every derivation here follows: a concurrent reader of an artifact
@@ -285,8 +316,14 @@ def _staged(job_dir: Path, name: str, write) -> None:
     ``finally`` matters as much as the replace -- an encode that raises part way
     through would otherwise strand its staging file for the life of the job
     directory, where nothing ever looks at a dotfile again.
+
+    ``tmp_name`` overrides the staging file's name, and exists for exactly one
+    caller: Blender's glTF exporter appends ``.glb`` to a path that does not
+    already end in it, so the default ``.animated.glb.tmp`` would be written as
+    ``.animated.glb.tmp.glb`` and the rename would find nothing. That is
+    ``rigging.RIG_GLB_TMP``'s rule, met a second time.
     """
-    tmp = job_dir / f".{name}.tmp"
+    tmp = job_dir / (tmp_name or f".{name}.tmp")
     try:
         write(tmp)
         os.replace(tmp, job_dir / name)

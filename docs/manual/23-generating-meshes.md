@@ -325,10 +325,15 @@ The inspector's **Export** tab lists everything you can take away, as a two-colu
 | Collision | `collision.glb` | A simplified collision shape. |
 | Textures | `textures.zip` | The texture images on their own. |
 | Rigged GLB | `rig.glb` | Present once the mesh has been rigged. |
+| Animated GLB | `animated.glb` | The rig with every authored clip baked on as a named glTF animation — idle, walk, run, attack, jump. Needs Blender and a rig on one of the four skeletons that ship with clips. |
 | Reference image | `input.png` | The picture the mesh was reconstructed from. |
 
-Only `model.glb` and `source.glb` come out of the job itself. Everything else is a pure function of
-`model.glb` and is produced the first time you ask for it, then cached — which is why the first STL
+Only `model.glb` and `source.glb` come out of the job itself. Everything else is produced the first
+time you ask for it, then cached — a pure function of `model.glb`, except **Animated GLB**, which is
+made from `rig.glb`: it is the only export that carries motion, and the only way the clips leave
+Warlock as something an engine can play rather than as Troupe's 2D sheet. Godot, Unity, Unreal and
+three.js all read named glTF animations directly. Retargeting the mesh lists it as stale beside the
+rig, for the same reason the rig is listed: both describe geometry that no longer exists — which is why the first STL
 of a large mesh takes a moment and the second is instant. Rebuilding the mesh at a new triangle
 budget deletes all of them, since they describe the old geometry.
 

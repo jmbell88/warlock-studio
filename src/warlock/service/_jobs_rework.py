@@ -530,7 +530,11 @@ def stale_rig_artifacts(job_dir: Path) -> list[str]:
     the caller can act on beats silently destroying them over a triangle
     retarget.
     """
-    out = [n for n in ("rig.glb", "rig.json") if (job_dir / n).exists()]
+    # ``animated.glb`` is in the list because it is baked *from* rig.glb, so a
+    # retarget makes it describe a skeleton skinned to a mesh that no longer
+    # exists -- the one derived artifact whose source is the rig rather than
+    # the mesh (``files.DERIVED_RIG``).
+    out = [n for n in ("rig.glb", "rig.json", "animated.glb") if (job_dir / n).exists()]
     if out:
         out += sorted(
             f"{rigging.POSE_DIR_NAME}/{p.name}" for p in rigging.pose_dir(job_dir).glob("*.glb")
