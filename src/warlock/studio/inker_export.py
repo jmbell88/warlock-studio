@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from ..pipelines import sheet as sheetlib
-from . import atomic, dialogs, inker_mode
+from . import atomic, dialogs, icons, inker_mode
 from .inker_state import InkerDoc
 
 
@@ -1198,3 +1198,160 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     # ``start_save`` rather than a bare submit, so a refused key clears the lock
     # this function did not set -- the tab has been locked since the click.
     inker_mode._start(ctx, tab, f"inker-export:{tab.uid}", runners.get(export.kind, run_gif))
+
+
+# --- the five doors, spelled once ------------------------------------------
+#
+# Until 2026-09-05 these five labels, tooltips and refusal sentences lived in
+# ``panes/inker_timeline.py`` and nowhere else: a second toolbar row under the
+# transport. At 1280x800 that row overflowed -- three of the five collapsed
+# into a ``...`` menu, "Skip empty" was clipped mid-word and the onion row
+# below it was cut off by the pane's bottom edge -- so the exports the row
+# existed for were the part of it you could not see. They moved to Inker's
+# bridge (``panes/inker_generate.py``) and to the File menu, and the labels
+# came here so the two presentations cannot drift: a door is *one* record and
+# both readers ask :func:`doors` for it.
+
+
+@dataclass(frozen=True)
+class Door:
+    """One export the Inker offers, wherever it is presented."""
+
+    key: str
+    label: str
+    icon: str
+    tooltip: str
+    #: Why this door is refused when its own precondition is unmet. Empty for
+    #: a door that only ever waits on the document.
+    refusal: str = ""
+
+
+#: No drawing at all. Every door carries it, because a bridge that draws the
+#: five whether or not a document is open has to say why they are grey.
+NO_DOCUMENT_WHY = "No drawing is open."
+
+#: Mid-write. The same sentence the rest of the app's document buttons give.
+BUSY_WHY = "This document is being written; the buttons come back when it lands."
+
+DOORS: tuple[Door, ...] = (
+    Door(
+        "sheet",
+        "Export sheet...",
+        icons.GRID,
+        "Writes a packed PNG of every frame plus a JSON sidecar "
+        "naming the cells, their durations and any tags.",
+    ),
+    Door(
+        "gif",
+        "Export GIF...",
+        icons.FILM,
+        "Writes the whole timeline as an animated GIF, looping. A "
+        "GIF holds no partial transparency and times frames in hundredths "
+        "of a second, so soft edges become hard ones and a duration is "
+        "rounded to the nearest 10 ms.",
+    ),
+    Door(
+        "pngs",
+        "Export PNGs...",
+        icons.IMAGE,
+        "Writes one numbered PNG per frame beside the name you "
+        "pick -- name_0000.png, name_0001.png and so on.",
+    ),
+    Door(
+        "per-tag",
+        "Export sheet per tag...",
+        icons.FLAG,
+        "Writes one sheet per tag, each exactly what exporting "
+        "that tag on its own would write -- name_walk.png, "
+        "name_idle.png, each with its own sidecar.",
+        refusal="This document has no tags to split by.",
+    ),
+    Door(
+        "per-layer",
+        "Export sheet per layer...",
+        icons.LAYERS,
+        "Writes one sheet per layer, or per group as the panel "
+        "shows it -- each holding only that layer's own pixels. Hidden "
+        "layers are left out.",
+        refusal=(
+            "There is only one visible layer, so a split would write "
+            "the sheet Export sheet already writes."
+        ),
+    ),
+)
+
+
+def doors() -> tuple[Door, ...]:
+    return DOORS
+
+
+def door_state(door: Door, tab: Any) -> tuple[bool, str]:
+    """``(enabled, reason)`` for one door against the open document.
+
+    Both readers -- the bridge's buttons and the File menu's rows -- call this,
+    so a door is never live in one place and grey in the other, and a grey one
+    always carries a sentence (the harness audits for exactly that).
+    """
+    if tab is None:
+        return (False, NO_DOCUMENT_WHY)
+    if getattr(tab, "busy", False):
+        return (False, BUSY_WHY)
+    if door.key == "per-tag":
+        tags = getattr(getattr(tab.doc, "anim", None), "tags", None)
+        if not tags:
+            return (False, door.refusal)
+    elif door.key == "per-layer":
+        from .inker import sheetout
+
+        if len(sheetout.layer_splits(tab.doc)) <= 1:
+            return (False, door.refusal)
+    return (True, "")
+
+
+def open_door(ctx: Any, tab: Any, key: str) -> None:
+    """Run one door by key. The single dispatch both readers share."""
+    if key == "sheet":
+        export_sheet(ctx, tab)
+    elif key == "gif":
+        export_gif(ctx, tab)
+    elif key == "pngs":
+        export_pngs(ctx, tab)
+    elif key == "per-tag":
+        export_per_tag(ctx, tab, "sheet")
+    elif key == "per-layer":
+        export_per_layer(ctx, tab, "sheet")
+
+
+# --- the sheet knobs, which moved with the doors ----------------------------
+#
+# These used to be the *trailing* of the export toolbar row in the timeline.
+# They came with the exports because every one of them is read by
+# ``_submit_export`` and by nothing else: they describe the file that is
+# written, not the clip that is played. (The Onion and Thumbs switches stayed
+# behind for the mirror-image reason -- they change what the strip draws and
+# never reach a file.)
+
+#: The whole-number magnifications the export combo offers. Whole numbers only,
+#: because the point of the setting is that nothing is resampled -- x1.5 would
+#: have to invent a rule for which source pixel a destination one comes from,
+#: which is exactly what ``transform.upscale`` exists not to do.
+EXPORT_SCALES = (("1", "1x"), ("2", "2x"), ("3", "3x"), ("4", "4x"), ("8", "8x"))
+
+#: The ``##inkertemplate`` field's placeholder -- shown, never typed, so an
+#: empty box still says what "empty" means without a caption stealing width
+#: from the row. ``sheetout.filename_for``'s own default for a plain PNG
+#: sequence; the tooltip covers the split defaults, which this field cannot
+#: show both of at once.
+EXPORT_TEMPLATE_HINT = "{title}_{frame}"
+
+#: How a sheet export packs its cells. "grid" is the combo's spelling of
+#: ``InkerState.export_arrange is None`` -- the row-wrap this always did --
+#: since ``widgets.combo`` needs a real key for every option and ``None``
+#: cannot be one.
+ARRANGE_OPTIONS = (
+    ("grid", "Grid"),
+    ("horizontal", "Horizontal strip"),
+    ("vertical", "Vertical strip"),
+    ("rows", "Rows..."),
+    ("columns", "Columns..."),
+)

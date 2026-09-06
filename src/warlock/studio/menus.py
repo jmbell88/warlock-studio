@@ -116,6 +116,15 @@ def _command_specs(ctx: Any, *, evaluate: bool = True) -> list[MenuSpec]:
     return out
 
 
+#: Two of Inker's five export doors were already ``inker_ops`` File rows, under
+#: their own older labels ("Export sprite sheet...") and their own refusal. They
+#: are suppressed there and drawn from :data:`inker_export.DOORS` instead, so
+#: the File menu spells each door exactly once and in the same words the
+#: bridge's button uses. The ops themselves are untouched -- the palette and the
+#: shortcut table still reach them by name.
+SHADOWED_BY_DOORS = frozenset({"export_sheet", "export_gif"})
+
+
 def _inker_specs(ctx: Any, *, evaluate: bool = True) -> list[MenuSpec]:
     if ctx.state.mode != "inker":
         return []
@@ -126,7 +135,7 @@ def _inker_specs(ctx: Any, *, evaluate: bool = True) -> list[MenuSpec]:
     tab = state.active
     out = []
     for index, op in enumerate(inker_ops.OPS):
-        if not op.menu:
+        if not op.menu or op.name in SHADOWED_BY_DOORS:
             continue
         out.append(
             MenuSpec(
@@ -149,6 +158,55 @@ def _inker_specs(ctx: Any, *, evaluate: bool = True) -> list[MenuSpec]:
     return out
 
 
+def _inker_export_specs(ctx: Any, *, evaluate: bool = True) -> list[MenuSpec]:
+    """Inker's five exports as File rows.
+
+    They were toolbar buttons on the timeline's second row and nowhere else --
+    a row that overflowed at 1280x800, so three of the five were only reachable
+    through a ``...`` menu inside a strip. There is no export *root*: the File
+    menu carries one ``export`` command and these five land beside it, ordered
+    after everything the command table puts there.
+
+    Label, enabled state and refusal all come from
+    :func:`inker_export.door_state`, the same call Inker's bridge makes, so the
+    menu row and the button cannot disagree about whether a door is open or
+    about why it is not.
+    """
+    if ctx.state.mode != "inker":
+        return []
+    from . import inker_export, inker_mode, palette
+
+    tab = inker_mode.ensure(ctx).active
+    # The same order as the File menu's own ``export`` row, so the five land
+    # beside it rather than under Quit: ``sorted`` is stable and these rows are
+    # appended after the command rows, so a tie puts them immediately after it.
+    base = next(
+        (i for i, one in enumerate(palette.commands(ctx)) if one.key == "export"), 0
+    )
+    out = []
+    for index, door in enumerate(inker_export.doors()):
+        enabled, reason = (
+            inker_export.door_state(door, tab) if evaluate else (True, "")
+        )
+        out.append(
+            MenuSpec(
+                identity=f"inker-export:{door.key}",
+                path=("File",),
+                order=base,
+                label=door.label,
+                enabled=enabled,
+                checked=False,
+                shortcut="",
+                disabled_reason=reason,
+                callback=lambda door=door: inker_export.open_door(
+                    ctx, inker_mode.ensure(ctx).active, door.key
+                ),
+                separator_before=index == 0,
+            )
+        )
+    return out
+
+
 def specs(ctx: Any, layout: Any = None, *, evaluate: bool = True) -> list[MenuSpec]:
     """The current menu tree as data, rebuilt so state never goes stale.
 
@@ -162,7 +220,11 @@ def specs(ctx: Any, layout: Any = None, *, evaluate: bool = True) -> list[MenuSp
     has always promised.
     """
 
-    rows = _command_specs(ctx, evaluate=evaluate) + _inker_specs(ctx, evaluate=evaluate)
+    rows = (
+        _command_specs(ctx, evaluate=evaluate)
+        + _inker_specs(ctx, evaluate=evaluate)
+        + _inker_export_specs(ctx, evaluate=evaluate)
+    )
     if layout is not None:
         rows.append(
             MenuSpec(

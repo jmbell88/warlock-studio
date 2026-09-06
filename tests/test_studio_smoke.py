@@ -4574,12 +4574,6 @@ def _transport_items():
     return items
 
 
-def _export_items():
-    return [
-        toolbar.Item("sheet", "Export sheet", icons.GRID),
-        toolbar.Item("gif", "Export GIF", icons.FILM),
-        toolbar.Item("pngs", "Export PNGs", icons.IMAGE),
-    ]
 
 
 def _bulk_items():
@@ -4601,7 +4595,6 @@ def _rows():
     return [
         ("inker-transform", _transform_items(), inker_canvas._transform_action),
         ("inker-transport", _transport_items(), inker_timeline._frame_action),
-        ("inker-timeline-out", _export_items(), inker_timeline._export_action),
         ("library-bulk", _bulk_items(), library._bulk_action),
     ]
 

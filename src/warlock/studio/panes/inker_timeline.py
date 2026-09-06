@@ -60,7 +60,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import anchors, controls, icons, inker_mode, theme, tokens, toolbar, widgets
-from ..inker import animation, sheetout
+from ..inker import animation
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_flourish as inker_flourish_pane
@@ -85,32 +85,6 @@ TRACK_LABEL_W = 96.0
 #: a fixed ``TRACK_LABEL_W`` a name is already truncated to fit, where the
 #: layers panel's column grows with the window.
 GROUP_INDENT = 8.0
-
-#: The whole-number magnifications the export combo offers. Whole numbers only,
-#: because the point of the setting is that nothing is resampled -- x1.5 would
-#: have to invent a rule for which source pixel a destination one comes from,
-#: which is exactly what ``transform.upscale`` exists not to do.
-EXPORT_SCALES = (("1", "1x"), ("2", "2x"), ("3", "3x"), ("4", "4x"), ("8", "8x"))
-
-#: The ``##inkertemplate`` field's placeholder -- shown, never typed, so an
-#: empty box still says what "empty" means without a caption stealing width
-#: from the row (the same ``##`` idiom the wrap and padding fields beside it
-#: use). ``sheetout.filename_for``'s own default for a plain PNG sequence;
-#: the tooltip covers the split defaults, which this field cannot show both
-#: of at once.
-EXPORT_TEMPLATE_HINT = "{title}_{frame}"
-
-#: How a sheet export packs its cells. "grid" is the combo's spelling of
-#: ``InkerState.export_arrange is None`` -- the row-wrap this always did --
-#: since ``widgets.combo`` needs a real key for every option and ``None``
-#: cannot be one.
-ARRANGE_OPTIONS = (
-    ("grid", "Grid"),
-    ("horizontal", "Horizontal strip"),
-    ("vertical", "Vertical strip"),
-    ("rows", "Rows..."),
-    ("columns", "Columns..."),
-)
 
 
 #: The swatches the timeline's Properties block offers, and the whole of the
@@ -560,14 +534,21 @@ MS_W = 128.0
 
 
 def _transport(ctx: Any, tab: Any) -> None:
-    """Two rows, both laid out by :mod:`~warlock.studio.toolbar`.
+    """One row, laid out by :mod:`~warlock.studio.toolbar`, then the switches.
 
     This was the worst ``same_line`` chain in the app -- seventeen items across
-    one row, so at 150 % the export buttons were simply not on screen. It is
-    split by what the controls are *about*: the top row is the frame you are on
-    (transport, the frame operations, the counter and that frame's duration),
-    the bottom row is what leaves the app (the three exports, with the two view
-    toggles and the export scale beside them).
+    one row, so at 150 % the export buttons were simply not on screen. Splitting
+    it in two bought a year and then failed the same way: at 1280x800, scale
+    1.0, the *second* row overflowed as well -- three of its five exports fell
+    into the ``...`` menu, "Skip empty" was clipped mid-word, and the onion row
+    below it was cut off by the pane's bottom edge.
+
+    So the exports left the timeline entirely (2026-09-05). The five doors are
+    :data:`~warlock.studio.inker_export.DOORS`, drawn by Inker's bridge under
+    *Export* and offered in the File menu, with the sheet knobs that only ever
+    fed them. What is left here is one row about the frame you are on
+    (transport, the frame operations, the counter and that frame's duration)
+    and the two switches that change what this strip draws.
 
     The transport is pinned, so it collapses to glyphs and stops -- a play
     button that moves into an overflow menu when the window is dragged is not a
@@ -621,63 +602,44 @@ def _transport(ctx: Any, tab: Any) -> None:
         trailing=_frame_trailing(ctx, tab, index),
     )
 
-    # What the two split verbs would produce, read once for their enabled
-    # states: both are disabled rather than hidden when they have nothing to
-    # split, so the row does not change shape as tags come and go.
-    tags = anim.tags
-    splits = sheetout.layer_splits(tab.doc)
-    toolbar.toolbar(
-        "inker-timeline-out",
-        [
-            toolbar.Item(
-                "sheet", "Export sheet...", icons.GRID,
-                tooltip="Writes a packed PNG of every frame plus a JSON sidecar "
-                "naming the cells, their durations and any tags.",
-                enabled=not tab.busy,
-            ),
-            toolbar.Item(
-                "gif", "Export GIF...", icons.FILM,
-                tooltip="Writes the whole timeline as an animated GIF, looping. A "
-                "GIF holds no partial transparency and times frames in hundredths "
-                "of a second, so soft edges become hard ones and a duration is "
-                "rounded to the nearest 10 ms.",
-                enabled=not tab.busy,
-            ),
-            toolbar.Item(
-                "pngs", "Export PNGs...", icons.IMAGE,
-                tooltip="Writes one numbered PNG per frame beside the name you "
-                "pick -- name_0000.png, name_0001.png and so on.",
-                enabled=not tab.busy,
-            ),
-            # Priority 1, so the row gives these up to the overflow menu before
-            # it gives up the three exports it exists for -- where they come
-            # back with their full labels rather than as two more glyphs.
-            toolbar.Item(
-                "per-tag", "Export sheet per tag...", icons.FLAG,
-                tooltip="Writes one sheet per tag, each exactly what exporting "
-                "that tag on its own would write -- name_walk.png, "
-                "name_idle.png, each with its own sidecar.",
-                enabled=not tab.busy and bool(tags),
-                reason="This document has no tags to split by.",
-                priority=1,
-            ),
-            toolbar.Item(
-                "per-layer", "Export sheet per layer...", icons.LAYERS,
-                tooltip="Writes one sheet per layer, or per group as the panel "
-                "shows it -- each holding only that layer's own pixels. Hidden "
-                "layers are left out.",
-                enabled=not tab.busy and len(splits) > 1,
-                reason=(
-                    "There is only one visible layer, so a split would write "
-                    "the sheet Export sheet already writes."
-                ),
-                priority=1,
-            ),
-        ],
-        lambda key: _export_action(ctx, tab, key),
-        trailing=_output_trailing(ctx, state),
-    )
+    _view_toggles(ctx, state)
     _onion_controls(state)
+
+
+#: What the export row used to be. Kept as a comment rather than as code: the
+#: five doors it drew are :data:`inker_export.DOORS` now, presented by the
+#: bridge and by the File menu (2026-09-05). The row overflowed at 1280x800 --
+#: three exports in a ``...`` menu, "Skip empty" clipped mid-word, and the
+#: onion row under it cut off by the pane's bottom edge -- so what leaves the
+#: app was the part of the timeline you could not see.
+_EXPORTS_MOVED_TO = "warlock.studio.inker_export"
+
+
+def _view_toggles(ctx: Any, state: Any) -> None:
+    """Onion and Thumbs: the two switches that stayed.
+
+    Neither reaches a file. Onion draws the neighbouring frames' ghosts on the
+    canvas and Thumbs draws each cel's picture in its own timeline cell, so
+    both are about what is *on screen while you work* -- which is what this
+    strip is for. Everything else that shared their row (magnification,
+    arrange, wrap, merge, skip empty, trim, padding, extrude, the filename
+    template) is read only by ``inker_export._submit_export`` and moved with
+    the doors.
+    """
+    changed, value = widgets.toggle("Onion", state.onion, tag="inker-onion")
+    if changed:
+        state.onion = value
+    imgui.same_line()
+    changed, value = widgets.toggle("Thumbs", state.timeline_thumbs, tag="inker-thumbs")
+    if changed:
+        state.timeline_thumbs = value
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Draws each cel's picture in its timeline cell, and grows the "
+            "cells to fit. Linked cels share one thumbnail, so a link is "
+            "visible as the same drawing in several columns."
+        )
+    manual_render.help_button(ctx, "inker-timeline")
 
 
 def _frame_action(ctx: Any, tab: Any, key: str) -> None:
@@ -701,19 +663,6 @@ def _frame_action(ctx: Any, tab: Any, key: str) -> None:
         doc.add_frame(link=True)
     elif key == "remove":
         doc.remove_frame()
-
-
-def _export_action(ctx: Any, tab: Any, key: str) -> None:
-    if key == "sheet":
-        inker_mode.export_sheet(ctx, tab)
-    elif key == "gif":
-        inker_mode.export_gif(ctx, tab)
-    elif key == "pngs":
-        inker_mode.export_pngs(ctx, tab)
-    elif key == "per-tag":
-        inker_mode.export_per_tag(ctx, tab, "sheet")
-    elif key == "per-layer":
-        inker_mode.export_per_layer(ctx, tab, "sheet")
 
 
 def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:
@@ -752,167 +701,6 @@ def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:
         if changed:
             tab.doc.set_frame_duration(index, value)
         imgui.end_disabled()
-
-    return (width, draw_it)
-
-
-def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
-    """The two view toggles, the export magnification, the sheet arrange,
-    trim/padding/extrude, the filename template, and the (?)."""
-    gap = imgui.get_style().item_spacing.x
-    switch = sp(32) + sp(6)
-    width = (
-        switch * 3
-        + imgui.calc_text_size("Onion").x
-        + imgui.calc_text_size("Thumbs").x
-        + imgui.calc_text_size("Trim").x
-        + sp(64)
-        + sp(96)
-        + sp(48)
-        + sp(40)
-        + sp(40)
-        + sp(96)
-        + sp(26)
-        + gap * 10
-    )
-
-    def draw_it() -> None:
-        changed, value = widgets.toggle("Onion", state.onion, tag="inker-onion")
-        if changed:
-            state.onion = value
-        imgui.same_line()
-        changed, value = widgets.toggle(
-            "Thumbs", state.timeline_thumbs, tag="inker-thumbs"
-        )
-        if changed:
-            state.timeline_thumbs = value
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Draws each cel's picture in its timeline cell, and grows the "
-                "cells to fit. Linked cels share one thumbnail, so a link is "
-                "visible as the same drawing in several columns."
-            )
-        imgui.same_line()
-        scale = widgets.combo(
-            "##inkerscale", str(int(state.export_scale)), list(EXPORT_SCALES), sp(64)
-        )
-        state.export_scale = max(1, int(scale))
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Magnifies every export by a whole number, nearest neighbour -- "
-                "each pixel drawn N times and nothing resampled. The sheet "
-                "sidecar is built on the scaled size, so its cells and trims "
-                "describe the file that is written; sidecars bound for "
-                "Packwright are not scaled."
-            )
-        imgui.same_line()
-        arrange_key = state.export_arrange or "grid"
-        chosen = widgets.combo(
-            "##inkerarrange", arrange_key, list(ARRANGE_OPTIONS), sp(96)
-        )
-        state.export_arrange = None if chosen == "grid" else chosen
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "How frames pack into the sheet. Grid wraps at the atlas "
-                "ceiling, same as it always has. Horizontal/Vertical strip is "
-                "one row or column. Rows.../Columns... fixes that side's count "
-                "and wraps the rest. A document with its own directional "
-                "layout (turnaround, walk) keeps that fixed grid instead."
-            )
-        if state.export_arrange in sheetout.COUNTED_ARRANGES:
-            imgui.same_line()
-            imgui.set_next_item_width(sp(48))
-            changed, value = controls.input_int(
-                "##inkerwrap", state.export_wrap, 1, 1
-            )
-            if changed:
-                state.export_wrap = max(1, int(value))
-        imgui.same_line()
-        changed, value = widgets.toggle(
-            "Merge", state.export_merge, tag="inker-export-merge"
-        )
-        if changed:
-            state.export_merge = value
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Duplicate frames -- byte-identical, which a linked cel is for "
-                "free -- share one cell instead of one each. Each frame still "
-                "gets its own duration in the sidecar; only the pixels are "
-                "shared. Refused for a document with its own directional "
-                "layout, whose cells are poses by yaws rather than frames -- "
-                "turn it off to export one."
-            )
-        imgui.same_line()
-        changed, value = widgets.toggle(
-            "Skip empty", state.export_skip_empty, tag="inker-export-skip-empty"
-        )
-        if changed:
-            state.export_skip_empty = value
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "A fully-transparent frame gets no cell at all, and the "
-                "sidecar names which frames it dropped -- and renumbers the "
-                "tags onto what survived. Refused for a document with its own "
-                "directional layout, for the same reason Merge is."
-            )
-        imgui.same_line()
-        changed, value = widgets.toggle(
-            "Trim", state.export_trim, tag="inker-export-trim"
-        )
-        if changed:
-            state.export_trim = value
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Each cell shrinks to the largest trimmed frame's size, with "
-                "every frame's own trimmed pixels placed flush in its "
-                "corner. The sidecar's per-cell trim rectangle still names "
-                "where that came from in the full frame, for an importer "
-                "that wants to put it back."
-            )
-        imgui.same_line()
-        imgui.set_next_item_width(sp(40))
-        # Hidden id, no drawn caption -- the same idiom ``##inkerwrap`` above
-        # already uses: a bare field, its meaning carried by the tooltip
-        # alone. Not ``"Pad"``/``"Ext"`` as the label: imgui draws a widget's
-        # own label as text immediately after it, which ``width``'s estimate
-        # above never counted -- the row under-declared by that much and
-        # clipped Ext and the help button off the end of it.
-        changed, value = controls.drag_int("##inkerpadding", state.export_padding, 1, 0, 64)
-        if changed:
-            state.export_padding = max(0, int(value))
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Padding: a border around the atlas and a gutter between "
-                "every cell, in pixels. Zero is the sheet this always packed."
-            )
-        imgui.same_line()
-        imgui.set_next_item_width(sp(40))
-        changed, value = controls.drag_int("##inkerextrude", state.export_extrude, 1, 0, 32)
-        if changed:
-            state.export_extrude = max(0, int(value))
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Extrude: repeats each cell's own border pixels outward into "
-                "its gutter, so a filtered texture sampling just past a "
-                "sprite's edge finds that sprite's own colour rather than "
-                "its neighbour's. Padding must be at least twice this, so "
-                "two neighbours extruding into one gutter cannot meet."
-            )
-        imgui.same_line()
-        imgui.set_next_item_width(sp(96))
-        state.export_template = widgets.input_text(
-            "##inkertemplate", state.export_template, max_length=80,
-            hint=EXPORT_TEMPLATE_HINT,
-        )
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Filename template. Empty is the plain frame numbering "
-                "(PNG sequence) or the tag/layer name (a split export). "
-                "{title}, {tag}, {frame} (0000) and {layer} are the whole "
-                "vocabulary; a PNG sequence reads {title} and {frame}, a "
-                "per-tag or per-layer split reads {title} and {tag}/{layer}."
-            )
-        manual_render.help_button(ctx, "inker-timeline")
 
     return (width, draw_it)
 

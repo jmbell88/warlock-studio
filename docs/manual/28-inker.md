@@ -1288,6 +1288,22 @@ tags and which cels are shared — rides along in a member those editors ignore.
 in anything that does not understand that member, **including an older build of Warlock**, and then
 saving it, writes the file back flat and loses the animation.
 
+Inker's five exports — **Export sheet**, **Export GIF**, **Export PNGs**, **Export sheet per
+tag** and **Export sheet per layer** — live in the **Export** block of the right-hand panel, above
+*Take it somewhere*, and every one of them is also a row in the **File** menu. They used to be a
+second row of buttons on the timeline strip; at a 1280×800 window that row did not fit, so three of
+the five were only reachable through a `...` overflow menu inside the strip and the settings beside
+them were clipped mid-word. The settings the sheet exports read — Scale, Arrange, Merge, Skip empty,
+Trim, Padding, Extrude and the filename template — moved with them, into the same block. The
+timeline strip keeps only the two switches that change what is drawn on screen: **Onion** and
+**Thumbs**.
+
+A door you cannot use says why rather than going missing: with no drawing open all five read *No
+drawing is open.*, **Export sheet per tag** with an untagged document reads *This document has no
+tags to split by.*, and **Export sheet per layer** with a single visible layer reads *There is only
+one visible layer, so a split would write the sheet Export sheet already writes.* The button and the
+File row give the same sentence, because they read the same record.
+
 **Export sheet** packs an animated document into one PNG atlas plus a JSON sidecar, one cell per
 frame, wrapping into rows when a single row would be wider than an engine will accept as a texture.
 The sidecar names each cell, its duration and any tags, in the same format the 3D sprite sheets use.
@@ -1313,16 +1329,17 @@ frame's duration leaves with it — it is not folded into a neighbouring cell's 
 the surviving durations is shorter than the clip's own length by however long the holds ran. Both are
 *refused* for a document with its own directional layout, whose cells are poses by yaws rather than
 frames — turn them off to export one, the same way Arrange has to go back to Grid.
-**Trim**, **Pad** and **Ext** pack a tighter atlas the same way Packwright already does. Trim shrinks
+**Trim**, **Padding** and **Extrude** pack a tighter atlas the same way Packwright already does. Trim shrinks
 every cell to the largest trimmed frame's size instead of the full canvas, placing each frame's own
 — possibly smaller — trimmed pixels flush in the cell's corner; the sidecar's per-cell `trim`
 rectangle still names where that content sat in the full, untrimmed frame, so an importer that wants
-it back at its original position can put it there. Pad adds a uniform border around the atlas and a
-gutter between every cell, in pixels, and Ext repeats each placed rectangle's own border pixels
+it back at its original position can put it there. Padding adds a uniform border around the atlas
+and a gutter between every cell, in pixels, and Extrude repeats each placed rectangle's own border
+pixels
 outward into that gutter, so a filtered texture sampling just past a sprite's edge finds that
-sprite's own colour rather than its neighbour's. Pad must be at least twice Ext, refused by name if
+sprite's own colour rather than its neighbour's. Padding must be at least twice Extrude, refused by name if
 not — two neighbours extruding into one shared gutter would otherwise meet. All three are off by
-default, so an export with none of them on is the sheet this has always packed. Once Pad (or Trim) is
+default, so an export with none of them on is the sheet this has always packed. Once Padding (or Trim) is
 on, read the sidecar cell-driven — each cell's own `x`/`y`/`w`/`h` — rather than deriving positions
 from the top-level frame size and column count: that arithmetic no longer accounts for the gutters
 or the per-cell trim, and only the cells themselves still say where everything actually landed.
@@ -1331,7 +1348,7 @@ or the per-cell trim, and only the cells themselves still say where everything a
 beside whatever name you pick. No atlas to slice and no sidecar to read, which is what an engine
 with its own importer wants.
 
-The **filename template** field beside Ext lets you rename the pieces of an export instead of
+The **filename template** field under Extrude lets you rename the pieces of an export instead of
 accepting the default numbering. `{title}` is the name you gave the dialog, `{frame}` is the frame
 number (always four digits — `0007`, never `7`), `{tag}` and `{layer}` are the split name a per-tag
 or per-layer batch gives each of its files. Leave it empty for the default: a plain PNG sequence
@@ -1344,14 +1361,14 @@ that asks for a key that export does not have (`{tag}` on a PNG sequence that wa
 `{frame}` on a per-tag or per-layer split) is refused by name, and so is one that would give two of
 the export's own files the same name.
 
-Inker remembers your export settings. Scale, Arrange, Merge, Skip empty, Trim, Pad, Ext and the
+Inker remembers your export settings. Scale, Arrange, Merge, Skip empty, Trim, Padding, Extrude and the
 filename template all carry over to your next export in this session — and each document remembers
 its *own* last destination and settings, so reopening a tab you already exported once suggests the
 same folder and the same options rather than whatever you last used on a different drawing. The
 options themselves — not which folder — also survive closing and reopening Warlock, seeding a fresh
 document's export controls with whatever you used last time.
 
-The **scale** box on the timeline's second row magnifies every export by a whole number, nearest
+The **Scale** box at the top of the Export block magnifies every export by a whole number, nearest
 neighbour: each pixel is drawn N times and nothing is resampled, so a 32×32 sprite at 8× is the
 artwork at 256×256 rather than a blurred version of it. A sheet's sidecar is built on the scaled
 size, so its cells and trims describe the file that is actually written.

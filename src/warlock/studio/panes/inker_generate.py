@@ -33,15 +33,18 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import anchors, inker_mode, inker_ops, tokens, widgets
+from .. import anchors, controls, inker_export, inker_mode, inker_ops, tokens, widgets
+from ..inker import sheetout
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_menu
 
 #: The least this pane may be squeezed to, in design px: the file header's
-#: two rows and status line, the heading, four full-width buttons and the
-#: link line under them.
-GENERATE_FLOOR = 270.0
+#: two rows and status line, the Export block's five doors and its collapsed
+#: options header, the exits heading, four full-width buttons and the link line.
+#: Raised from 270 when the five exports moved here from the timeline row
+#: they were overflowing out of (2026-09-05).
+GENERATE_FLOOR = 360.0
 
 #: The ops, in the order the File menu registers them, with the one-line note
 #: that says what each is *for*. The names are checked against the registry at
@@ -91,6 +94,11 @@ def draw(ctx: Any) -> None:
             step=lambda index: inker_mode.step_history(ctx, tab, index),
         )
         imgui.dummy((0, sp(tokens.SP_2)))
+    # The five doors, before the exits, in the shape ``packwright_bridge``
+    # draws its own Export block: what writes files for another application is
+    # its own heading, above the verbs that move a drawing *inside* the app.
+    _exports(ctx, tab)
+    imgui.dummy((0, sp(tokens.SP_2)))
     # Inker's exits -- Make 3D, Save as reference, Add to Packwright -- under
     # the heading every workspace puts over the same verbs.
     widgets.exits()
@@ -117,6 +125,161 @@ def draw(ctx: Any) -> None:
         widgets.recent_files(
             inker_mode.recent_paths(ctx),
             lambda path: inker_mode.open_path(ctx, Path(path)),
+        )
+
+
+def _exports(ctx: Any, tab: Any) -> None:
+    """The five doors, drawn once from :mod:`~warlock.studio.inker_export`.
+
+    Every label, tooltip and refusal sentence is that module's, not this
+    pane's: the same records the File menu reads, so a door cannot be live in
+    one presentation and grey in the other, and a grey one always carries a
+    sentence (``door_state`` never returns ``(False, "")``).
+
+    Drawn whether or not a document is open -- refused with *No drawing is
+    open.* when there is none -- for the reason this whole pane exists: a verb
+    should be visible before it is available.
+    """
+    widgets.section("Export")
+    for door in inker_export.doors():
+        enabled, reason = inker_export.door_state(door, tab)
+        if widgets.disabled_button(
+            f"{door.icon} {door.label}##inkexp/{door.key}",
+            enabled,
+            (-1, 0),
+            reason=reason,
+            tooltip=door.tooltip,
+        ):
+            inker_export.open_door(ctx, tab, door.key)
+    if tab is not None and controls.collapsing_header("Sheet options##inkexpopts"):
+        # Collapsed by default, and that is the point: the five doors are what
+        # this block is for, and nine knobs above the exits pushed Make 3D and
+        # its three neighbours off the bottom of the pane (the harness called
+        # them *clipped*). Every one of them keeps its remembered value while
+        # the header is shut -- closing it changes nothing that is written.
+        _export_options(ctx)
+
+
+def _export_options(ctx: Any) -> None:
+    """The knobs the sheet doors read, and nothing else reads.
+
+    They were the trailing of the timeline's export row; they came with the
+    exports because each is an argument to the file that is written rather
+    than to the clip that is played. App-level, on ``ctx.state.inker``, which
+    is where they already lived.
+    """
+    state = ctx.state.inker
+    scale = widgets.combo(
+        "Scale##inkerscale",
+        str(int(state.export_scale)),
+        list(inker_export.EXPORT_SCALES),
+        sp(72),
+    )
+    state.export_scale = max(1, int(scale))
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Magnifies every export by a whole number, nearest neighbour -- "
+            "each pixel drawn N times and nothing resampled. The sheet "
+            "sidecar is built on the scaled size, so its cells and trims "
+            "describe the file that is written; sidecars bound for "
+            "Packwright are not scaled."
+        )
+    arrange_key = state.export_arrange or "grid"
+    chosen = widgets.combo(
+        "Arrange##inkerarrange",
+        arrange_key,
+        list(inker_export.ARRANGE_OPTIONS),
+        sp(120),
+    )
+    state.export_arrange = None if chosen == "grid" else chosen
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "How frames pack into the sheet. Grid wraps at the atlas "
+            "ceiling, same as it always has. Horizontal/Vertical strip is "
+            "one row or column. Rows.../Columns... fixes that side's count "
+            "and wraps the rest. A document with its own directional "
+            "layout (turnaround, walk) keeps that fixed grid instead."
+        )
+    if state.export_arrange in sheetout.COUNTED_ARRANGES:
+        imgui.set_next_item_width(sp(72))
+        changed, value = controls.input_int("Count##inkerwrap", state.export_wrap, 1, 1)
+        if changed:
+            state.export_wrap = max(1, int(value))
+    changed, value = widgets.toggle("Merge", state.export_merge, tag="inker-export-merge")
+    if changed:
+        state.export_merge = value
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Duplicate frames -- byte-identical, which a linked cel is for "
+            "free -- share one cell instead of one each. Each frame still "
+            "gets its own duration in the sidecar; only the pixels are "
+            "shared. Refused for a document with its own directional "
+            "layout, whose cells are poses by yaws rather than frames -- "
+            "turn it off to export one."
+        )
+    imgui.same_line()
+    changed, value = widgets.toggle(
+        "Skip empty", state.export_skip_empty, tag="inker-export-skip-empty"
+    )
+    if changed:
+        state.export_skip_empty = value
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "A fully-transparent frame gets no cell at all, and the "
+            "sidecar names which frames it dropped -- and renumbers the "
+            "tags onto what survived. Refused for a document with its own "
+            "directional layout, for the same reason Merge is."
+        )
+    imgui.same_line()
+    changed, value = widgets.toggle("Trim", state.export_trim, tag="inker-export-trim")
+    if changed:
+        state.export_trim = value
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Each cell shrinks to the largest trimmed frame's size, with "
+            "every frame's own trimmed pixels placed flush in its "
+            "corner. The sidecar's per-cell trim rectangle still names "
+            "where that came from in the full frame, for an importer "
+            "that wants to put it back."
+        )
+    # Real captions here, not the ``##`` hidden ids the toolbar row needed: a
+    # column can afford a label, where the row could not and lost Ext and the
+    # help button off its end for it.
+    imgui.set_next_item_width(sp(72))
+    changed, value = controls.drag_int("Padding", state.export_padding, 1, 0, 64)
+    if changed:
+        state.export_padding = max(0, int(value))
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "A border around the atlas and a gutter between every cell, in "
+            "pixels. Zero is the sheet this always packed."
+        )
+    imgui.set_next_item_width(sp(72))
+    changed, value = controls.drag_int("Extrude", state.export_extrude, 1, 0, 32)
+    if changed:
+        state.export_extrude = max(0, int(value))
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Repeats each cell's own border pixels outward into its gutter, "
+            "so a filtered texture sampling just past a sprite's edge finds "
+            "that sprite's own colour rather than its neighbour's. Padding "
+            "must be at least twice this, so two neighbours extruding into "
+            "one gutter cannot meet."
+        )
+    imgui.set_next_item_width(-1)
+    state.export_template = widgets.input_text(
+        "##inkertemplate",
+        state.export_template,
+        max_length=80,
+        hint=inker_export.EXPORT_TEMPLATE_HINT,
+    )
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Filename template. Empty is the plain frame numbering "
+            "(PNG sequence) or the tag/layer name (a split export). "
+            "{title}, {tag}, {frame} (0000) and {layer} are the whole "
+            "vocabulary; a PNG sequence reads {title} and {frame}, a "
+            "per-tag or per-layer split reads {title} and {tag}/{layer}."
         )
 
 
