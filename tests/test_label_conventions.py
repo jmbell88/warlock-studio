@@ -10,6 +10,11 @@ from __future__ import annotations
 
 from warlock.studio import clay_ops, dialogs, inker_ops
 
+#: Every one-line ``"Export ..."`` string literal in a module. A label is one
+#: line by construction, so the newline excludes the docstrings that open with
+#: the same word.
+_EXPORT_LABEL = '"(Export[^"\n]*)"'
+
 #: An action that opens a picker, a popup or a confirm before it does anything
 #: ends in an ellipsis. The op registries already keep it; the toolbars and the
 #: context menus beside them did not, so the same three exports were "Export
@@ -27,21 +32,35 @@ def test_an_inker_export_says_it_will_ask_first():
         assert inker_ops.get(name).label.endswith("..."), name
 
 
-def test_the_timeline_bar_agrees_with_the_file_menu_about_the_ellipsis():
-    """The same three exports, reached from the other door. Read out of the
-    source rather than by building a bar: the items are constructed inside a
-    draw and every one of them opens a save dialog."""
+def test_every_export_door_agrees_with_the_file_menu_about_the_ellipsis():
+    """The same exports, reached from the other door.
+
+    This used to scan ``inker_timeline``'s source for ``"Export ..."``
+    literals, because the five doors were toolbar items built inside a draw and
+    there was no record to read. They left that row on 2026-09-05 and
+    ``inker_export.DOORS`` is now the record, so the convention is asserted
+    against the labels themselves -- stronger than a regex, and immune to the
+    tooltips and failure messages in that module that legitimately open with
+    the same word and are not labels.
+    """
+    from warlock.studio import inker_export
+
+    assert len(inker_export.DOORS) == 5, inker_export.DOORS
+    for door in inker_export.DOORS:
+        assert door.label.endswith("..."), f"{door.label!r} opens a dialog and must say so"
+
+
+def test_the_timeline_still_says_so_on_the_labels_it_kept():
+    """The frame context menu's range and tag exports stayed behind, and the
+    convention did not leave with the doors."""
     import re
     from pathlib import Path
 
     from warlock.studio.panes import inker_timeline
 
     source = Path(inker_timeline.__file__).read_text(encoding="utf-8")
-    # Every ``"Export ..."`` string literal in the file. The one multi-line
-    # docstring that opens with the word is excluded by the newline: a label is
-    # one line by construction.
-    labels = set(re.findall('"(Export[^"\n]*)"', source))
-    assert len(labels) >= 10, labels
+    labels = set(re.findall(_EXPORT_LABEL, source))
+    assert len(labels) >= 5, labels
     for label in sorted(labels):
         assert label.endswith("..."), f"{label!r} opens a dialog and must say so"
 
