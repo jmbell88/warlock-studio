@@ -183,23 +183,59 @@ def _warn_stale(ctx: Any, job: Any) -> None:
     )
 
 
+def dependent_job_reason(jobs: list[dict[str, Any]], job_id: str) -> str | None:
+    """Whether an unfinished sibling job still writes into this asset's directory.
+
+    The 2026-09-06 audit, finding create-02: this pane greyed its button only
+    on its own client-side ``busy`` flag, so a rig, sheet or sibling rework job
+    already queued or running against the same mesh (``_jobs_rework``'s
+    ``_require_no_dependents`` / ``_jobs_lifecycle.dependent_jobs``) was
+    discovered only after a wasted press, as a ``Conflict`` toast, instead of
+    as a reason stated before the button the way the stale-rig warning is.
+
+    A pure function over ``ctx.cache.jobs`` rather than a call to
+    ``dependent_jobs(svc, job_id)`` itself: that does a live sqlite query, and
+    ``draw`` runs on the frame thread (the frame-thread rule in CLAUDE.md and
+    ``tests/test_frame_thread_doors.py``). ``jobs_cache`` already refreshes on
+    its own timer for exactly this reason, so this reads the same recent
+    window every other pane does.
+    """
+    count = sum(
+        1
+        for job in jobs
+        if job.get("status") in ("queued", "running")
+        and (job.get("params") or {}).get("source_job") == job_id
+    )
+    if not count:
+        return None
+    return (
+        f"{count} job(s) started from this mesh are still queued or running; "
+        "wait for them to finish first."
+    )
+
+
 def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     key = f"retarget:{job_id}"
     busy = ctx.busy(key)
     problems = validate(form)
     for problem in problems:
         widgets.muted(problem)
+    dep_reason = None if busy else dependent_job_reason(ctx.cache.jobs, job_id)
+    if dep_reason:
+        widgets.text_colored(theme.WARN, dep_reason)
     if busy:
         widgets.busy("Rebuilding the mesh")
     if widgets.disabled_button(
         "Rebuild mesh",
-        not problems and not busy,
+        not problems and not busy and not dep_reason,
         (-1, 0),
         # ``sheet_panel``'s rule: the problems are listed above the button, so
         # the reason names the other gate and defers to the list otherwise.
-        reason="A rebuild is already running for this asset."
-        if busy
-        else "; ".join(problems),
+        reason=(
+            "A rebuild is already running for this asset."
+            if busy
+            else dep_reason or "; ".join(problems)
+        ),
     ):
         # A new submit is judged on its own, so last time's rings go first --
         # ``settings_2d.generate``'s rule, and the half a bare ``errors=``

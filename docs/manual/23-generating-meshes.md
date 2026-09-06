@@ -174,7 +174,9 @@ or running, because its write would collide with the worker's. And a retarget ma
 poses and its rendered sheets describe a mesh that no longer exists — those are minutes of your
 work, so they are reported rather than deleted, and the warning is shown *before* the button rather
 than after. Everything else derived from the mesh (STL, OBJ, FBX, collision, textures) is deleted,
-because those describe the old geometry exactly.
+because those describe the old geometry exactly. The button also greys pre-emptively when a rig, a
+sheet, or a sibling remesh or re-texture is already queued or running against this same mesh — the
+same collision the service refuses, now stated before the press rather than after it.
 
 Press **Rebuild mesh** to apply. The served `model.glb` is never written in place: the new mesh is
 staged and swapped, so nothing reading the old one sees a truncated file.

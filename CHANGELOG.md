@@ -38,6 +38,39 @@ leave the building.
   records) and offers only the four templates that ship with clips; the door
   refuses a clipless or unknown one with a `field`, where it used to raise a
   message about a missing dictionary key.
+- **A re-texture refusal marked nothing on the panel that raised it.** The
+  re-texture door refuses by name — an empty prompt, a restyle strength or
+  anchor strength outside the model's range, an anchor scale with no control,
+  a texture size the base model will not take — and every sibling rework panel
+  wraps its controls so the named control is ringed and the ring is cleared on
+  the next press. The re-texture panel never did, so those refusals arrived as
+  a bare toast with nothing to point the user at a slider they could not see
+  was wrong; the most reachable route is a reroll that re-submits a strength
+  stored before that range was tightened, which the resubmit path does not
+  re-check. Found by the 2026-09-06 audit of Create, whose own sweep could not
+  see the gap because the panel was absent from the table that test iterates.
+- **The three rework panels let you press a button that was going to be
+  refused.** Retarget, remesh and re-texture greyed their submit only while
+  *their own* job was in flight, so a collision with a sibling rework already
+  queued against the same mesh was discovered by pressing the button and
+  reading the error. Each panel now states the reason before the press, beside
+  the staleness warning that was already shown there, reading the job window
+  the frame already has rather than querying the store from the frame loop.
+- **A stored Create form could be migrated into disagreeing with itself.** The
+  migration that translated the old output switches into today's asset type
+  then re-derived the legacy field by reading the legacy field, so a file whose
+  asset type was unreadable was left naming one type in one key and another in
+  the other — the exact contradiction the branch's own comment said it must not
+  resurrect. Nothing downstream could reach the wrong door (the form is
+  re-synced from the authoritative field on the first Create draw), so this is
+  stored-state hygiene, not a wrong result.
+- **A failed cutout could latch onto the wrong reference.** The matte preview
+  matched a finished task to the open preview by asking whether the task's key
+  *ended with* the job id rather than whether it was that job's key, so a key
+  ending in another job's id would stop the preview re-submitting for the
+  reference actually on screen, leaving the cutting-out modal up with no toast
+  and no retry. Job ids are twelve hex characters, so this was unlikely rather
+  than impossible.
 - **"Build another sheet" raised `AttributeError` on a fresh session.** Its
   guard against submitting the door's defaults called
   `troupe_settings._form(state, troupe_settings._options(ctx))`, and both moved

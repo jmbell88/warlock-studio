@@ -32,7 +32,7 @@ from ... import models
 from ...pipelines import retexture
 from ...service import jobs as svc_jobs
 from ...service.validation import MAX_PROMPT
-from .. import controls, theme, widgets
+from .. import controls, forms, theme, widgets
 from ..manual import render as manual_render
 
 
@@ -49,61 +49,81 @@ def draw(ctx: Any, job: Any) -> None:
     job_id = job["id"]
     form = _form(ctx, job_id)
 
-    form["prompt"] = widgets.multiline(
-        "##retexture_prompt", form["prompt"], 66, MAX_PROMPT
-    )
-    widgets.hint_text("Describe the surface: rusted iron, mossy stone, painted wood.")
-
-    _changed, form["strength"] = widgets.labeled_slider_float(
-        "Restyle strength",
-        float(form["strength"]),
-        models.RETEXTURE_STRENGTH_MIN,
-        # The re-texture's own ceiling, not the sheets': see models.py.
-        models.RETEXTURE_STRENGTH_MAX,
-        # A denoising fraction, drawn as the percentage the reader thinks in.
-        # The range does not start at zero, so the inference cannot see it.
-        percent=True,
-        help_text=(
-            "How far each rendered view is taken from the mesh's current look. Low "
-            "keeps the shapes and recolours them; high reinterprets them. The top "
-            "of the range is only worth it with the geometry anchor on."
-        ),
-    )
-    _changed, form["depth"] = controls.checkbox(
-        "Anchor to geometry (depth)",
-        bool(form["depth"]),
-        tooltip=(
-            "Renders the mesh's own depth from every view. Each restyle is "
-            "held to it (a depth ControlNet), and colours stop reaching "
-            "surfaces hidden behind overhangs (a per-texel depth test). "
-            "Needs the depth ControlNet from Settings -> Models."
-        ),
-    )
-    if form["depth"]:
-        _changed, form["control_scale"] = widgets.labeled_slider_float(
-            "Anchor strength",
-            float(form["control_scale"]),
-            models.CONTROL_SCALE_MIN,
-            models.CONTROL_SCALE_MAX,
+    # The 2026-09-06 audit, finding create-01: this pane wired neither
+    # ``errors=`` nor ``on_edit=``, so a ``retexture_job`` refusal recorded
+    # against "prompt", "strength", "control" or "control_scale" rang no
+    # control here and never cleared -- unlike its two siblings
+    # (``remesh_panel``, ``retarget_panel``), which both wire this and clear
+    # last time's rings before a fresh submit.
+    with forms.Form(
+        "retexture-settings",
+        errors=ctx.state.field_errors,
+        on_edit=ctx.state.clear_field_error,
+    ) as form_ui:
+        _changed, form["prompt"] = form_ui.multiline(
+            "prompt",
+            "Surface",
+            form["prompt"],
+            MAX_PROMPT,
+            helper="Describe the surface: rusted iron, mossy stone, painted wood.",
+        )
+        # ``strength`` is a 0..1 denoising fraction drawn as the percentage the
+        # reader thinks in -- ``form_ui.slider`` has no ``percent`` mode (only
+        # ``widgets.labeled_slider_float`` does), so the scaling is done here
+        # by hand and undone on the way back out.
+        _changed, shown = form_ui.slider(
+            "strength",
+            "Restyle strength",
+            float(form["strength"]) * 100.0,
+            models.RETEXTURE_STRENGTH_MIN * 100.0,
+            # The re-texture's own ceiling, not the sheets': see models.py.
+            models.RETEXTURE_STRENGTH_MAX * 100.0,
+            fmt="%.0f%%",
             help_text=(
-                "How firmly each restyle is held to the rendered depth. The "
-                "default is the model's own."
+                "How far each rendered view is taken from the mesh's current look. "
+                "Low keeps the shapes and recolours them; high reinterprets them. "
+                "The top of the range is only worth it with the geometry anchor on."
             ),
         )
-    form["texture_size"] = widgets.labeled_combo(
-        "Atlas size",
-        form["texture_size"],
-        [("", "Match the mesh")]
-        + [(str(s), f"{s} px") for s in retexture.TEXTURE_SIZES],
-        help_text=(
-            "The default keeps the mesh's current atlas resolution. A smaller one "
-            "would also shrink the parts no view covers, which keep their old "
-            "colour."
-        ),
-    )
+        form["strength"] = shown / 100.0
+        _changed, form["depth"] = controls.checkbox(
+            "Anchor to geometry (depth)",
+            bool(form["depth"]),
+            tooltip=(
+                "Renders the mesh's own depth from every view. Each restyle is "
+                "held to it (a depth ControlNet), and colours stop reaching "
+                "surfaces hidden behind overhangs (a per-texel depth test). "
+                "Needs the depth ControlNet from Settings -> Models."
+            ),
+        )
+        if form["depth"]:
+            _changed, form["control_scale"] = form_ui.slider(
+                "control_scale",
+                "Anchor strength",
+                float(form["control_scale"]),
+                models.CONTROL_SCALE_MIN,
+                models.CONTROL_SCALE_MAX,
+                fmt="%.2f",
+                help_text=(
+                    "How firmly each restyle is held to the rendered depth. The "
+                    "default is the model's own."
+                ),
+            )
+        _changed, form["texture_size"] = form_ui.combo(
+            "texture_size",
+            "Atlas size",
+            form["texture_size"],
+            [("", "Match the mesh")]
+            + [(str(s), f"{s} px") for s in retexture.TEXTURE_SIZES],
+            help_text=(
+                "The default keeps the mesh's current atlas resolution. A smaller "
+                "one would also shrink the parts no view covers, which keep their "
+                "old colour."
+            ),
+        )
 
-    _warn(ctx, job, form)
-    _submit(ctx, job_id, form)
+        _warn(ctx, job, form)
+        _submit(ctx, job_id, form)
     _report(job)
 
 
@@ -182,25 +202,56 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+def dependent_job_reason(jobs: list[dict[str, Any]], job_id: str) -> str | None:
+    """Whether an unfinished sibling job still writes into this asset's directory.
+
+    The 2026-09-06 audit, finding create-02: matches ``retarget_panel``'s
+    function of the same name -- see it for why this reads ``ctx.cache.jobs``
+    rather than calling ``_jobs_lifecycle.dependent_jobs`` from the frame
+    thread.
+    """
+    count = sum(
+        1
+        for job in jobs
+        if job.get("status") in ("queued", "running")
+        and (job.get("params") or {}).get("source_job") == job_id
+    )
+    if not count:
+        return None
+    return (
+        f"{count} job(s) started from this mesh are still queued or running; "
+        "wait for them to finish first."
+    )
+
+
 def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     key = f"retexture:{job_id}"
     busy = ctx.busy(key)
     problems = validate(form)
     for problem in problems:
         widgets.muted(problem)
+    dep_reason = None if busy else dependent_job_reason(ctx.cache.jobs, job_id)
+    if dep_reason:
+        widgets.text_colored(theme.WARN, dep_reason)
     if busy:
         widgets.spinner()
         imgui.same_line()
     if widgets.disabled_button(
         "Re-texture mesh",
-        not problems and not busy,
+        not problems and not busy and not dep_reason,
         (-1, 0),
         # ``retarget_panel``'s rule: the problems are listed above, so the
         # reason names the other gate and defers to the list otherwise.
-        reason="A re-texture is already running for this asset."
-        if busy
-        else "; ".join(problems),
+        reason=(
+            "A re-texture is already running for this asset."
+            if busy
+            else dep_reason or "; ".join(problems)
+        ),
     ):
+        # Last time's rings first: a new submit is judged on its own --
+        # ``retarget_panel``/``remesh_panel``'s rule, missing here until the
+        # 2026-09-06 audit's finding create-01.
+        ctx.state.clear_field_errors()
         ctx.submit(
             key,
             svc_jobs.retexture_job,

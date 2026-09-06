@@ -91,7 +91,14 @@ def _migrate(data: dict[str, Any]) -> dict[str, Any]:
             # alternate source of truth. A corrupt value falls back safely;
             # it must not resurrect a contradictory legacy selection.
             form["asset_type"] = create_assets.DEFAULT_ASSET_TYPE
-        form["generation_type"] = create_assets.asset_type_from_params(form)
+        # The 2026-09-06 audit (finding create-03): routing this through
+        # asset_type_from_params(form) re-read "generation_type" out of the
+        # same dict, preferring that stale legacy field over the asset_type
+        # this migration had just repaired -- so the corrupt-value branch
+        # above would fix asset_type and then immediately write the very
+        # contradiction it says must not come back. generation_type is
+        # derived, never an independent source of truth here.
+        form["generation_type"] = form["asset_type"]
         if form.get("projection") == "orthogonal":
             form["projection"] = "top_down"
     return data

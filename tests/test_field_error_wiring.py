@@ -37,6 +37,7 @@ FIELD_FORMS = (
     ("panes/sprite_panel.py", "sprite-settings"),
     ("panes/troupe_settings.py", "troupe-settings"),
     ("panes/retarget_panel.py", "retarget-settings"),
+    ("panes/texture_panel.py", "retexture-settings"),
 )
 
 
@@ -92,10 +93,31 @@ def test_every_submit_that_can_be_refused_by_name_drops_last_times_rings():
         "panes/sprite_panel.py",
         "panes/retarget_panel.py",
         "panes/remesh_panel.py",
+        "panes/texture_panel.py",
         "panes/app_settings.py",
         "troupe_mode.py",
     ):
         assert "clear_field_errors()" in _source(rel), rel
+
+
+def test_a_retexture_refusal_rings_the_control_on_texture_panel():
+    """The 2026-09-06 audit, finding create-01.
+
+    Unlike its two siblings (``remesh_panel``, ``retarget_panel``),
+    ``texture_panel`` wired neither ``errors=`` nor ``on_edit=`` and never
+    cleared last time's rings before a fresh submit -- so a ``retexture_job``
+    refusal recorded against "prompt", "strength", "control" or
+    "control_scale" reached the user as a bare toast with no ring anywhere on
+    the panel.
+    """
+    source = _source("panes/texture_panel.py")
+    opened = re.search(
+        r'forms\.Form\(\s*"retexture-settings"(.*?)\)\s*as ', source, re.S
+    )
+    assert opened is not None, "texture_panel never opens forms.Form('retexture-settings')"
+    assert "errors=ctx.state.field_errors" in opened.group(1)
+    assert "on_edit=ctx.state.clear_field_error" in opened.group(1)
+    assert "clear_field_errors()" in source
 
 
 #: The other ``forms.Form`` sites, and why each takes no ``errors``. Listed

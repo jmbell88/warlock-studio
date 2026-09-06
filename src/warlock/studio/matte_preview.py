@@ -183,10 +183,15 @@ def on_task_failed(ctx: Any, done: Any) -> None:
     state = ctx.state.matte
     if state is None or not state.job_id:
         return
-    if not str(getattr(done, "key", "")).endswith(state.job_id):
-        # A cutout for a reference the user has since moved off. The current
-        # one is untouched -- latching here would suppress a submit that has
-        # never been tried.
+    if getattr(done, "key", None) != key(state.job_id):
+        # A cutout for a reference the user has since moved off -- or, since
+        # job ids are arbitrary 12-hex-char strings (uuid.uuid4().hex[:12],
+        # db.py:673), a task key for some other job that merely *ends with*
+        # this job's id. ``endswith`` treated that collision as a match
+        # (2026-09-06 audit, finding create-04), latching the other job's
+        # failure onto the preview the user is actually looking at. The
+        # current one is untouched -- latching here would suppress a submit
+        # that has never been tried.
         return
     state.failed_stamp = state.stamp
     state._tried_and_failed = True

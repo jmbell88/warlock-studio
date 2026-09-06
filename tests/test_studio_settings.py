@@ -115,6 +115,46 @@ def test_a_form_saved_before_the_layout_control_reopens_on_the_grid(tmp_path):
     assert loaded.get("theme") == "light"
 
 
+def test_migrate_makes_the_two_asset_type_fields_agree_on_a_pre_asset_type_file(
+    tmp_path,
+):
+    """The 2026-09-06 audit's create-03: ``_migrate`` derived a corrupt
+    ``asset_type`` field back to ``DEFAULT_ASSET_TYPE`` (its own comment says a
+    bad value "must not resurrect a contradictory legacy selection"), then set
+    ``generation_type`` by calling ``asset_type_from_params(form)`` -- which
+    checks ``"generation_type" in params`` *first* and returns the stale
+    stored value in preference to the field ``_migrate`` had just repaired.
+    The file was then written back with the two fields naming two different
+    asset types, contradicting the invariant that they are one choice.
+    """
+    _write(
+        tmp_path,
+        {
+            "form_2d": {
+                "prompt": "a torch",
+                # A corrupt asset_type from a build that shipped between the
+                # two spellings, paired with a legacy generation_type that
+                # names a different door -- the exact stale value the
+                # corrupt-value branch's comment says must not come back.
+                "asset_type": "not-a-real-asset-type",
+                "generation_type": "seamless_material",
+            },
+        },
+    )
+    loaded = Settings.load(tmp_path)
+    form = loaded.get("form_2d")
+    assert form["asset_type"] == form["generation_type"], (
+        "the migrated file must not disagree with itself about which asset "
+        "type was chosen"
+    )
+    from warlock.studio import create_assets
+
+    assert form["asset_type"] == create_assets.DEFAULT_ASSET_TYPE
+    # _migrate must stay a silent repair: no notice, and nothing marked dirty.
+    assert loaded.take_notice() is None
+    assert loaded.flush() is False
+
+
 def test_reading_a_pre_control_form_neither_resets_nor_rewrites_the_file(tmp_path):
     """The 2026-08-28 shape, refused here.
 

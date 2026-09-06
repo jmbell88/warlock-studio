@@ -131,6 +131,28 @@ def _warn_stale(ctx: Any, job: Any) -> None:
         )
 
 
+def dependent_job_reason(jobs: list[dict[str, Any]], job_id: str) -> str | None:
+    """Whether an unfinished sibling job still writes into this asset's directory.
+
+    The 2026-09-06 audit, finding create-02: matches ``retarget_panel``'s
+    function of the same name -- see it for why this reads ``ctx.cache.jobs``
+    rather than calling ``_jobs_lifecycle.dependent_jobs`` from the frame
+    thread.
+    """
+    count = sum(
+        1
+        for job in jobs
+        if job.get("status") in ("queued", "running")
+        and (job.get("params") or {}).get("source_job") == job_id
+    )
+    if not count:
+        return None
+    return (
+        f"{count} job(s) started from this mesh are still queued or running; "
+        "wait for them to finish first."
+    )
+
+
 def validate(form: dict[str, Any]) -> list[str]:
     """The refusals stated before the button; ``remesh.resolve`` is the rule."""
     try:
@@ -161,15 +183,20 @@ def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     problems = validate(form)
     for problem in problems:
         widgets.muted(problem)
+    dep_reason = None if busy else dependent_job_reason(ctx.cache.jobs, job_id)
+    if dep_reason:
+        widgets.text_colored(theme.WARN, dep_reason)
     if busy:
         widgets.busy("Queueing the remesh")
     if widgets.disabled_button(
         "Remesh and rebake",
-        not problems and not busy,
+        not problems and not busy and not dep_reason,
         (-1, 0),
-        reason="A remesh is already being queued for this asset."
-        if busy
-        else "; ".join(problems),
+        reason=(
+            "A remesh is already being queued for this asset."
+            if busy
+            else dep_reason or "; ".join(problems)
+        ),
     ):
         # Last time's rings first: a new submit is judged on its own.
         ctx.state.clear_field_errors()

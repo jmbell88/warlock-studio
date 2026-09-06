@@ -342,3 +342,26 @@ def test_a_failure_for_another_reference_does_not_latch_this_one(svc, monkeypatc
     matte_preview.on_task_failed(ctx, _Failed(matte_preview.key("someone-else")))
 
     assert ctx.state.matte.failed_stamp is None
+
+
+def test_a_failure_key_that_merely_ends_with_the_open_job_id_does_not_latch_it(svc, monkeypatch):
+    """Job ids are arbitrary 12-hex-char strings (``uuid.uuid4().hex[:12]``,
+    db.py:673), so a task key for one job can end with another job's full id
+    by coincidence. ``on_task_failed`` matched with ``str.endswith`` (2026-09-06
+    audit, finding create-04), so a failure for such a colliding key would
+    wrongly latch onto the reference the user is actually looking at, leaving
+    the "Cutting the subject out..." modal stuck with no retry."""
+    from warlock.service import jobs as svc_jobs
+
+    job_id = svc_jobs.import_reference(svc, _png(_subject()))["id"]
+    ctx = _Ctx(svc)
+    monkeypatch.setattr(matte_preview.svc_matte, "preview", lambda *a, **k: None)
+    matte_preview.open_for(ctx, job_id, {})
+    matte_preview.pump(ctx)
+
+    # A key for some other job whose id happens to end with this job's id --
+    # e.g. this job's id is a suffix of another 12-hex-char job id's task key.
+    colliding_key = matte_preview.key("aa" + job_id)
+    matte_preview.on_task_failed(ctx, _Failed(colliding_key))
+
+    assert ctx.state.matte.failed_stamp is None
