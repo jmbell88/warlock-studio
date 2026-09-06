@@ -131,18 +131,63 @@ def _add(ctx: Any, state: Any, doc: Any) -> None:
     ``primitives.GENERATORS`` and no edit here at all -- which is the whole
     reason that registry is data.
     """
-    widgets.field_label("add")
     width = widgets.grid_width(COLUMNS)
-    for index, name in enumerate(sorted(bp.GENERATORS)):
-        icon = PRIMITIVE_ICONS.get(name, icons.BOX)
-        if controls.button(f"{icon}##add{name}", (width, sp(28))):
-            add_primitive(ctx, doc, name)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(name.replace("_", " "))
-        if index % COLUMNS != COLUMNS - 1:
-            imgui.same_line()
-    imgui.new_line()
+    for label, names in _sections():
+        widgets.field_label(label)
+        for index, name in enumerate(names):
+            icon = PRIMITIVE_ICONS.get(name, icons.BOX)
+            if controls.button(f"{icon}##add{name}", (width, sp(28))):
+                add_primitive(ctx, doc, name)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(name.replace("_", " "))
+            if index % COLUMNS != COLUMNS - 1:
+                imgui.same_line()
+        imgui.new_line()
+    _figures(ctx, doc)
     del state
+
+
+def _sections() -> list[tuple[str, tuple[str, ...]]]:
+    """``primitives.CATEGORIES``, plus anything the table forgot.
+
+    The table is asserted to be a partition of ``GENERATORS``, so the trailing
+    section is empty in every shipped build and the test that says so is an
+    exact equality. It is drawn anyway for ``PRIMITIVE_ICONS.get``'s reason: a
+    thirteenth generator added and not filed still gets a button on the day it
+    is written rather than on the day someone remembers this file, which is the
+    property that makes ``_add`` generated from data rather than a third list
+    of what Clay can build.
+    """
+    out = [(label, tuple(names)) for label, names in bp.CATEGORIES]
+    filed = {name for _, names in bp.CATEGORIES for name in names}
+    rest = tuple(sorted(set(bp.GENERATORS) - filed))
+    if rest:
+        out.append(("other", rest))
+    return out
+
+
+def _figures(ctx: Any, doc: Any) -> None:
+    """The assembly presets, as labelled full-width rows.
+
+    Labelled rather than icon-only because "humanoid" and "blob" have no honest
+    glyph, and the icon set is strained enough already -- ``cone`` borrows
+    triangle-alert and ``uv_sphere`` and ``torus`` are both a circle, so a
+    silhouette a reader has to guess at is worse than a word.
+
+    One button per row rather than two: the labels carry the template's own
+    description ("Insect / spider (six-legged)"), which does not fit half a
+    Clay sidebar at 1280x800, and eight rows in one column stay scannable.
+    """
+    from ..clay import presets
+
+    if not presets.ASSEMBLIES:
+        return
+    widgets.field_label("figures")
+    width = widgets.grid_width(1)
+    for key, (label, _build) in presets.ASSEMBLIES.items():
+        if controls.button(f"{label}##figure{key}", (width, sp(28))):
+            add_assembly(ctx, doc, key)
+    imgui.new_line()
 
 
 def add_primitive(ctx: Any, doc: Any, name: str) -> Any:
@@ -167,8 +212,57 @@ def add_primitive(ctx: Any, doc: Any, name: str) -> Any:
     return obj
 
 
-def _unique_name(doc: Any, base: str) -> str:
-    taken = {obj.name for obj in doc.objects}
+def add_assembly(ctx: Any, doc: Any, key: str) -> list[Any]:
+    """Place every part of a figure preset, as one undo step.
+
+    Each part is an ordinary generated object -- same generator name, same
+    recorded params -- so the properties panel offers a leg's radius the way it
+    offers a lone cylinder's, and nothing about a figure is a special kind of
+    document. What the preset adds is where the parts sit and what they are
+    called; the parts themselves are the primitives that were already there.
+
+    Through :func:`_unique_name` for the reason ``add_primitive`` is: two
+    humanoids in one document must not have two objects called ``Head``, and
+    the count is taken against the document *as it grows*, which is why the
+    objects are appended to a list here and handed over in one call rather
+    than named up front.
+    """
+    from ..clay import presets
+
+    _label, build = presets.ASSEMBLIES[key]
+    objs: list[Any] = []
+    taken: set[str] = set()
+    for part in build():
+        defaults, make = bp.GENERATORS[part.generator]
+        params = {**defaults, **part.params}
+        name = _unique_name(doc, part.name, taken)
+        taken.add(name)
+        objs.append(
+            bd.Obj(
+                uid=bd.new_uid(),
+                name=name,
+                mesh=make(**params),
+                generator=part.generator,
+                params=dict(params),
+                translation=list(part.translation),
+                rotation=list(part.rotation),
+                scale=list(part.scale),
+            )
+        )
+    doc.add_objects(objs, _label)
+    del ctx
+    return objs
+
+
+def _unique_name(doc: Any, base: str, also: set[str] | None = None) -> str:
+    """A name no object in *doc* wears.
+
+    ``also`` is for the several objects an assembly places in one call: they
+    are not in ``doc.objects`` yet, so counting against the document alone
+    would hand every leg of a second humanoid the name the first leg already
+    has. The caller adds each name it takes.
+    """
+    taken = {obj.name for obj in doc.objects} | (also or set())
     if base not in taken:
         return base
     # The same counting-up rule ``ops.duplicate`` uses, so two objects never

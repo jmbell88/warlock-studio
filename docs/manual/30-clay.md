@@ -49,6 +49,23 @@ latitude and longitude, which is what makes it the one to wrap an equirectangula
 **Capsule**'s `height` is its cylindrical middle alone, so the whole shape is that plus a radius at
 each end.
 
+### Figures
+
+Below the shape grid is a **figures** list: whole assemblies, one button each, named rather than
+drawn as icons because a humanoid and a blob look the same at sixteen pixels. Clicking one places
+every part of the figure at once — a humanoid arrives as a head, a torso, arms and legs, each an
+ordinary object you can move, scale or delete on its own.
+
+They are one undo step, not one per part. `Ctrl+Z` after placing a figure removes the whole thing,
+rather than taking sixteen presses through fourteen states in which the figure is half there. The
+step is named after the figure in the history panel.
+
+Every part is a normal generated object: it keeps its generator and parameters, so the properties
+panel offers a leg's radius exactly as it would for a cylinder you added yourself. A figure is a
+starting point that saves you the assembly, not a special kind of object — once placed, nothing
+about it is different from the same parts added one at a time. Parts are named so they never
+collide, so a second humanoid does not fight the first one for `Head`.
+
 A placed object remembers *how it was made*. Its generator and the parameters it was built with are
 kept, so the properties panel offers those parameters — a cylinder's radius, height and segment
 count — and changing one rebuilds the mesh. That is a single undo step, so `Ctrl+Z` takes the

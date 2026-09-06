@@ -306,6 +306,42 @@ class ClayDoc:
         self.touch()
         return obj
 
+    def add_objects(self, objs: Iterable[Obj], label: str = "") -> list[Obj]:
+        """Insert several objects as **one** step, and select all of them.
+
+        The figure presets build sixteen parts at once, and sixteen
+        ``add_object`` calls are sixteen ``ObjectAddEdit`` pushes -- so undoing
+        a humanoid you did not want is sixteen presses of Ctrl+Z, through
+        fifteen intermediate states that are a dismembered figure standing in
+        the viewport. One assembly is one gesture, so it is one step, for the
+        reason ``set_visibility`` and :meth:`join_objects` are: an undo history
+        whose entries are not the actions the user took is not a history.
+
+        Built the way ``join_objects`` builds its own compound -- edits
+        collected in the order they were applied, ``CompoundEdit`` undoing them
+        in reverse, which pops the objects off the end of the list first and so
+        keeps every recorded index correct on the way back out.
+
+        Empty is a no-op that pushes nothing at all, for ``set_visibility``'s
+        reason: a step that changes nothing makes a saved document ask to be
+        saved again.
+        """
+        added = list(objs)
+        if not added:
+            return []
+        edits: list[Any] = []
+        for obj in added:
+            at = len(self.objects)
+            self.objects.insert(at, obj)
+            edits.append(ObjectAddEdit(at, obj))
+        edit = edits[0] if len(edits) == 1 else CompoundEdit(edits)
+        if label:
+            edit.label = label
+        self.history.push(edit)
+        self.select([obj.uid for obj in added])
+        self.touch()
+        return added
+
     def remove_object(self, uid: int) -> bool:
         index = self.index_of(uid)
         obj = self.objects.pop(index)

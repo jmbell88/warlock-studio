@@ -205,6 +205,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         ops_subdiv,
         ops_topo,
         pick,
+        presets,
         primitives,
         selection,
         serialize,
