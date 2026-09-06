@@ -78,15 +78,19 @@ MAX_PADDING = 256
 # items placed -- so a document claiming a million sources is not a slow pack
 # but one that never returns.
 #
-# **1024, measured.** This said 4096 and called it "short of where the search
-# stops answering"; that half was never measured and was wrong. One pack of
-# 4096 random 8-64px items takes 190 seconds on the reference machine, and
-# `maxrects_layout` can call pack once per candidate size. 1024 is the largest
-# count whose single pack stays under five seconds. See
-# docs/measurements/2026-08-31-packwright-max-sprites.md for the table and for
-# what would lift it again (bucketing the free-rect list so neither `_score`
-# nor `_prune` scans all of it).
-MAX_SPRITES = 1024
+# **4096, measured twice.** docs/measurements/2026-08-31-packwright-max-sprites.md
+# cut this to 1024 on a 190 second pack of 4096 random 8-64px items, and stated
+# the rule: the largest count whose single pack stays under five seconds.
+# docs/measurements/2026-09-06-native-batch-7-candidates.md found that 92% of
+# that time was `_prune` re-checking free-rectangle pairs that cannot fire --
+# after every prune no survivor contains another, so only pairs touching a
+# piece the last `_split` produced can newly do so -- and restricting the loop
+# to those pairs is exact by induction. With that restriction 4096 packs in
+# 3.6 seconds, under the same five-second rule that lowered the ceiling, so it
+# returns to 4096. See both documents for the tables; `maxrects_layout` can
+# still call `pack` once per candidate size, so a document's total cost is a
+# small multiple of the single-pack figure.
+MAX_SPRITES = 4096
 
 
 def next_pot(value: int) -> int:

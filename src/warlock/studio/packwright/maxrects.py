@@ -31,6 +31,7 @@ flag whether or not anything sets it. It is a later option, not a default.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 
 
@@ -127,7 +128,7 @@ def _contains(outer: Rect, inner: Rect) -> bool:
     )
 
 
-def _prune(free: list[Rect]) -> None:
+def _prune(free: list[Rect], fresh: list[bool]) -> None:
     """Drop every free rectangle wholly inside another.
 
     Without this the list grows without bound and, worse, the same space is
@@ -146,6 +147,19 @@ def _prune(free: list[Rect]) -> None:
 
     The bounds are unpacked once per rectangle instead of through four property
     reads per comparison, which is the rest of the win and changes nothing.
+
+    **``fresh`` restricts which pairs are even considered.** After every call
+    to this function no surviving rectangle contains another -- that is its own
+    postcondition -- so on the *next* placement the only pairs that can newly
+    fire are those touching a rectangle ``_split`` just produced: an old-vs-old
+    pair was already checked (and found not to contain) the previous time
+    around, and neither rectangle has changed since. Restricting the inner loop
+    to old-vs-new and new-vs-new pairs is therefore exact by induction, not an
+    approximation -- it is the caller's job to pass a ``fresh`` that is true
+    only for this placement's new pieces, and the postcondition above is what
+    makes that safe. This is 92% of a pack's time at 1024 sprites before the
+    restriction: measured at 4432 ms, 297 ms after, in
+    docs/measurements/2026-09-06-native-batch-7-candidates.md.
     """
     count = len(free)
     if count < 2:
@@ -153,11 +167,13 @@ def _prune(free: list[Rect]) -> None:
     bounds = [(r.x, r.y, r.x + r.w, r.y + r.h) for r in free]
     dead = [False] * count
     dropped = False
+    new_idx = [k for k in range(count) if fresh[k]]
     for i in range(count):
         if dead[i]:
             continue
         ix, iy, ir, ib = bounds[i]
-        for j in range(i + 1, count):
+        js = range(i + 1, count) if fresh[i] else new_idx[bisect_right(new_idx, i):]
+        for j in js:
             if dead[j]:
                 continue
             jx, jy, jr, jb = bounds[j]
@@ -201,13 +217,16 @@ def pack(items: list[tuple[str, int, int]], width: int, height: int) -> list[Pla
         placed.append(Placement(key=key, x=used.x, y=used.y, w=w, h=h))
 
         remaining: list[Rect] = []
+        fresh: list[bool] = []
         for candidate in free:
             pieces = _split(candidate, used)
             if pieces is None:
                 remaining.append(candidate)
+                fresh.append(False)
             else:
                 remaining.extend(pieces)
+                fresh.extend([True] * len(pieces))
         free = remaining
-        _prune(free)
+        _prune(free, fresh)
 
     return placed

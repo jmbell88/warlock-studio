@@ -165,7 +165,7 @@ def test_pruning_drops_a_contained_rectangle():
     space several times over -- so the tie-breaks stop being a total order over
     distinct candidates."""
     free = [Rect(0, 0, 10, 10), Rect(2, 2, 4, 4), Rect(0, 0, 20, 20)]
-    maxrects._prune(free)
+    maxrects._prune(free, [True, True, True])
     assert free == [Rect(0, 0, 20, 20)]
 
 

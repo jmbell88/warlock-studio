@@ -1,5 +1,11 @@
 # Native kernel batch 7 — two candidates, measured. No C written, no fix landed.
 
+> **Landed the same day** (commit after `867b05b1`): both Python fixes below are
+> now the shipped code, so the bench's `shipped` and variant columns read the
+> same. `MAX_SPRITES` is 4096 again. Regression tests:
+> `tests/packwright/test_maxrects_prune.py`, `tests/plotter/test_wang_field_hoisted.py`.
+> Default lane 18 463 passed. The tables below are the before-and-after record.
+
 2026-09-06, at `d6f8d148`. Machine: Windows 11, numpy 2.x, Python 3.13,
 `vendor/warlockc/warlockc.dll` present (ABI 10) — neither site below has a
 kernel, so the DLL changes nothing here. Every figure is the **minimum of seven

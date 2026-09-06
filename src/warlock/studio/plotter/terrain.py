@@ -345,17 +345,27 @@ def wang_field(data: np.ndarray, ref: TilesetRef, wangset: Any) -> Any:
     ``None`` for off the map, for an empty cell, and for a tile this set says
     nothing about -- all three mean "nothing here has an opinion", which is what
     :func:`~..tilegrid.wang.constraints_from` needs them to mean.
+
+    ``ref.firstgid``, ``ref.last_gid``, ``wangset.tiles`` and the gid mask are
+    read once into locals rather than through ``ref.holds`` per neighbour read:
+    ``holds`` is ``firstgid <= id <= last_gid`` and ``last_gid`` recomputes
+    through a ``max_local_id -> tile_count -> columns/rows -> image_w/h``
+    property chain on every call, and one gesture makes on the order of eight
+    such reads per touched cell. `docs/measurements/2026-09-06-native-batch-7-candidates.md`
+    (B9) measured a 128-cell diagonal drag at 131 ms shipped, 68 ms with this
+    hoist -- same answers, by inspection of ``holds``.
     """
     height, width = data.shape
+    firstgid, last_gid, tiles, mask = ref.firstgid, ref.last_gid, wangset.tiles, gidlib.GID_MASK
 
     def field_of(x: int, y: int) -> Any:
         if not (0 <= x < width and 0 <= y < height):
             return None
-        value = int(data[y, x]) & gidlib.GID_MASK
-        if not value or not ref.holds(value):
+        value = int(data[y, x]) & mask
+        if not value or not (firstgid <= value <= last_gid):
             return None
-        local = value - ref.firstgid
-        return wangset.tiles.get(local)
+        local = value - firstgid
+        return tiles.get(local)
 
     return field_of
 
@@ -467,7 +477,9 @@ def paint_wang_cells(
     # that computes them all at once and gets the same answer -- so what is
     # shared here is everything that can be, and it is the expensive part. The
     # 2026-09-02 review filed the remaining per-cell Python as a cost; it is
-    # the algorithm rather than the implementation.
+    # the algorithm rather than the implementation. Batch 7 profiled that cost
+    # (docs/measurements/2026-09-06-native-batch-7-candidates.md, B9): it was
+    # ``TilesetRef.holds``'s property chain, not the loop -- see wang_field.
     field = wang_field(work, ref, wangset)
     cache: dict[tuple[tuple[int, int], ...], list[int]] = {}
     for y in range(y0, y1):

@@ -66,3 +66,23 @@ free rects by position so neither has to scan the whole list is the standard
 fix and would change the shape of this table rather than its constant factor.
 Until someone does that, 1024 is what the search answers in reasonable time,
 and this file is the evidence for the number.
+
+## 2026-09-06: the ceiling returns to 4096
+
+Not the bucketing this file predicted. `_prune` was re-checking every pair of
+free rectangles per placement when, after any prune, no survivor contains
+another -- so only pairs touching a piece the last `_split` produced can newly
+fire. Restricting the loop to those pairs is exact by induction, and it is
+92% of a pack's time at 1024 sprites. See
+docs/measurements/2026-09-06-native-batch-7-candidates.md §1 for the full
+account; the restricted-prune figures, minimum of seven runs in a fresh
+process:
+
+| sprites | `prune_new_only` |
+|---|---|
+| 1024 | 297 ms |
+| 2048 | 977 ms |
+| 4096 | 3 589 ms |
+
+4096 at 3.6 seconds is back under this document's own five-second rule, so
+`layout.MAX_SPRITES` is 4096 again.
