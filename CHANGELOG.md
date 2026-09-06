@@ -16,6 +16,46 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
+## 0.0.37 — 2026-09-06
+
+Two doors into Troupe stopped guessing, and the clip library learned how to
+leave the building.
+
+- **Both doors into Troupe now ask what the picker inside it already could.**
+  `send_to_troupe` has always accepted a sprite size and a rig template, and
+  only Troupe's own collapsed picker passed either — the library's right-click
+  item and the inspector's button under "Take it somewhere" passed no form at
+  all. So 32 px and `humanoid` were silent defaults: a user who wanted 64 px
+  sprites had to know to enter Troupe first and open a sub-header, and a
+  quadruped was quietly rigged as a humanoid and animated with human walk
+  cycles — discovered after a rig plus up to 512 EEVEE frames, with the
+  manual's own workaround being to go and re-rig it from Create. **Send to
+  Troupe…** now opens one dialog carrying Skeleton, Sprite size, Camera,
+  Outline and Colours. Its answers are written back into the mode's own form,
+  so all three doors share one set of defaults and the size chosen at the
+  library is the size the inspector opens on. The Skeleton row appears only for
+  an unrigged mesh (a rigged one is animated on the skeleton its `rig.json`
+  records) and offers only the four templates that ship with clips; the door
+  refuses a clipless or unknown one with a `field`, where it used to raise a
+  message about a missing dictionary key.
+- **"Build another sheet" raised `AttributeError` on a fresh session.** Its
+  guard against submitting the door's defaults called
+  `troupe_settings._form(state, troupe_settings._options(ctx))`, and both moved
+  to `troupe_mode` on 2026-09-05 — so the fallback failed in exactly the case
+  it exists for, an empty form, which is what a restored session has.
+- **`animated.glb`: the authored clips, as 3D animation.** Warlock has clips, a
+  clip editor, interpolation and a renderer that poses an armature per cell,
+  and the only consumer of any of it was Troupe's 2D sheet, because the glTF
+  export hard-coded `export_animations=False`. The new export is the rig with
+  every authored clip baked on as a named glTF animation — idle, walk, run,
+  attack, jump — which Godot, Unity, Unreal and three.js all read directly. The
+  frames are resolved on the host at the clip's *own* segment lengths, so the
+  file carries the author's timing rather than Troupe's grid, and the timing
+  itself is read from the one table that already holds it. It is the only
+  export derived from `rig.glb` rather than `model.glb`, so it is gated on the
+  rig being finished and on its skeleton having clips at all, and a retarget
+  lists it as stale beside the rig.
+
 ## 0.0.36 — 2026-09-05
 
 The first install of this application on a machine that did not build it
