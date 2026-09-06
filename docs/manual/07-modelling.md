@@ -21,7 +21,9 @@ would be worse than saying so.
 
 ## Primitives
 
-Nine: box, plane, cylinder, cone, UV sphere, icosphere, torus, capsule and grid. Place one and its
+Twelve, in two groups. The primitives: box, plane, cylinder, cone, UV sphere, icosphere, torus,
+capsule and grid. The structures — shapes you would otherwise build out of several primitives —
+pyramid, arch and column. Place one and its
 parameters — radius, height, segments — stay live in the properties panel, so a cylinder can become
 a thinner cylinder without being rebuilt by hand.
 

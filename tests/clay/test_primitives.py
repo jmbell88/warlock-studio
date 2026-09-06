@@ -459,7 +459,23 @@ def test_the_registry_names_every_generator_the_module_exports() -> None:
         "grid",
         "capsule",
         "icosphere",
+        "pyramid",
+        "arch",
+        "column",
     }
+
+
+def test_the_categories_table_partitions_the_registry_exactly() -> None:
+    """The add panel is drawn in sections, and this is the coverage check the
+    panel itself cannot be: a generator missing from ``CATEGORIES`` simply does
+    not appear, which is a button that is not there rather than an error, and a
+    name in ``CATEGORIES`` that is no longer a generator is a ``KeyError`` the
+    first time somebody scrolls to it. Every generator in exactly one section,
+    and no section naming anything that is not one."""
+    listed = [name for _, names in bp.CATEGORIES for name in names]
+    assert sorted(listed) == sorted(bp.GENERATORS)
+    assert len(listed) == len(set(listed)), "a generator is filed in two sections"
+    assert len({label for label, _ in bp.CATEGORIES}) == len(bp.CATEGORIES)
 
 
 # --- the three later arrivals -------------------------------------------------
@@ -559,6 +575,173 @@ def test_an_icospheres_subdivisions_are_capped() -> None:
 def test_an_icosphere_at_zero_subdivisions_is_the_bare_icosahedron() -> None:
     mesh = bp.icosphere(subdivisions=0)
     assert (len(mesh.positions), bm.face_count(mesh)) == (12, 20)
+
+
+# --- the three structures -----------------------------------------------------
+
+
+def test_a_pyramids_base_is_axis_aligned_rather_than_stood_on_a_corner() -> None:
+    """The whole difference between ``pyramid`` and ``cone(segments=4)``.
+
+    ``_ring`` starts at +X, so a four-segment cone is a square standing on a
+    corner -- 45 degrees off the box a user places it on the top of. The base
+    here is rotated by half a segment, which puts a face at +X and makes
+    ``base`` the flat-to-flat width.
+    """
+    mesh = bp.pyramid(base=2.0, height=1.0, sides=4)
+    corners = mesh.positions[mesh.positions[:, 1] < 0.0]
+    assert len(corners) == 4
+    assert np.allclose(np.abs(corners[:, [0, 2]]), 1.0, atol=1e-6)
+    # And the corner-standing one it is not: a cone's first base vertex is on
+    # +X with no z at all, which is what "rotated half a segment" means.
+    cone_ring = bp.cone(radius=1.0, height=1.0, segments=4).positions[0]
+    assert abs(float(cone_ring[2])) < 1e-6
+
+
+def test_a_pyramid_spans_the_base_it_was_asked_for_and_its_height() -> None:
+    lo, hi = bm.bounds(bp.pyramid(base=2.0, height=3.0, sides=4))
+    assert np.allclose(lo, [-1.0, -1.5, -1.0], atol=1e-6)
+    assert np.allclose(hi, [+1.0, +1.5, +1.0], atol=1e-6)
+
+
+def test_a_pyramids_sides_are_clamped_like_every_other_ring() -> None:
+    assert bm.face_count(bp.pyramid(sides=1)) == bm.face_count(
+        bp.pyramid(sides=bp.MIN_SEGMENTS)
+    )
+
+
+def test_a_pyramid_has_one_apex_and_one_n_gon_base() -> None:
+    mesh = bp.pyramid(sides=6)
+    assert (len(mesh.positions), bm.face_count(mesh)) == (7, 7)
+    assert Counter(int(n) for n in np.diff(mesh.starts)) == {3: 6, 6: 1}
+
+
+def test_a_column_with_no_base_and_no_capital_is_a_plain_shaft() -> None:
+    """Which is the property that says the lathe is a superset of ``cylinder``
+    rather than a shape with a cylinder hidden somewhere inside it."""
+    shaft = bp.column(radius=0.5, height=2.0, segments=16, base=0.0, capital=0.0)
+    plain = bp.cylinder(radius=0.5, height=2.0, segments=16)
+    assert np.allclose(shaft.positions, plain.positions, atol=1e-6)
+    assert bm.face_count(shaft) == bm.face_count(plain)
+    assert list(np.diff(shaft.starts)) == list(np.diff(plain.starts))
+
+
+def test_a_columns_base_and_capital_are_wider_than_its_shaft() -> None:
+    mesh = bp.column(radius=0.5, height=2.0, segments=16, base=0.2, capital=0.2)
+    radial = np.hypot(mesh.positions[:, 0], mesh.positions[:, 2])
+    ends = radial[np.abs(mesh.positions[:, 1]) > 0.99]
+    middle = radial[np.abs(mesh.positions[:, 1]) < 0.5]
+    assert np.allclose(ends, 0.5 * bp.COLUMN_FLARE, atol=1e-6)
+    assert np.allclose(middle, 0.5, atol=1e-6)
+
+
+def test_a_columns_ends_cannot_eat_the_shaft_between_them() -> None:
+    """``base + capital >= height`` would put the plinth's top ring above the
+    capital's bottom one: the band between them faces inward and ``validate``
+    accepts every bit of it, which is the inside-out failure a negative height
+    causes arriving through two positive numbers."""
+    mesh = bp.column(radius=0.5, height=1.0, segments=8, base=5.0, capital=5.0)
+    bm.validate(mesh)
+    assert max(_directed_edge_counts(mesh).values()) == 1
+    ys = sorted({round(float(y), 6) for y in mesh.positions[:, 1]})
+    assert ys == sorted(set(ys)) and len(ys) == 6
+
+
+def test_a_column_spans_its_height_and_its_widest_ring() -> None:
+    lo, hi = bm.bounds(bp.column(radius=0.5, height=2.0, segments=16))
+    wide = 0.5 * bp.COLUMN_FLARE
+    assert np.allclose(lo, [-wide, -1.0, -wide], atol=1e-6)
+    assert np.allclose(hi, [+wide, +1.0, +wide], atol=1e-6)
+
+
+def _blocks_a_ray_along_z(mesh: bm.Mesh, x: float, y: float) -> bool:
+    """Does any triangle stand in the way of a ray straight down Z at (x, y)?
+
+    A ray along Z hits a triangle exactly when the point falls inside the
+    triangle's projection into XY, so this is the whole intersection test with
+    no z arithmetic. The three edge signs must agree *strictly*, which is what
+    keeps the bands -- edge-on to the ray, and projecting to zero-area slivers
+    -- from claiming to contain every point in the plane.
+    """
+    tris, _ = bm.triangulate(mesh)
+    p = mesh.positions[tris][:, :, [0, 1]].astype("f8")
+    a, b, c = p[:, 0], p[:, 1], p[:, 2]
+
+    def side(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        return (v[:, 0] - u[:, 0]) * (y - u[:, 1]) - (v[:, 1] - u[:, 1]) * (x - u[:, 0])
+
+    s1, s2, s3 = side(a, b), side(b, c), side(c, a)
+    inside = ((s1 > 0) & (s2 > 0) & (s3 > 0)) | ((s1 < 0) & (s2 < 0) & (s3 < 0))
+    return bool(inside.any())
+
+
+def test_an_arch_is_open_through_its_depth_under_the_head() -> None:
+    """The opening is an opening: a ray straight through the archway hits
+    nothing, while the same ray through a leg hits the wall. The second half is
+    what makes the first mean something -- a test that only asserts "no hit"
+    passes just as well against a mesh with no faces at all.
+    """
+    mesh = bp.arch(width=1.0, height=1.0, depth=0.5, thickness=0.25, segments=12)
+    # Centred, so the ground is at y = -0.5 and the springline at y = 0.
+    assert not _blocks_a_ray_along_z(mesh, 0.0, -0.25)
+    assert _blocks_a_ray_along_z(mesh, 0.4, -0.25)
+    assert _blocks_a_ray_along_z(mesh, -0.4, -0.25)
+
+
+def test_an_arch_spans_the_box_it_was_asked_for() -> None:
+    lo, hi = bm.bounds(bp.arch(width=2.0, height=3.0, depth=1.0, thickness=0.25))
+    assert np.allclose(lo, [-1.0, -1.5, -0.5], atol=1e-6)
+    assert np.allclose(hi, [+1.0, +1.5, +0.5], atol=1e-6)
+
+
+def test_an_arch_is_every_quad_and_caps_both_of_its_legs() -> None:
+    """The leg ends are capped rather than added to ``OPEN``: the sweep tests
+    this generator joined the registry for are exactly the ones an open shell
+    would be exempt from."""
+    mesh = bp.arch(segments=6)
+    assert set(int(n) for n in np.diff(mesh.starts)) == {4}
+    assert set(_edge_use_counts(mesh).values()) == {2}
+    down = [
+        i
+        for i in range(bm.face_count(mesh))
+        if _face_normal(mesh, i)[1] < -1e-9 and abs(_face_normal(mesh, i)[0]) < 1e-9
+    ]
+    assert len(down) == 2
+
+
+def test_an_arch_too_short_for_its_head_grows_rather_than_folding() -> None:
+    """Below half the width there is no leg, and a leg-bottom station would
+    duplicate the first point of the head -- a zero-area quad in four faces at
+    once."""
+    mesh = bp.arch(width=2.0, height=0.1, depth=0.5, thickness=0.25, segments=8)
+    bm.validate(mesh)
+    lo, hi = bm.bounds(mesh)
+    assert np.allclose(hi[1] - lo[1], 1.0, atol=1e-6)
+    assert max(_directed_edge_counts(mesh).values()) == 1
+
+
+def test_an_arch_wall_cannot_be_thicker_than_the_opening_it_leaves() -> None:
+    mesh = bp.arch(width=1.0, height=1.0, thickness=99.0, segments=8)
+    bm.validate(mesh)
+    assert max(_directed_edge_counts(mesh).values()) == 1
+    assert set(_edge_use_counts(mesh).values()) == {2}
+
+
+@pytest.mark.parametrize(
+    ("negative", "positive"),
+    [
+        (lambda: bp.pyramid(base=-2.0), lambda: bp.pyramid(base=2.0)),
+        (lambda: bp.arch(depth=-0.5), lambda: bp.arch(depth=0.5)),
+        (lambda: bp.column(height=-2.0), lambda: bp.column(height=2.0)),
+    ],
+    ids=["pyramid", "arch", "column"],
+)
+def test_a_structures_negative_extent_is_taken_as_its_magnitude(
+    negative: object, positive: object
+) -> None:
+    mesh = negative()  # type: ignore[operator]
+    assert np.allclose(mesh.positions, positive().positions)  # type: ignore[operator]
+    assert max(_directed_edge_counts(mesh).values()) == 1
 
 
 def test_every_generated_mesh_starts_flat_shaded_on_material_zero() -> None:

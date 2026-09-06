@@ -27,9 +27,18 @@ work, and entering the mode is not a reason to disturb them.
 
 ## Adding a primitive
 
-The **add** row has one button per primitive: box, plane, grid, cylinder, cone, UV sphere,
-icosphere, capsule and torus. Clicking one places it at the origin and selects it. Hovering a button
-names it.
+The **add** row has one button per shape, in two groups. **Primitives**: box, plane, grid, cylinder,
+cone, UV sphere, icosphere, capsule and torus. **Structures**: pyramid, arch and column. Clicking one
+places it at the origin and selects it. Hovering a button names it.
+
+The structures are the shapes that are tedious rather than hard — the ones you would otherwise
+assemble out of three or four primitives and then have to keep assembled. A **pyramid**'s base sits
+square to the axes, which is what separates it from a four-sided cone: a cone stands on a corner,
+45 degrees off the box you are putting it on top of, and its `base` is the flat-to-flat width. An
+**arch** is a doorway — two legs and a semicircular head, swept through its `depth`, with
+`thickness` setting how heavy the wall is; the opening goes right through. A **column** is a lathe:
+`base` and `capital` are the *heights* of the plinth and the block at the top, and setting both to
+zero leaves a plain shaft.
 
 Three of those are near-duplicates of others and are worth telling apart. **Grid** is a plane cut
 into squares; **plane** is the single quad, which is what a decal or a backdrop wants, and a grid is

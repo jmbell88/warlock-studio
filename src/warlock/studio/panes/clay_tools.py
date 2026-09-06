@@ -53,6 +53,14 @@ PRIMITIVE_ICONS = {
     "grid": icons.GRID,
     "capsule": icons.EGG,
     "icosphere": icons.STAR,
+    # The three structures. The icon set is strained by now -- ``cone`` borrows
+    # triangle-alert, and ``uv_sphere`` and ``torus`` are both a circle -- so
+    # these are the nearest silhouettes rather than the right glyphs: a magnet
+    # is a horseshoe, which is the arch, and a ruler is the tallest thing in
+    # the set. The tooltip carries the name.
+    "pyramid": icons.PENTAGON,
+    "arch": icons.MAGNET,
+    "column": icons.RULER,
 }
 
 AXES = (("x", "X"), ("y", "Y"), ("z", "Z"))

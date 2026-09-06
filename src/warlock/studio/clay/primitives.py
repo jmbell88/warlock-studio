@@ -1,16 +1,16 @@
-"""The nine shapes a user can place, and the registry the panel is built from.
+"""The twelve shapes a user can place, and the registry the panel is built from.
 
 Each generator is a plain function of its parameters returning a :class:`Mesh`,
 and :data:`GENERATORS` maps a name to ``(defaults, builder)``. The registry is
 the point of the module rather than an index over it: the properties panel is
-generated from those default dictionaries, so adding a tenth primitive is
+generated from those default dictionaries, so adding a thirteenth primitive is
 adding a function and one registry line, in the same spirit as "add a skeleton
 by adding a JSON file, never by hardcoding bones in ``blender_worker``". A
 panel that switched on a hardcoded list of shape names would be a second place
 that has to know what a cylinder's parameters are, and the two would drift the
 first time a parameter was renamed.
 
-Four rules hold across all nine, and each of them is pinned by a test:
+Four rules hold across all twelve, and each of them is pinned by a test:
 
 **Every primitive is built centred on the origin.** ``Obj`` carries the
 translation, so geometry that baked its placement in would make the numeric TRS
@@ -684,6 +684,296 @@ def icosphere(radius: float = 0.5, subdivisions: int = 2) -> Mesh:
     return _mesh(unit * r, faces, _sphere_uv(unit, faces))
 
 
+# How much wider a column's plinth and capital are than its shaft. A constant
+# rather than a parameter because ``base`` and ``capital`` are *heights*: they
+# are the two numbers a user reads off a reference photograph, and a third
+# "how much wider" slider buys a shape nobody asked for at the cost of a
+# control on every column ever placed. Blocks the same width as the shaft would
+# not read as a column at all -- they would be invisible.
+COLUMN_FLARE = 1.35
+
+# The most of a column's height its plinth and capital may take between them.
+# Without it, ``base + capital >= height`` puts the two blocks past each other:
+# the shaft's two rings swap order, its band faces inward, and ``validate``
+# accepts it because only the geometry is wrong -- the same failure a negative
+# height would cause, arriving through two positive numbers instead.
+COLUMN_ENDS_MAX = 0.8
+
+
+def pyramid(base: float = 1.0, height: float = 1.0, sides: int = 4) -> Mesh:
+    """An n-gon base and a fan of triangles up to a single apex, base flat to X.
+
+    This is not ``cone`` with a small ``segments``, and the difference is the
+    half-segment of rotation. ``_ring`` starts at +X, so a four-segment cone is
+    a square standing on a *corner* -- its faces point along the diagonals, and
+    a user who places a pyramid to be the roof of an axis-aligned box gets one
+    turned 45 degrees to it. So the ring here is rotated by half a segment,
+    which puts a **face** at +X instead of a vertex, and ``base`` is then the
+    flat-to-flat width: exactly the box a four-sided pyramid stands on.
+
+    That also fixes what the UV is for. A cone is unwrapped as a cone -- the
+    sides are one continuous band around the apex -- whereas a pyramid's sides
+    are flat plates, so they get the same band but there is no curvature for it
+    to lie about. The two generators ship separately because the shapes are
+    different objects to a modeller, not because the code could not be shared.
+    """
+    n = max(int(sides), MIN_SEGMENTS)
+    # ``base`` is the flat-to-flat width, so the circumradius is the apothem
+    # over ``cos(pi / n)``. At n = 4 that is the half-diagonal of the square.
+    half = abs(float(base)) * 0.5
+    h = abs(float(height)) * 0.5
+    r = half / float(np.cos(np.pi / n))
+
+    ring = _ring(r, -h, n)
+    # A rigid rotation about Y by half a segment: it moves every vertex by the
+    # same angle, so the ring's order -- and therefore the winding every face
+    # below inherits from it -- is untouched.
+    turn = np.pi / n
+    cos_t, sin_t = float(np.cos(turn)), float(np.sin(turn))
+    x, z = ring[:, 0].copy(), ring[:, 2].copy()
+    ring[:, 0] = cos_t * x - sin_t * z
+    ring[:, 2] = sin_t * x + cos_t * z
+
+    positions = np.concatenate([ring, [[0.0, +h, 0.0]]])
+    apex = n
+    faces: list[list[int]] = [[i, apex, (i + 1) % n] for i in range(n)]
+    faces.append(list(range(n)))  # base cap, ring order, normal -Y
+
+    # The apex gets a different u per side, for the reason ``cone``'s does: it
+    # is one vertex and n corners, which is the case a per-corner field is for.
+    uv: list[list[tuple[float, float]]] = [
+        [(i / n, 0.5), ((i + 0.5) / n, 1.0), ((i + 1) / n, 0.5)] for i in range(n)
+    ]
+    uv.append(_disc_uv(n, (0.25, 0.25), 0.24))
+    return _mesh(positions, faces, uv)
+
+
+def arch(
+    width: float = 1.0,
+    height: float = 1.0,
+    depth: float = 0.5,
+    thickness: float = 0.25,
+    segments: int = 12,
+) -> Mesh:
+    """A swept profile: two legs and a semicircular head, extruded along Z.
+
+    The profile is sampled at N *stations*, and each station carries two points
+    -- one on the outer boundary and one on the inner -- so every face in the
+    shell is a quad between two adjacent stations. That is the whole reason the
+    shape is built this way rather than as a boolean of a box and a cylinder:
+    convexity comes for free with quads, and the module's fan-triangulation
+    rule is a promise about *every* face rather than one this generator would
+    have to argue about.
+
+    Five families of face come out of it and there are no others: the front
+    plates at +Z, the back plates at -Z, the band around the outside, the band
+    around the inside of the opening, and one quad capping each leg where it
+    meets the ground. **The leg ends are capped**, deliberately: an uncapped
+    arch would be an open shell, and the registry's sweep tests
+    (``test_every_closed_generator_is_wound_outward`` and the
+    each-edge-exactly-twice check) exempt only the two shapes named in ``OPEN``
+    -- joining that set to avoid two quads would be opting out of the very
+    tests this generator joined the registry for.
+
+    Note what the opening is *not*: a hole through material. An arch is a
+    horseshoe, open at the bottom, so the shell is a topological ball like every
+    other closed primitive here and not a torus.
+
+    ``height`` is the whole thing, ground to crown, and the head's radius is
+    half the width -- so a ``height`` below that leaves no leg at all and is
+    raised to it. ``thickness`` is likewise held inside the head's radius: a
+    wall as thick as the arch is wide has no opening left to be an arch of.
+    """
+    n = max(int(segments), MIN_SEGMENTS)
+    r_out = abs(float(width)) * 0.5
+    # The head is a semicircle of the full half-width, so the crown is at
+    # ``springline + r_out``: a height below the radius has no leg to stand on
+    # and the arch would be a half-annulus hovering with its own head cut off.
+    h = max(abs(float(height)), r_out)
+    d = max(abs(float(depth)), 1e-4) * 0.5
+    t = min(max(abs(float(thickness)), r_out * 0.02), r_out * 0.9)
+    r_in = r_out - t
+    springline = h - r_out
+
+    outer: list[tuple[float, float]] = []
+    inner: list[tuple[float, float]] = []
+    # The legs are stations only when there are legs. At ``height == width / 2``
+    # the springline is the ground and a leg-bottom station would duplicate the
+    # first point of the head, which is a zero-area quad in four faces at once.
+    if springline > 1e-6:
+        outer.append((-r_out, 0.0))
+        inner.append((-r_in, 0.0))
+    for k in range(n + 1):
+        angle = np.pi * (1.0 - k / n)
+        cos_a, sin_a = float(np.cos(angle)), float(np.sin(angle))
+        outer.append((r_out * cos_a, springline + r_out * sin_a))
+        inner.append((r_in * cos_a, springline + r_in * sin_a))
+    if springline > 1e-6:
+        outer.append((+r_out, 0.0))
+        inner.append((+r_in, 0.0))
+
+    stations = len(outer)
+    # y runs 0..h in the profile and the primitive is centred, so it is shifted
+    # by half the height on the way into the buffer rather than in the maths.
+    def plate(points: list[tuple[float, float]], z: float) -> np.ndarray:
+        return np.array([[x, y - h * 0.5, z] for x, y in points], dtype="f8")
+
+    positions = np.concatenate(
+        [plate(outer, +d), plate(inner, +d), plate(outer, -d), plate(inner, -d)]
+    )
+    fo, fi, bo, bi = 0, stations, 2 * stations, 3 * stations
+
+    faces: list[list[int]] = []
+    # Front, seen from +Z: outer down to inner and back along the next station
+    # is counter-clockwise; the other traversal of the same four corners faces
+    # into the wall. Back is that order reversed, which is the same rule.
+    faces.extend([fo + i, fi + i, fi + i + 1, fo + i + 1] for i in range(stations - 1))
+    faces.extend([bo + i, bo + i + 1, bi + i + 1, bi + i] for i in range(stations - 1))
+    faces.extend([fo + i, fo + i + 1, bo + i + 1, bo + i] for i in range(stations - 1))
+    faces.extend([fi + i, bi + i, bi + i + 1, fi + i + 1] for i in range(stations - 1))
+    last = stations - 1
+    # Both leg bottoms face -Y, and they are written out separately rather than
+    # in a loop because the two ends traverse the same rectangle in opposite
+    # directions -- the profile runs left to right, so "outer then inner" is a
+    # different turn at each end.
+    faces.append([fo, bo, bi, fi])
+    faces.append([fo + last, fi + last, bi + last, bo + last])
+
+    # Four islands in the four quadrants of the square plus the two small caps
+    # along the bottom edge, because a canonical unwrap whose islands overlap is
+    # one that cannot be baked to.
+    def across(i: int) -> float:
+        return (outer[i][0] + r_out) / (2.0 * r_out)
+
+    def up(i: int, points: list[tuple[float, float]]) -> float:
+        return points[i][1] / h if h > 0.0 else 0.0
+
+    def station(i: int) -> float:
+        return i / max(stations - 1, 1)
+
+    uv: list[list[tuple[float, float]]] = []
+    for i in range(stations - 1):  # front, top-left quadrant
+        uv.append(
+            [
+                (0.5 * across(i), 0.5 + 0.5 * up(i, outer)),
+                (0.5 * across(i), 0.5 + 0.5 * up(i, inner)),
+                (0.5 * across(i + 1), 0.5 + 0.5 * up(i + 1, inner)),
+                (0.5 * across(i + 1), 0.5 + 0.5 * up(i + 1, outer)),
+            ]
+        )
+    for i in range(stations - 1):  # back, top-right quadrant, mirrored
+        uv.append(
+            [
+                (1.0 - 0.5 * across(i), 0.5 + 0.5 * up(i, outer)),
+                (1.0 - 0.5 * across(i + 1), 0.5 + 0.5 * up(i + 1, outer)),
+                (1.0 - 0.5 * across(i + 1), 0.5 + 0.5 * up(i + 1, inner)),
+                (1.0 - 0.5 * across(i), 0.5 + 0.5 * up(i, inner)),
+            ]
+        )
+    for i in range(stations - 1):  # outer band, left of the bottom half
+        uv.append(
+            [
+                (0.5 * station(i), 0.49),
+                (0.5 * station(i + 1), 0.49),
+                (0.5 * station(i + 1), 0.27),
+                (0.5 * station(i), 0.27),
+            ]
+        )
+    for i in range(stations - 1):  # inner band, right of the bottom half
+        uv.append(
+            [
+                (0.5 + 0.5 * station(i), 0.27),
+                (0.5 + 0.5 * station(i), 0.49),
+                (0.5 + 0.5 * station(i + 1), 0.49),
+                (0.5 + 0.5 * station(i + 1), 0.27),
+            ]
+        )
+    uv.append([(0.01, 0.01), (0.24, 0.01), (0.24, 0.24), (0.01, 0.24)])
+    uv.append([(0.51, 0.01), (0.74, 0.01), (0.74, 0.24), (0.51, 0.24)])
+    return _mesh(positions, faces, uv)
+
+
+def column(
+    radius: float = 0.35,
+    height: float = 2.0,
+    segments: int = 16,
+    base: float = 0.15,
+    capital: float = 0.15,
+) -> Mesh:
+    """A lathe: rings at varying radius, with an n-gon cap at each end.
+
+    ``base`` and ``capital`` are **heights** -- how tall the plinth at the
+    bottom and the block at the top are -- and how much wider than the shaft
+    they sit is :data:`COLUMN_FLARE`, a constant rather than a third slider.
+    Setting either to zero removes it, and setting **both** to zero leaves the
+    two rings and two caps of a plain cylinder, which is the property that says
+    this generator is a superset of one rather than a shape with a cylinder
+    hidden inside it.
+
+    Between them they may take :data:`COLUMN_ENDS_MAX` of the height and no
+    more. Past that the plinth's top ring would sit *above* the capital's
+    bottom one, the shaft band between them would face inward, and ``validate``
+    would accept every bit of it -- the inside-out failure a negative height
+    causes, arriving here through two perfectly positive numbers.
+    """
+    n = max(int(segments), MIN_SEGMENTS)
+    r = abs(float(radius))
+    h = abs(float(height))
+    half = h * 0.5
+    b, c = abs(float(base)), abs(float(capital))
+    if b + c > h * COLUMN_ENDS_MAX:
+        shrink = (h * COLUMN_ENDS_MAX) / (b + c)
+        b, c = b * shrink, c * shrink
+    wide = r * COLUMN_FLARE
+
+    # The profile, bottom to top, as (ring radius, y). A block is a straight
+    # section and then a taper into the shaft, so it reads as a plinth rather
+    # than as a step -- and the taper is what keeps the two rings that meet the
+    # shaft at different heights, so no band in the lathe is zero-height.
+    profile: list[tuple[float, float]] = []
+    if b > 0.0:
+        profile.extend([(wide, -half), (wide, -half + b * 0.5), (r, -half + b)])
+    else:
+        profile.append((r, -half))
+    if c > 0.0:
+        profile.extend([(r, +half - c), (wide, +half - c * 0.5), (wide, +half)])
+    else:
+        profile.append((r, +half))
+
+    positions = np.concatenate([_ring(rr, y, n) for rr, y in profile])
+    rings = len(profile)
+    faces: list[list[int]] = []
+    for j in range(rings - 1):
+        faces.extend(_side_quads(j * n, (j + 1) * n, n))
+    faces.append(list(range(n)))  # bottom cap, ring order, normal -Y
+    top = (rings - 1) * n
+    faces.append(list(range(top + n - 1, top - 1, -1)))  # top cap, normal +Y
+
+    # ``v`` follows arc length along the profile rather than height, for the
+    # reason ``capsule``'s does: a plinth is a tenth of the column's height and
+    # a fifth of its silhouette, and height alone would squash it to the former.
+    points = np.array(profile, dtype="f8")
+    steps = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    along = np.concatenate([[0.0], np.cumsum(steps)])
+    total = float(along[-1])
+    v = 0.5 + 0.5 * (along / total if total > 0.0 else np.zeros(len(along)))
+
+    uv: list[list[tuple[float, float]]] = []
+    for j in range(rings - 1):
+        uv.extend(
+            [
+                (i / n, float(v[j])),
+                (i / n, float(v[j + 1])),
+                ((i + 1) / n, float(v[j + 1])),
+                ((i + 1) / n, float(v[j])),
+            ]
+            for i in range(n)
+        )
+    uv.append(_disc_uv(n, (0.25, 0.25), 0.24))
+    uv.append(_disc_uv(n, (0.75, 0.25), 0.24, reverse=True))
+    return _mesh(positions, faces, uv)
+
+
 # --- the registry ------------------------------------------------------------
 
 GENERATORS: dict[str, tuple[dict[str, Any], Callable[..., Mesh]]] = {
@@ -696,6 +986,15 @@ GENERATORS: dict[str, tuple[dict[str, Any], Callable[..., Mesh]]] = {
     "grid": ({"size": (1.0, 1.0), "divisions": 4}, grid),
     "capsule": ({"radius": 0.25, "height": 0.5, "segments": 16, "rings": 4}, capsule),
     "icosphere": ({"radius": 0.5, "subdivisions": 2}, icosphere),
+    "pyramid": ({"base": 1.0, "height": 1.0, "sides": 4}, pyramid),
+    "arch": (
+        {"width": 1.0, "height": 1.0, "depth": 0.5, "thickness": 0.25, "segments": 12},
+        arch,
+    ),
+    "column": (
+        {"radius": 0.35, "height": 2.0, "segments": 16, "base": 0.15, "capital": 0.15},
+        column,
+    ),
 }
 """Name -> ``(defaults, builder)``. Every default dictionary is a complete call.
 
@@ -703,4 +1002,23 @@ Complete because that is exactly what the properties panel does with it: splat
 it into the builder to make the object the user just asked for, then bind each
 key to a widget. A missing key would be a ``TypeError`` raised the first time
 somebody picked that shape, which is why a test calls every entry this way.
+"""
+
+CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("primitives", ("box", "plane", "grid", "cylinder", "cone",
+                    "uv_sphere", "icosphere", "torus", "capsule")),
+    ("structures", ("pyramid", "arch", "column")),
+)
+"""The add panel's sections, in the order they are drawn.
+
+The registry says what a shape *is*; this says where it appears, which is a
+different question and one ``GENERATORS`` cannot answer -- a dict has one order
+and the panel wants two headings. It lives here rather than in the pane for the
+same reason the defaults do: a fourth structure should be one line in this file
+and no edit to the pane at all.
+
+It is a **partition**, asserted as one: every generator in exactly one section
+and no name that is not a generator, so a primitive added to the registry and
+forgotten here fails a test rather than quietly vanishing from the panel that
+is generated from it.
 """
